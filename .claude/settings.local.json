@@ -16,7 +16,9 @@
       "Bash(php vendor/bin/phpunit:*)",
       "Bash(composer test:*)",
       "Bash(php:*)",
-      "Bash(vendorbinphpunit testsUnitServicesResponseGeneratorTest.php)"
+      "Bash(vendorbinphpunit testsUnitServicesResponseGeneratorTest.php)",
+      "Bash(copy:*)",
+      "Bash(composer dump-autoload:*)"
     ],
     "deny": [],
     "ask": []

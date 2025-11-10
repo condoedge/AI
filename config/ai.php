@@ -215,6 +215,23 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Query Pattern Library
+    |--------------------------------------------------------------------------
+    |
+    | Reusable, generic query patterns for semantic metadata system.
+    | These patterns are domain-agnostic templates that the LLM uses to generate
+    | appropriate Cypher queries based on business rules and relationship specs.
+    |
+    | Patterns are loaded from a separate file (ai-patterns.php) if it exists,
+    | otherwise falls back to default patterns or empty array.
+    |
+    */
+    'query_patterns' => file_exists(__DIR__ . '/ai-patterns.php')
+        ? require __DIR__ . '/ai-patterns.php'
+        : [],
+
+    /*
+    |--------------------------------------------------------------------------
     | Entity Configurations
     |--------------------------------------------------------------------------
     |

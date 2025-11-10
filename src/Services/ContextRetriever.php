@@ -381,13 +381,20 @@ class ContextRetriever implements ContextRetrieverInterface
                     if (strpos($questionLower, strtolower($scopeName)) !== false) {
                         $isDetected = true;
 
-                        // Record the detected scope
+                        // Record the detected scope with full semantic context
                         $detectedScopes[$scopeName] = [
                             'entity' => $entityName,
                             'scope' => $scopeName,
-                            'description' => $scopeConfig['description'] ?? '',
+                            'specification_type' => $scopeConfig['specification_type'] ?? 'property_filter',
+                            'concept' => $scopeConfig['concept'] ?? ($scopeConfig['description'] ?? ''),
+                            'relationship_spec' => $scopeConfig['relationship_spec'] ?? null,
+                            'filter' => $scopeConfig['filter'] ?? null,
+                            'pattern' => $scopeConfig['pattern'] ?? null,
+                            'pattern_params' => $scopeConfig['pattern_params'] ?? null,
+                            'business_rules' => $scopeConfig['business_rules'] ?? [],
+                            'examples' => $scopeConfig['examples'] ?? [],
+                            // Legacy support for old format
                             'cypher_pattern' => $scopeConfig['cypher_pattern'] ?? '',
-                            'filter' => $scopeConfig['filter'] ?? [],
                         ];
                     }
                 }

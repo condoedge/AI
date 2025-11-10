@@ -48,6 +48,11 @@ return [
             'properties' => ['id', 'first_name', 'last_name', 'email', 'birth_date', 'type', 'role', 'status'],
             'relationships' => [
                 [
+                    'type' => 'HAS_ROLE',
+                    'target_label' => 'PersonTeam',
+                    'foreign_key' => 'person_id',
+                ],
+                [
                     'type' => 'MEMBER_OF',
                     'target_label' => 'Team',
                     'foreign_key' => 'team_id',
@@ -84,16 +89,47 @@ return [
 
             // Scoped subsets with business terminology
             'scopes' => [
+                // Volunteers - Relationship-based scope using semantic format
                 'volunteers' => [
-                    'description' => 'People who volunteer their time',
-                    'filter' => ['type' => 'volunteer'],
-                    'cypher_pattern' => "type = 'volunteer'",
+                    // Specification type: relationship_traversal (graph traversal pattern)
+                    'specification_type' => 'relationship_traversal',
+
+                    // Business concept in plain language
+                    'concept' => 'People who volunteer on teams',
+
+                    // Relationship specification - describes the graph path
+                    'relationship_spec' => [
+                        'start_entity' => 'Person',
+                        'path' => [
+                            [
+                                'relationship' => 'HAS_ROLE',
+                                'target_entity' => 'PersonTeam',
+                                'direction' => 'outgoing',
+                            ],
+                        ],
+                        'filter' => [
+                            'entity' => 'PersonTeam',
+                            'property' => 'role_type',
+                            'operator' => 'equals',
+                            'value' => 'volunteer',
+                        ],
+                        'return_distinct' => true,
+                    ],
+
+                    // Business rules in plain language
+                    'business_rules' => [
+                        'A person is a volunteer if they have at least one volunteer role on any team',
+                        'The volunteer role is stored in PersonTeam.role_type',
+                        'Multiple volunteer roles on different teams = still one volunteer (use DISTINCT)',
+                    ],
+
+                    // Example questions for training the LLM
                     'examples' => [
                         'Show me all volunteers',
                         'How many volunteers do we have?',
-                        'List active volunteers',
+                        'List volunteers on teams',
                         'Who are our volunteers?',
-                        'Find volunteers in the database',
+                        'Find people who volunteer',
                     ],
                 ],
                 'customers' => [

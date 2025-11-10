@@ -77,17 +77,28 @@ class QueryGenerator implements QueryGeneratorInterface
     ];
 
     /**
+     * Semantic prompt builder (optional - for semantic metadata support)
+     */
+    private ?SemanticPromptBuilder $promptBuilder = null;
+
+    /**
      * Constructor
      *
      * @param LlmProviderInterface $llm LLM provider for query generation
      * @param GraphStoreInterface $graphStore Graph store for schema access
      * @param array $config Configuration options
+     * @param SemanticPromptBuilder|null $promptBuilder Optional semantic prompt builder
      */
     public function __construct(
         private readonly LlmProviderInterface $llm,
         private readonly GraphStoreInterface $graphStore,
-        private readonly array $config = []
+        private readonly array $config = [],
+        ?SemanticPromptBuilder $promptBuilder = null
     ) {
+        // Initialize semantic prompt builder if not provided
+        $this->promptBuilder = $promptBuilder ?? new SemanticPromptBuilder(
+            new PatternLibrary()
+        );
     }
 
     /**
@@ -333,6 +344,24 @@ class QueryGenerator implements QueryGeneratorInterface
      */
     private function buildPrompt(string $question, array $context, bool $allowWrite, ?string $previousError): string
     {
+        // Check if we have semantic scopes (new format with specification_type)
+        $hasSemanticScopes = $this->hasSemanticScopes($context);
+
+        // Use semantic prompt builder if semantic scopes detected
+        if ($hasSemanticScopes && $this->promptBuilder) {
+            $prompt = $this->promptBuilder->buildPrompt($question, $context, $allowWrite);
+
+            // Add retry context if needed
+            if ($previousError) {
+                $prompt .= "\n\nPrevious attempt failed with error: {$previousError}\n";
+                $prompt .= "Please fix the error and regenerate the query.\n\n";
+                $prompt .= "CYPHER QUERY:";
+            }
+
+            return $prompt;
+        }
+
+        // Fallback to original prompt building (for backward compatibility)
         $prompt = "You are a Neo4j Cypher query expert. Generate a valid, safe Cypher query.\n\n";
 
         // Add context
@@ -524,5 +553,31 @@ class QueryGenerator implements QueryGeneratorInterface
 
         // Return as-is if not in schema
         return $label;
+    }
+
+    /**
+     * Check if context contains semantic scopes (new format)
+     *
+     * Semantic scopes have specification_type field indicating they use
+     * the new declarative format with relationship_spec, pattern, etc.
+     *
+     * @param array $context Context array
+     * @return bool True if semantic scopes detected
+     */
+    private function hasSemanticScopes(array $context): bool
+    {
+        // Check if we have detected scopes
+        if (empty($context['entity_metadata']['detected_scopes'])) {
+            return false;
+        }
+
+        // Check if any scope has specification_type (indicates new format)
+        foreach ($context['entity_metadata']['detected_scopes'] as $scope) {
+            if (isset($scope['specification_type'])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
