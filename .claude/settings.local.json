@@ -9,7 +9,14 @@
       "Bash(findstr:*)",
       "Bash(test_results.txt)",
       "Bash(cat:*)",
-      "Bash(vendor/bin/phpunit:*)"
+      "Bash(vendor/bin/phpunit:*)",
+      "Bash(composer require:*)",
+      "Bash(php artisan:*)",
+      "Skill(kompo-skills:kompo-orchestrator)",
+      "Bash(php vendor/bin/phpunit:*)",
+      "Bash(composer test:*)",
+      "Bash(php:*)",
+      "Bash(vendorbinphpunit testsUnitServicesResponseGeneratorTest.php)"
     ],
     "deny": [],
     "ask": []

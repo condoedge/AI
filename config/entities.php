@@ -39,13 +39,13 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Example: Person Entity
+    | Example: Person Entity (with Semantic Metadata)
     |--------------------------------------------------------------------------
     */
     'Person' => [
         'graph' => [
             'label' => 'Person',
-            'properties' => ['id', 'first_name', 'last_name', 'email', 'birth_date'],
+            'properties' => ['id', 'first_name', 'last_name', 'email', 'birth_date', 'type', 'role', 'status'],
             'relationships' => [
                 [
                     'type' => 'MEMBER_OF',
@@ -53,12 +53,119 @@ return [
                     'foreign_key' => 'team_id',
                     'properties' => ['since' => 'created_at'],
                 ],
+                [
+                    'type' => 'MANAGES',
+                    'target_label' => 'Team',
+                    'foreign_key' => 'managed_team_id',
+                ],
             ],
         ],
         'vector' => [
             'collection' => 'people',
             'embed_fields' => ['first_name', 'last_name', 'bio', 'notes'],
-            'metadata' => ['id', 'email', 'team_id'],
+            'metadata' => ['id', 'email', 'team_id', 'type', 'role'],
+        ],
+
+        /*
+        |----------------------------------------------------------------------
+        | Semantic Metadata for Entity Understanding
+        |----------------------------------------------------------------------
+        |
+        | This metadata helps the AI system understand domain-specific
+        | terminology and map business terms to entity filters.
+        |
+        */
+        'metadata' => [
+            // Alternative names for this entity
+            'aliases' => ['person', 'people', 'user', 'users', 'individual', 'individuals', 'member', 'members'],
+
+            // Description of the entity for AI context
+            'description' => 'Represents individuals in the system including volunteers, customers, and staff members',
+
+            // Scoped subsets with business terminology
+            'scopes' => [
+                'volunteers' => [
+                    'description' => 'People who volunteer their time',
+                    'filter' => ['type' => 'volunteer'],
+                    'cypher_pattern' => "type = 'volunteer'",
+                    'examples' => [
+                        'Show me all volunteers',
+                        'How many volunteers do we have?',
+                        'List active volunteers',
+                        'Who are our volunteers?',
+                        'Find volunteers in the database',
+                    ],
+                ],
+                'customers' => [
+                    'description' => 'People who are customers',
+                    'filter' => ['type' => 'customer'],
+                    'cypher_pattern' => "type = 'customer'",
+                    'examples' => [
+                        'Show me all customers',
+                        'How many customers do we have?',
+                        'List customers',
+                        'Which customers placed orders?',
+                        'Find all customer records',
+                    ],
+                ],
+                'staff' => [
+                    'description' => 'People who are staff members or employees',
+                    'filter' => ['role' => 'staff'],
+                    'cypher_pattern' => "role = 'staff'",
+                    'examples' => [
+                        'List all staff members',
+                        'Show me employees',
+                        'How many staff do we have?',
+                        'Who are the staff members?',
+                    ],
+                ],
+                'active' => [
+                    'description' => 'People with active status',
+                    'filter' => ['status' => 'active'],
+                    'cypher_pattern' => "status = 'active'",
+                    'examples' => [
+                        'Show active people',
+                        'List active members',
+                        'Who is currently active?',
+                    ],
+                ],
+            ],
+
+            // Property descriptions for better AI understanding
+            'common_properties' => [
+                'id' => 'Unique identifier for the person',
+                'first_name' => 'Person\'s first name',
+                'last_name' => 'Person\'s last name',
+                'email' => 'Email address',
+                'birth_date' => 'Date of birth',
+                'type' => 'Person type: volunteer, customer, staff, etc.',
+                'role' => 'Person role in the organization',
+                'status' => 'Current status: active, inactive, pending, etc.',
+                'team_id' => 'ID of the team this person belongs to',
+            ],
+
+            // Common combinations of scopes
+            'combinations' => [
+                'active_volunteers' => [
+                    'description' => 'Active volunteers',
+                    'filters' => ['type' => 'volunteer', 'status' => 'active'],
+                    'cypher_pattern' => "type = 'volunteer' AND status = 'active'",
+                    'examples' => [
+                        'Show active volunteers',
+                        'List volunteers who are active',
+                        'Find all active volunteer members',
+                    ],
+                ],
+                'active_customers' => [
+                    'description' => 'Active customers',
+                    'filters' => ['type' => 'customer', 'status' => 'active'],
+                    'cypher_pattern' => "type = 'customer' AND status = 'active'",
+                    'examples' => [
+                        'Show active customers',
+                        'List customers who are active',
+                    ],
+                ],
+            ],
         ],
     ],
 
@@ -78,13 +185,13 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Example: Order Entity
+    | Example: Order Entity (with Semantic Metadata)
     |--------------------------------------------------------------------------
     */
     'Order' => [
         'graph' => [
             'label' => 'Order',
-            'properties' => ['id', 'total', 'status', 'created_at'],
+            'properties' => ['id', 'total', 'status', 'created_at', 'updated_at'],
             'relationships' => [
                 [
                     'type' => 'PLACED_BY',
@@ -102,6 +209,61 @@ return [
             'collection' => 'orders',
             'embed_fields' => ['notes', 'description'],
             'metadata' => ['id', 'customer_id', 'status', 'total'],
+        ],
+
+        'metadata' => [
+            'aliases' => ['order', 'orders', 'purchase', 'purchases', 'sale', 'sales'],
+            'description' => 'Represents customer orders and purchases',
+
+            'scopes' => [
+                'pending' => [
+                    'description' => 'Orders awaiting processing',
+                    'filter' => ['status' => 'pending'],
+                    'cypher_pattern' => "status = 'pending'",
+                    'examples' => [
+                        'Show pending orders',
+                        'List orders awaiting processing',
+                        'How many pending orders?',
+                    ],
+                ],
+                'completed' => [
+                    'description' => 'Orders that have been completed',
+                    'filter' => ['status' => 'completed'],
+                    'cypher_pattern' => "status = 'completed'",
+                    'examples' => [
+                        'Show completed orders',
+                        'List fulfilled orders',
+                        'How many orders are completed?',
+                    ],
+                ],
+                'cancelled' => [
+                    'description' => 'Orders that were cancelled',
+                    'filter' => ['status' => 'cancelled'],
+                    'cypher_pattern' => "status = 'cancelled'",
+                    'examples' => [
+                        'Show cancelled orders',
+                        'List orders that were cancelled',
+                    ],
+                ],
+                'high_value' => [
+                    'description' => 'Orders with high total value',
+                    'filter' => [],
+                    'cypher_pattern' => 'total > 1000',
+                    'examples' => [
+                        'Show high value orders',
+                        'List expensive orders',
+                        'Orders over $1000',
+                    ],
+                ],
+            ],
+
+            'common_properties' => [
+                'id' => 'Unique order identifier',
+                'total' => 'Total order amount in currency',
+                'status' => 'Order status: pending, completed, cancelled, etc.',
+                'created_at' => 'When the order was created',
+                'customer_id' => 'ID of the customer who placed the order',
+            ],
         ],
     ],
 

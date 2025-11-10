@@ -69,6 +69,11 @@ class ContextRetriever implements ContextRetrieverInterface
     private const DEFAULT_SCORE_THRESHOLD = 0.0;
 
     /**
+     * Entity configurations loaded from config/entities.php
+     */
+    private array $entityConfigs = [];
+
+    /**
      * Create context retriever with injected dependencies
      *
      * All dependencies are interfaces to ensure:
@@ -80,12 +85,16 @@ class ContextRetriever implements ContextRetrieverInterface
      * @param VectorStoreInterface $vectorStore Vector database for similarity search
      * @param GraphStoreInterface $graphStore Graph database for schema/entity queries
      * @param EmbeddingProviderInterface $embeddingProvider Text-to-vector embedding service
+     * @param array|null $entityConfigs Optional entity configurations (defaults to config/entities.php)
      */
     public function __construct(
         private readonly VectorStoreInterface $vectorStore,
         private readonly GraphStoreInterface $graphStore,
-        private readonly EmbeddingProviderInterface $embeddingProvider
+        private readonly EmbeddingProviderInterface $embeddingProvider,
+        ?array $entityConfigs = null
     ) {
+        // Load entity configs from config file or use provided configs
+        $this->entityConfigs = $entityConfigs ?? $this->loadEntityConfigs();
     }
 
     /**
@@ -135,6 +144,7 @@ class ContextRetriever implements ContextRetrieverInterface
             'similar_queries' => [],
             'graph_schema' => [],
             'relevant_entities' => [],
+            'entity_metadata' => [],
             'errors' => [],
         ];
 
@@ -166,6 +176,13 @@ class ContextRetriever implements ContextRetrieverInterface
                 $examplesPerLabel,
                 $context['errors']
             );
+        }
+
+        // 4. Get entity metadata for detected entities
+        try {
+            $context['entity_metadata'] = $this->getEntityMetadata($question);
+        } catch (\Exception $e) {
+            $context['errors'][] = 'Entity metadata retrieval failed: ' . $e->getMessage();
         }
 
         return $context;
@@ -297,6 +314,142 @@ class ContextRetriever implements ContextRetrieverInterface
                 $e
             );
         }
+    }
+
+    /**
+     * Get entity metadata for relevant entities detected in the question
+     *
+     * This method detects which entities are mentioned in the user's question
+     * and returns their semantic metadata including scopes, aliases, and
+     * property descriptions. This helps the LLM understand domain terminology.
+     *
+     * Detection Strategy:
+     * 1. Check for entity labels (Person, Order, Team)
+     * 2. Check for entity aliases (people, users, customers)
+     * 3. Check for scope terms (volunteers, pending orders)
+     *
+     * @param string $question Natural language question from user
+     *
+     * @return array Metadata for detected entities with structure:
+     *               [
+     *                   'detected_entities' => ['Person', 'Order'],
+     *                   'entity_metadata' => [
+     *                       'Person' => [...full metadata...],
+     *                       'Order' => [...full metadata...]
+     *                   ],
+     *                   'detected_scopes' => [
+     *                       'volunteers' => ['entity' => 'Person', 'scope' => 'volunteers', ...]
+     *                   ]
+     *               ]
+     */
+    public function getEntityMetadata(string $question): array
+    {
+        $questionLower = strtolower($question);
+        $detectedEntities = [];
+        $detectedScopes = [];
+        $entityMetadata = [];
+
+        // Iterate through all entity configurations
+        foreach ($this->entityConfigs as $entityName => $config) {
+            $metadata = $config['metadata'] ?? null;
+
+            // Skip entities without metadata
+            if (!$metadata) {
+                continue;
+            }
+
+            $isDetected = false;
+
+            // Check if entity label is mentioned
+            if (stripos($question, $entityName) !== false) {
+                $isDetected = true;
+            }
+
+            // Check if any aliases are mentioned
+            if (!$isDetected && !empty($metadata['aliases'])) {
+                foreach ($metadata['aliases'] as $alias) {
+                    if (strpos($questionLower, strtolower($alias)) !== false) {
+                        $isDetected = true;
+                        break;
+                    }
+                }
+            }
+
+            // Check for scope terms
+            if (!empty($metadata['scopes'])) {
+                foreach ($metadata['scopes'] as $scopeName => $scopeConfig) {
+                    if (strpos($questionLower, strtolower($scopeName)) !== false) {
+                        $isDetected = true;
+
+                        // Record the detected scope
+                        $detectedScopes[$scopeName] = [
+                            'entity' => $entityName,
+                            'scope' => $scopeName,
+                            'description' => $scopeConfig['description'] ?? '',
+                            'cypher_pattern' => $scopeConfig['cypher_pattern'] ?? '',
+                            'filter' => $scopeConfig['filter'] ?? [],
+                        ];
+                    }
+                }
+            }
+
+            // If entity was detected, include its full metadata
+            if ($isDetected) {
+                $detectedEntities[] = $entityName;
+                $entityMetadata[$entityName] = $metadata;
+            }
+        }
+
+        return [
+            'detected_entities' => $detectedEntities,
+            'entity_metadata' => $entityMetadata,
+            'detected_scopes' => $detectedScopes,
+        ];
+    }
+
+    /**
+     * Get all available entity metadata
+     *
+     * Returns metadata for all configured entities, useful for providing
+     * comprehensive context to the LLM about available business terms.
+     *
+     * @return array All entity metadata indexed by entity name
+     */
+    public function getAllEntityMetadata(): array
+    {
+        $allMetadata = [];
+
+        foreach ($this->entityConfigs as $entityName => $config) {
+            if (isset($config['metadata'])) {
+                $allMetadata[$entityName] = $config['metadata'];
+            }
+        }
+
+        return $allMetadata;
+    }
+
+    /**
+     * Load entity configurations from config file
+     *
+     * @return array Entity configurations
+     */
+    private function loadEntityConfigs(): array
+    {
+        // Try to load from Laravel config if available
+        if (function_exists('config')) {
+            $configs = config('ai.entities');
+            if ($configs !== null) {
+                return $configs;
+            }
+        }
+
+        // Fallback: load directly from file
+        $configPath = __DIR__ . '/../../config/entities.php';
+        if (file_exists($configPath)) {
+            return require $configPath;
+        }
+
+        return [];
     }
 
     /**

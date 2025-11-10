@@ -46,7 +46,8 @@ class ContextRetrieverTest extends TestCase
         $this->service = new ContextRetriever(
             $this->mockVectorStore,
             $this->mockGraphStore,
-            $this->mockEmbeddingProvider
+            $this->mockEmbeddingProvider,
+            [] // Empty entity configs for testing
         );
     }
 
@@ -68,7 +69,8 @@ class ContextRetrieverTest extends TestCase
         $service = new ContextRetriever(
             $this->mockVectorStore,
             $this->mockGraphStore,
-            $this->mockEmbeddingProvider
+            $this->mockEmbeddingProvider,
+            []
         );
 
         $this->assertInstanceOf(ContextRetriever::class, $service);
