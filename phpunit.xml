@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.0/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+         stopOnFailure="false"
+         failOnWarning="true"
+         failOnRisky="true">
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Integration">
+            <directory>tests/Integration</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory suffix=".php">src</directory>
+        </include>
+        <exclude>
+            <directory>src/Kompo</directory>
+            <directory>src/Http</directory>
+        </exclude>
+    </source>
+    <php>
+        <env name="APP_ENV" value="testing"/>
+
+        <!-- Neo4j Test Configuration -->
+        <env name="NEO4J_URI" value="bolt://localhost:7687"/>
+        <env name="NEO4J_USERNAME" value="neo4j"/>
+        <env name="NEO4J_PASSWORD" value="o4@hTz!9vXlQ#2mP"/>
+        <env name="NEO4J_DATABASE" value="neo4j"/>
+        <env name="NEO4J_ENABLED" value="true"/>
+
+        <!-- Qdrant Test Configuration -->
+        <env name="QDRANT_HOST" value="localhost"/>
+        <env name="QDRANT_PORT" value="6333"/>
+        <env name="QDRANT_API_KEY" value=""/>
+        <env name="QDRANT_TIMEOUT" value="30"/>
+        <env name="QDRANT_ENABLED" value="true"/>
+    </php>
+</phpunit>

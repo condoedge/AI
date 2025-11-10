@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(php test-neo4j.php:*)",
+      "Bash(test:*)",
+      "Bash(php -r:*)",
+      "Bash(php -l:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(test_results.txt)",
+      "Bash(cat:*)",
+      "Bash(vendor/bin/phpunit:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
