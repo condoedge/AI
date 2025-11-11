@@ -15,7 +15,7 @@ Add to `config/app.php`:
 ```php
 'providers' => [
     // ...
-    AiSystem\AiServiceProvider::class,
+    Condoedge\Ai\AiServiceProvider::class,
 ],
 ```
 
@@ -28,7 +28,7 @@ Add to `config/app.php`:
 ### 1. Using AI Facade (Simplest)
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 class CustomerController extends Controller
 {
@@ -64,7 +64,7 @@ class CustomerController extends Controller
 ### 2. Using AiManager with Dependency Injection (Recommended)
 
 ```php
-use AiSystem\Services\AiManager;
+use Condoedge\Ai\Services\AiManager;
 
 class CustomerController extends Controller
 {
@@ -129,9 +129,9 @@ class CustomerController extends Controller
 ### 3. Using Individual Services (Maximum Control)
 
 ```php
-use AiSystem\Contracts\DataIngestionServiceInterface;
-use AiSystem\Contracts\ContextRetrieverInterface;
-use AiSystem\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Contracts\ContextRetrieverInterface;
+use Condoedge\Ai\Contracts\LlmProviderInterface;
 
 class CustomerController extends Controller
 {
@@ -186,7 +186,7 @@ Automatically sync entities when they change:
 ### Using AI Facade
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 use App\Models\Customer;
 
 class CustomerObserver
@@ -211,7 +211,7 @@ class CustomerObserver
 ### Using Dependency Injection (Better for Testing)
 
 ```php
-use AiSystem\Services\AiManager;
+use Condoedge\Ai\Services\AiManager;
 use App\Models\Customer;
 
 class CustomerObserver
@@ -257,7 +257,7 @@ public function boot()
 
 ```php
 use Illuminate\Console\Command;
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 use App\Models\Customer;
 
 class IngestCustomersCommand extends Command
@@ -292,7 +292,7 @@ class IngestCustomersCommand extends Command
 
 ```php
 use Illuminate\Console\Command;
-use AiSystem\Services\AiManager;
+use Condoedge\Ai\Services\AiManager;
 use App\Models\Customer;
 
 class IngestCustomersCommand extends Command
@@ -353,7 +353,7 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Contracts\Queue\ShouldQueue;
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 class IngestEntityJob implements ShouldQueue
 {
@@ -432,7 +432,7 @@ Route::prefix('api/ai')->group(function () {
 ### AI Controller (Using Facade)
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 class AiController extends Controller
 {
@@ -492,7 +492,7 @@ class AiController extends Controller
 ```php
 use Illuminate\Support\Facades\Event;
 use App\Events\CustomerCreated;
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 Event::listen(CustomerCreated::class, function ($event) {
     AI::ingest($event->customer);
@@ -507,7 +507,7 @@ Event::listen(CustomerCreated::class, function ($event) {
 
 ```php
 use Tests\TestCase;
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 use App\Models\Customer;
 
 class CustomerAiTest extends TestCase

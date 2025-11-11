@@ -16,7 +16,7 @@ RAG retrieves context from multiple sources:
 ## Complete Context Retrieval
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $context = AI::retrieveContext("Show teams with most members", [
     'collection' => 'questions',
@@ -138,7 +138,7 @@ $cypherQuery = AI::complete($userPrompt, $systemPrompt);
 ## Advanced: Direct Service Usage
 
 ```php
-use AiSystem\Services\ContextRetriever;
+use Condoedge\Ai\Services\ContextRetriever;
 
 $retriever = app(ContextRetriever::class);
 

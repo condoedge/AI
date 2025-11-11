@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Tests\Unit\EmbeddingProviders;
+namespace Condoedge\Ai\Tests\Unit\EmbeddingProviders;
 
-use AiSystem\Tests\TestCase;
-use AiSystem\EmbeddingProviders\AnthropicEmbeddingProvider;
-use AiSystem\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Tests\TestCase;
+use Condoedge\Ai\EmbeddingProviders\AnthropicEmbeddingProvider;
+use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use RuntimeException;
 
 /**

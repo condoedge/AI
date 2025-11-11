@@ -15,8 +15,8 @@ Build a semantic customer search that understands meaning, not just keywords.
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use AiSystem\Domain\Contracts\Nodeable;
-use AiSystem\Domain\Traits\HasNodeableConfig;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\Traits\HasNodeableConfig;
 
 class Customer extends Model implements Nodeable
 {
@@ -68,7 +68,7 @@ return [
 // app/Http/Controllers/CustomerSearchController.php
 namespace App\Http\Controllers;
 
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 use Illuminate\Http\Request;
 
 class CustomerSearchController extends Controller
@@ -135,8 +135,8 @@ Build a system that answers questions about your data using natural language.
 ```php
 namespace App\Http\Controllers;
 
-use AiSystem\Facades\AI;
-use AiSystem\GraphStore\Neo4jStore;
+use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\GraphStore\Neo4jStore;
 
 class AiQuestionController extends Controller
 {
@@ -240,8 +240,8 @@ Build an interactive chatbot that queries your knowledge graph.
 ```php
 namespace App\Services;
 
-use AiSystem\Facades\AI;
-use AiSystem\GraphStore\Neo4jStore;
+use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\GraphStore\Neo4jStore;
 
 class KnowledgeGraphChatbot
 {
@@ -388,7 +388,7 @@ Keep AI system in sync automatically.
 ```php
 namespace App\Observers;
 
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 use App\Models\Customer;
 use Illuminate\Support\Facades\Log;
 
@@ -442,7 +442,7 @@ Ingest large datasets efficiently.
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 use App\Models\Customer;
 
 class IngestAllCustomersCommand extends Command

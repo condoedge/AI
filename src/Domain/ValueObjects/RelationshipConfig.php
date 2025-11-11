@@ -1,6 +1,6 @@
 <?php
 
-namespace AiSystem\Domain\ValueObjects;
+namespace Condoedge\Ai\Domain\ValueObjects;
 
 /**
  * RelationshipConfig - Configuration for Neo4j relationships

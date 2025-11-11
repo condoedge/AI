@@ -1,9 +1,9 @@
 <?php
 
-namespace AiSystem\Tests\Integration\VectorStore;
+namespace Condoedge\Ai\Tests\Integration\VectorStore;
 
-use AiSystem\VectorStore\QdrantStore;
-use AiSystem\Tests\TestCase;
+use Condoedge\Ai\VectorStore\QdrantStore;
+use Condoedge\Ai\Tests\TestCase;
 
 /**
  * Integration tests for QdrantStore
@@ -16,7 +16,7 @@ class QdrantStoreTest extends TestCase
     protected QdrantStore $qdrant;
     protected string $testCollection;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 
@@ -29,7 +29,7 @@ class QdrantStoreTest extends TestCase
         }
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         // Cleanup: delete test collection
         try {

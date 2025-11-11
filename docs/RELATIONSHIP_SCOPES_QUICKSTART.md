@@ -75,8 +75,8 @@ CYPHER,
 ### Step 3: Test It
 
 ```php
-use AiSystem\Services\ContextRetriever;
-use AiSystem\Services\QueryGenerator;
+use Condoedge\Ai\Services\ContextRetriever;
+use Condoedge\Ai\Services\QueryGenerator;
 
 // Get context
 $context = $contextRetriever->retrieveContext("How many volunteers?");

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Tests\Database\Factories;
+namespace Condoedge\Ai\Tests\Database\Factories;
 
-use AiSystem\Tests\Fixtures\TestOrder;
-use AiSystem\Tests\Fixtures\TestCustomer;
+use Condoedge\Ai\Tests\Fixtures\TestOrder;
+use Condoedge\Ai\Tests\Fixtures\TestCustomer;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**

@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Tests\Feature;
+namespace Condoedge\Ai\Tests\Feature;
 
-use AiSystem\Facades\AI;
-use AiSystem\Tests\Fixtures\TestCustomer;
-use AiSystem\Tests\Fixtures\TestOrder;
+use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Tests\Fixtures\TestCustomer;
+use Condoedge\Ai\Tests\Fixtures\TestOrder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -39,7 +39,7 @@ class AiSystemFeatureTest extends TestCase
     /**
      * Set up test data before each test
      */
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 

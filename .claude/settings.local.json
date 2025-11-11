@@ -18,7 +18,22 @@
       "Bash(php:*)",
       "Bash(vendorbinphpunit testsUnitServicesResponseGeneratorTest.php)",
       "Bash(copy:*)",
-      "Bash(composer dump-autoload:*)"
+      "Bash(composer dump-autoload:*)",
+      "Bash(vendor/bin/testbench package:test:*)",
+      "Bash(timeout 10 php:*)",
+      "Bash(timeout 30 php vendor/bin/phpunit:*)",
+      "Bash(timeout /t 30 /nobreak)",
+      "Bash(nul)",
+      "Bash(ping:*)",
+      "Bash(./vendor/bin/phpunit:*)",
+      "Bash(composer test-unit:*)",
+      "Bash(\"C:\\Users\\jkend\\Documents\\kompo\\ai\\src\\Services\\Discovery\\AliasGenerator.php\")",
+      "Bash(echo:*)",
+      "Bash(\"C:\\Users\\jkend\\Documents\\kompo\\ai\\src\\Services\\Discovery\\EmbedFieldDetector.php\")",
+      "Bash(\"C:\\Users\\jkend\\Documents\\kompo\\ai\\src\\Services\\Discovery\\EntityAutoDiscovery.php\")",
+      "Bash(\"C:\\Users\\jkend\\Documents\\kompo\\ai\\tests\\Integration\\EntityAutoDiscoveryTest.php\")",
+      "Bash(\"C:\\Users\\jkend\\Documents\\kompo\\ai\\examples\\EntityAutoDiscoveryDemo.php\")",
+      "Bash(timeout 120 vendor/bin/phpunit:*)"
     ],
     "deny": [],
     "ask": []

@@ -25,7 +25,7 @@ The AI Facade supports Laravel's facade mocking, making it easy to test.
 ### Basic Facade Mocking
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 use Tests\TestCase;
 
 class CustomerServiceTest extends TestCase
@@ -127,7 +127,7 @@ Inject a mock AiManager for better testability and control.
 ### Basic AiManager Mocking
 
 ```php
-use AiSystem\Services\AiManager;
+use Condoedge\Ai\Services\AiManager;
 use Mockery;
 
 class CustomerControllerTest extends TestCase
@@ -166,7 +166,7 @@ class CustomerControllerTest extends TestCase
         ]);
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();
@@ -222,7 +222,7 @@ class CustomerServiceTest extends TestCase
     private CustomerService $service;
     private AiManager $mockAi;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 
@@ -258,7 +258,7 @@ class CustomerServiceTest extends TestCase
         $this->assertStringContainsString('complete', $analysis);
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();
@@ -273,10 +273,10 @@ class CustomerServiceTest extends TestCase
 ### Testing Data Ingestion
 
 ```php
-use AiSystem\Services\DataIngestionService;
-use AiSystem\Contracts\VectorStoreInterface;
-use AiSystem\Contracts\GraphStoreInterface;
-use AiSystem\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Services\DataIngestionService;
+use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use Mockery;
 use Tests\TestCase;
 
@@ -323,7 +323,7 @@ class DataIngestionServiceTest extends TestCase
         $this->assertEmpty($status['errors']);
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();
@@ -336,7 +336,7 @@ class DataIngestionServiceTest extends TestCase
 ### Testing Context Retrieval
 
 ```php
-use AiSystem\Services\ContextRetriever;
+use Condoedge\Ai\Services\ContextRetriever;
 
 class ContextRetrieverTest extends TestCase
 {
@@ -389,13 +389,13 @@ class ContextRetrieverTest extends TestCase
 ### Testing with Real Neo4j
 
 ```php
-use AiSystem\GraphStore\Neo4jStore;
+use Condoedge\Ai\GraphStore\Neo4jStore;
 
 class Neo4jIntegrationTest extends TestCase
 {
     private Neo4jStore $neo4j;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 
@@ -437,14 +437,14 @@ class Neo4jIntegrationTest extends TestCase
 ### Testing with Real Qdrant
 
 ```php
-use AiSystem\VectorStore\QdrantStore;
+use Condoedge\Ai\VectorStore\QdrantStore;
 
 class QdrantIntegrationTest extends TestCase
 {
     private QdrantStore $qdrant;
     private string $testCollection = 'test_collection';
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 
@@ -482,7 +482,7 @@ class QdrantIntegrationTest extends TestCase
         $this->assertEquals('Test Item', $results[0]['payload']['name']);
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         // Cleanup
         $this->qdrant->deleteCollection($this->testCollection);
@@ -554,7 +554,7 @@ $service = new DataIngestionService($mockVector, $mockGraph, $mockEmbed);
 ### 2. Always Clean Up Mocks
 
 ```php
-protected function tearDown(): void
+public function tearDown(): void
 {
     Mockery::close(); // Essential for Mockery
     parent::tearDown();
@@ -663,7 +663,7 @@ class CustomerTest extends TestCase
 ### 2. Clean Up Resources
 
 ```php
-protected function tearDown(): void
+public function tearDown(): void
 {
     // Clean Neo4j
     $this->neo4j->query('MATCH (n:TestNode) DELETE n');

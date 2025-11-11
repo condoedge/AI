@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Services;
+namespace Condoedge\Ai\Services;
 
-use AiSystem\Contracts\QueryExecutorInterface;
-use AiSystem\Contracts\GraphStoreInterface;
-use AiSystem\Exceptions\QueryExecutionException;
-use AiSystem\Exceptions\QueryTimeoutException;
-use AiSystem\Exceptions\ReadOnlyViolationException;
+use Condoedge\Ai\Contracts\QueryExecutorInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Exceptions\QueryExecutionException;
+use Condoedge\Ai\Exceptions\QueryTimeoutException;
+use Condoedge\Ai\Exceptions\ReadOnlyViolationException;
 
 /**
  * Query Executor Service
@@ -16,7 +16,7 @@ use AiSystem\Exceptions\ReadOnlyViolationException;
  * Executes Cypher queries against Neo4j with safety measures,
  * timeout protection, result formatting, and comprehensive error handling.
  *
- * @package AiSystem\Services
+ * @package Condoedge\Ai\Services
  */
 class QueryExecutor implements QueryExecutorInterface
 {

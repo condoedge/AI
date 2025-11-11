@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Tests\Fixtures;
+namespace Condoedge\Ai\Tests\Fixtures;
 
-use AiSystem\Domain\Traits\HasNodeableConfig;
+use Condoedge\Ai\Domain\Traits\HasNodeableConfig;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use AiSystem\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
 
 /**
  * Test Order Model
@@ -35,7 +35,7 @@ class TestOrder extends Model implements Nodeable
      */
     protected static function newFactory()
     {
-        return \AiSystem\Tests\Database\Factories\TestOrderFactory::new();
+        return \Condoedge\Ai\Tests\Database\Factories\TestOrderFactory::new();
     }
 
     protected $fillable = [
@@ -149,5 +149,41 @@ class TestOrder extends Model implements Nodeable
             'total' => (float) $this->total,
             'order_date' => $this->order_date->toDateString(),
         ];
+    }
+
+    // ========================================
+    // Query Scopes for Testing CypherScopeAdapter
+    // ========================================
+
+    /**
+     * Scope: Pending orders
+     */
+    public function scopePending($query)
+    {
+        return $query->where('status', 'pending');
+    }
+
+    /**
+     * Scope: Completed orders
+     */
+    public function scopeCompleted($query)
+    {
+        return $query->where('status', 'completed');
+    }
+
+    /**
+     * Scope: High value orders
+     */
+    public function scopeHighValue($query)
+    {
+        return $query->where('total', '>', 1000);
+    }
+
+    /**
+     * Scope: Recent orders (date filter)
+     */
+    public function scopeRecent($query, $days = 30)
+    {
+        return $query->whereDate('order_date', '>=', now()->subDays($days));
     }
 }

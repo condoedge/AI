@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Tests\Unit\Services;
+namespace Condoedge\Ai\Tests\Unit\Services;
 
-use Tests\TestCase;
+use Condoedge\Ai\Tests\TestCase;
 use Mockery;
-use AiSystem\Services\QueryGenerator;
-use AiSystem\Contracts\LlmProviderInterface;
-use AiSystem\Contracts\GraphStoreInterface;
-use AiSystem\Exceptions\QueryGenerationException;
-use AiSystem\Exceptions\QueryValidationException;
+use Condoedge\Ai\Services\QueryGenerator;
+use Condoedge\Ai\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Exceptions\QueryGenerationException;
+use Condoedge\Ai\Exceptions\QueryValidationException;
 
 class QueryGeneratorTest extends TestCase
 {
@@ -19,7 +19,7 @@ class QueryGeneratorTest extends TestCase
     private GraphStoreInterface $mockGraph;
     private array $config;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 
@@ -42,7 +42,7 @@ class QueryGeneratorTest extends TestCase
         );
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();
@@ -54,7 +54,7 @@ class QueryGeneratorTest extends TestCase
 
     public function test_generate_simple_query(): void
     {
-        $question = "Show all customers";
+        $question = "What are the customers?";
         $context = [
             'graph_schema' => [
                 'labels' => ['Customer', 'Order'],
@@ -66,9 +66,11 @@ class QueryGeneratorTest extends TestCase
 
         $this->mockLlm->shouldReceive('complete')
             ->once()
+            ->with(Mockery::any(), null, Mockery::any())
             ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
 
-        $result = $this->generator->generate($question, $context);
+        // Disable explanation to avoid second complete() call
+        $result = $this->generator->generate($question, $context, ['explain' => false]);
 
         $this->assertIsArray($result);
         $this->assertArrayHasKey('cypher', $result);
@@ -116,7 +118,7 @@ class QueryGeneratorTest extends TestCase
 
     public function test_generate_retries_on_validation_failure(): void
     {
-        $question = "Show all customers";
+        $question = "What are the customers?";
         $context = [
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
         ];
@@ -124,14 +126,16 @@ class QueryGeneratorTest extends TestCase
         // First attempt returns invalid query
         $this->mockLlm->shouldReceive('complete')
             ->once()
+            ->with(Mockery::any(), null, Mockery::any())
             ->andReturn('INVALID QUERY');
 
         // Second attempt returns valid query
         $this->mockLlm->shouldReceive('complete')
             ->once()
+            ->with(Mockery::any(), null, Mockery::any())
             ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
 
-        $result = $this->generator->generate($question, $context);
+        $result = $this->generator->generate($question, $context, ['explain' => false]);
 
         $this->assertGreaterThan(0, $result['metadata']['retry_count']);
         $this->assertStringContainsString('MATCH', $result['cypher']);
@@ -141,7 +145,7 @@ class QueryGeneratorTest extends TestCase
     {
         $this->expectException(QueryGenerationException::class);
 
-        $question = "Show all customers";
+        $question = "What are the customers?";
         $context = [
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
         ];
@@ -149,14 +153,15 @@ class QueryGeneratorTest extends TestCase
         // All attempts return invalid queries
         $this->mockLlm->shouldReceive('complete')
             ->times(3)
+            ->with(Mockery::any(), null, Mockery::any())
             ->andReturn('INVALID QUERY');
 
-        $this->generator->generate($question, $context);
+        $this->generator->generate($question, $context, ['explain' => false]);
     }
 
     public function test_generate_respects_temperature_option(): void
     {
-        $question = "Show all customers";
+        $question = "What are the customers?";
         $context = [
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
         ];
@@ -168,22 +173,33 @@ class QueryGeneratorTest extends TestCase
             }))
             ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
 
-        $this->generator->generate($question, $context, ['temperature' => 0.5]);
+        $result = $this->generator->generate($question, $context, ['temperature' => 0.5, 'explain' => false]);
+
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('cypher', $result);
     }
 
     public function test_generate_includes_explanation_when_requested(): void
     {
-        $question = "Show all customers";
+        $question = "What are the customers?";
         $context = [
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
         ];
 
+        // First call generates the query
         $this->mockLlm->shouldReceive('complete')
             ->once()
+            ->with(Mockery::any(), null, Mockery::on(function ($options) {
+                return isset($options['max_tokens']) && $options['max_tokens'] === 500;
+            }))
             ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
 
+        // Second call generates the explanation
         $this->mockLlm->shouldReceive('complete')
             ->once()
+            ->with(Mockery::any(), null, Mockery::on(function ($options) {
+                return isset($options['max_tokens']) && $options['max_tokens'] === 150;
+            }))
             ->andReturn('This query finds all customer nodes.');
 
         $result = $this->generator->generate($question, $context, ['explain' => true]);
@@ -397,14 +413,15 @@ class QueryGeneratorTest extends TestCase
 
     public function test_generate_with_empty_context(): void
     {
-        $question = "Show all customers";
+        $question = "What are the customers?";
         $context = [];
 
         $this->mockLlm->shouldReceive('complete')
             ->once()
+            ->with(Mockery::any(), null, Mockery::any())
             ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
 
-        $result = $this->generator->generate($question, $context);
+        $result = $this->generator->generate($question, $context, ['explain' => false]);
 
         $this->assertIsArray($result);
         $this->assertArrayHasKey('cypher', $result);
@@ -412,16 +429,17 @@ class QueryGeneratorTest extends TestCase
 
     public function test_generate_extracts_cypher_from_markdown(): void
     {
-        $question = "Show all customers";
+        $question = "What are the customers?";
         $context = [
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
         ];
 
         $this->mockLlm->shouldReceive('complete')
             ->once()
+            ->with(Mockery::any(), null, Mockery::any())
             ->andReturn("```cypher\nMATCH (n:Customer) RETURN n LIMIT 100\n```");
 
-        $result = $this->generator->generate($question, $context);
+        $result = $this->generator->generate($question, $context, ['explain' => false]);
 
         $this->assertStringNotContainsString('```', $result['cypher']);
         $this->assertStringContainsString('MATCH', $result['cypher']);

@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Tests\Unit\Services;
+namespace Condoedge\Ai\Tests\Unit\Services;
 
-use Tests\TestCase;
+use Condoedge\Ai\Tests\TestCase;
 use Mockery;
-use AiSystem\Services\QueryExecutor;
-use AiSystem\Contracts\GraphStoreInterface;
-use AiSystem\Exceptions\QueryExecutionException;
-use AiSystem\Exceptions\QueryTimeoutException;
-use AiSystem\Exceptions\ReadOnlyViolationException;
+use Condoedge\Ai\Services\QueryExecutor;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Exceptions\QueryExecutionException;
+use Condoedge\Ai\Exceptions\QueryTimeoutException;
+use Condoedge\Ai\Exceptions\ReadOnlyViolationException;
 
 class QueryExecutorTest extends TestCase
 {
@@ -18,7 +18,7 @@ class QueryExecutorTest extends TestCase
     private GraphStoreInterface $mockGraph;
     private array $config;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 
@@ -40,7 +40,7 @@ class QueryExecutorTest extends TestCase
         );
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();

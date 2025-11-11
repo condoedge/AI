@@ -1,9 +1,9 @@
 <?php
 
-namespace AiSystem\Tests\Unit\Domain\ValueObjects;
+namespace Condoedge\Ai\Tests\Unit\Domain\ValueObjects;
 
-use AiSystem\Domain\ValueObjects\RelationshipConfig;
-use AiSystem\Tests\TestCase;
+use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
+use Condoedge\Ai\Tests\TestCase;
 
 class RelationshipConfigTest extends TestCase
 {

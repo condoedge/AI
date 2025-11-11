@@ -1,8 +1,8 @@
 <?php
 
-namespace AiSystem\VectorStore;
+namespace Condoedge\Ai\VectorStore;
 
-use AiSystem\Contracts\VectorStoreInterface;
+use Condoedge\Ai\Contracts\VectorStoreInterface;
 
 /**
  * Qdrant Vector Store Implementation

@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Services;
+namespace Condoedge\Ai\Services;
 
-use AiSystem\Contracts\DataIngestionServiceInterface;
-use AiSystem\Contracts\VectorStoreInterface;
-use AiSystem\Contracts\GraphStoreInterface;
-use AiSystem\Contracts\EmbeddingProviderInterface;
-use AiSystem\Domain\Contracts\Nodeable;
-use AiSystem\Domain\ValueObjects\GraphConfig;
-use AiSystem\Domain\ValueObjects\VectorConfig;
-use AiSystem\Domain\ValueObjects\RelationshipConfig;
+use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
+use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
+use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
 
 /**
  * DataIngestionService

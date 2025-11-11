@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Tests\Integration\EmbeddingProviders;
+namespace Condoedge\Ai\Tests\Integration\EmbeddingProviders;
 
-use AiSystem\Tests\TestCase;
-use AiSystem\EmbeddingProviders\OpenAiEmbeddingProvider;
+use Condoedge\Ai\Tests\TestCase;
+use Condoedge\Ai\EmbeddingProviders\OpenAiEmbeddingProvider;
 use RuntimeException;
 
 /**
@@ -25,7 +25,7 @@ class OpenAiEmbeddingProviderTest extends TestCase
 {
     private ?OpenAiEmbeddingProvider $provider = null;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 

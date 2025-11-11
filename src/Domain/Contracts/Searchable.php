@@ -1,8 +1,8 @@
 <?php
 
-namespace AiSystem\Domain\Contracts;
+namespace Condoedge\Ai\Domain\Contracts;
 
-use AiSystem\Domain\ValueObjects\VectorConfig;
+use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
 
 /**
  * Searchable Interface

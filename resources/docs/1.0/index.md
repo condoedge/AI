@@ -163,7 +163,7 @@ OPENAI_API_KEY=sk-your-key-here
 
 **Usage:**
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 // Ingest an entity
 AI::ingest($customer);

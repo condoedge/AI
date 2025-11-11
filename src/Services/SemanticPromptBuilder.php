@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Services;
+namespace Condoedge\Ai\Services;
 
 /**
  * Semantic Prompt Builder

@@ -1,6 +1,6 @@
 <?php
 
-namespace AiSystem\Domain\ValueObjects;
+namespace Condoedge\Ai\Domain\ValueObjects;
 
 /**
  * VectorConfig - Configuration for Qdrant vector storage

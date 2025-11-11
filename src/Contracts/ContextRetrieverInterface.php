@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Contracts;
+namespace Condoedge\Ai\Contracts;
 
 /**
  * Context Retriever Interface
@@ -23,7 +23,7 @@ namespace AiSystem\Contracts;
  * → Combine into unified context for LLM
  * → LLM generates accurate Cypher query
  *
- * @package AiSystem\Contracts
+ * @package Condoedge\Ai\Contracts
  */
 interface ContextRetrieverInterface
 {

@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Services;
+namespace Condoedge\Ai\Services;
 
-use AiSystem\Contracts\DataIngestionServiceInterface;
-use AiSystem\Contracts\ContextRetrieverInterface;
-use AiSystem\Contracts\EmbeddingProviderInterface;
-use AiSystem\Contracts\LlmProviderInterface;
-use AiSystem\Contracts\QueryGeneratorInterface;
-use AiSystem\Contracts\QueryExecutorInterface;
-use AiSystem\Contracts\ResponseGeneratorInterface;
-use AiSystem\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Contracts\ContextRetrieverInterface;
+use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Contracts\QueryGeneratorInterface;
+use Condoedge\Ai\Contracts\QueryExecutorInterface;
+use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
 
 /**
  * AI Manager - Convenient wrapper around AI services
@@ -22,7 +22,7 @@ use AiSystem\Domain\Contracts\Nodeable;
  *
  * **Usage via Facade:**
  * ```php
- * use AiSystem\Facades\AI;
+ * use Condoedge\Ai\Facades\AI;
  *
  * AI::ingest($customer);
  * $context = AI::retrieveContext("Show all teams");
@@ -31,7 +31,7 @@ use AiSystem\Domain\Contracts\Nodeable;
  *
  * **Usage via Dependency Injection:**
  * ```php
- * use AiSystem\Services\AiManager;
+ * use Condoedge\Ai\Services\AiManager;
  *
  * class CustomerController extends Controller
  * {
@@ -55,7 +55,7 @@ use AiSystem\Domain\Contracts\Nodeable;
  * $mockAi->shouldReceive('ingest')->once()->andReturn([...]);
  * ```
  *
- * @package AiSystem\Services
+ * @package Condoedge\Ai\Services
  */
 class AiManager
 {

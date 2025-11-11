@@ -23,7 +23,7 @@ Interact with Large Language Models (OpenAI GPT-4o or Anthropic Claude) for chat
 ### Simple Chat
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $response = AI::chat("What is the capital of France?");
 echo $response; // "The capital of France is Paris."
@@ -165,7 +165,7 @@ ANTHROPIC_MAX_TOKENS=4000
 ### OpenAI
 
 ```php
-use AiSystem\LlmProviders\OpenAiLlmProvider;
+use Condoedge\Ai\LlmProviders\OpenAiLlmProvider;
 
 $openai = new OpenAiLlmProvider([
     'api_key' => env('OPENAI_API_KEY'),
@@ -182,7 +182,7 @@ $response = $openai->chat([
 ### Anthropic
 
 ```php
-use AiSystem\LlmProviders\AnthropicLlmProvider;
+use Condoedge\Ai\LlmProviders\AnthropicLlmProvider;
 
 $claude = new AnthropicLlmProvider([
     'api_key' => env('ANTHROPIC_API_KEY'),

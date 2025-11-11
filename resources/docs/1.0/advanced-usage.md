@@ -10,7 +10,7 @@ The AI system provides three ways to access functionality:
 
 ### 1. Facade (Simplest)
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 AI::ingest($customer);
 ```
@@ -18,7 +18,7 @@ AI::ingest($customer);
 
 ### 2. AiManager Dependency Injection (Recommended for Testing)
 ```php
-use AiSystem\Services\AiManager;
+use Condoedge\Ai\Services\AiManager;
 
 class CustomerController extends Controller
 {
@@ -34,7 +34,7 @@ class CustomerController extends Controller
 
 ### 3. Direct Service Injection (Maximum Control)
 ```php
-use AiSystem\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
 
 class CustomerService
 {
@@ -59,7 +59,7 @@ The `AiManager` service provides the same convenient API as the Facade, but with
 ### Basic Injection
 
 ```php
-use AiSystem\Services\AiManager;
+use Condoedge\Ai\Services\AiManager;
 
 class CustomerService
 {
@@ -88,7 +88,7 @@ class CustomerService
 ### Controller Example
 
 ```php
-use AiSystem\Services\AiManager;
+use Condoedge\Ai\Services\AiManager;
 use Illuminate\Http\JsonResponse;
 
 class CustomerController extends Controller
@@ -131,7 +131,7 @@ class CustomerController extends Controller
 ### Service Class Example
 
 ```php
-use AiSystem\Services\AiManager;
+use Condoedge\Ai\Services\AiManager;
 
 class QueryGenerationService
 {
@@ -168,7 +168,7 @@ class QueryGenerationService
 Easily mock AiManager in tests:
 
 ```php
-use AiSystem\Services\AiManager;
+use Condoedge\Ai\Services\AiManager;
 use Mockery;
 
 class CustomerServiceTest extends TestCase
@@ -203,7 +203,7 @@ class CustomerServiceTest extends TestCase
         $this->assertTrue($result['ingestion']['graph_stored']);
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();
@@ -218,10 +218,10 @@ class CustomerServiceTest extends TestCase
 ### Data Ingestion Service
 
 ```php
-use AiSystem\Services\DataIngestionService;
-use AiSystem\VectorStore\QdrantStore;
-use AiSystem\GraphStore\Neo4jStore;
-use AiSystem\EmbeddingProviders\OpenAiEmbeddingProvider;
+use Condoedge\Ai\Services\DataIngestionService;
+use Condoedge\Ai\VectorStore\QdrantStore;
+use Condoedge\Ai\GraphStore\Neo4jStore;
+use Condoedge\Ai\EmbeddingProviders\OpenAiEmbeddingProvider;
 
 $vectorStore = new QdrantStore([
     'host' => 'localhost',
@@ -258,7 +258,7 @@ $status = $ingestion->ingest($customer);
 ### Anthropic LLM
 
 ```php
-use AiSystem\LlmProviders\AnthropicLlmProvider;
+use Condoedge\Ai\LlmProviders\AnthropicLlmProvider;
 
 $claude = new AnthropicLlmProvider([
     'api_key' => env('ANTHROPIC_API_KEY'),
@@ -279,7 +279,7 @@ $response = $claude->chat([
 ### Neo4j Operations
 
 ```php
-use AiSystem\GraphStore\Neo4jStore;
+use Condoedge\Ai\GraphStore\Neo4jStore;
 
 $neo4j = new Neo4jStore(config('ai.graph.neo4j'));
 
@@ -301,7 +301,7 @@ $schema = $neo4j->getSchema();
 ## Custom Provider Implementation
 
 ```php
-use AiSystem\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 
 class CustomEmbeddingProvider implements EmbeddingProviderInterface
 {
@@ -327,7 +327,7 @@ For maximum control, inject only the services you need:
 ### Example: Injecting DataIngestionService
 
 ```php
-use AiSystem\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
 
 class CustomerController extends Controller
 {
@@ -351,9 +351,9 @@ class CustomerController extends Controller
 ### Example: Multiple Service Injection
 
 ```php
-use AiSystem\Contracts\DataIngestionServiceInterface;
-use AiSystem\Contracts\ContextRetrieverInterface;
-use AiSystem\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Contracts\ContextRetrieverInterface;
+use Condoedge\Ai\Contracts\LlmProviderInterface;
 
 class QueryService
 {
@@ -383,10 +383,10 @@ class QueryService
 
 ```php
 use Mockery;
-use AiSystem\Services\DataIngestionService;
-use AiSystem\Contracts\VectorStoreInterface;
-use AiSystem\Contracts\GraphStoreInterface;
-use AiSystem\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Services\DataIngestionService;
+use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 
 class DataIngestionTest extends TestCase
 {
@@ -424,7 +424,7 @@ class DataIngestionTest extends TestCase
         $this->assertTrue($status['vector_stored']);
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();

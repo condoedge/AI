@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Services;
+namespace Condoedge\Ai\Services;
 
-use AiSystem\Contracts\ContextRetrieverInterface;
-use AiSystem\Contracts\VectorStoreInterface;
-use AiSystem\Contracts\GraphStoreInterface;
-use AiSystem\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Contracts\ContextRetrieverInterface;
+use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 
 /**
  * Context Retriever Service
@@ -33,7 +33,7 @@ use AiSystem\Contracts\EmbeddingProviderInterface;
  * → Examples: Sample Team and Person entities
  * → Context sent to LLM for accurate Cypher generation
  *
- * @package AiSystem\Services
+ * @package Condoedge\Ai\Services
  */
 class ContextRetrieverService implements ContextRetrieverInterface
 {

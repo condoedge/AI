@@ -1,9 +1,9 @@
 <?php
 
-namespace AiSystem\Tests\Unit\Domain\ValueObjects;
+namespace Condoedge\Ai\Tests\Unit\Domain\ValueObjects;
 
-use AiSystem\Domain\ValueObjects\VectorConfig;
-use AiSystem\Tests\TestCase;
+use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
+use Condoedge\Ai\Tests\TestCase;
 
 class VectorConfigTest extends TestCase
 {

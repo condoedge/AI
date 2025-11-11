@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Contracts;
+namespace Condoedge\Ai\Contracts;
 
-use AiSystem\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
 
 /**
  * DataIngestionServiceInterface

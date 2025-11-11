@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Tests\Integration\LlmProviders;
+namespace Condoedge\Ai\Tests\Integration\LlmProviders;
 
-use AiSystem\Tests\TestCase;
-use AiSystem\LlmProviders\OpenAiLlmProvider;
+use Condoedge\Ai\Tests\TestCase;
+use Condoedge\Ai\LlmProviders\OpenAiLlmProvider;
 use Exception;
 
 /**
@@ -22,7 +22,7 @@ class OpenAiLlmProviderTest extends TestCase
 {
     private ?OpenAiLlmProvider $provider = null;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 

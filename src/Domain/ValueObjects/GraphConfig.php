@@ -1,6 +1,6 @@
 <?php
 
-namespace AiSystem\Domain\ValueObjects;
+namespace Condoedge\Ai\Domain\ValueObjects;
 
 /**
  * GraphConfig - Configuration for Neo4j graph storage
@@ -59,6 +59,16 @@ class GraphConfig
             properties: $config['properties'],
             relationships: $relationships
         );
+    }
+
+    /**
+     * Get all relationships
+     *
+     * @return RelationshipConfig[]
+     */
+    public function getRelationships(): array
+    {
+        return $this->relationships;
     }
 
     /**

@@ -1,10 +1,10 @@
 <?php
 
-namespace AiSystem\Domain\Traits;
+namespace Condoedge\Ai\Domain\Traits;
 
-use AiSystem\Domain\ValueObjects\GraphConfig;
-use AiSystem\Domain\ValueObjects\VectorConfig;
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
+use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
+use Condoedge\Ai\Facades\AI;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -166,9 +166,9 @@ trait HasNodeableConfig
 
         // Job will be created in next step
         $jobClass = match ($operation) {
-            'create' => \AiSystem\Jobs\IngestEntityJob::class,
-            'update' => \AiSystem\Jobs\SyncEntityJob::class,
-            'delete' => \AiSystem\Jobs\RemoveEntityJob::class,
+            'create' => \Condoedge\Ai\Jobs\IngestEntityJob::class,
+            'update' => \Condoedge\Ai\Jobs\SyncEntityJob::class,
+            'delete' => \Condoedge\Ai\Jobs\RemoveEntityJob::class,
         };
 
         $job = new $jobClass($this);
@@ -275,69 +275,129 @@ trait HasNodeableConfig
     }
 
     /**
-     * Get Neo4j graph configuration from config file
+     * Get Neo4j graph configuration with auto-discovery fallback
      */
     public function getGraphConfig(): GraphConfig
     {
-        $config = $this->loadEntityConfig();
+        $config = $this->resolveConfig();
 
         if (!isset($config['graph'])) {
-            throw new \LogicException(
-                sprintf('No graph configuration found for entity: %s', $this->getConfigKey())
-            );
+            return GraphConfig::fromArray([
+                'label' => class_basename($this),
+                'properties' => [],
+                'relationships' => [],
+            ]);
         }
 
         return GraphConfig::fromArray($config['graph']);
     }
 
     /**
-     * Get Qdrant vector configuration from config file
+     * Get Qdrant vector configuration with auto-discovery fallback
      */
-    public function getVectorConfig(): VectorConfig
+    public function getVectorConfig(): ?VectorConfig
     {
-        $config = $this->loadEntityConfig();
+        $config = $this->resolveConfig();
 
-        if (!isset($config['vector'])) {
-            throw new \LogicException(
-                sprintf('No vector configuration found for entity: %s. Entity is not searchable.', $this->getConfigKey())
-            );
-        }
-
-        return VectorConfig::fromArray($config['vector']);
+        return isset($config['vector'])
+            ? VectorConfig::fromArray($config['vector'])
+            : null;
     }
 
     /**
-     * Load entity configuration from file
+     * Resolve configuration with fallback chain
+     *
+     * Priority:
+     * 1. nodeableConfig() method on model (highest priority)
+     * 2. config/entities.php for model class
+     * 3. EntityAutoDiscovery service (fallback)
+     *
+     * @return array<string, mixed> Entity configuration
+     */
+    protected function resolveConfig(): array
+    {
+        // 1. Check for nodeableConfig() method (developer override)
+        if (method_exists($this, 'nodeableConfig')) {
+            $result = $this->nodeableConfig();
+
+            // If returns NodeableConfig builder, convert to array
+            if ($result instanceof \Condoedge\Ai\Domain\ValueObjects\NodeableConfig) {
+                return $result->toArray();
+            }
+
+            return $result;
+        }
+
+        // 2. Check config/entities.php (legacy support)
+        $entityConfigs = config('ai.entities', []);
+        $modelClass = get_class($this);
+        $shortName = class_basename($modelClass);
+
+        if (isset($entityConfigs[$modelClass])) {
+            return $entityConfigs[$modelClass];
+        }
+
+        if (isset($entityConfigs[$shortName])) {
+            return $entityConfigs[$shortName];
+        }
+
+        // 3. Auto-discovery (fallback)
+        return $this->autoDiscover();
+    }
+
+    /**
+     * Auto-discover configuration
+     *
+     * @return array<string, mixed> Discovered configuration
+     */
+    protected function autoDiscover(): array
+    {
+        // Check if auto-discovery is enabled
+        if (!config('ai.auto_discovery.enabled', true)) {
+            return [];
+        }
+
+        // Get auto-discovery service from container
+        if (!app()->bound(\Condoedge\Ai\Services\Discovery\EntityAutoDiscovery::class)) {
+            return [];
+        }
+
+        $discovery = app(\Condoedge\Ai\Services\Discovery\EntityAutoDiscovery::class);
+
+        // Discover and cache
+        $config = $discovery->discover($this);
+
+        // Allow model to customize discovery
+        if (method_exists($this, 'customizeDiscovery')) {
+            $nodeableConfig = \Condoedge\Ai\Domain\ValueObjects\NodeableConfig::fromArray($config);
+            $customized = $this->customizeDiscovery($nodeableConfig);
+            return $customized->toArray();
+        }
+
+        return $config;
+    }
+
+    /**
+     * Optional: Allow models to customize discovery
+     *
+     * Override this method in your model to customize auto-discovered configuration.
+     *
+     * @param \Condoedge\Ai\Domain\ValueObjects\NodeableConfig $config Discovered configuration
+     * @return \Condoedge\Ai\Domain\ValueObjects\NodeableConfig Customized configuration
+     */
+    public function customizeDiscovery(\Condoedge\Ai\Domain\ValueObjects\NodeableConfig $config): \Condoedge\Ai\Domain\ValueObjects\NodeableConfig
+    {
+        return $config; // Override in model to customize
+    }
+
+    /**
+     * Load entity configuration from file (legacy support)
+     *
+     * @deprecated Use resolveConfig() instead
      */
     protected function loadEntityConfig(): array
     {
-        $configKey = $this->getConfigKey();
-
-        // Try loading from Laravel config first
-        if (function_exists('config')) {
-            $config = config("ai.entities.{$configKey}");
-            if ($config) {
-                return $config;
-            }
-        }
-
-        // Fallback: Load directly from PHP config file
-        $configPath = $this->getConfigPath();
-        if (!file_exists($configPath)) {
-            throw new \RuntimeException(
-                sprintf('Entity config file not found: %s', $configPath)
-            );
-        }
-
-        $allEntities = require $configPath;
-
-        if (!isset($allEntities[$configKey])) {
-            throw new \RuntimeException(
-                sprintf('Entity "%s" not found in config file', $configKey)
-            );
-        }
-
-        return $allEntities[$configKey];
+        return $this->resolveConfig();
     }
 
     /**

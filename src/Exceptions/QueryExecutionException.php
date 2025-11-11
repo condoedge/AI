@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Exceptions;
+namespace Condoedge\Ai\Exceptions;
 
 /**
  * Query Execution Exception

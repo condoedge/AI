@@ -244,7 +244,7 @@ php artisan vendor:publish --tag=ai-entities
 ### Override in Code
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $ai = new AI([
     'embedding_provider' => 'anthropic',

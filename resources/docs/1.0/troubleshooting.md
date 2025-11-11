@@ -6,9 +6,9 @@ Common issues and their solutions.
 
 ## Migration Issues
 
-### "Class 'AiSystem\Wrappers\AI' not found"
+### "Class 'Condoedge\Ai\Wrappers\AI' not found"
 
-**Error:** `Class 'AiSystem\Wrappers\AI' not found`
+**Error:** `Class 'Condoedge\Ai\Wrappers\AI' not found`
 
 **Cause:** Using deprecated import statement after refactoring.
 
@@ -18,10 +18,10 @@ Update your import statement:
 
 ```php
 // Old (deprecated)
-use AiSystem\Wrappers\AI;
+use Condoedge\Ai\Wrappers\AI;
 
 // New (current)
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 ```
 
 The API is unchanged - only the import needs updating. See the [Migration Guide](https://github.com/your-repo/MIGRATION-GUIDE.md) for complete details.
@@ -338,8 +338,8 @@ NEO4J_PASSWORD=password
 
 **Solution:**
 ```php
-use AiSystem\Domain\Contracts\Nodeable;
-use AiSystem\Domain\Traits\HasNodeableConfig;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\Traits\HasNodeableConfig;
 
 class Customer extends Model implements Nodeable
 {

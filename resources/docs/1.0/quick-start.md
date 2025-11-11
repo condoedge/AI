@@ -25,8 +25,8 @@ Create a model that implements `Nodeable`:
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use AiSystem\Domain\Contracts\Nodeable;
-use AiSystem\Domain\Traits\HasNodeableConfig;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\Traits\HasNodeableConfig;
 
 class Team extends Model implements Nodeable
 {
@@ -76,7 +76,7 @@ return [
 ## Step 3: Ingest Your First Entity (1 minute)
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 use App\Models\Team;
 
 // Create a team
@@ -118,7 +118,7 @@ print_r($status);
 Batch ingestion is more efficient when processing many entities:
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $teams = Team::all(); // Get all teams
 
@@ -141,7 +141,7 @@ print_r($result);
 Find semantically similar teams using vector search:
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $similar = AI::searchSimilar(
     "Teams working on software development",
@@ -173,7 +173,7 @@ Score: 0.78
 When an entity changes, sync it to both stores:
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $team = Team::find(1);
 $team->size = 15;
@@ -199,7 +199,7 @@ print_r($status);
 Delete entity from both Neo4j and Qdrant:
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $team = Team::find(1);
 
@@ -219,7 +219,7 @@ if ($success) {
 Retrieve rich context for LLM query generation:
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $question = "Show me all engineering teams";
 
@@ -264,7 +264,7 @@ print_r($context);
 Simple chat interface using OpenAI or Anthropic:
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 // Simple question
 $response = AI::chat("What is the capital of France?");
@@ -289,7 +289,7 @@ echo $response; // "6"
 Create vector embeddings for custom text:
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $text = "Artificial Intelligence and Machine Learning";
 $vector = AI::embed($text);
@@ -306,7 +306,7 @@ echo "First values: " . implode(', ', array_slice($vector, 0, 5)) . "\n";
 Discover what's in your Neo4j database:
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $schema = AI::getSchema();
 
@@ -325,7 +325,7 @@ print_r($schema);
 Here's a complete example combining multiple features:
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 // 1. User asks a question
 $question = "Show me teams with more than 5 members";
@@ -368,7 +368,7 @@ For production use, automatically sync entities when they change:
 
 namespace App\Observers;
 
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 use App\Models\Team;
 
 class TeamObserver
@@ -417,7 +417,7 @@ namespace Tests\Feature;
 
 use Tests\TestCase;
 use App\Models\Team;
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 class TeamAiIntegrationTest extends TestCase
 {

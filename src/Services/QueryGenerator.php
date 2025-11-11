@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Services;
+namespace Condoedge\Ai\Services;
 
-use AiSystem\Contracts\QueryGeneratorInterface;
-use AiSystem\Contracts\LlmProviderInterface;
-use AiSystem\Contracts\GraphStoreInterface;
-use AiSystem\Exceptions\QueryGenerationException;
-use AiSystem\Exceptions\QueryValidationException;
-use AiSystem\Exceptions\UnsafeQueryException;
+use Condoedge\Ai\Contracts\QueryGeneratorInterface;
+use Condoedge\Ai\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Exceptions\QueryGenerationException;
+use Condoedge\Ai\Exceptions\QueryValidationException;
+use Condoedge\Ai\Exceptions\UnsafeQueryException;
 
 /**
  * Query Generator Service
@@ -17,7 +17,7 @@ use AiSystem\Exceptions\UnsafeQueryException;
  * Transforms natural language questions into safe, valid Cypher queries
  * using LLM and context from RAG (graph schema, similar queries, examples).
  *
- * @package AiSystem\Services
+ * @package Condoedge\Ai\Services
  */
 class QueryGenerator implements QueryGeneratorInterface
 {

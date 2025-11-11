@@ -385,15 +385,15 @@ Create a new test file for relationship pattern testing:
 
 declare(strict_types=1);
 
-namespace AiSystem\Tests\Unit\Services;
+namespace Condoedge\Ai\Tests\Unit\Services;
 
-use AiSystem\Tests\TestCase;
-use AiSystem\Services\ContextRetriever;
-use AiSystem\Services\QueryGenerator;
-use AiSystem\Contracts\VectorStoreInterface;
-use AiSystem\Contracts\GraphStoreInterface;
-use AiSystem\Contracts\EmbeddingProviderInterface;
-use AiSystem\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Tests\TestCase;
+use Condoedge\Ai\Services\ContextRetriever;
+use Condoedge\Ai\Services\QueryGenerator;
+use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Mockery;
 
 /**
@@ -415,7 +415,7 @@ class RelationshipScopesTest extends TestCase
     private $queryGenerator;
     private $testEntityConfigs;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 
@@ -502,7 +502,7 @@ CYPHER,
         );
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();

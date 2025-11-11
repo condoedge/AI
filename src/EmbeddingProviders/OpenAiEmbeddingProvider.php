@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\EmbeddingProviders;
+namespace Condoedge\Ai\EmbeddingProviders;
 
-use AiSystem\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use RuntimeException;
 
 /**

@@ -329,13 +329,13 @@ class AI extends Facade
 **Usage Examples:**
 ```php
 // Via Facade (simple)
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 AI::ingest($customer);
 AI::retrieveContext("Show all teams");
 AI::chat("What is 2+2?");
 
 // Via Dependency Injection (testable)
-use AiSystem\Services\AiManager;
+use Condoedge\Ai\Services\AiManager;
 class CustomerController extends Controller
 {
     public function __construct(private AiManager $ai) {}

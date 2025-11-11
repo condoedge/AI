@@ -26,7 +26,7 @@ Add the service provider to your `config/app.php`:
 ```php
 'providers' => [
     // ...
-    AiSystem\AiServiceProvider::class,
+    Condoedge\Ai\AiServiceProvider::class,
 ],
 ```
 
@@ -215,9 +215,9 @@ Create a simple test script `test-ai-setup.php`:
 ```php
 <?php
 
-use AiSystem\Facades\AI;
-use AiSystem\VectorStore\QdrantStore;
-use AiSystem\GraphStore\Neo4jStore;
+use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\VectorStore\QdrantStore;
+use Condoedge\Ai\GraphStore\Neo4jStore;
 
 // Test Neo4j Connection
 try {
@@ -281,8 +281,8 @@ include 'test-ai-setup.php'
 Define an entity that implements `Nodeable`:
 
 ```php
-use AiSystem\Domain\Contracts\Nodeable;
-use AiSystem\Domain\Traits\HasNodeableConfig;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\Traits\HasNodeableConfig;
 use Illuminate\Database\Eloquent\Model;
 
 class Customer extends Model implements Nodeable
@@ -320,7 +320,7 @@ return [
 ### Ingest Your First Entity
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $customer = Customer::create([
     'name' => 'John Doe',

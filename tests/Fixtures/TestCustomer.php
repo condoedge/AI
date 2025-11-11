@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Tests\Fixtures;
+namespace Condoedge\Ai\Tests\Fixtures;
 
-use AiSystem\Domain\Traits\HasNodeableConfig;
+use Condoedge\Ai\Domain\Traits\HasNodeableConfig;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use AiSystem\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
 
 /**
  * Test Customer Model
@@ -35,7 +35,7 @@ class TestCustomer extends Model implements Nodeable
      */
     protected static function newFactory()
     {
-        return \AiSystem\Tests\Database\Factories\TestCustomerFactory::new();
+        return \Condoedge\Ai\Tests\Database\Factories\TestCustomerFactory::new();
     }
 
     protected $fillable = [
@@ -147,5 +147,84 @@ class TestCustomer extends Model implements Nodeable
             'country' => $this->country,
             'order_count' => $this->orders()->count(),
         ];
+    }
+
+    // ========================================
+    // Query Scopes for Testing CypherScopeAdapter
+    // ========================================
+
+    /**
+     * Scope: Active customers
+     */
+    public function scopeActive($query)
+    {
+        return $query->where('status', 'active');
+    }
+
+    /**
+     * Scope: Inactive customers
+     */
+    public function scopeInactive($query)
+    {
+        return $query->where('status', 'inactive');
+    }
+
+    /**
+     * Scope: High value customers
+     */
+    public function scopeHighValue($query)
+    {
+        return $query->where('lifetime_value', '>', 1000);
+    }
+
+    /**
+     * Scope: Customers from specific country
+     */
+    public function scopeFromCountry($query, $country)
+    {
+        return $query->where('country', $country);
+    }
+
+    /**
+     * Scope: Customers with orders (relationship)
+     */
+    public function scopeWithOrders($query)
+    {
+        return $query->whereHas('orders');
+    }
+
+    /**
+     * Scope: Customers with completed orders (relationship with nested condition)
+     */
+    public function scopeWithCompletedOrders($query)
+    {
+        return $query->whereHas('orders', function($q) {
+            $q->where('status', 'completed');
+        });
+    }
+
+    /**
+     * Scope: VIP customers (multiple conditions)
+     */
+    public function scopeVip($query)
+    {
+        return $query->where('status', 'active')
+                     ->where('lifetime_value', '>=', 5000);
+    }
+
+    /**
+     * Scope: Customers with null country
+     */
+    public function scopeWithoutCountry($query)
+    {
+        return $query->whereNull('country');
+    }
+
+    /**
+     * Scope: Customers in specific countries
+     */
+    public function scopeInCountries($query, array $countries)
+    {
+        return $query->whereIn('country', $countries);
     }
 }

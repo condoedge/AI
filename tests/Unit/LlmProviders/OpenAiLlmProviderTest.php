@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Tests\Unit\LlmProviders;
+namespace Condoedge\Ai\Tests\Unit\LlmProviders;
 
-use AiSystem\Tests\TestCase;
-use AiSystem\LlmProviders\OpenAiLlmProvider;
-use AiSystem\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Tests\TestCase;
+use Condoedge\Ai\LlmProviders\OpenAiLlmProvider;
+use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Exception;
 
 /**

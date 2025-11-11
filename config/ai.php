@@ -38,6 +38,51 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Auto-Discovery Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Automatically discover entity configurations from Eloquent models.
+    | Reduces boilerplate by inferring properties, relationships, aliases,
+    | and embed fields from model definitions.
+    |
+    */
+    'auto_discovery' => [
+        // Enable auto-discovery globally
+        'enabled' => env('AI_AUTO_DISCOVERY_ENABLED', true),
+
+        // Cache discovered configurations
+        'cache' => [
+            'enabled' => env('AI_AUTO_DISCOVERY_CACHE', true),
+            'ttl' => env('AI_AUTO_DISCOVERY_CACHE_TTL', 3600), // 1 hour
+            'prefix' => 'ai.discovery.',
+        ],
+
+        // What to auto-discover
+        'discover' => [
+            'properties' => true,
+            'relationships' => true,
+            'scopes' => true,
+            'aliases' => true,
+            'embed_fields' => true,
+        ],
+
+        // Customization
+        'alias_mappings' => [
+            // Map table names to additional aliases
+            // 'customers' => ['client', 'buyer'],
+            // 'orders' => ['purchase', 'transaction'],
+        ],
+
+        'exclude_properties' => [
+            // Additional properties to exclude from discovery
+            // (password, tokens, etc. are excluded by default)
+            // 'internal_notes',
+            // 'admin_only_field',
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Auto-Sync Configuration
     |--------------------------------------------------------------------------
     |
@@ -211,6 +256,48 @@ return [
         'similarity_threshold' => env('AI_SIMILARITY_THRESHOLD', 0.7),
         'include_schema' => env('AI_INCLUDE_SCHEMA', true),
         'include_examples' => env('AI_INCLUDE_EXAMPLES', true),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | File Processing Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configuration for file content processing and semantic search.
+    | Files are stored in dual storage:
+    | - Neo4j: File metadata and relationships
+    | - Qdrant: File content chunks with embeddings for semantic search
+    |
+    */
+    'file_processing' => [
+        // Enable file content processing
+        'enabled' => env('AI_FILE_PROCESSING_ENABLED', true),
+
+        // Qdrant collection name for file chunks
+        'collection' => env('AI_FILE_COLLECTION', 'file_chunks'),
+
+        // Supported file types for content extraction
+        'supported_types' => ['pdf', 'docx', 'txt', 'md', 'markdown', 'log', 'text'],
+
+        // Chunking settings
+        'chunk_size' => env('AI_FILE_CHUNK_SIZE', 1000), // characters
+        'chunk_overlap' => env('AI_FILE_CHUNK_OVERLAP', 200), // characters
+        'preserve_sentences' => env('AI_FILE_PRESERVE_SENTENCES', true),
+        'preserve_paragraphs' => env('AI_FILE_PRESERVE_PARAGRAPHS', true),
+
+        // Queue processing settings
+        'queue' => env('AI_FILE_QUEUE', false), // Queue file processing
+        'queue_connection' => env('AI_FILE_QUEUE_CONNECTION', null),
+        'queue_name' => env('AI_FILE_QUEUE_NAME', 'default'),
+        'queue_threshold_bytes' => env('AI_FILE_QUEUE_THRESHOLD', 5 * 1024 * 1024), // 5MB
+
+        // Error handling
+        'fail_silently' => env('AI_FILE_FAIL_SILENTLY', true),
+        'log_errors' => env('AI_FILE_LOG_ERRORS', true),
+
+        // Search settings
+        'default_search_limit' => env('AI_FILE_SEARCH_LIMIT', 10),
+        'min_search_score' => env('AI_FILE_MIN_SCORE', 0.0),
     ],
 
     /*

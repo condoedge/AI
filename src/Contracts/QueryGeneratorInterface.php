@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Contracts;
+namespace Condoedge\Ai\Contracts;
 
 /**
  * Query Generator Interface

@@ -1,8 +1,8 @@
 <?php
 
-namespace AiSystem\GraphStore;
+namespace Condoedge\Ai\GraphStore;
 
-use AiSystem\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
 
 /**
  * Neo4j Graph Store Implementation

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Jobs;
+namespace Condoedge\Ai\Jobs;
 
-use AiSystem\Domain\Contracts\Nodeable;
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Facades\AI;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Facades;
+namespace Condoedge\Ai\Facades;
 
 use Illuminate\Support\Facades\Facade;
 
@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Facade;
  *
  * **Basic Usage:**
  * ```php
- * use AiSystem\Facades\AI;
+ * use Condoedge\Ai\Facades\AI;
  *
  * // Data Ingestion
  * AI::ingest($customer);
@@ -64,7 +64,7 @@ use Illuminate\Support\Facades\Facade;
  *
  * **Testing:**
  * ```php
- * use AiSystem\Facades\AI;
+ * use Condoedge\Ai\Facades\AI;
  *
  * // Mock facade in tests
  * AI::shouldReceive('ingest')
@@ -87,10 +87,10 @@ use Illuminate\Support\Facades\Facade;
  * - All services are singletons managed by Laravel
  * - Fully testable using Laravel's facade mocking
  *
- * @method static array ingest(\AiSystem\Domain\Contracts\Nodeable $entity)
+ * @method static array ingest(\Condoedge\Ai\Domain\Contracts\Nodeable $entity)
  * @method static array ingestBatch(array $entities)
- * @method static bool remove(\AiSystem\Domain\Contracts\Nodeable $entity)
- * @method static array sync(\AiSystem\Domain\Contracts\Nodeable $entity)
+ * @method static bool remove(\Condoedge\Ai\Domain\Contracts\Nodeable $entity)
+ * @method static array sync(\Condoedge\Ai\Domain\Contracts\Nodeable $entity)
  * @method static array retrieveContext(string $question, array $options = [])
  * @method static array searchSimilar(string $question, array $options = [])
  * @method static array getSchema()
@@ -124,8 +124,8 @@ use Illuminate\Support\Facades\Facade;
  * @method static array suggestVisualizations(array $queryResult, string $cypherQuery)
  * @method static array answerQuestion(string $question, array $options = [])
  *
- * @see \AiSystem\Services\AiManager
- * @package AiSystem\Facades
+ * @see \Condoedge\Ai\Services\AiManager
+ * @package Condoedge\Ai\Facades
  */
 class AI extends Facade
 {

@@ -1,9 +1,9 @@
 <?php
 
-namespace AiSystem\Tests\Integration\GraphStore;
+namespace Condoedge\Ai\Tests\Integration\GraphStore;
 
-use AiSystem\GraphStore\Neo4jStore;
-use AiSystem\Tests\TestCase;
+use Condoedge\Ai\GraphStore\Neo4jStore;
+use Condoedge\Ai\Tests\TestCase;
 
 /**
  * Integration tests for Neo4jStore
@@ -16,7 +16,7 @@ class Neo4jStoreTest extends TestCase
     protected Neo4jStore $neo4j;
     protected string $testLabel;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 
@@ -29,7 +29,7 @@ class Neo4jStoreTest extends TestCase
         }
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         // Cleanup: delete all test nodes
         try {

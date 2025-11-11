@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Services;
+namespace Condoedge\Ai\Services;
 
-use AiSystem\Contracts\ContextRetrieverInterface;
-use AiSystem\Contracts\VectorStoreInterface;
-use AiSystem\Contracts\GraphStoreInterface;
-use AiSystem\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Contracts\ContextRetrieverInterface;
+use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 
 /**
  * ContextRetriever
@@ -56,7 +56,7 @@ use AiSystem\Contracts\EmbeddingProviderInterface;
  * ]
  * ```
  *
- * @package AiSystem\Services
+ * @package Condoedge\Ai\Services
  */
 class ContextRetriever implements ContextRetrieverInterface
 {
@@ -385,6 +385,7 @@ class ContextRetriever implements ContextRetrieverInterface
                         $detectedScopes[$scopeName] = [
                             'entity' => $entityName,
                             'scope' => $scopeName,
+                            'description' => $scopeConfig['description'] ?? '',
                             'specification_type' => $scopeConfig['specification_type'] ?? 'property_filter',
                             'concept' => $scopeConfig['concept'] ?? ($scopeConfig['description'] ?? ''),
                             'relationship_spec' => $scopeConfig['relationship_spec'] ?? null,

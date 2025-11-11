@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Services;
+namespace Condoedge\Ai\Services;
 
-use AiSystem\Contracts\ResponseGeneratorInterface;
-use AiSystem\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
+use Condoedge\Ai\Contracts\LlmProviderInterface;
 
 /**
  * Response Generator Service
@@ -13,7 +13,7 @@ use AiSystem\Contracts\LlmProviderInterface;
  * Transforms raw query results into natural language explanations
  * using LLM to make data accessible to non-technical users.
  *
- * @package AiSystem\Services
+ * @package Condoedge\Ai\Services
  */
 class ResponseGenerator implements ResponseGeneratorInterface
 {

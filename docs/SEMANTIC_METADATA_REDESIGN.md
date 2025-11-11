@@ -989,7 +989,7 @@ private function formatRelationshipPath(array $spec): string
 ```php
 <?php
 
-namespace AiSystem\Services;
+namespace Condoedge\Ai\Services;
 
 class PatternLibrary
 {
@@ -1166,7 +1166,7 @@ New service to build LLM prompts from semantic metadata:
 ```php
 <?php
 
-namespace AiSystem\Services;
+namespace Condoedge\Ai\Services;
 
 class SemanticPromptBuilder
 {

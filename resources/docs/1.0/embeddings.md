@@ -17,7 +17,7 @@ Embeddings convert text into numerical vectors that represent semantic meaning. 
 ## Generate Single Embedding
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $text = "Artificial Intelligence and Machine Learning";
 $vector = AI::embed($text);
@@ -113,7 +113,7 @@ $vectors = AI::embedBatch($documents);
 ## Advanced: Direct Provider Usage
 
 ```php
-use AiSystem\EmbeddingProviders\OpenAiEmbeddingProvider;
+use Condoedge\Ai\EmbeddingProviders\OpenAiEmbeddingProvider;
 
 $provider = new OpenAiEmbeddingProvider([
     'api_key' => env('OPENAI_API_KEY'),

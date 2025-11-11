@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Tests\Unit\Services;
+namespace Condoedge\Ai\Tests\Unit\Services;
 
-use AiSystem\Tests\TestCase;
-use AiSystem\Services\DataIngestionService;
-use AiSystem\Contracts\DataIngestionServiceInterface;
-use AiSystem\Contracts\VectorStoreInterface;
-use AiSystem\Contracts\GraphStoreInterface;
-use AiSystem\Contracts\EmbeddingProviderInterface;
-use AiSystem\Domain\Contracts\Nodeable;
-use AiSystem\Domain\ValueObjects\GraphConfig;
-use AiSystem\Domain\ValueObjects\VectorConfig;
-use AiSystem\Domain\ValueObjects\RelationshipConfig;
+use Condoedge\Ai\Tests\TestCase;
+use Condoedge\Ai\Services\DataIngestionService;
+use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
+use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
+use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
 use Mockery;
 use InvalidArgumentException;
 use RuntimeException;
@@ -38,7 +38,7 @@ class DataIngestionServiceTest extends TestCase
     private $mockEmbeddingProvider;
     private $service;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 
@@ -53,7 +53,7 @@ class DataIngestionServiceTest extends TestCase
         );
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();

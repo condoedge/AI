@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\LlmProviders;
+namespace Condoedge\Ai\LlmProviders;
 
-use AiSystem\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Exception;
 
 /**
@@ -13,7 +13,7 @@ use Exception;
  * Independent implementation for OpenAI's chat completion API.
  * Uses GPT-4 and later models with 128K context window.
  *
- * @package AiSystem\LlmProviders
+ * @package Condoedge\Ai\LlmProviders
  */
 class OpenAiLlmProvider implements LlmProviderInterface
 {

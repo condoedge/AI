@@ -57,7 +57,7 @@ File: config/entities.php
 
 ### Step 3: Test It
 ```php
-use AiSystem\Services\ContextRetriever;
+use Condoedge\Ai\Services\ContextRetriever;
 
 $retriever = new ContextRetriever(...);
 $metadata = $retriever->getEntityMetadata('Show me business_term');

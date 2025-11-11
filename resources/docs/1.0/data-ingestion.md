@@ -19,7 +19,7 @@ All ingestion happens automatically when you call `AI::ingest()` or use the `Dat
 ### Using AI Wrapper
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 $customer = Customer::find(1);
 $status = AI::ingest($customer);
@@ -127,8 +127,8 @@ Define in `config/entities.php`:
 ## Model Implementation
 
 ```php
-use AiSystem\Domain\Contracts\Nodeable;
-use AiSystem\Domain\Traits\HasNodeableConfig;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\Traits\HasNodeableConfig;
 
 class Customer extends Model implements Nodeable
 {
@@ -184,7 +184,7 @@ if ($result['failed'] > 0) {
 ## Automatic Sync with Observers
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 class CustomerObserver
 {
@@ -219,7 +219,7 @@ public function boot()
 ## Advanced: Direct Service Usage
 
 ```php
-use AiSystem\Services\DataIngestionService;
+use Condoedge\Ai\Services\DataIngestionService;
 
 $service = app(DataIngestionService::class);
 

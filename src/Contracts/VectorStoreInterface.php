@@ -1,6 +1,6 @@
 <?php
 
-namespace AiSystem\Contracts;
+namespace Condoedge\Ai\Contracts;
 
 /**
  * VectorStoreInterface

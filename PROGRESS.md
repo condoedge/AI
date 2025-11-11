@@ -158,18 +158,18 @@
 **Usage Comparison:**
 ```php
 // Facade (Recommended - Simple & Testable)
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 AI::ingest($customer);
 $context = AI::retrieveContext("Show all teams");
 $response = AI::chat("What is 2+2?");
 
 // Dependency Injection (Best for Testing)
-use AiSystem\Services\AiManager;
+use Condoedge\Ai\Services\AiManager;
 public function __construct(private AiManager $ai) {}
 $this->ai->ingest($customer);
 
 // Direct Services (Maximum Control)
-use AiSystem\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
 public function __construct(private DataIngestionServiceInterface $ingestion) {}
 $this->ingestion->ingest($customer);
 ```
@@ -207,7 +207,7 @@ $this->ingestion->ingest($customer);
 
 **Usage Example:**
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 // Generate query from question
 $result = AI::generateQuery("Show all customers with orders > 100");
@@ -248,7 +248,7 @@ $safe = AI::sanitizeQuery("MATCH (n) DELETE n"); // Removes DELETE
 
 **Usage Example:**
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 // Execute a query
 $result = AI::executeQuery("MATCH (n:Customer) RETURN n LIMIT 10");
@@ -293,7 +293,7 @@ $answer = AI::ask("How many customers do we have?");
 
 **Usage Example:**
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 // Generate natural language response
 $response = AI::generateResponse(

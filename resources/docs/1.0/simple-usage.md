@@ -15,7 +15,7 @@ The AI Facade automatically handles:
 > **Architecture Note**: The AI system was recently refactored to follow Laravel best practices. The facade now properly leverages Laravel's service container and dependency injection, making it fully testable. See [Migration Guide](https://github.com/your-repo/MIGRATION-GUIDE.md) for details.
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 // Facade usage (recommended)
 AI::ingest($customer);
@@ -23,7 +23,7 @@ $context = AI::retrieveContext("Show all teams");
 $response = AI::chat("What is 2+2?");
 ```
 
-> **Note**: The old `AiSystem\Wrappers\AI` class is **deprecated** and will be removed in v2.0. Please update your imports to use `AiSystem\Facades\AI`.
+> **Note**: The old `Condoedge\Ai\Wrappers\AI` class is **deprecated** and will be removed in v2.0. Please update your imports to use `Condoedge\Ai\Facades\AI`.
 
 ---
 
@@ -422,7 +422,7 @@ The AI Facade is fully testable using Laravel's facade mocking:
 ### Mocking in Tests
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 use Tests\TestCase;
 
 class CustomerServiceTest extends TestCase
@@ -488,7 +488,7 @@ See [Testing Documentation](/docs/{{version}}/testing) for comprehensive testing
 Here's a complete example combining multiple features:
 
 ```php
-use AiSystem\Facades\AI;
+use Condoedge\Ai\Facades\AI;
 
 // 1. Ingest customer data
 $customer = Customer::create([

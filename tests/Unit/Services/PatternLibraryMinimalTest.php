@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace AiSystem\Tests\Unit\Services;
+namespace Condoedge\Ai\Tests\Unit\Services;
 
-use AiSystem\Tests\TestCase;
-use AiSystem\Services\PatternLibrary;
+use Condoedge\Ai\Tests\TestCase;
+use Condoedge\Ai\Services\PatternLibrary;
 
 class PatternLibraryMinimalTest extends TestCase
 {

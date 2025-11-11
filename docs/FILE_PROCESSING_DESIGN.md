@@ -61,7 +61,7 @@ A file processing system that chunks documents, generates embeddings, stores the
 Represents a single chunk of a file with its metadata.
 
 ```php
-namespace AiSystem\Domain\DTOs;
+namespace Condoedge\Ai\Domain\DTOs;
 
 class FileChunk
 {
@@ -98,7 +98,7 @@ class FileChunk
 Responsible for splitting file content into semantic chunks.
 
 ```php
-namespace AiSystem\Contracts;
+namespace Condoedge\Ai\Contracts;
 
 interface FileChunkerInterface
 {
@@ -121,10 +121,10 @@ interface FileChunkerInterface
 Orchestrates the entire file processing pipeline.
 
 ```php
-namespace AiSystem\Contracts;
+namespace Condoedge\Ai\Contracts;
 
 use Kondoedge\Utils\Models\File;
-use AiSystem\Domain\DTOs\ProcessingResult;
+use Condoedge\Ai\Domain\DTOs\ProcessingResult;
 
 interface FileProcessorInterface
 {
@@ -160,9 +160,9 @@ interface FileProcessorInterface
 Manages storage and retrieval of file chunks.
 
 ```php
-namespace AiSystem\Contracts;
+namespace Condoedge\Ai\Contracts;
 
-use AiSystem\Domain\DTOs\FileChunk;
+use Condoedge\Ai\Domain\DTOs\FileChunk;
 
 interface ChunkStoreInterface
 {
@@ -223,7 +223,7 @@ interface ChunkStoreInterface
 Results from file processing.
 
 ```php
-namespace AiSystem\Domain\DTOs;
+namespace Condoedge\Ai\Domain\DTOs;
 
 class ProcessingResult
 {
@@ -276,11 +276,11 @@ class ProcessingResult
 **Using Model Plugins Pattern** (condoedge/utils):
 
 ```php
-namespace AiSystem\Plugins;
+namespace Condoedge\Ai\Plugins;
 
 use Kondoedge\Utils\Models\File;
 use Kondoedge\Utils\Plugins\ModelPlugin;
-use AiSystem\Contracts\FileProcessorInterface;
+use Condoedge\Ai\Contracts\FileProcessorInterface;
 
 class FileProcessingPlugin extends ModelPlugin
 {
@@ -330,7 +330,7 @@ class FileProcessingPlugin extends ModelPlugin
 **Facade for easy access:**
 
 ```php
-namespace AiSystem\Facades;
+namespace Condoedge\Ai\Facades;
 
 use Illuminate\Support\Facades\Facade;
 
@@ -360,7 +360,7 @@ foreach ($results as $result) {
 ### Extractors (Strategy Pattern)
 
 ```php
-namespace AiSystem\Services\Extractors;
+namespace Condoedge\Ai\Services\Extractors;
 
 interface FileExtractorInterface
 {
@@ -378,7 +378,7 @@ class MarkdownExtractor implements FileExtractorInterface { }
 ### File Type Registry
 
 ```php
-namespace AiSystem\Services;
+namespace Condoedge\Ai\Services;
 
 class FileExtractorRegistry
 {
@@ -513,7 +513,7 @@ CREATE TABLE file_processing_status (
 ## Queue Jobs
 
 ```php
-namespace AiSystem\Jobs;
+namespace Condoedge\Ai\Jobs;
 
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -521,7 +521,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Kondoedge\Utils\Models\File;
-use AiSystem\Contracts\FileProcessorInterface;
+use Condoedge\Ai\Contracts\FileProcessorInterface;
 
 class ProcessFileJob implements ShouldQueue
 {
