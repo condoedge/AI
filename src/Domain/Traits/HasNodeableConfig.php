@@ -29,6 +29,11 @@ use Illuminate\Support\Facades\Log;
 trait HasNodeableConfig
 {
     /**
+     * Cached resolved configuration
+     */
+    protected ?array $resolvedConfig = null;
+
+    /**
      * Boot the trait and register model event listeners
      */
     public static function bootHasNodeableConfig(): void
@@ -294,14 +299,21 @@ trait HasNodeableConfig
 
     /**
      * Get Qdrant vector configuration with auto-discovery fallback
+     *
+     * @throws \LogicException If entity is not vectorizable
      */
-    public function getVectorConfig(): ?VectorConfig
+    public function getVectorConfig(): VectorConfig
     {
         $config = $this->resolveConfig();
 
-        return isset($config['vector'])
-            ? VectorConfig::fromArray($config['vector'])
-            : null;
+        if (!isset($config['vector'])) {
+            throw new \LogicException(
+                'Entity ' . static::class . ' is not vectorizable. ' .
+                'Add vector configuration to config/entities.php or ensure embed_fields are discovered.'
+            );
+        }
+
+        return VectorConfig::fromArray($config['vector']);
     }
 
     /**
@@ -316,33 +328,43 @@ trait HasNodeableConfig
      */
     protected function resolveConfig(): array
     {
+        // Return cached config if available
+        if ($this->resolvedConfig !== null) {
+            return $this->resolvedConfig;
+        }
+
         // 1. Check for nodeableConfig() method (developer override)
         if (method_exists($this, 'nodeableConfig')) {
             $result = $this->nodeableConfig();
 
             // If returns NodeableConfig builder, convert to array
             if ($result instanceof \Condoedge\Ai\Domain\ValueObjects\NodeableConfig) {
-                return $result->toArray();
+                $this->resolvedConfig = $result->toArray();
+                return $this->resolvedConfig;
             }
 
-            return $result;
+            $this->resolvedConfig = $result;
+            return $this->resolvedConfig;
         }
 
         // 2. Check config/entities.php (legacy support)
         $entityConfigs = config('ai.entities', []);
         $modelClass = get_class($this);
-        $shortName = class_basename($modelClass);
+        $configKey = $this->getConfigKey();
 
         if (isset($entityConfigs[$modelClass])) {
-            return $entityConfigs[$modelClass];
+            $this->resolvedConfig = $entityConfigs[$modelClass];
+            return $this->resolvedConfig;
         }
 
-        if (isset($entityConfigs[$shortName])) {
-            return $entityConfigs[$shortName];
+        if (isset($entityConfigs[$configKey])) {
+            $this->resolvedConfig = $entityConfigs[$configKey];
+            return $this->resolvedConfig;
         }
 
         // 3. Auto-discovery (fallback)
-        return $this->autoDiscover();
+        $this->resolvedConfig = $this->autoDiscover();
+        return $this->resolvedConfig;
     }
 
     /**

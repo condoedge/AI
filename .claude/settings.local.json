@@ -33,7 +33,17 @@
       "Bash(\"C:\\Users\\jkend\\Documents\\kompo\\ai\\src\\Services\\Discovery\\EntityAutoDiscovery.php\")",
       "Bash(\"C:\\Users\\jkend\\Documents\\kompo\\ai\\tests\\Integration\\EntityAutoDiscoveryTest.php\")",
       "Bash(\"C:\\Users\\jkend\\Documents\\kompo\\ai\\examples\\EntityAutoDiscoveryDemo.php\")",
-      "Bash(timeout 120 vendor/bin/phpunit:*)"
+      "Bash(timeout 120 vendor/bin/phpunit:*)",
+      "Bash(timeout 60 vendor/bin/testbench:*)",
+      "Bash(composer install:*)",
+      "Bash(tee:*)",
+      "Bash(timeout 30 php vendor/phpunit/phpunit/phpunit:*)",
+      "Bash(for test in tests/Unit/Domain/ValueObjects/*.php)",
+      "Bash(do echo \"Testing: $test\")",
+      "Bash(done)",
+      "Bash(find:*)",
+      "Bash(tree:*)",
+      "Bash(git reset:*)"
     ],
     "deny": [],
     "ask": []

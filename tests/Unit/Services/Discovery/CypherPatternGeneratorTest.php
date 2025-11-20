@@ -17,7 +17,7 @@ class CypherPatternGeneratorTest extends TestCase
 {
     private CypherPatternGenerator $generator;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
         $this->generator = new CypherPatternGenerator();

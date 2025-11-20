@@ -35,6 +35,16 @@ use ReflectionMethod;
 class RelationshipDiscoverer
 {
     /**
+     * Track models being discovered to prevent infinite recursion
+     */
+    private array $discoveryStack = [];
+
+    /**
+     * Maximum stack depth to prevent runaway recursion
+     */
+    private const MAX_STACK_DEPTH = 5;
+
+    /**
      * Create a new relationship discoverer
      *
      * @param SchemaInspector|null $schema Schema inspector for foreign key hints
@@ -44,25 +54,56 @@ class RelationshipDiscoverer
     ) {}
 
     /**
-     * Discover relationships from a model
+     * Discover relationships from a model with recursion protection
      *
      * @param string|Model $model Model class name or instance
      * @return array<int, array{type: string, target_label: string, foreign_key?: string, inverse?: bool}>
+     * @throws \RuntimeException If maximum recursion depth exceeded
      */
     public function discover(string|Model $model): array
     {
         $modelInstance = $this->resolveModel($model);
+        $modelClass = get_class($modelInstance);
 
-        // Get relationships from Eloquent methods
-        $relationships = $this->fromEloquentMethods($modelInstance);
-
-        // Enhance with foreign key hints if schema inspector available
-        if ($this->schema !== null) {
-            $foreignKeys = $this->schema->getForeignKeys($modelInstance->getTable());
-            $relationships = $this->enhanceWithForeignKeys($relationships, $foreignKeys, $modelInstance);
+        // Recursion guard: check if we're already discovering this model
+        if (isset($this->discoveryStack[$modelClass])) {
+            // Circular reference detected - return empty to break cycle
+            return [];
         }
 
-        return array_values($relationships);
+        // Stack depth guard: prevent runaway recursion
+        if (count($this->discoveryStack) >= self::MAX_STACK_DEPTH) {
+            throw new \RuntimeException(
+                "Maximum relationship discovery depth (" . self::MAX_STACK_DEPTH . ") exceeded. " .
+                "Possible circular relationship structure in models."
+            );
+        }
+
+        // Add model to stack
+        $this->discoveryStack[$modelClass] = true;
+
+        try {
+            // Get relationships from Eloquent methods
+            $relationships = $this->fromEloquentMethods($modelInstance);
+
+            // Enhance with foreign key hints if schema inspector available
+            if ($this->schema !== null) {
+                try {
+                    $table = $modelInstance->getTable();
+                    if ($table !== null) {
+                        $foreignKeys = $this->schema->getForeignKeys($table);
+                        $relationships = $this->enhanceWithForeignKeys($relationships, $foreignKeys, $modelInstance);
+                    }
+                } catch (\Throwable $e) {
+                    // Skip schema enhancement if table is not configured
+                }
+            }
+
+            return array_values($relationships);
+        } finally {
+            // Always remove from stack when done, even if exception thrown
+            unset($this->discoveryStack[$modelClass]);
+        }
     }
 
     /**

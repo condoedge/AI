@@ -77,7 +77,16 @@ class EmbedFieldDetector
     public function detect(string|Model $model): array
     {
         $modelInstance = $this->resolveModel($model);
-        $tableName = $modelInstance->getTable();
+
+        try {
+            $tableName = $modelInstance->getTable();
+            if ($tableName === null) {
+                return [];
+            }
+        } catch (\Throwable $e) {
+            // Return empty if table not configured
+            return [];
+        }
 
         // Get text columns from schema
         $textColumns = $this->schema->getTextColumns($tableName);

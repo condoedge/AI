@@ -63,7 +63,13 @@ class AliasGenerator
     public function generate(string|Model $model): array
     {
         $modelInstance = $this->resolveModel($model);
-        $tableName = $modelInstance->getTable();
+
+        try {
+            $tableName = $modelInstance->getTable();
+        } catch (\Throwable $e) {
+            $tableName = null;
+        }
+
         $className = class_basename($model);
 
         // Remove 'Test' prefix if present
@@ -73,15 +79,19 @@ class AliasGenerator
 
         $aliases = [];
 
-        // Add inflections from table name
-        $aliases = array_merge($aliases, $this->inflections($tableName));
+        // Add inflections from table name (if available)
+        if ($tableName !== null) {
+            $aliases = array_merge($aliases, $this->inflections($tableName));
+        }
 
         // Add inflections from class name
         $classBase = Str::snake($className);
         $aliases = array_merge($aliases, $this->inflections($classBase));
 
         // Add business terms
-        $aliases = array_merge($aliases, $this->businessTerms($tableName));
+        if ($tableName !== null) {
+            $aliases = array_merge($aliases, $this->businessTerms($tableName));
+        }
         $aliases = array_merge($aliases, $this->businessTerms($classBase));
 
         // Remove duplicates and return
@@ -233,7 +243,18 @@ class AliasGenerator
     {
         $modelInstance = $this->resolveModel($model);
 
-        // Use table name for collection (already pluralized)
-        return $modelInstance->getTable();
+        try {
+            // Use table name for collection (already pluralized)
+            $table = $modelInstance->getTable();
+            if ($table !== null) {
+                return $table;
+            }
+        } catch (\Throwable $e) {
+            // Fall back to class-based name if table not configured
+        }
+
+        // Fallback: use class basename in snake_case, pluralized
+        $className = class_basename($modelInstance);
+        return Str::plural(Str::snake($className));
     }
 }

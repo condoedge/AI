@@ -225,11 +225,11 @@ class CypherScopeAdapter
         $typeName = $type->getName();
 
         return match ($typeName) {
-            'string' => '',
-            'int' => 0,
-            'float' => 0.0,
-            'bool' => false,
-            'array' => [],
+            'string' => 'example',
+            'int' => 1,
+            'float' => 1.0,
+            'bool' => true,
+            'array' => ['example1', 'example2'],
             default => null,
         };
     }

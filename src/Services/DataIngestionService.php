@@ -12,6 +12,9 @@ use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
 use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
 use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
+use Condoedge\Ai\Exceptions\DataConsistencyException;
+use Condoedge\Ai\Services\Security\SensitiveDataSanitizer;
+use Illuminate\Support\Facades\Log;
 
 /**
  * DataIngestionService
@@ -58,40 +61,128 @@ class DataIngestionService implements DataIngestionServiceInterface
 
     /**
      * {@inheritDoc}
+     *
+     * Implements compensating transactions to ensure data consistency across dual stores.
+     * If one store fails, the successful operation is rolled back to prevent orphaned data.
+     *
+     * Transaction Flow:
+     * 1. Attempt graph insert (with relationships)
+     * 2. If successful, attempt vector insert
+     * 3. If vector fails, rollback graph insert
+     * 4. If both succeed, return success
+     * 5. If graph fails initially, don't attempt vector
+     *
+     * @throws DataConsistencyException If operation fails but rollback succeeds
+     * @throws \Exception If operation and rollback both fail (requires manual intervention)
      */
     public function ingest(Nodeable $entity): array
     {
         $this->validateEntity($entity);
 
-        $status = [
-            'graph_stored' => false,
-            'vector_stored' => false,
-            'relationships_created' => 0,
-            'errors' => [],
-        ];
+        $entityId = $entity->getId();
+        $graphSuccess = false;
+        $vectorSuccess = false;
+        $relationshipsCreated = 0;
 
-        // 1. Ingest into graph store
         try {
+            // Phase 1: Ingest into graph store
             $graphConfig = $entity->getGraphConfig();
             $this->ingestToGraph($entity, $graphConfig);
-            $status['graph_stored'] = true;
+            $graphSuccess = true;
 
             // Create relationships after node is created
-            $status['relationships_created'] = $this->createRelationships($entity, $graphConfig);
-        } catch (\Exception $e) {
-            $status['errors'][] = 'Graph: ' . $e->getMessage();
-        }
+            $relationshipsCreated = $this->createRelationships($entity, $graphConfig);
 
-        // 2. Ingest into vector store
-        try {
-            $vectorConfig = $entity->getVectorConfig();
-            $this->ingestToVector($entity, $vectorConfig);
-            $status['vector_stored'] = true;
-        } catch (\Exception $e) {
-            $status['errors'][] = 'Vector: ' . $e->getMessage();
-        }
+            try {
+                // Phase 2: Ingest into vector store
+                $vectorConfig = $entity->getVectorConfig();
+                $this->ingestToVector($entity, $vectorConfig);
+                $vectorSuccess = true;
 
-        return $status;
+                // Both succeeded - return success
+                return [
+                    'graph_stored' => true,
+                    'vector_stored' => true,
+                    'relationships_created' => $relationshipsCreated,
+                    'errors' => [],
+                ];
+
+            } catch (\Exception $vectorError) {
+                // Vector store failed - ROLLBACK graph insert
+                Log::warning('Vector store failed, rolling back graph insert', SensitiveDataSanitizer::forLogging([
+                    'entity_id' => $entityId,
+                    'entity_class' => get_class($entity),
+                    'error' => $vectorError->getMessage(),
+                ]));
+
+                try {
+                    // Compensating transaction: Delete from graph
+                    $this->graphStore->deleteNode($graphConfig->label, $entityId);
+
+                } catch (\Exception $rollbackError) {
+                    // Rollback FAILED - critical data inconsistency
+                    Log::critical('CRITICAL: Rollback failed, data inconsistency detected', SensitiveDataSanitizer::forLogging([
+                        'entity_id' => $entityId,
+                        'entity_class' => get_class($entity),
+                        'graph_success' => true,
+                        'vector_success' => false,
+                        'rolled_back' => false,
+                        'vector_error' => $vectorError->getMessage(),
+                        'rollback_error' => $rollbackError->getMessage(),
+                    ]));
+
+                    // This requires manual intervention
+                    throw new \RuntimeException(
+                        "CRITICAL DATA INCONSISTENCY: Entity {$entityId} exists in Neo4j but not in Qdrant. " .
+                        "Rollback failed. Manual cleanup required. " .
+                        "Neo4j label: {$graphConfig->label}, Entity ID: {$entityId}",
+                        0,
+                        $rollbackError
+                    );
+                }
+
+                // Rollback successful - throw consistency exception
+                throw new DataConsistencyException(
+                    "Vector store failed, rolled back graph insert for entity {$entityId}",
+                    [
+                        'entity_id' => $entityId,
+                        'entity_class' => get_class($entity),
+                        'graph_success' => true,
+                        'vector_success' => false,
+                        'rolled_back' => true,
+                        'operation' => 'ingest',
+                    ],
+                    0,
+                    $vectorError
+                );
+            }
+
+        } catch (DataConsistencyException $e) {
+            // Re-throw consistency exceptions (rollback was successful)
+            throw $e;
+
+        } catch (\Exception $graphError) {
+            // Graph store failed initially - don't attempt vector store
+            Log::error('Graph store failed during ingest', SensitiveDataSanitizer::forLogging([
+                'entity_id' => $entityId,
+                'entity_class' => get_class($entity),
+                'error' => $graphError->getMessage(),
+            ]));
+
+            throw new DataConsistencyException(
+                "Graph store failed for entity {$entityId}: " . $graphError->getMessage(),
+                [
+                    'entity_id' => $entityId,
+                    'entity_class' => get_class($entity),
+                    'graph_success' => false,
+                    'vector_success' => false,
+                    'rolled_back' => false, // Nothing to rollback
+                    'operation' => 'ingest',
+                ],
+                0,
+                $graphError
+            );
+        }
     }
 
     /**
@@ -161,38 +252,135 @@ class DataIngestionService implements DataIngestionServiceInterface
 
     /**
      * {@inheritDoc}
+     *
+     * Implements compensating transactions for removal operations.
+     * If one store fails after the other succeeds, attempts to restore the deleted entity.
+     *
+     * Transaction Flow:
+     * 1. Snapshot entity data before deletion
+     * 2. Attempt graph deletion
+     * 3. If successful, attempt vector deletion
+     * 4. If vector fails, restore graph node from snapshot
+     * 5. If both succeed, return true
+     *
+     * @throws DataConsistencyException If operation fails but compensation succeeds
+     * @throws \RuntimeException If operation and compensation both fail
      */
     public function remove(Nodeable $entity): bool
     {
         $this->validateEntity($entity);
 
+        $entityId = $entity->getId();
+        $graphConfig = $entity->getGraphConfig();
+        $vectorConfig = $entity->getVectorConfig();
+
+        // Take snapshot for potential rollback
+        $entitySnapshot = $entity->toArray();
         $graphSuccess = false;
         $vectorSuccess = false;
 
-        // Remove from graph store
         try {
-            $graphConfig = $entity->getGraphConfig();
+            // Phase 1: Remove from graph store
             $graphSuccess = $this->graphStore->deleteNode(
                 $graphConfig->label,
-                $entity->getId()
+                $entityId
             );
-        } catch (\Exception $e) {
-            // Log but continue - we still want to try removing from vector store
-        }
 
-        // Remove from vector store
-        try {
-            $vectorConfig = $entity->getVectorConfig();
-            $vectorSuccess = $this->vectorStore->deletePoints(
-                $vectorConfig->collection,
-                [$entity->getId()]
+            if (!$graphSuccess) {
+                throw new \RuntimeException("Failed to delete node from graph store");
+            }
+
+            try {
+                // Phase 2: Remove from vector store
+                $vectorSuccess = $this->vectorStore->deletePoints(
+                    $vectorConfig->collection,
+                    [$entityId]
+                );
+
+                if (!$vectorSuccess) {
+                    throw new \RuntimeException("Failed to delete points from vector store");
+                }
+
+                // Both succeeded
+                return true;
+
+            } catch (\Exception $vectorError) {
+                // Vector deletion failed - RESTORE graph node
+                Log::warning('Vector deletion failed, restoring graph node', SensitiveDataSanitizer::forLogging([
+                    'entity_id' => $entityId,
+                    'entity_class' => get_class($entity),
+                    'error' => $vectorError->getMessage(),
+                ]));
+
+                try {
+                    // Compensating transaction: Recreate node
+                    $this->graphStore->createNode($graphConfig->label, $entitySnapshot);
+
+                    // Restore relationships if they existed
+                    $this->createRelationships($entity, $graphConfig);
+
+                } catch (\Exception $restoreError) {
+                    // Restoration FAILED - critical inconsistency
+                    Log::critical('CRITICAL: Failed to restore graph node after vector deletion failure', SensitiveDataSanitizer::forLogging([
+                        'entity_id' => $entityId,
+                        'entity_class' => get_class($entity),
+                        'graph_success' => true,
+                        'vector_success' => false,
+                        'rolled_back' => false,
+                        'vector_error' => $vectorError->getMessage(),
+                        'restore_error' => $restoreError->getMessage(),
+                    ]));
+
+                    throw new \RuntimeException(
+                        "CRITICAL DATA INCONSISTENCY: Entity {$entityId} deleted from Neo4j but not Qdrant. " .
+                        "Restoration failed. Manual recovery required.",
+                        0,
+                        $restoreError
+                    );
+                }
+
+                // Restoration successful - throw consistency exception
+                throw new DataConsistencyException(
+                    "Vector deletion failed, restored graph node for entity {$entityId}",
+                    [
+                        'entity_id' => $entityId,
+                        'entity_class' => get_class($entity),
+                        'graph_success' => true,
+                        'vector_success' => false,
+                        'rolled_back' => true,
+                        'operation' => 'remove',
+                    ],
+                    0,
+                    $vectorError
+                );
+            }
+
+        } catch (DataConsistencyException $e) {
+            // Re-throw consistency exceptions
+            throw $e;
+
+        } catch (\Exception $graphError) {
+            // Graph deletion failed initially
+            Log::error('Graph deletion failed', SensitiveDataSanitizer::forLogging([
+                'entity_id' => $entityId,
+                'entity_class' => get_class($entity),
+                'error' => $graphError->getMessage(),
+            ]));
+
+            throw new DataConsistencyException(
+                "Graph deletion failed for entity {$entityId}: " . $graphError->getMessage(),
+                [
+                    'entity_id' => $entityId,
+                    'entity_class' => get_class($entity),
+                    'graph_success' => false,
+                    'vector_success' => false,
+                    'rolled_back' => false,
+                    'operation' => 'remove',
+                ],
+                0,
+                $graphError
             );
-        } catch (\Exception $e) {
-            // Log but continue
         }
-
-        // Success if removed from at least one store
-        return $graphSuccess || $vectorSuccess;
     }
 
     /**

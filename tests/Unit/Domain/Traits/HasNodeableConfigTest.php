@@ -27,7 +27,7 @@ use Mockery;
  */
 class HasNodeableConfigTest extends TestCase
 {
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();
@@ -63,12 +63,12 @@ class HasNodeableConfigTest extends TestCase
         // Get graph config
         $graphConfig = $model->getGraphConfig();
         $this->assertInstanceOf(GraphConfig::class, $graphConfig);
-        $this->assertEquals('TestNode', $graphConfig->getLabel());
+        $this->assertEquals('TestNode', $graphConfig->label);
 
         // Get vector config
         $vectorConfig = $model->getVectorConfig();
         $this->assertInstanceOf(VectorConfig::class, $vectorConfig);
-        $this->assertEquals('test_collection', $vectorConfig->getCollection());
+        $this->assertEquals('test_collection', $vectorConfig->collection);
     }
 
     /** @test */
@@ -93,27 +93,16 @@ class HasNodeableConfigTest extends TestCase
 
         // Get graph config
         $graphConfig = $model->getGraphConfig();
-        $this->assertEquals('BuilderNode', $graphConfig->getLabel());
+        $this->assertEquals('BuilderNode', $graphConfig->label);
 
         // Get vector config
         $vectorConfig = $model->getVectorConfig();
-        $this->assertEquals('builder_collection', $vectorConfig->getCollection());
+        $this->assertEquals('builder_collection', $vectorConfig->collection);
     }
 
     /** @test */
     public function it_falls_back_to_config_entities_php_with_full_class_name()
     {
-        // Mock config
-        Config::set('ai.entities', [
-            'Condoedge\\Ai\\Tests\\Unit\\TestModel' => [
-                'graph' => [
-                    'label' => 'ConfigNode',
-                    'properties' => ['id', 'name'],
-                    'relationships' => [],
-                ],
-            ],
-        ]);
-
         // Create model without nodeableConfig() method
         $model = new class extends Model implements Nodeable {
             use HasNodeableConfig;
@@ -122,19 +111,23 @@ class HasNodeableConfigTest extends TestCase
             protected $fillable = ['name'];
         };
 
-        // Manually set the class name in config
+        // Manually set the class name in config (use actual anonymous class name)
         $className = get_class($model);
-        Config::set("ai.entities.{$className}", [
+
+        // Set config using Laravel's Config facade (array syntax)
+        $entities = config('ai.entities', []);
+        $entities[$className] = [
             'graph' => [
                 'label' => 'ConfigNode',
                 'properties' => ['id', 'name'],
                 'relationships' => [],
             ],
-        ]);
+        ];
+        Config::set('ai.entities', $entities);
 
         // Get graph config
         $graphConfig = $model->getGraphConfig();
-        $this->assertEquals('ConfigNode', $graphConfig->getLabel());
+        $this->assertEquals('ConfigNode', $graphConfig->label);
     }
 
     /** @test */
@@ -164,7 +157,7 @@ class HasNodeableConfigTest extends TestCase
 
         // Get graph config
         $graphConfig = $model->getGraphConfig();
-        $this->assertEquals('ShortNameNode', $graphConfig->getLabel());
+        $this->assertEquals('ShortNameNode', $graphConfig->label);
     }
 
     /** @test */
@@ -203,11 +196,11 @@ class HasNodeableConfigTest extends TestCase
 
         // Get graph config - should use auto-discovery
         $graphConfig = $model->getGraphConfig();
-        $this->assertEquals('DiscoveredNode', $graphConfig->getLabel());
+        $this->assertEquals('DiscoveredNode', $graphConfig->label);
 
         // Get vector config
         $vectorConfig = $model->getVectorConfig();
-        $this->assertEquals('discovered_collection', $vectorConfig->getCollection());
+        $this->assertEquals('discovered_collection', $vectorConfig->collection);
     }
 
     /** @test */
@@ -249,7 +242,7 @@ class HasNodeableConfigTest extends TestCase
 
         // Get config - should use auto-discovery + customization
         $graphConfig = $model->getGraphConfig();
-        $this->assertEquals('DiscoveredNode', $graphConfig->getLabel());
+        $this->assertEquals('DiscoveredNode', $graphConfig->label);
     }
 
     /** @test */
@@ -267,17 +260,14 @@ class HasNodeableConfigTest extends TestCase
             protected $fillable = ['name'];
         };
 
-        // Get graph config - should return default
+        // Get graph config - should throw exception due to empty properties
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Graph properties cannot be empty');
         $graphConfig = $model->getGraphConfig();
-        $this->assertInstanceOf(GraphConfig::class, $graphConfig);
-
-        // Get vector config - should return null
-        $vectorConfig = $model->getVectorConfig();
-        $this->assertNull($vectorConfig);
     }
 
     /** @test */
-    public function it_returns_null_vector_config_when_not_configured()
+    public function it_throws_exception_when_vector_config_not_configured()
     {
         // Create model with only graph config
         $model = new class extends Model implements Nodeable {
@@ -299,9 +289,10 @@ class HasNodeableConfigTest extends TestCase
             }
         };
 
-        // Get vector config
-        $vectorConfig = $model->getVectorConfig();
-        $this->assertNull($vectorConfig);
+        // Get vector config - should throw LogicException
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('is not vectorizable');
+        $model->getVectorConfig();
     }
 
     /** @test */
@@ -347,7 +338,7 @@ class HasNodeableConfigTest extends TestCase
 
         // Should use nodeableConfig() method (highest priority)
         $graphConfig = $model->getGraphConfig();
-        $this->assertEquals('MethodNode', $graphConfig->getLabel());
+        $this->assertEquals('MethodNode', $graphConfig->label);
     }
 
     /** @test */
@@ -384,14 +375,21 @@ class HasNodeableConfigTest extends TestCase
         $graphConfig2 = $model->getGraphConfig();
 
         // Both should return same result (from cache)
-        $this->assertEquals('CachedNode', $graphConfig1->getLabel());
-        $this->assertEquals('CachedNode', $graphConfig2->getLabel());
+        $this->assertEquals('CachedNode', $graphConfig1->label);
+        $this->assertEquals('CachedNode', $graphConfig2->label);
     }
 
     /** @test */
     public function it_handles_missing_auto_discovery_service_gracefully()
     {
-        // Don't bind EntityAutoDiscovery service
+        // Mock auto-discovery to return empty array (simulating service failure)
+        $discoveryMock = Mockery::mock(EntityAutoDiscovery::class);
+        $discoveryMock->shouldReceive('discover')
+            ->once()
+            ->andReturn([]);
+
+        $this->app->instance(EntityAutoDiscovery::class, $discoveryMock);
+
         Config::set('ai.auto_discovery.enabled', true);
         Config::set('ai.entities', []);
 
@@ -403,11 +401,9 @@ class HasNodeableConfigTest extends TestCase
             protected $fillable = ['name'];
         };
 
-        // Should return default config without throwing
+        // Should throw exception due to empty properties when auto-discovery returns empty array
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Graph properties cannot be empty');
         $graphConfig = $model->getGraphConfig();
-        $this->assertInstanceOf(GraphConfig::class, $graphConfig);
-
-        $vectorConfig = $model->getVectorConfig();
-        $this->assertNull($vectorConfig);
     }
 }

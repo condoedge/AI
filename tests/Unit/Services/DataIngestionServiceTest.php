@@ -18,6 +18,8 @@ use Mockery;
 use InvalidArgumentException;
 use RuntimeException;
 use Exception;
+use Condoedge\Ai\Exceptions\DataConsistencyException;
+use CondoedgeAiExceptionsDataConsistencyException;
 
 /**
  * Unit Tests for DataIngestionService
@@ -134,25 +136,12 @@ class DataIngestionServiceTest extends TestCase
             ->once()
             ->andThrow(new Exception('Graph connection failed'));
 
-        // Vector store succeeds
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->andReturn([0.1, 0.2]);
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once();
+        // Expect DataConsistencyException to be thrown
+        $this->expectException(DataConsistencyException::class);
+        $this->expectExceptionMessageMatches('/Graph store failed for entity 1/');
 
         // Act
-        $result = $this->service->ingest($entity);
-
-        // Assert
-        $this->assertFalse($result['graph_stored']);
-        $this->assertTrue($result['vector_stored']);
-        $this->assertNotEmpty($result['errors']);
-        $this->assertStringContainsString('Graph', $result['errors'][0]);
-        $this->assertStringContainsString('Graph connection failed', $result['errors'][0]);
+        $this->service->ingest($entity);
     }
 
     public function test_ingest_continues_when_vector_store_fails()
@@ -169,21 +158,24 @@ class DataIngestionServiceTest extends TestCase
             ->shouldReceive('createNode')
             ->once();
 
+        // Rollback (deleteNode) also fails - simulating critical failure
+        $this->mockGraphStore
+            ->shouldReceive('deleteNode')
+            ->once()
+            ->andThrow(new Exception('Rollback failed'));
+
         // Vector store throws exception
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
             ->once()
             ->andThrow(new Exception('Embedding API failed'));
 
-        // Act
-        $result = $this->service->ingest($entity);
+        // Assert - expect DataConsistencyException when rollback fails
+        $this->expectException(DataConsistencyException::class);
+        $this->expectExceptionMessageMatches('/Graph store failed for entity 1/');
 
-        // Assert
-        $this->assertTrue($result['graph_stored']);
-        $this->assertFalse($result['vector_stored']);
-        $this->assertNotEmpty($result['errors']);
-        $this->assertStringContainsString('Vector', $result['errors'][0]);
-        $this->assertStringContainsString('Embedding API failed', $result['errors'][0]);
+        // Act
+        $this->service->ingest($entity);
     }
 
     public function test_ingest_handles_both_stores_failing()
@@ -197,20 +189,12 @@ class DataIngestionServiceTest extends TestCase
             ->once()
             ->andThrow(new Exception('Graph failed'));
 
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->andThrow(new Exception('Vector failed'));
+        // Expect DataConsistencyException to be thrown (graph fails first)
+        $this->expectException(DataConsistencyException::class);
+        $this->expectExceptionMessage('Graph store failed for entity 1');
 
         // Act
-        $result = $this->service->ingest($entity);
-
-        // Assert
-        $this->assertFalse($result['graph_stored']);
-        $this->assertFalse($result['vector_stored']);
-        $this->assertCount(2, $result['errors']);
-        $this->assertStringContainsString('Graph', $result['errors'][0]);
-        $this->assertStringContainsString('Vector', $result['errors'][1]);
+        $this->service->ingest($entity);
     }
 
     public function test_ingest_creates_relationships_from_graph_config()
@@ -599,17 +583,12 @@ class DataIngestionServiceTest extends TestCase
             ->once()
             ->andThrow(new Exception('Graph delete failed'));
 
-        // Vector store succeeds
-        $this->mockVectorStore
-            ->shouldReceive('deletePoints')
-            ->once()
-            ->andReturn(true);
+        // Expect DataConsistencyException to be thrown
+        $this->expectException(DataConsistencyException::class);
+        $this->expectExceptionMessage('Graph deletion failed for entity 1');
 
         // Act
-        $result = $this->service->remove($entity);
-
-        // Assert
-        $this->assertTrue($result);
+        $this->service->remove($entity);
     }
 
     public function test_remove_handles_store_failures_gracefully()
@@ -623,16 +602,12 @@ class DataIngestionServiceTest extends TestCase
             ->once()
             ->andThrow(new Exception('Graph failed'));
 
-        $this->mockVectorStore
-            ->shouldReceive('deletePoints')
-            ->once()
-            ->andThrow(new Exception('Vector failed'));
+        // Expect DataConsistencyException to be thrown (graph fails first)
+        $this->expectException(DataConsistencyException::class);
+        $this->expectExceptionMessage('Graph deletion failed for entity 1');
 
         // Act
-        $result = $this->service->remove($entity);
-
-        // Assert - returns false when both fail
-        $this->assertFalse($result);
+        $this->service->remove($entity);
     }
 
     public function test_remove_calls_delete_node_and_delete_points_with_correct_ids()
@@ -796,14 +771,15 @@ class DataIngestionServiceTest extends TestCase
         // Graph store succeeds
         $this->mockGraphStore->shouldReceive('createNode')->once();
 
-        // Act
-        $result = $this->service->ingest($entity);
+        // Graph store rollback succeeds when vector fails
+        $this->mockGraphStore->shouldReceive('deleteNode')->once()->andReturn(true);
 
-        // Assert - Graph succeeds but vector fails due to empty embed text
-        $this->assertTrue($result['graph_stored']);
-        $this->assertFalse($result['vector_stored']);
-        $this->assertNotEmpty($result['errors']);
-        $this->assertStringContainsString('Cannot generate embedding', $result['errors'][0]);
+        // Expect DataConsistencyException (vector fails, rollback succeeds)
+        $this->expectException(DataConsistencyException::class);
+        $this->expectExceptionMessage('Vector store failed, rolled back graph insert for entity 1');
+
+        // Act
+        $this->service->ingest($entity);
     }
 
     public function test_ingest_skips_relationships_when_foreign_key_is_null()

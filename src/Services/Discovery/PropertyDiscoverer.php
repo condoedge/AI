@@ -55,13 +55,21 @@ class PropertyDiscoverer
     public function discover(string|Model $model): array
     {
         $modelInstance = $this->resolveModel($model);
-        $tableName = $modelInstance->getTable();
+
+        try {
+            $tableName = $modelInstance->getTable();
+        } catch (\Throwable $e) {
+            // If table not configured, set to null
+            $tableName = null;
+        }
 
         // Get properties from model attributes
         $properties = $this->fromModelAttributes($modelInstance);
 
-        // Enhance with schema information
-        $properties = $this->enhanceWithSchema($properties, $tableName);
+        // Enhance with schema information (only if table exists)
+        if ($tableName !== null) {
+            $properties = $this->enhanceWithSchema($properties, $tableName);
+        }
 
         // Remove excluded properties
         $properties = $this->filterExcluded($properties);
@@ -83,11 +91,21 @@ class PropertyDiscoverer
     public function discoverWithTypes(string|Model $model): array
     {
         $modelInstance = $this->resolveModel($model);
-        $tableName = $modelInstance->getTable();
+
+        try {
+            $tableName = $modelInstance->getTable();
+        } catch (\Throwable $e) {
+            // If table not configured, set to null
+            $tableName = null;
+        }
+
         $properties = $this->discover($model);
 
-        // Get column types from schema
-        $columnTypes = $this->schema->getColumnTypes($tableName);
+        // Get column types from schema (only if table exists)
+        $columnTypes = [];
+        if ($tableName !== null) {
+            $columnTypes = $this->schema->getColumnTypes($tableName);
+        }
 
         $typedProperties = [];
         foreach ($properties as $property) {
@@ -111,27 +129,43 @@ class PropertyDiscoverer
         $properties = [];
 
         // Get fillable attributes
-        $fillable = $model->getFillable();
-        if (!empty($fillable)) {
-            $properties = array_merge($properties, $fillable);
+        try {
+            $fillable = $model->getFillable();
+            if (!empty($fillable)) {
+                $properties = array_merge($properties, $fillable);
+            }
+        } catch (\Throwable $e) {
+            // Skip if model doesn't support fillable
         }
 
         // Get casted attributes
-        $casts = $model->getCasts();
-        if (!empty($casts)) {
-            $properties = array_merge($properties, array_keys($casts));
+        try {
+            $casts = $model->getCasts();
+            if (!empty($casts)) {
+                $properties = array_merge($properties, array_keys($casts));
+            }
+        } catch (\Throwable $e) {
+            // Skip if model doesn't support casts
         }
 
         // Get date attributes
-        $dates = $model->getDates();
-        if (!empty($dates)) {
-            $properties = array_merge($properties, $dates);
+        try {
+            $dates = $model->getDates();
+            if (!empty($dates)) {
+                $properties = array_merge($properties, $dates);
+            }
+        } catch (\Throwable $e) {
+            // Skip if model doesn't support dates
         }
 
         // Get attributes from model instance (if any have been set)
-        $attributes = $model->getAttributes();
-        if (!empty($attributes)) {
-            $properties = array_merge($properties, array_keys($attributes));
+        try {
+            $attributes = $model->getAttributes();
+            if (!empty($attributes)) {
+                $properties = array_merge($properties, array_keys($attributes));
+            }
+        } catch (\Throwable $e) {
+            // Skip if model doesn't support attributes
         }
 
         return array_unique($properties);
@@ -201,15 +235,23 @@ class PropertyDiscoverer
         $essential = [];
 
         // Include primary key
-        $primaryKey = $model->getKeyName();
-        if ($primaryKey) {
-            $essential[] = $primaryKey;
+        try {
+            $primaryKey = $model->getKeyName();
+            if ($primaryKey) {
+                $essential[] = $primaryKey;
+            }
+        } catch (\Throwable $e) {
+            // Skip if model doesn't support getKeyName
         }
 
         // Include timestamps if enabled
-        if ($model->usesTimestamps()) {
-            $essential[] = $model::CREATED_AT;
-            $essential[] = $model::UPDATED_AT;
+        try {
+            if ($model->usesTimestamps()) {
+                $essential[] = $model::CREATED_AT;
+                $essential[] = $model::UPDATED_AT;
+            }
+        } catch (\Throwable $e) {
+            // Skip if model doesn't support timestamps
         }
 
         return array_unique(array_merge($essential, $properties));

@@ -357,7 +357,11 @@ class SchemaInspector
     {
         $foreignKeys = [];
 
+        // Validate table name to prevent SQL injection
+        $table = $this->sanitizeTableName($table);
+
         // SQLite uses PRAGMA foreign_key_list
+        // Note: PRAGMA doesn't support parameter binding, so we validate the table name
         $constraints = DB::select("PRAGMA foreign_key_list({$table})");
 
         foreach ($constraints as $constraint) {
@@ -496,11 +500,17 @@ class SchemaInspector
     {
         $indexes = [];
 
+        // Validate table name to prevent SQL injection
+        $table = $this->sanitizeTableName($table);
+
         // Get all indexes for the table
         $indexList = DB::select("PRAGMA index_list({$table})");
 
         foreach ($indexList as $indexInfo) {
             $indexName = $indexInfo->name;
+
+            // Validate index name to prevent SQL injection
+            $indexName = $this->sanitizeTableName($indexName);
 
             // Get columns for this index
             $indexColumns = DB::select("PRAGMA index_info({$indexName})");
@@ -519,6 +529,36 @@ class SchemaInspector
         }
 
         return $indexes;
+    }
+
+    /**
+     * Sanitize table/index name to prevent SQL injection
+     *
+     * Validates that the name contains only alphanumeric characters and underscores.
+     * This is necessary for PRAGMA queries which don't support parameter binding.
+     *
+     * @param string $name Table or index name
+     * @return string Sanitized name
+     * @throws \InvalidArgumentException If name contains invalid characters
+     */
+    private function sanitizeTableName(string $name): string
+    {
+        // Allow only alphanumeric characters, underscores, and hyphens
+        // This matches typical database identifier rules
+        if (!preg_match('/^[a-zA-Z0-9_-]+$/', $name)) {
+            throw new \InvalidArgumentException(
+                "Invalid table/index name '{$name}': must contain only alphanumeric characters, underscores, and hyphens"
+            );
+        }
+
+        // Additional length check to prevent DoS
+        if (strlen($name) > 64) {
+            throw new \InvalidArgumentException(
+                "Table/index name too long (max 64 characters): '{$name}'"
+            );
+        }
+
+        return $name;
     }
 
     /**

@@ -22,7 +22,7 @@ class EntityAutoDiscoveryTest extends TestCase
 {
     private EntityAutoDiscovery $discovery;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 

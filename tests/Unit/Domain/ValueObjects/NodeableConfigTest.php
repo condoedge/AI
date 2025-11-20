@@ -43,10 +43,12 @@ class NodeableConfigTest extends TestCase
 
     public function test_can_discover_from_model()
     {
-        // Create a mock model
-        $model = $this->getMockBuilder(Model::class)
-            ->disableOriginalConstructor()
-            ->getMock();
+        // Create an anonymous model class for testing
+        $model = new class extends Model {
+            protected $table = 'random_models'; // No table
+            protected $fillable = ['name', 'email'];
+            protected $casts = ['active' => 'boolean'];
+        };
 
         $config = NodeableConfig::discover($model);
 
@@ -561,9 +563,11 @@ class NodeableConfigTest extends TestCase
     public function test_can_override_discovered_config()
     {
         // Simulate discovering a model then overriding specific parts
-        $model = $this->getMockBuilder(Model::class)
-            ->disableOriginalConstructor()
-            ->getMock();
+        $model = new class extends Model {
+            protected $table = 'random_models'; // No table
+            protected $fillable = ['name', 'email'];
+            protected $casts = ['active' => 'boolean'];
+        };
 
         $config = NodeableConfig::discover($model)
             ->aliases('custom_alias') // Override just aliases

@@ -16,7 +16,7 @@ class CypherQueryBuilderSpyTest extends TestCase
 {
     private CypherQueryBuilderSpy $spy;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
         $this->spy = new CypherQueryBuilderSpy();
