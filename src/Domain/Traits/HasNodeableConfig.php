@@ -362,9 +362,18 @@ trait HasNodeableConfig
             return $this->resolvedConfig;
         }
 
-        // 3. Auto-discovery (fallback)
-        $this->resolvedConfig = $this->autoDiscover();
-        return $this->resolvedConfig;
+        // 3. Auto-discovery (DISABLED by default - use php artisan ai:discover)
+        if (config('ai.auto_discovery.runtime_enabled', false)) {
+            $this->resolvedConfig = $this->autoDiscover();
+            return $this->resolvedConfig;
+        }
+
+        // If nothing configured, throw helpful error
+        throw new \LogicException(
+            'No configuration found for entity ' . get_class($this) . '. ' .
+            'Run "php artisan ai:discover" to generate config/entities.php, or ' .
+            'add a nodeableConfig() method to your model.'
+        );
     }
 
     /**

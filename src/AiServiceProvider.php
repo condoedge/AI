@@ -422,6 +422,13 @@ class AiServiceProvider extends ServiceProvider
             __DIR__ . '/../config/entities.php' => config_path('entities.php'),
         ], 'ai-entities');
 
+        // Register console commands
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                \Condoedge\Ai\Console\Commands\DiscoverEntitiesCommand::class,
+            ]);
+        }
+
         // Load routes if documentation is enabled
         if (config('ai.docs.enabled', false)) {
             $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');

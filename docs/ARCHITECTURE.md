@@ -36,6 +36,7 @@ class Customer extends Model implements Nodeable
     use HasNodeableConfig;
 
     protected $fillable = ['name', 'email', 'status'];
+    protected $metadataColumns = ['is_premium']; // Extra property just for this
 
     public function team() {
         return $this->belongsTo(Team::class);
@@ -48,10 +49,10 @@ class Customer extends Model implements Nodeable
 
 // Auto-discovered configuration:
 // Label: "Customer"
-// Properties: ['id', 'name', 'email', 'status', 'created_at', 'updated_at']
+// Properties: ['id', 'name', 'email', 'status', 'is_premium', 'created_at', 'updated_at']
 // Relationships: [BELONGS_TO_TEAM → Team]
 // Collection: "customers"
-// Embed Fields: ['name', 'email']
+// Embed Fields: ['name', 'email', 'status']
 // Aliases: ['customer', 'customers', 'client', 'clients']
 // Scopes: ['active']
 ```
@@ -66,11 +67,12 @@ class Customer extends Model implements Nodeable
 **Property Discovery Algorithm:**
 1. Start with `id` (always included)
 2. Add `$fillable` attributes
-3. Add `$casts` keys
-4. Add date fields from `$dates`
-5. Add timestamps if enabled
-6. Remove `$hidden` attributes
-7. Remove sensitive fields (password, tokens)
+3. Add `$metadataColumns` if defined
+4. Add `$casts` keys
+5. Add date fields from `$dates`
+6. Add timestamps if enabled
+7. Remove `$hidden` attributes
+8. Remove sensitive fields (password, tokens)
 
 **Relationship Discovery:**
 - Only `belongsTo` relationships are auto-discovered

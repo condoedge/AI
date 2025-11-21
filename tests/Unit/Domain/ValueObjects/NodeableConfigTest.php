@@ -10,6 +10,14 @@ use Illuminate\Database\Eloquent\Model;
 
 class NodeableConfigTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // Enable runtime auto-discovery for tests
+        config(['ai.auto_discovery.runtime_enabled' => true]);
+    }
+
     // =========================================================================
     // Factory Method Tests
     // =========================================================================

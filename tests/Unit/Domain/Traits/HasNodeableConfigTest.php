@@ -27,6 +27,14 @@ use Mockery;
  */
 class HasNodeableConfigTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // Enable runtime auto-discovery for tests
+        config(['ai.auto_discovery.runtime_enabled' => true]);
+    }
+
     public function tearDown(): void
     {
         Mockery::close();

@@ -66,6 +66,8 @@ class PropertyDiscoverer
         // Get properties from model attributes
         $properties = $this->fromModelAttributes($modelInstance);
 
+        $properties = array_merge($properties, $this->fromModelMetadataProperty($modelInstance));
+
         // Enhance with schema information (only if table exists)
         if ($tableName !== null) {
             $properties = $this->enhanceWithSchema($properties, $tableName);
@@ -190,6 +192,24 @@ class PropertyDiscoverer
         // Get foreign key columns
         $foreignKeys = $this->schema->getForeignKeys($table);
         $properties = array_merge($properties, array_keys($foreignKeys));
+
+        return array_unique($properties);
+    }
+
+    private function fromModelMetadataProperty(Model $model): array
+    {
+        // Get metadata columns
+        $properties = [];
+        try {
+            if (getPrivateProperty($model, 'metadataColumns')) {
+                $metadataColumns = getPrivateProperty($model, 'metadataColumns');
+                if (is_array($metadataColumns)) {
+                    $properties = array_merge($properties, $metadataColumns);
+                }
+            }
+        } catch (\Throwable $e) {
+            // Skip if model doesn't support metadataColumns
+        }
 
         return array_unique($properties);
     }
