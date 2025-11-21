@@ -12,32 +12,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Documentation Settings (Larecipe)
-    |--------------------------------------------------------------------------
-    */
-    'documentation' => [
-        'enabled' => env('AI_DOCS_ENABLED', true),
-        'route_prefix' => env('AI_DOCS_PREFIX', 'ai-docs'),
-        'middleware' => ['web'], // Add 'auth' if you want to protect docs
-
-        // Larecipe configuration
-        'larecipe' => [
-            'path' => resource_path('docs'),
-            'default_version' => '1.0',
-            'versions' => ['1.0'],
-            'title' => 'AI System Documentation',
-            'description' => 'Complete documentation for the AI Text-to-Query System',
-            'author' => 'AI System',
-            'url' => env('APP_URL', 'http://localhost'),
-
-            // Auto-generation settings
-            'auto_generate' => env('AI_DOCS_AUTO_GENERATE', false),
-            'generate_on_deploy' => env('AI_DOCS_GENERATE_ON_DEPLOY', true),
-        ],
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
     | Auto-Discovery Configuration
     |--------------------------------------------------------------------------
     |

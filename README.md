@@ -13,6 +13,7 @@
 - [Key Features](#key-features)
 - [Security Architecture](#security-architecture)
 - [Quick Start](#quick-start)
+- [Artisan Commands](#artisan-commands)
 - [Project Structure](#project-structure)
 - [Testing](#testing)
 - [Documentation](#documentation)
@@ -378,6 +379,26 @@ class Customer extends Model implements Nodeable
     use HasNodeableConfig;
 
     protected $fillable = ['name', 'email', 'status'];
+}
+
+// 2. Discover and generate config
+php artisan ai:discover
+
+// This generates config/entities.php with discovered configuration:
+// - Neo4j label, properties, relationships
+// - Qdrant collection, embed fields
+// - Aliases for natural language queries
+// Review and customize config/entities.php as needed
+
+// 3. Bulk ingest existing data (one-time setup)
+php artisan ai:ingest
+
+// This ingests all existing entities into Neo4j + Qdrant
+// - Processes in batches for efficiency
+// - Shows progress bar
+// - Reports success/failure counts
+
+// 4. New data auto-syncs (after initial ingest)
 
     public function orders() {
         return $this->hasMany(Order::class);
@@ -580,6 +601,74 @@ tests/
 - **Internals & Architecture Track** (`resources/docs/1.0/internals/`): Architecture diagrams, component deep dives, data flows, storage reference, resilience/security details.
 - **Examples**: Working code samples in `examples/` directory.
 - **Tests**: Test suite demonstrates usage patterns.
+
+## Artisan Commands
+
+### `php artisan ai:discover`
+
+Auto-discover Nodeable entities and generate `config/entities.php`.
+
+```bash
+# Discover all Nodeable models
+php artisan ai:discover
+
+# Discover specific model
+php artisan ai:discover --model="App\Models\Customer"
+
+# Overwrite existing config
+php artisan ai:discover --force
+
+# Preview without writing
+php artisan ai:discover --dry-run
+```
+
+**What it does:**
+- Scans `app/Models` for classes implementing `Nodeable`
+- Analyzes models to discover:
+  - Neo4j label, properties, relationships
+  - Qdrant collection, embed fields
+  - Aliases for natural language queries
+  - Eloquent scopes for Cypher conversion
+- Generates/merges `config/entities.php`
+
+**When to run:**
+- Initial setup
+- After adding new Nodeable models
+- After changing model structure (new columns, relationships, scopes)
+
+### `php artisan ai:ingest`
+
+Bulk ingest existing Nodeable entities into Neo4j and Qdrant.
+
+```bash
+# Ingest all entities
+php artisan ai:ingest
+
+# Ingest specific model
+php artisan ai:ingest --model="App\Models\Customer"
+
+# Clear stores before ingesting
+php artisan ai:ingest --fresh
+
+# Custom batch size (default: 100)
+php artisan ai:ingest --chunk=500
+
+# Preview without ingesting
+php artisan ai:ingest --dry-run
+```
+
+**What it does:**
+- Finds all Nodeable models
+- Processes existing database records in batches
+- Ingests into Neo4j (graph) + Qdrant (vectors)
+- Shows progress bar and success/failure counts
+
+**When to run:**
+- Initial setup (when you have existing data)
+- After migrating to the AI package
+- To rebuild graph/vector stores from scratch (`--fresh`)
+
+**Note:** After initial ingestion, new/updated entities auto-sync via model events.
 
 ## Development
 

@@ -28,6 +28,13 @@
         "orchestra/testbench": "^9.15",
         "phpunit/phpunit": "^10.0"
     },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Condoedge\\Ai\\AiServiceProvider"
+            ]
+        }
+    },
     "scripts": {
         "test": "phpunit",
         "test-coverage": "phpunit --coverage-html coverage",
