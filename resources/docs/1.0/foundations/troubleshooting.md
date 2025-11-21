@@ -471,6 +471,6 @@ Log::info('RAG Context', $context);
 
 ## Still Stuck?
 
-- Review [Architecture](/docs/{{version}}/architecture)
-- Check [Configuration Reference](/docs/{{version}}/configuration)
-- See [Examples](/docs/{{version}}/examples)
+- Review [Architecture](/docs/{{version}}/internals/architecture)
+- Check [Configuration Reference](/docs/{{version}}/foundations/configuration)
+- See [Examples](/docs/{{version}}/usage/examples)

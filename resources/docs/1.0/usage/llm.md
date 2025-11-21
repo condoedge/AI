@@ -240,4 +240,4 @@ $messages = [
 
 ---
 
-See also: [Simple Usage](/docs/{{version}}/simple-usage) | [Context Retrieval](/docs/{{version}}/context-retrieval) | [Examples](/docs/{{version}}/examples)
+See also: [Simple Usage](/docs/{{version}}/usage/simple-usage) | [Context Retrieval](/docs/{{version}}/usage/context-retrieval) | [Examples](/docs/{{version}}/usage/examples)

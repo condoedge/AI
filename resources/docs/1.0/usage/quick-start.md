@@ -8,7 +8,7 @@ Get up and running with the AI Text-to-Query System in 5 minutes! This guide sho
 
 Before starting, ensure you have:
 
-- ✅ Installed the package ([Installation Guide](/docs/{{version}}/getting-started))
+- ✅ Installed the package ([Installation Guide](/docs/{{version}}/foundations/installing))
 - ✅ Neo4j and Qdrant running
 - ✅ Environment variables configured
 - ✅ OpenAI or Anthropic API key (optional for basic ingestion)
@@ -455,19 +455,19 @@ php artisan test --filter=TeamAiIntegrationTest
 You've completed the quick start! Here's what to explore next:
 
 ### Learn More About APIs
-- **[Simple Usage Guide](/docs/{{version}}/simple-usage)** - All AI wrapper methods
-- **[Data Ingestion API](/docs/{{version}}/data-ingestion)** - Detailed ingestion guide
-- **[Context Retrieval](/docs/{{version}}/context-retrieval)** - Deep dive into RAG
+- **[Simple Usage Guide](/docs/{{version}}/usage/simple-usage)** - All AI wrapper methods
+- **[Data Ingestion API](/docs/{{version}}/usage/data-ingestion)** - Detailed ingestion guide
+- **[Context Retrieval](/docs/{{version}}/usage/context-retrieval)** - Deep dive into RAG
 
 ### Advanced Topics
-- **[Advanced Usage](/docs/{{version}}/advanced-usage)** - Direct service usage
-- **[Laravel Integration](/docs/{{version}}/laravel-integration)** - Controllers, commands, queues
-- **[Real-World Examples](/docs/{{version}}/examples)** - Complete implementations
+- **[Advanced Usage](/docs/{{version}}/usage/advanced-usage)** - Direct service usage
+- **[Laravel Integration](/docs/{{version}}/usage/laravel-integration)** - Controllers, commands, queues
+- **[Real-World Examples](/docs/{{version}}/usage/examples)** - Complete implementations
 
 ### Configuration
-- **[Configuration Reference](/docs/{{version}}/configuration)** - All settings explained
-- **[Architecture Overview](/docs/{{version}}/architecture)** - System design deep dive
+- **[Configuration Reference](/docs/{{version}}/foundations/configuration)** - All settings explained
+- **[Architecture Overview](/docs/{{version}}/internals/architecture)** - System design deep dive
 
 ---
 
-**Questions?** Check the [Troubleshooting Guide](/docs/{{version}}/troubleshooting) or explore [Real-World Examples](/docs/{{version}}/examples)!
+**Questions?** Check the [Troubleshooting Guide](/docs/{{version}}/foundations/troubleshooting) or explore [Real-World Examples](/docs/{{version}}/usage/examples)!

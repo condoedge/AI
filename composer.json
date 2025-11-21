@@ -1,5 +1,5 @@
 {
-    "name": "ai-system/text-to-query",
+    "name": "condoedge/ai",
     "description": "AI-powered text-to-query system with RAG, Neo4j, and Qdrant",
     "type": "library",
     "license": "MIT",

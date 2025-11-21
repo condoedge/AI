@@ -464,4 +464,4 @@ class DataIngestionTest extends TestCase
 
 ---
 
-See also: [Simple Usage](/docs/{{version}}/simple-usage) | [Testing](/docs/{{version}}/testing) | [Laravel Integration](/docs/{{version}}/laravel-integration)
+See also: [Simple Usage](/docs/{{version}}/usage/simple-usage) | [Testing](/docs/{{version}}/usage/testing) | [Laravel Integration](/docs/{{version}}/usage/laravel-integration)

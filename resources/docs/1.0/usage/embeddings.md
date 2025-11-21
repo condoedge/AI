@@ -151,4 +151,4 @@ $vectors = AI::embedBatch($texts);
 
 ---
 
-See also: [Context Retrieval](/docs/{{version}}/context-retrieval) | [Configuration](/docs/{{version}}/configuration)
+See also: [Context Retrieval](/docs/{{version}}/usage/context-retrieval) | [Configuration](/docs/{{version}}/foundations/configuration)

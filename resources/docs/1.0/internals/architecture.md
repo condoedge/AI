@@ -674,7 +674,7 @@ $result = $neo4j->createNode('Test', ['name' => 'test']);
 
 ## Next Steps
 
-- **[Simple Usage](/docs/{{version}}/simple-usage)** - Learn the AI wrapper API
-- **[Advanced Usage](/docs/{{version}}/advanced-usage)** - Direct service usage
-- **[Configuration](/docs/{{version}}/configuration)** - All settings explained
-- **[Real-World Examples](/docs/{{version}}/examples)** - Complete implementations
+- **[Simple Usage](/docs/{{version}}/usage/simple-usage)** - Learn the AI wrapper API
+- **[Advanced Usage](/docs/{{version}}/usage/advanced-usage)** - Direct service usage
+- **[Configuration](/docs/{{version}}/foundations/configuration)** - All settings explained
+- **[Real-World Examples](/docs/{{version}}/usage/examples)** - Complete implementations

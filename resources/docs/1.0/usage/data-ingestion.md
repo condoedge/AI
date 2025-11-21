@@ -238,4 +238,4 @@ $success = $service->remove($customer);
 
 ---
 
-See also: [Simple Usage](/docs/{{version}}/simple-usage) | [Configuration](/docs/{{version}}/configuration) | [Laravel Integration](/docs/{{version}}/laravel-integration)
+See also: [Simple Usage](/docs/{{version}}/usage/simple-usage) | [Configuration](/docs/{{version}}/foundations/configuration) | [Laravel Integration](/docs/{{version}}/usage/laravel-integration)

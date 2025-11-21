@@ -479,7 +479,7 @@ AI::shouldReceive('embed')
 AI::makePartial();
 ```
 
-See [Testing Documentation](/docs/{{version}}/testing) for comprehensive testing strategies.
+See [Testing Documentation](/docs/{{version}}/usage/testing) for comprehensive testing strategies.
 
 ---
 
@@ -601,7 +601,7 @@ AI_QUERY_TIMEOUT=60
 
 ## Next Steps
 
-- **[Advanced Usage](/docs/{{version}}/advanced-usage)** - Direct service usage
-- **[Data Ingestion API](/docs/{{version}}/data-ingestion)** - Detailed ingestion guide
-- **[Context Retrieval](/docs/{{version}}/context-retrieval)** - RAG deep dive
-- **[Configuration](/docs/{{version}}/configuration)** - All settings explained
+- **[Advanced Usage](/docs/{{version}}/usage/advanced-usage)** - Direct service usage
+- **[Data Ingestion API](/docs/{{version}}/usage/data-ingestion)** - Detailed ingestion guide
+- **[Context Retrieval](/docs/{{version}}/usage/context-retrieval)** - RAG deep dive
+- **[Configuration](/docs/{{version}}/foundations/configuration)** - All settings explained

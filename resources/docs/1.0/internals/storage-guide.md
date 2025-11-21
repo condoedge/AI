@@ -1,6 +1,6 @@
-# Qdrant + Neo4j Query Cheatsheet
+# Storage & Query Guide (Qdrant + Neo4j)
 
-Use this doc as a fast reference for the most common read/write/search patterns. Both systems expose drivers for TypeScript/JavaScript, Python, Go, and more; samples below stick to REST (Qdrant) and Cypher (Neo4j) so you can translate to any SDK quickly.
+Use this doc as a fast reference for the most common read/write/search patterns. Both systems expose drivers for TypeScript/JavaScript, Python, Go, and more; samples below stick to REST (Qdrant) and Cypher (Neo4j) so you can translate to any SDK quickly. Pair this guide with the [Data & Control Flows](/docs/{{version}}/internals/data-flows) chapter whenever you debug ingestion or RAG mismatches.
 
 ## Qdrant Query Patterns
 
@@ -131,6 +131,8 @@ RETURN count(*) > 0 AS allowed;
 
 ## Coordinating Both for RAG
 
-- Query Qdrant first for semantic neighbors (keep payload IDs, tenant hints, tags).
-- Use returned IDs to drive Neo4j lookups (e.g., related owners, processes, lineage).
-- Enrich final context bundle with both vector results and graph facts before hitting the LLM.
+1. **Search Qdrant first** – Keep payload metadata (tenant IDs, aliases, prior Cypher) alongside similarity scores.
+2. **Use IDs as graph pivots** – Feed the matching entity IDs back into Neo4j lookups (relationships, ownership, lineage).
+3. **Assemble context** – Merge semantic hits + structural facts before invoking the LLM. This mirrors the `ContextRetriever` workflow.
+
+> **Tip:** When results feel off, log the raw Qdrant response plus the Cypher that ultimately executed. Comparing the two usually surfaces missing metadata or outdated embeddings.

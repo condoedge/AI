@@ -575,10 +575,11 @@ tests/
 
 ## Documentation
 
-- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)**: Detailed technical architecture, design patterns, implementation details
-- **[GETTING-STARTED.md](docs/GETTING-STARTED.md)**: User guide, configuration reference, troubleshooting
-- **Examples**: Working code samples in `examples/` directory
-- **Tests**: Test suite demonstrates usage patterns
+- **Foundations Track** (`resources/docs/1.0/foundations/`): Requirements, installation, infrastructure, configuration, and troubleshooting (rendered at `/ai-docs/foundations`).
+- **Usage & Extension Track** (`resources/docs/1.0/usage/`): Quick start, AI facade APIs, ingestion/context guides, Laravel integration, testing, and extension playbooks.
+- **Internals & Architecture Track** (`resources/docs/1.0/internals/`): Architecture diagrams, component deep dives, data flows, storage reference, resilience/security details.
+- **Examples**: Working code samples in `examples/` directory.
+- **Tests**: Test suite demonstrates usage patterns.
 
 ## Development
 
@@ -618,18 +619,21 @@ composer test-coverage
 ### Why Neo4j + Qdrant?
 
 **Neo4j (Graph Database):**
+
 - Native graph storage optimized for relationship traversal
 - Cypher query language provides expressive pattern matching
 - Efficient multi-hop queries for complex relationships
 - ACID transactions for data consistency
 
 **Qdrant (Vector Database):**
+
 - High-performance vector similarity search
 - Metadata filtering alongside vector search
 - Scales to millions of vectors
 - Easy deployment (Docker, cloud)
 
 **Why Dual-Storage?**
+
 - Neo4j excels at relationship queries ("who is connected to whom")
 - Qdrant excels at semantic search ("find similar entities")
 - Together: Powerful hybrid queries combining structure and semantics
@@ -637,12 +641,14 @@ composer test-coverage
 ### Why Compensating Transactions vs 2PC?
 
 **Two-Phase Commit (2PC)** requires:
+
 - Coordinator service
 - Prepare phase locks
 - Complex failure recovery
 - Increased latency
 
 **Compensating Transactions** provide:
+
 - Simpler implementation (rollback on failure)
 - No distributed coordinator needed
 - Lower latency (no prepare phase)
@@ -653,12 +659,14 @@ composer test-coverage
 ### Why Interface-Based Design?
 
 **Benefits:**
+
 - **Testability**: Easy to mock dependencies in unit tests
 - **Flexibility**: Swap implementations (e.g., switch from OpenAI to Anthropic)
 - **Loose Coupling**: Components depend on contracts, not concrete classes
 - **Laravel Integration**: Works naturally with service container binding
 
 **Example:**
+
 ```php
 // Bind interface to implementation
 $this->app->singleton(GraphStoreInterface::class, Neo4jStore::class);
@@ -670,12 +678,14 @@ $this->app->singleton(GraphStoreInterface::class, ArangoDbStore::class);
 ### Why Auto-Discovery vs Manual Config?
 
 **Manual Configuration Issues:**
+
 - Duplication between model definition and config file
 - Config drift when models change
 - Maintenance burden
 - Error-prone
 
 **Auto-Discovery Benefits:**
+
 - Single source of truth (Eloquent model)
 - Zero duplication
 - Automatic updates when models change
@@ -690,7 +700,7 @@ MIT License - see [LICENSE](LICENSE) file for details
 ## Support
 
 - **Issues**: GitHub Issues for bug reports and feature requests
-- **Documentation**: See `docs/` directory for detailed guides
+- **Documentation**: See `resources/docs/1.0/` (rendered via LaRecipe at `/ai-docs`)
 - **Examples**: Working code samples in `examples/` directory
 
 ---

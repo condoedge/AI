@@ -502,4 +502,4 @@ php artisan ai:ingest-all-customers --batch-size=50
 
 ---
 
-See also: [Simple Usage](/docs/{{version}}/simple-usage) | [Laravel Integration](/docs/{{version}}/laravel-integration) | [Testing](/docs/{{version}}/testing)
+See also: [Simple Usage](/docs/{{version}}/usage/simple-usage) | [Laravel Integration](/docs/{{version}}/usage/laravel-integration) | [Testing](/docs/{{version}}/usage/testing)

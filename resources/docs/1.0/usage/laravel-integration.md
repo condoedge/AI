@@ -580,4 +580,4 @@ class CustomerAiTest extends TestCase
 
 ---
 
-See also: [Simple Usage](/docs/{{version}}/simple-usage) | [Testing](/docs/{{version}}/testing) | [Examples](/docs/{{version}}/examples)
+See also: [Simple Usage](/docs/{{version}}/usage/simple-usage) | [Testing](/docs/{{version}}/usage/testing) | [Examples](/docs/{{version}}/usage/examples)

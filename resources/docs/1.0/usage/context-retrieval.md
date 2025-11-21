@@ -174,4 +174,4 @@ if (!empty($context['graph_schema'])) {
 
 ---
 
-See also: [Simple Usage](/docs/{{version}}/simple-usage) | [Embeddings](/docs/{{version}}/embeddings) | [LLM](/docs/{{version}}/llm)
+See also: [Simple Usage](/docs/{{version}}/usage/simple-usage) | [Embeddings](/docs/{{version}}/usage/embeddings) | [LLM](/docs/{{version}}/usage/llm)

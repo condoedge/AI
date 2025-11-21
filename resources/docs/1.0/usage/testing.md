@@ -752,4 +752,4 @@ jobs:
 
 ---
 
-See also: [Advanced Usage](/docs/{{version}}/advanced-usage) | [Laravel Integration](/docs/{{version}}/laravel-integration)
+See also: [Advanced Usage](/docs/{{version}}/usage/advanced-usage) | [Laravel Integration](/docs/{{version}}/usage/laravel-integration)
