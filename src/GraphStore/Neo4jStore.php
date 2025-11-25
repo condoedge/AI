@@ -202,6 +202,29 @@ class Neo4jStore implements GraphStoreInterface
         return !empty($result) && $result[0]['count'] > 0;
     }
 
+    public function relationshipExists(
+        string $fromLabel,
+        string|int $fromId,
+        string $toLabel,
+        string|int $toId,
+        string $type
+    ): bool {
+        // Validate labels and type to prevent injection
+        $safeFromLabel = CypherSanitizer::escapeLabel($fromLabel);
+        $safeToLabel = CypherSanitizer::escapeLabel($toLabel);
+        $safeType = CypherSanitizer::escapeLabel($type);
+
+        $cypher = "MATCH (from:{$safeFromLabel} {id: \$fromId})-[r:{$safeType}]->(to:{$safeToLabel} {id: \$toId}) " .
+                  "RETURN count(r) as count";
+
+        $result = $this->query($cypher, [
+            'fromId' => $fromId,
+            'toId' => $toId,
+        ]);
+
+        return !empty($result) && $result[0]['count'] > 0;
+    }
+
     public function getNode(string $label, string|int $id): ?array
     {
         // Validate label to prevent injection

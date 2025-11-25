@@ -42,14 +42,20 @@ class RelationshipConfig
      * Create from array configuration
      *
      * @param array $config ['type' => '...', 'target_label' => '...', 'foreign_key' => '...', 'properties' => [...]]
-     * @return self
+     * @return self|null
      */
-    public static function fromArray(array $config): self
+    public static function fromArray(array $config): ?self
     {
+        $foreignKey = $config['foreign_key'] ?? $config['foreignKey'] ?? null;
+
+        if (empty($foreignKey)) {
+            return null;
+        }
+
         return new self(
             type: $config['type'],
             targetLabel: $config['target_label'] ?? $config['targetLabel'],
-            foreignKey: $config['foreign_key'] ?? $config['foreignKey'],
+            foreignKey: $config['foreign_key'] ?? $config['foreignKey'] ?? null,
             properties: $config['properties'] ?? []
         );
     }

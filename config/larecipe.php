@@ -18,7 +18,7 @@ return [
     */
 
     'docs'        => [
-        'route'   => '/docs',
+        'route'   => '/' . env('AI_DOCS_PREFIX', 'docs'),
         'path'    => 'vendor/condoedge/ai/resources/docs',
         'landing' => 'index',
         'middleware' => ['web'],

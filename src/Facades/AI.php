@@ -27,6 +27,7 @@ use Illuminate\Support\Facades\Facade;
  * $context = AI::retrieveContext("Show teams with most active members");
  * $similar = AI::searchSimilar("Show all teams");
  * $schema = AI::getSchema();
+ * AI::storeQuery("Show all customers", "MATCH (c:Customer) RETURN c", ['confidence' => 0.9]);
  *
  * // Embeddings
  * $vector = AI::embed("Some text to embed");
@@ -95,6 +96,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static array searchSimilar(string $question, array $options = [])
  * @method static array getSchema()
  * @method static array getExampleEntities(array $labels, int $limit = 3)
+ * @method static array storeQuery(string $question, string $cypherQuery, array $metadata = [], string $collection = 'questions')
  * @method static array embed(string $text)
  * @method static array embedBatch(array $texts)
  * @method static int getEmbeddingDimensions()

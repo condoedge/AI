@@ -106,4 +106,34 @@ interface DataIngestionServiceInterface
      * @throws \InvalidArgumentException If entity does not implement Nodeable
      */
     public function sync(Nodeable $entity): array;
+
+    /**
+     * Synchronize missing relationships for entities
+     *
+     * This method reconciles relationships that couldn't be created during initial
+     * ingestion because target nodes didn't exist yet (e.g., Users ingested before Persons).
+     *
+     * For each entity:
+     * 1. Checks all configured relationships
+     * 2. Verifies both source and target nodes exist
+     * 3. Creates missing relationships (skips existing ones)
+     * 4. Logs detailed information about created/skipped relationships
+     *
+     * Use cases:
+     * - After bulk ingestion with wrong entity order
+     * - After importing data from external sources
+     * - Periodic reconciliation to ensure data consistency
+     *
+     * @param array $entities Array of Nodeable entities to sync relationships for
+     * @return array Summary with structure:
+     *               [
+     *                   'total_entities' => int,          // Total entities processed
+     *                   'total_relationships_checked' => int,  // Total relationships evaluated
+     *                   'relationships_created' => int,    // New relationships created
+     *                   'relationships_skipped' => int,    // Already existing relationships
+     *                   'relationships_failed' => int,     // Relationships that couldn't be created
+     *                   'errors' => array                  // Detailed errors by entity ID
+     *               ]
+     */
+    public function syncRelationships(array $entities): array;
 }

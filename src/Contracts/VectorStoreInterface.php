@@ -45,6 +45,14 @@ interface VectorStoreInterface
      */
     public function upsert(string $collection, array $points): bool;
 
+
+    /**
+     * List all collections
+     *
+     * @return array Array of collection names
+     */
+    public function listCollections();
+
     /**
      * Search for similar vectors
      *

@@ -105,7 +105,7 @@ trait HasNodeableConfig
 
         // Check entity-specific config (optional)
         $entityKey = $this->getConfigKey();
-        $entityConfig = config("ai.entities.{$entityKey}.auto_sync");
+        $entityConfig = config("entities.{$entityKey}.auto_sync");
         if ($entityConfig !== null) {
             // Entity has explicit auto_sync setting
             if (is_bool($entityConfig)) {
@@ -348,7 +348,7 @@ trait HasNodeableConfig
         }
 
         // 2. Check config/entities.php (legacy support)
-        $entityConfigs = config('ai.entities', []);
+        $entityConfigs = config('entities', []);
         $modelClass = get_class($this);
         $configKey = $this->getConfigKey();
 

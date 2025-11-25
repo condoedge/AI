@@ -10,10 +10,15 @@ This track walks you through consuming the package (AI facade, ingestion workflo
 
 ## Highlights
 
-- **Quick Start** – Ship your first natural-language question in ~5 minutes.
+- **Quick Start** – Ship your first natural-language question in ~5 minutes with auto-sync.
+- **Auto-Sync** – Entities automatically sync to Neo4j + Qdrant on model events (no manual intervention).
+- **Smart Ingestion** – Order-independent entity ingestion with relationship reconciliation.
+- **File Processing** – Semantic search across PDF, DOCX, TXT files with automatic chunking and embedding.
+- **Project Context** – Configure your business domain for smarter LLM query generation.
 - **API Surfaces** – AI facade, `AiManager`, and granular services for ingestion, context, embeddings, and LLM I/O.
+- **Batch Commands** – `ai:discover`, `ai:ingest`, `ai:sync-relationships`, `ai:process-files` for setup and maintenance.
 - **Extensibility** – Override auto-discovery, inject custom providers, or plug into Laravel jobs/queues.
-- **Quality Gates** – Testing recipes, observability hooks, and troubleshooting flows focused on runtime behavior (not just install).
+- **Quality Gates** – Testing recipes, observability hooks, and troubleshooting flows focused on runtime behavior.
 
 ## Reading Path
 

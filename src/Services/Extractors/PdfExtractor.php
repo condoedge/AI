@@ -16,7 +16,7 @@ class PdfExtractor implements FileExtractorInterface
      * @param Parser|null $parser PDF parser instance
      */
     public function __construct(
-        private readonly ?Parser $parser = null
+        private ?Parser $parser = null
     ) {
         $this->parser = $parser ?? new Parser();
     }

@@ -11,6 +11,7 @@ use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\QueryGeneratorInterface;
 use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
+use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 
 /**
@@ -74,6 +75,7 @@ class AiManager
      * @param QueryGeneratorInterface $queryGenerator Query generation service
      * @param QueryExecutorInterface $queryExecutor Query execution service
      * @param ResponseGeneratorInterface $responseGenerator Response generation service
+     * @param VectorStoreInterface $vectorStore Vector store for query storage
      */
     public function __construct(
         private readonly DataIngestionServiceInterface $ingestion,
@@ -82,7 +84,8 @@ class AiManager
         private readonly LlmProviderInterface $llm,
         private readonly QueryGeneratorInterface $queryGenerator,
         private readonly QueryExecutorInterface $queryExecutor,
-        private readonly ResponseGeneratorInterface $responseGenerator
+        private readonly ResponseGeneratorInterface $responseGenerator,
+        private readonly VectorStoreInterface $vectorStore
     ) {
     }
 
@@ -191,6 +194,76 @@ class AiManager
     public function getExampleEntities(array $labels, int $limit = 3): array
     {
         return $this->context->getExampleEntities($labels, $limit);
+    }
+
+    /**
+     * Store a question-query pair in the vector store for future RAG retrieval
+     *
+     * This method stores a question and its corresponding Cypher query in the
+     * vector database, enabling the system to learn from past queries and provide
+     * better context for similar future questions.
+     *
+     * The question is embedded and stored with its query in the 'questions' collection.
+     * This builds up a knowledge base of question-query pairs that can be used for
+     * few-shot learning in future query generation.
+     *
+     * @param string $question Natural language question
+     * @param string $cypherQuery The Cypher query that answers the question
+     * @param array $metadata Optional metadata to store with the query (e.g., user_id, timestamp, confidence)
+     * @param string $collection Collection name (default: 'questions')
+     * @return array Result with keys: success, point_id, errors
+     *
+     * @throws \RuntimeException If embedding generation fails
+     * @throws \RuntimeException If vector store operation fails
+     */
+    public function storeQuery(
+        string $question,
+        string $cypherQuery,
+        array $metadata = [],
+        string $collection = 'questions'
+    ): array {
+        try {
+            // Ensure collection exists
+            if (!$this->vectorStore->collectionExists($collection)) {
+                $vectorSize = $this->embedding->getDimensions();
+                $this->vectorStore->createCollection($collection, $vectorSize, 'cosine');
+            }
+
+            // Generate embedding for the question
+            $embedding = $this->embedding->embed($question);
+
+            // Create unique ID for this question-query pair
+            $pointId = md5($question . $cypherQuery);
+
+            // Prepare payload
+            $payload = array_merge([
+                'question' => $question,
+                'cypher_query' => $cypherQuery,
+                'created_at' => now()->toIso8601String(),
+            ], $metadata);
+
+            // Store in vector database
+            $success = $this->vectorStore->upsert($collection, [
+                [
+                    'id' => $pointId,
+                    'vector' => $embedding,
+                    'payload' => $payload,
+                ],
+            ]);
+
+            return [
+                'success' => $success,
+                'point_id' => $pointId,
+                'errors' => [],
+            ];
+
+        } catch (\Exception $e) {
+            return [
+                'success' => false,
+                'point_id' => null,
+                'errors' => [$e->getMessage()],
+            ];
+        }
     }
 
     // =========================================================================
@@ -371,8 +444,19 @@ class AiManager
         if (empty($context)) {
             $context = $this->retrieveContext($question);
         }
+        
+        $generation =  $this->queryGenerator->generate($question, $context, $options);
 
-        return $this->queryGenerator->generate($question, $context, $options);
+        $this->storeQuery(
+            question: $question,
+            cypherQuery: $generation['cypher'],
+            metadata: [
+                'confidence' => $generation['confidence'],
+                'generated_at' => now()->toIso8601String(),
+            ]
+        );
+
+        return $generation;
     }
 
     /**

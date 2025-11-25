@@ -77,6 +77,10 @@ class QdrantStore implements VectorStoreInterface
     public function upsert(string $collection, array $points): bool
     {
         try {
+            if (!$this->collectionExists($collection)) {
+                $this->createCollection($collection, count($points[0]['vector']));
+            }
+
             $response = $this->request('PUT', "/collections/{$collection}/points", [
                 'points' => $points
             ]);
@@ -86,6 +90,18 @@ class QdrantStore implements VectorStoreInterface
             return in_array($status, ['acknowledged', 'completed', 'ok']);
         } catch (\Exception $e) {
             throw new \RuntimeException("Failed to upsert points in '{$collection}': " . $e->getMessage());
+        }
+    }
+
+    public function listCollections()
+    {
+        try {
+            $response = $this->request('GET', '/collections');
+            $collections = $response['result']['collections'] ?? [];
+
+            return array_map(fn($col) => $col['name'], $collections);
+        } catch (\Exception $e) {
+            throw new \RuntimeException("Failed to list collections: " . $e->getMessage());
         }
     }
 

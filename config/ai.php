@@ -12,6 +12,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Project Metadata
+    |--------------------------------------------------------------------------
+    |
+    | High-level information about your project/domain that helps the LLM
+    | understand the business context when generating queries and responses.
+    |
+    */
+    'project' => [
+        'name' => env('APP_NAME', 'Laravel Application'),
+        'description' => env('AI_PROJECT_DESCRIPTION', 'A Laravel application with AI-powered natural language query capabilities.'),
+        'domain' => env('AI_PROJECT_DOMAIN', 'general'), // e.g., 'e-commerce', 'crm', 'healthcare', 'finance'
+        'business_rules' => [
+            // Add domain-specific business rules that the LLM should know
+            // Example: 'Active customers are those with status = "active"',
+            // Example: 'Orders are linked to customers via customer_id',
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Auto-Discovery Configuration
     |--------------------------------------------------------------------------
     |
@@ -242,6 +262,54 @@ return [
         'similarity_threshold' => env('AI_SIMILARITY_THRESHOLD', 0.7),
         'include_schema' => env('AI_INCLUDE_SCHEMA', true),
         'include_examples' => env('AI_INCLUDE_EXAMPLES', true),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Semantic Matching Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Semantic matching uses vector embeddings for fuzzy/semantic text matching
+    | instead of hardcoded string comparisons. This enables:
+    | - Entity detection: "clients" → Customer entity
+    | - Scope detection: "volunteers" → volunteer scope
+    | - Template matching: "display all" → list_all template
+    |
+    | Features:
+    | - Handles synonyms and variations automatically
+    | - Configurable similarity thresholds
+    | - Falls back to exact matching if disabled
+    |
+    | Workflow:
+    |   1. Enable: AI_SEMANTIC_MATCHING=true
+    |   2. Index: php artisan ai:index-semantic --rebuild
+    |
+    */
+    'semantic_matching' => [
+        // Enable semantic matching (falls back to exact matching if false)
+        'enabled' => env('AI_SEMANTIC_MATCHING', true),
+
+        // Fallback to exact matching if semantic matching fails
+        'fallback_to_exact' => env('AI_FALLBACK_EXACT_MATCH', true),
+
+        // Similarity thresholds (0.0 - 1.0)
+        // Higher = more precise, Lower = more recall
+        'thresholds' => [
+            'entity_detection' => (float) env('AI_SEMANTIC_THRESHOLD_ENTITY', 0.75),
+            'scope_detection' => (float) env('AI_SEMANTIC_THRESHOLD_SCOPE', 0.70),
+            'template_detection' => (float) env('AI_SEMANTIC_THRESHOLD_TEMPLATE', 0.65),
+            'label_inference' => (float) env('AI_SEMANTIC_THRESHOLD_LABEL', 0.70),
+        ],
+
+        // Vector store collections for semantic indexes
+        'collections' => [
+            'entities' => 'semantic_entities',
+            'scopes' => 'semantic_scopes',
+            'templates' => 'semantic_templates',
+        ],
+
+        // Cache embeddings in memory to avoid redundant API calls
+        'cache_embeddings' => env('AI_SEMANTIC_CACHE_EMBEDDINGS', true),
     ],
 
     /*

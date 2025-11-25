@@ -116,7 +116,7 @@ class QueryGenerator implements QueryGeneratorInterface
         $temperature = $options['temperature'] ?? $this->config['temperature'] ?? 0.1;
         $maxRetries = $options['max_retries'] ?? $this->config['max_retries'] ?? 3;
         $allowWrite = $options['allow_write'] ?? $this->config['allow_write_operations'] ?? false;
-        $explain = $options['explain'] ?? true;
+        $explain = $options['explain'] ?? false;
 
         // Check if templates are enabled
         if ($this->config['enable_templates'] ?? true) {
@@ -344,101 +344,20 @@ class QueryGenerator implements QueryGeneratorInterface
      */
     private function buildPrompt(string $question, array $context, bool $allowWrite, ?string $previousError): string
     {
-        // Check if we have semantic scopes (new format with specification_type)
-        $hasSemanticScopes = $this->hasSemanticScopes($context);
-
-        // Use semantic prompt builder if semantic scopes detected
-        if ($hasSemanticScopes && $this->promptBuilder) {
-            $prompt = $this->promptBuilder->buildPrompt($question, $context, $allowWrite);
-
-            // Add retry context if needed
-            if ($previousError) {
-                $prompt .= "\n\nPrevious attempt failed with error: {$previousError}\n";
-                $prompt .= "Please fix the error and regenerate the query.\n\n";
-                $prompt .= "CYPHER QUERY:";
-            }
-
-            return $prompt;
+        // Always use SemanticPromptBuilder for consistent, high-quality prompts
+        // It handles all context types including project metadata, entity metadata, scopes, etc.
+        if (!$this->promptBuilder) {
+            throw new \RuntimeException('SemanticPromptBuilder not initialized');
         }
 
-        // Fallback to original prompt building (for backward compatibility)
-        $prompt = "You are a Neo4j Cypher query expert. Generate a valid, safe Cypher query.\n\n";
+        $prompt = $this->promptBuilder->buildPrompt($question, $context, $allowWrite);
 
-        // Add context
-        if (!empty($context['graph_schema'])) {
-            $prompt .= "Graph Schema:\n";
-            $prompt .= "Labels: " . implode(', ', $context['graph_schema']['labels'] ?? []) . "\n";
-            $prompt .= "Relationships: " . implode(', ', $context['graph_schema']['relationships'] ?? []) . "\n\n";
-        }
-
-        // Add entity metadata if available
-        if (!empty($context['entity_metadata'])) {
-            $metadata = $context['entity_metadata'];
-
-            // Add detected scopes (business terminology mapping)
-            if (!empty($metadata['detected_scopes'])) {
-                $prompt .= "Detected Business Terms (Scopes):\n";
-                foreach ($metadata['detected_scopes'] as $scopeName => $scopeInfo) {
-                    $prompt .= "- '{$scopeName}' means {$scopeInfo['description']} ";
-                    $prompt .= "→ Use filter: {$scopeInfo['cypher_pattern']}\n";
-                }
-                $prompt .= "\n";
-            }
-
-            // Add entity-specific metadata for context
-            if (!empty($metadata['entity_metadata'])) {
-                $prompt .= "Entity-Specific Information:\n";
-                foreach ($metadata['entity_metadata'] as $entityName => $entityMeta) {
-                    $prompt .= "- {$entityName}: {$entityMeta['description']}\n";
-
-                    // Add common properties
-                    if (!empty($entityMeta['common_properties'])) {
-                        $prompt .= "  Properties: ";
-                        $propDescriptions = [];
-                        foreach ($entityMeta['common_properties'] as $prop => $desc) {
-                            $propDescriptions[] = "{$prop} ({$desc})";
-                        }
-                        $prompt .= implode(', ', array_slice($propDescriptions, 0, 5)) . "\n";
-                    }
-
-                    // Add available scopes
-                    if (!empty($entityMeta['scopes'])) {
-                        $prompt .= "  Available filters: ";
-                        $scopeNames = array_keys($entityMeta['scopes']);
-                        $prompt .= implode(', ', $scopeNames) . "\n";
-                    }
-                }
-                $prompt .= "\n";
-            }
-        }
-
-        if (!empty($context['similar_queries'])) {
-            $prompt .= "Similar Past Queries:\n";
-            foreach (array_slice($context['similar_queries'], 0, 3) as $similar) {
-                $prompt .= "- " . ($similar['question'] ?? '') . " → " . ($similar['query'] ?? $similar['cypher'] ?? '') . "\n";
-            }
-            $prompt .= "\n";
-        }
-
-        // Add rules
-        $prompt .= "Rules:\n";
-        $prompt .= "- Use only labels/relationships from the schema\n";
-        $prompt .= "- When business terms (like 'volunteers', 'customers', 'pending') are used, apply the corresponding filters shown above\n";
-        $prompt .= "- Return ONLY the Cypher query (no explanations)\n";
-        $prompt .= "- Always include LIMIT to prevent large result sets\n";
-
-        if (!$allowWrite) {
-            $prompt .= "- NO DELETE, DROP, CREATE, MERGE, SET, or other write operations\n";
-        }
-
-        // Add retry context
+        // Add retry context if needed
         if ($previousError) {
-            $prompt .= "\nPrevious attempt failed with error: {$previousError}\n";
-            $prompt .= "Please fix the error and try again.\n";
+            $prompt .= "\n\nPrevious attempt failed with error: {$previousError}\n";
+            $prompt .= "Please fix the error and regenerate the query.\n\n";
+            $prompt .= "CYPHER QUERY:";
         }
-
-        $prompt .= "\nQuestion: {$question}\n\n";
-        $prompt .= "Generate Cypher query:";
 
         return $prompt;
     }

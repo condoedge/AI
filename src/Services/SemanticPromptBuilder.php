@@ -50,6 +50,8 @@ class SemanticPromptBuilder
     ): string {
         $prompt = "You are a Neo4j Cypher query expert who generates queries based on semantic business definitions.\n\n";
 
+        $prompt .= $this->getGenericContext();
+
         // Add graph schema
         $prompt .= $this->formatGraphSchema($context['graph_schema'] ?? []);
 
@@ -87,6 +89,14 @@ class SemanticPromptBuilder
         $prompt .= "CYPHER QUERY:";
 
         return $prompt;
+    }
+
+    private function getGenericContext()
+    {
+        $output = "=== CONTEXT INFORMATION ===\n\n";
+        $output .= "Current date: " . date('Y-m-d H:i:s') . "\n\n";
+
+        return $output;
     }
 
     /**

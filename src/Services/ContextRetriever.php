@@ -251,11 +251,15 @@ class ContextRetriever implements ContextRetrieverInterface
     {
         $schema = $this->graphStore->getSchema();
 
+        // Get properties grouped by label from entity configs
+        $propertiesByLabel = $this->getPropertiesByLabel();
+
         // Normalize schema structure to consistent format
         return [
             'labels' => $schema['labels'] ?? [],
             'relationships' => $schema['relationshipTypes'] ?? $schema['relationships'] ?? [],
-            'properties' => $schema['propertyKeys'] ?? $schema['properties'] ?? [],
+            'properties' => $propertiesByLabel, // Now structured by label
+            'propertyKeys' => $schema['propertyKeys'] ?? $schema['properties'] ?? [], // Keep flat list too
         ];
     }
 
@@ -296,9 +300,10 @@ class ContextRetriever implements ContextRetrieverInterface
             );
         }
 
-        // Build Cypher query to retrieve sample entities
+        // Build Cypher query to retrieve sample entities. (Using size(keys(n)) to
+        // prioritize nodes with more properties for richer context.)
         // Using backtick quoting for label name safety
-        $cypher = "MATCH (n:`{$label}`) RETURN n LIMIT \$limit";
+        $cypher = "MATCH (n:`{$label}`) WITH n, size(keys(n)) AS keyCount ORDER BY keyCount DESC RETURN n LIMIT \$limit";
 
         try {
             $results = $this->graphStore->query($cypher, ['limit' => $limit]);
@@ -445,7 +450,7 @@ class ContextRetriever implements ContextRetrieverInterface
     {
         // Try to load from Laravel config if available
         if (function_exists('config')) {
-            $configs = config('ai.entities');
+            $configs = config('entities');
             if ($configs !== null) {
                 return $configs;
             }
@@ -566,6 +571,33 @@ class ContextRetriever implements ContextRetrieverInterface
         }
 
         return $entities;
+    }
+
+    /**
+     * Get properties grouped by label from entity configurations
+     *
+     * Extracts property lists from entity configs and groups them by label.
+     *
+     * @return array Properties grouped by label: ['Customer' => ['id', 'name'], ...]
+     */
+    private function getPropertiesByLabel(): array
+    {
+        $propertiesByLabel = [];
+
+        foreach ($this->entityConfigs as $entityName => $config) {
+            // Get graph config
+            $graphConfig = $config['graph'] ?? [];
+            $label = $graphConfig['label'] ?? $entityName;
+
+            // Get properties for this label
+            $properties = $graphConfig['properties'] ?? [];
+
+            if (!empty($properties)) {
+                $propertiesByLabel[$label] = $properties;
+            }
+        }
+
+        return $propertiesByLabel;
     }
 
     /**

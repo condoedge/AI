@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get up and running with the AI Text-to-Query System in 5 minutes! This guide shows you the simplest possible usage.
+Get up and running with the AI Text-to-Query System in 10 minutes! This guide shows you the recommended workflow for new projects.
 
 ---
 
@@ -11,13 +11,23 @@ Before starting, ensure you have:
 - ✅ Installed the package ([Installation Guide](/docs/{{version}}/foundations/installing))
 - ✅ Neo4j and Qdrant running
 - ✅ Environment variables configured
-- ✅ OpenAI or Anthropic API key (optional for basic ingestion)
+- ✅ OpenAI or Anthropic API key
+
+**Optional but recommended:** Configure project context in `.env`:
+
+```env
+APP_NAME="My E-Commerce Platform"
+AI_PROJECT_DESCRIPTION="E-commerce platform managing products, orders, and customers with real-time inventory"
+AI_PROJECT_DOMAIN=e-commerce
+```
+
+This helps the LLM understand your business domain when generating queries and responses. See: [Project Metadata Configuration](/docs/{{version}}/foundations/configuration#project-metadata-configuration)
 
 ---
 
-## Step 1: Define Your Entity (2 minutes)
+## Step 1: Make Your Model Nodeable (1 minute)
 
-Create a model that implements `Nodeable`:
+Add the `Nodeable` interface and trait to your Eloquent model:
 
 ```php
 <?php
@@ -28,424 +38,336 @@ use Illuminate\Database\Eloquent\Model;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Domain\Traits\HasNodeableConfig;
 
-class Team extends Model implements Nodeable
+class Customer extends Model implements Nodeable
 {
     use HasNodeableConfig;
 
-    protected $fillable = ['name', 'description', 'size'];
+    protected $fillable = ['name', 'email', 'company', 'status'];
 
-    public function getId(): string|int
+    public function orders()
     {
-        return $this->id;
+        return $this->hasMany(Order::class);
+    }
+
+    public function scopeActive($query)
+    {
+        return $query->where('status', 'active');
     }
 }
 ```
 
+**That's it!** No manual configuration needed yet.
+
 ---
 
-## Step 2: Configure Entity Mapping (2 minutes)
+## Step 2: Discover and Generate Config (1 minute)
 
-Add configuration to `config/entities.php`:
+Run the discovery command to automatically generate configuration:
+
+```bash
+php artisan ai:discover
+```
+
+**Output:**
+```
+🔍 Discovering Nodeable entities...
+
+Found 1 Nodeable model(s)
+
+Discovering: App\Models\Customer
+  ✓ Discovered successfully
+
+✓ Configuration written to config/entities.php
+✓ Discovered 1 entities
+
+Next steps:
+  1. Review config/entities.php
+  2. Customize as needed (labels, properties, relationships)
+  3. Re-run ai:discover to update configurations
+```
+
+**What was generated?**
+
+The command analyzed your `Customer` model and created `config/entities.php`:
 
 ```php
 <?php
 
 return [
-    'Team' => [
+    'App\Models\Customer' => [
         'graph' => [
-            'label' => 'Team',
-            'properties' => ['id', 'name', 'size'],
-            'relationships' => []
+            'label' => 'Customer',
+            'properties' => ['id', 'name', 'email', 'company', 'status'],
+            'relationships' => [
+                ['type' => 'ORDERS', 'target_label' => 'Order', 'inverse' => true]
+            ]
         ],
         'vector' => [
-            'collection' => 'teams',
-            'embed_fields' => ['name', 'description'],
-            'metadata' => ['id', 'name', 'size']
+            'collection' => 'customers',
+            'embed_fields' => ['name', 'email', 'company'],
+            'metadata' => ['id', 'name', 'company', 'status']
+        ],
+        'metadata' => [
+            'aliases' => ['customer', 'customers', 'client', 'clients'],
+            'scopes' => [
+                'active' => [
+                    'name' => 'active',
+                    'cypher_pattern' => "n.status = 'active'",
+                    'description' => 'Filter active customers',
+                    'example_queries' => ['Show active customers', 'List all active clients']
+                ]
+            ]
         ]
     ]
 ];
 ```
 
-**What this does:**
-- **Graph:** Stores Team nodes in Neo4j with id, name, and size properties
-- **Vector:** Creates embeddings from name and description for semantic search
-- **Metadata:** Stores id, name, size in Qdrant for filtering
+**Review and customize** this file as needed. You can:
+- Change the Neo4j label
+- Add/remove properties
+- Customize embed fields
+- Add more aliases
 
 ---
 
-## Step 3: Ingest Your First Entity (1 minute)
+## Step 3: Bulk Ingest Existing Data (2 minutes)
 
-```php
-use Condoedge\Ai\Facades\AI;
-use App\Models\Team;
+If you have existing customers in your database, ingest them into Neo4j + Qdrant:
 
-// Create a team
-$team = Team::create([
-    'name' => 'Engineering Team',
-    'description' => 'Builds awesome software products',
-    'size' => 10
-]);
-
-// Ingest into AI system
-$status = AI::ingest($team);
-
-// Check the result
-print_r($status);
+```bash
+php artisan ai:ingest
 ```
 
 **Output:**
-```php
-[
-    'graph_stored' => true,
-    'vector_stored' => true,
-    'relationships_created' => 0,
-    'errors' => []
-]
+```
+🚀 Bulk Entity Ingestion
+
+Found 1 Nodeable model(s)
+
+Processing: App\Models\Customer
+  Found 500 entities
+  [████████████████] 500/500 (100%) Ingested: 500, Failed: 0
+  ✓ Ingested: 500
+
+
+✓ Successfully ingested: 500
+
+Ingestion complete!
 ```
 
 **What happened:**
-1. Team node created in Neo4j with properties
-2. Embedding generated from "Engineering Team Builds awesome software products"
-3. Vector stored in Qdrant with metadata
-4. Status report returned
+- All 500 existing customers were processed in batches
+- Customer nodes created in Neo4j with properties
+- Embeddings generated and stored in Qdrant
+- Relationships created (if target nodes exist)
 
----
+**Important:** If your entities have relationships to other entities (e.g., Users → Persons), some relationships may be skipped if target nodes don't exist yet. After ingesting all entities, run:
 
-## Common Use Cases
+```bash
+php artisan ai:sync-relationships
+```
 
-### Use Case 1: Ingest Multiple Entities (Batch)
+This reconciles any missing relationships. See: [Relationship Synchronization](/docs/{{version}}/usage/data-ingestion#relationship-synchronization)
 
-Batch ingestion is more efficient when processing many entities:
+**Optional flags:**
+```bash
+# Ingest specific model only
+php artisan ai:ingest --model="App\Models\Customer"
 
-```php
-use Condoedge\Ai\Facades\AI;
+# Custom batch size (default: 100)
+php artisan ai:ingest --chunk=500
 
-$teams = Team::all(); // Get all teams
-
-$result = AI::ingestBatch($teams->toArray());
-
-print_r($result);
-// [
-//     'total' => 10,
-//     'succeeded' => 10,
-//     'partially_succeeded' => 0,
-//     'failed' => 0,
-//     'errors' => []
-// ]
+# Preview without ingesting
+php artisan ai:ingest --dry-run
 ```
 
 ---
 
-### Use Case 2: Search for Similar Entities
+## Step 4: Auto-Sync New Data (Built-in!)
 
-Find semantically similar teams using vector search:
-
-```php
-use Condoedge\Ai\Facades\AI;
-
-$similar = AI::searchSimilar(
-    "Teams working on software development",
-    ['collection' => 'teams', 'limit' => 5]
-);
-
-foreach ($similar as $result) {
-    echo "Team: {$result['metadata']['name']}\n";
-    echo "Score: {$result['score']}\n\n";
-}
-```
-
-**Output:**
-```
-Team: Engineering Team
-Score: 0.89
-
-Team: Development Squad
-Score: 0.85
-
-Team: Tech Builders
-Score: 0.78
-```
-
----
-
-### Use Case 3: Update an Entity (Sync)
-
-When an entity changes, sync it to both stores:
+**Good news:** New and updated entities automatically sync to Neo4j + Qdrant via model events!
 
 ```php
-use Condoedge\Ai\Facades\AI;
-
-$team = Team::find(1);
-$team->size = 15;
-$team->description = 'Elite software development team';
-$team->save();
-
-// Sync changes to AI system
-$status = AI::sync($team);
-
-print_r($status);
-// [
-//     'action' => 'updated',
-//     'graph_synced' => true,
-//     'vector_synced' => true,
-//     'errors' => []
-// ]
-```
-
----
-
-### Use Case 4: Remove an Entity
-
-Delete entity from both Neo4j and Qdrant:
-
-```php
-use Condoedge\Ai\Facades\AI;
-
-$team = Team::find(1);
-
-// Remove from AI system
-$success = AI::remove($team);
-
-if ($success) {
-    // Now safe to delete from database
-    $team->delete();
-}
-```
-
----
-
-### Use Case 5: Get Context for a Question (RAG)
-
-Retrieve rich context for LLM query generation:
-
-```php
-use Condoedge\Ai\Facades\AI;
-
-$question = "Show me all engineering teams";
-
-$context = AI::retrieveContext($question, [
-    'collection' => 'teams',
-    'limit' => 5,
-    'includeSchema' => true,
-    'includeExamples' => true
+// Create a new customer - automatically ingested
+$customer = Customer::create([
+    'name' => 'Acme Corp',
+    'email' => 'contact@acme.com',
+    'company' => 'Acme Corporation',
+    'status' => 'active'
 ]);
+// ✓ Automatically stored in Neo4j
+// ✓ Automatically embedded and stored in Qdrant
 
-print_r($context);
+// Update customer - automatically synced
+$customer->status = 'inactive';
+$customer->save();
+// ✓ Automatically updated in Neo4j
+// ✓ Automatically re-embedded and updated in Qdrant
+
+// Delete customer - automatically removed
+$customer->delete();
+// ✓ Automatically removed from Neo4j
+// ✓ Automatically removed from Qdrant
 ```
 
-**Output:**
+**How it works:**
+
+The `HasNodeableConfig` trait automatically registers model events (created, updated, deleted) that sync changes to the AI system. No observers or manual syncing needed!
+
+**Disable auto-sync for specific operations:**
+
 ```php
-[
-    'similar_queries' => [
-        [
-            'question' => 'List all development teams',
-            'query' => 'MATCH (t:Team) WHERE t.name CONTAINS "dev" RETURN t',
-            'score' => 0.87
-        ]
-    ],
-    'graph_schema' => [
-        'labels' => ['Team', 'Person'],
-        'relationships' => ['MEMBER_OF'],
-        'properties' => ['id', 'name', 'size']
-    ],
-    'relevant_entities' => [
-        'Team' => [
-            ['id' => 1, 'name' => 'Engineering Team', 'size' => 10]
-        ]
-    ],
-    'errors' => []
+// Temporarily disable auto-sync
+$customer = Customer::withoutEvents(function () {
+    return Customer::create(['name' => 'Test']);
+});
+
+// Or disable in config
+// config/ai.php
+'auto_sync' => [
+    'enabled' => false, // Disable globally
 ]
 ```
 
 ---
 
-### Use Case 6: Chat with LLM
+## Step 5: Ask Questions in Natural Language (1 minute)
 
-Simple chat interface using OpenAI or Anthropic:
-
-```php
-use Condoedge\Ai\Facades\AI;
-
-// Simple question
-$response = AI::chat("What is the capital of France?");
-echo $response; // "The capital of France is Paris."
-
-// With conversation history
-$conversation = [
-    ['role' => 'system', 'content' => 'You are a helpful assistant'],
-    ['role' => 'user', 'content' => 'What is 2+2?'],
-    ['role' => 'assistant', 'content' => '4'],
-    ['role' => 'user', 'content' => 'What about 3+3?']
-];
-
-$response = AI::chat($conversation);
-echo $response; // "6"
-```
-
----
-
-### Use Case 7: Generate Embeddings
-
-Create vector embeddings for custom text:
+Now query your data using natural language:
 
 ```php
 use Condoedge\Ai\Facades\AI;
 
-$text = "Artificial Intelligence and Machine Learning";
-$vector = AI::embed($text);
+// Ask a question
+$response = AI::chat("How many active customers do we have?");
 
-echo "Dimensions: " . count($vector) . "\n"; // 1536
-echo "First values: " . implode(', ', array_slice($vector, 0, 5)) . "\n";
-// First values: 0.023, -0.015, 0.042, -0.008, 0.031
+echo $response;
+// Output: "You have 347 active customers in the system."
 ```
 
----
+**What happened:**
+1. **Context Retrieval (RAG):**
+   - Vector search found similar past queries
+   - Graph schema retrieved from Neo4j
+   - Scope "active" discovered from metadata
+2. **Query Generation:**
+   - LLM generated Cypher: `MATCH (n:Customer) WHERE n.status = 'active' RETURN count(n)`
+   - Query validated for safety (no injection, no deletes)
+3. **Execution:**
+   - Cypher executed against Neo4j
+   - Result: `347`
+4. **Response Generation:**
+   - LLM transformed result into natural language
+   - Response: "You have 347 active customers in the system."
 
-### Use Case 8: Get Graph Schema
-
-Discover what's in your Neo4j database:
+**More examples:**
 
 ```php
-use Condoedge\Ai\Facades\AI;
+// Complex query with relationships
+AI::chat("Show me customers who placed orders this month");
 
-$schema = AI::getSchema();
+// Aggregation
+AI::chat("What's the average number of orders per customer?");
 
-print_r($schema);
-// [
-//     'labels' => ['Team', 'Person', 'Project'],
-//     'relationships' => ['MEMBER_OF', 'WORKS_ON'],
-//     'properties' => ['id', 'name', 'email', 'size']
-// ]
+// Using scopes
+AI::chat("List all active customers in USA");
 ```
 
 ---
 
-## Complete Example: Question Answering System
+## Alternative: Use NodeableConfig Builder (Advanced)
 
-Here's a complete example combining multiple features:
-
-```php
-use Condoedge\Ai\Facades\AI;
-
-// 1. User asks a question
-$question = "Show me teams with more than 5 members";
-
-// 2. Retrieve context using RAG
-$context = AI::retrieveContext($question, [
-    'collection' => 'teams',
-    'limit' => 3,
-    'includeSchema' => true,
-    'includeExamples' => true
-]);
-
-// 3. Build prompt for LLM
-$systemPrompt = "You are a Cypher query expert. Generate valid Neo4j queries.";
-
-$userPrompt = sprintf(
-    "Question: %s\n\nGraph Schema:\n%s\n\nSimilar Queries:\n%s\n\nGenerate a Cypher query.",
-    $question,
-    json_encode($context['graph_schema'], JSON_PRETTY_PRINT),
-    json_encode($context['similar_queries'], JSON_PRETTY_PRINT)
-);
-
-// 4. Generate Cypher query
-$cypherQuery = AI::complete($userPrompt, $systemPrompt);
-
-echo "Generated Query:\n{$cypherQuery}\n";
-
-// Output:
-// MATCH (t:Team) WHERE t.size > 5 RETURN t
-```
-
----
-
-## Automatic Model Sync with Observers
-
-For production use, automatically sync entities when they change:
+Instead of `config/entities.php`, you can define configuration directly in your model using the fluent builder:
 
 ```php
 <?php
 
-namespace App\Observers;
+namespace App\Models;
 
-use Condoedge\Ai\Facades\AI;
-use App\Models\Team;
+use Illuminate\Database\Eloquent\Model;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\Traits\HasNodeableConfig;
+use Condoedge\Ai\Domain\ValueObjects\NodeableConfig;
 
-class TeamObserver
+class Customer extends Model implements Nodeable
 {
-    public function created(Team $team)
+    use HasNodeableConfig;
+
+    protected $fillable = ['name', 'email', 'company', 'status'];
+
+    /**
+     * Define AI configuration using builder pattern
+     */
+    public function nodeableConfig(): NodeableConfig
     {
-        AI::ingest($team);
+        return NodeableConfig::for(static::class)
+            // Neo4j configuration
+            ->label('Customer')
+            ->properties('id', 'name', 'email', 'company', 'status')
+            ->relationship('orders', 'Order', 'HAS_ORDER', 'customer_id')
+
+            // Qdrant configuration
+            ->collection('customers')
+            ->embedFields('name', 'email', 'company')
+            ->metadata(['id', 'name', 'company', 'status'])
+
+            // Metadata
+            ->aliases('customer', 'client', 'account')
+            ->description('Customer entity with orders and contact info');
     }
 
-    public function updated(Team $team)
+    public function orders()
     {
-        AI::sync($team);
-    }
-
-    public function deleted(Team $team)
-    {
-        AI::remove($team);
+        return $this->hasMany(Order::class);
     }
 }
 ```
 
-Register in `AppServiceProvider`:
+**Benefits:**
+- ✅ Configuration lives with the model (single source of truth)
+- ✅ IDE autocomplete and type safety
+- ✅ Can use logic and conditionals
+- ✅ Overrides `config/entities.php` (highest priority)
 
-```php
-use App\Models\Team;
-use App\Observers\TeamObserver;
-
-public function boot()
-{
-    Team::observe(TeamObserver::class);
-}
-```
-
-Now all Team changes automatically sync to the AI system!
+**See [Advanced Usage](/docs/{{version}}/usage/advanced-usage) for complete NodeableConfig API.**
 
 ---
 
-## Testing Your Integration
+## Configuration Priority
 
-Create a simple test:
+The system resolves configuration in this order (highest to lowest):
 
-```php
-<?php
+1. **`nodeableConfig()` method** - In your model (highest priority)
+2. **`config/entities.php`** - Generated by `php artisan ai:discover`
+3. **Runtime auto-discovery** - Disabled by default (only for dev/testing)
 
-namespace Tests\Feature;
+**Recommendation:**
+- Small projects: Use `config/entities.php` (simple, centralized)
+- Large projects: Use `nodeableConfig()` (distributed, type-safe)
+- Mix and match: Override specific models with `nodeableConfig()`
 
-use Tests\TestCase;
-use App\Models\Team;
-use Condoedge\Ai\Facades\AI;
+---
 
-class TeamAiIntegrationTest extends TestCase
-{
-    public function test_team_ingestion()
-    {
-        $team = Team::create([
-            'name' => 'Test Team',
-            'description' => 'Testing AI integration',
-            'size' => 5
-        ]);
-
-        $status = AI::ingest($team);
-
-        $this->assertTrue($status['graph_stored']);
-        $this->assertTrue($status['vector_stored']);
-        $this->assertEmpty($status['errors']);
-
-        // Cleanup
-        AI::remove($team);
-        $team->delete();
-    }
-}
-```
-
-Run tests:
+## Summary: Your Complete Workflow
 
 ```bash
-php artisan test --filter=TeamAiIntegrationTest
+# 1. Make model Nodeable
+class Customer extends Model implements Nodeable { use HasNodeableConfig; }
+
+# 2. Discover and generate config
+php artisan ai:discover
+
+# 3. Review/customize config/entities.php
+# (Optional: Add nodeableConfig() method instead)
+
+# 4. Bulk ingest existing data (one-time)
+php artisan ai:ingest
+
+# 5. New data auto-syncs automatically
+$customer = Customer::create([...]); // Auto-ingested!
+
+# 6. Ask questions in natural language
+AI::chat("How many customers do we have?");
 ```
 
 ---
@@ -454,20 +376,20 @@ php artisan test --filter=TeamAiIntegrationTest
 
 You've completed the quick start! Here's what to explore next:
 
-### Learn More About APIs
-- **[Simple Usage Guide](/docs/{{version}}/usage/simple-usage)** - All AI wrapper methods
-- **[Data Ingestion API](/docs/{{version}}/usage/data-ingestion)** - Detailed ingestion guide
-- **[Context Retrieval](/docs/{{version}}/usage/context-retrieval)** - Deep dive into RAG
-
-### Advanced Topics
-- **[Advanced Usage](/docs/{{version}}/usage/advanced-usage)** - Direct service usage
-- **[Laravel Integration](/docs/{{version}}/usage/laravel-integration)** - Controllers, commands, queues
-- **[Real-World Examples](/docs/{{version}}/usage/examples)** - Complete implementations
-
 ### Configuration
 - **[Configuration Reference](/docs/{{version}}/foundations/configuration)** - All settings explained
-- **[Architecture Overview](/docs/{{version}}/internals/architecture)** - System design deep dive
+- **[Advanced Usage](/docs/{{version}}/usage/advanced-usage)** - Complete NodeableConfig API and direct service usage
+
+### APIs and Integration
+- **[Simple Usage (AI Facade)](/docs/{{version}}/usage/simple-usage)** - All AI wrapper methods
+- **[Data Ingestion API](/docs/{{version}}/usage/data-ingestion)** - Manual ingestion and batch operations
+- **[Context Retrieval & RAG](/docs/{{version}}/usage/context-retrieval)** - Deep dive into RAG system
+
+### Examples and Extensions
+- **[Laravel Integration](/docs/{{version}}/usage/laravel-integration)** - Controllers, commands, queues
+- **[Real-World Examples](/docs/{{version}}/usage/examples)** - Complete implementations
+- **[Extending the Package](/docs/{{version}}/usage/extending)** - Custom providers and services
 
 ---
 
-**Questions?** Check the [Troubleshooting Guide](/docs/{{version}}/foundations/troubleshooting) or explore [Real-World Examples](/docs/{{version}}/usage/examples)!
+**Questions?** Check the [Troubleshooting Guide](/docs/{{version}}/foundations/troubleshooting)!

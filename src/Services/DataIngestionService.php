@@ -495,6 +495,13 @@ class DataIngestionService implements DataIngestionServiceInterface
     /**
      * Create relationships for an entity
      *
+     * Only creates relationships where the target node exists in Neo4j.
+     * Silently skips relationships to non-existent targets to allow
+     * flexible ingestion order (e.g., Users before Persons).
+     *
+     * Use syncRelationships() or 'php artisan ai:sync-relationships'
+     * to reconcile missing relationships after all entities are ingested.
+     *
      * @param Nodeable $entity Source entity
      * @param GraphConfig $config Graph configuration
      * @return int Number of relationships created
@@ -504,12 +511,44 @@ class DataIngestionService implements DataIngestionServiceInterface
     {
         $data = $entity->toArray();
         $count = 0;
+        $skipped = 0;
 
         foreach ($config->relationships as $relationshipConfig) {
             $foreignKeyValue = $data[$relationshipConfig->foreignKey] ?? null;
 
             // Skip if foreign key is not set or is null
             if ($foreignKeyValue === null) {
+                continue;
+            }
+
+            // Check if target node exists before creating relationship
+            try {
+                $targetExists = $this->graphStore->nodeExists(
+                    $relationshipConfig->targetLabel,
+                    $foreignKeyValue
+                );
+
+                if (!$targetExists) {
+                    Log::debug("Skipping relationship: target node not found", [
+                        'from_label' => $config->label,
+                        'from_id' => $entity->getId(),
+                        'to_label' => $relationshipConfig->targetLabel,
+                        'to_id' => $foreignKeyValue,
+                        'relationship_type' => $relationshipConfig->type,
+                        'message' => 'Target node will be created later. Run ai:sync-relationships after bulk ingestion.',
+                    ]);
+                    $skipped++;
+                    continue;
+                }
+            } catch (\Exception $e) {
+                Log::warning("Failed to check if target node exists, skipping relationship", [
+                    'from_label' => $config->label,
+                    'from_id' => $entity->getId(),
+                    'to_label' => $relationshipConfig->targetLabel,
+                    'to_id' => $foreignKeyValue,
+                    'error' => $e->getMessage(),
+                ]);
+                $skipped++;
                 continue;
             }
 
@@ -523,16 +562,58 @@ class DataIngestionService implements DataIngestionServiceInterface
                 }
             }
 
-            $this->graphStore->createRelationship(
-                fromLabel: $config->label,
-                fromId: $entity->getId(),
-                toLabel: $relationshipConfig->targetLabel,
-                toId: $foreignKeyValue,
-                type: $relationshipConfig->type,
-                properties: $relationshipProperties
-            );
+            try {
+                // Check if relationship already exists to avoid duplicates
+                $relationshipExists = $this->graphStore->relationshipExists(
+                    fromLabel: $config->label,
+                    fromId: $entity->getId(),
+                    toLabel: $relationshipConfig->targetLabel,
+                    toId: $foreignKeyValue,
+                    type: $relationshipConfig->type
+                );
 
-            $count++;
+                if ($relationshipExists) {
+                    Log::debug("Relationship already exists, skipping", [
+                        'from_label' => $config->label,
+                        'from_id' => $entity->getId(),
+                        'to_label' => $relationshipConfig->targetLabel,
+                        'to_id' => $foreignKeyValue,
+                        'type' => $relationshipConfig->type,
+                    ]);
+                    continue; // Already exists, don't create duplicate
+                }
+
+                $this->graphStore->createRelationship(
+                    fromLabel: $config->label,
+                    fromId: $entity->getId(),
+                    toLabel: $relationshipConfig->targetLabel,
+                    toId: $foreignKeyValue,
+                    type: $relationshipConfig->type,
+                    properties: $relationshipProperties
+                );
+
+                $count++;
+            } catch (\Exception $e) {
+                Log::warning("Failed to create relationship", [
+                    'from_label' => $config->label,
+                    'from_id' => $entity->getId(),
+                    'to_label' => $relationshipConfig->targetLabel,
+                    'to_id' => $foreignKeyValue,
+                    'type' => $relationshipConfig->type,
+                    'error' => $e->getMessage(),
+                ]);
+                $skipped++;
+            }
+        }
+
+        if ($skipped > 0) {
+            Log::info("Relationships created with some skipped", [
+                'entity_class' => get_class($entity),
+                'entity_id' => $entity->getId(),
+                'created' => $count,
+                'skipped' => $skipped,
+                'message' => 'Run "php artisan ai:sync-relationships" to create missing relationships',
+            ]);
         }
 
         return $count;
@@ -547,6 +628,9 @@ class DataIngestionService implements DataIngestionServiceInterface
      */
     private function ingestToVector(Nodeable $entity, VectorConfig $config): void
     {
+        // Ensure collection exists before ingesting
+        $this->ensureCollectionExists($config);
+
         $data = $entity->toArray();
 
         // Build text to embed from specified fields
@@ -818,5 +902,221 @@ class DataIngestionService implements DataIngestionServiceInterface
         }
 
         return $properties;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function syncRelationships(array $entities): array
+    {
+        $summary = [
+            'total_entities' => count($entities),
+            'total_relationships_checked' => 0,
+            'relationships_created' => 0,
+            'relationships_skipped' => 0,
+            'relationships_failed' => 0,
+            'errors' => [],
+        ];
+
+        if (empty($entities)) {
+            return $summary;
+        }
+
+        Log::info("Starting relationship synchronization", [
+            'total_entities' => count($entities),
+        ]);
+
+        foreach ($entities as $entity) {
+            try {
+                $this->validateEntity($entity);
+
+                $entityId = $entity->getId();
+                $graphConfig = $entity->getGraphConfig();
+                $data = $entity->toArray();
+
+                // Check if source node exists
+                $sourceExists = $this->graphStore->nodeExists($graphConfig->label, $entityId);
+                if (!$sourceExists) {
+                    Log::warning("Source node does not exist, skipping relationships", [
+                        'entity_class' => get_class($entity),
+                        'entity_id' => $entityId,
+                        'label' => $graphConfig->label,
+                    ]);
+                    continue;
+                }
+
+                // Process each configured relationship
+                foreach ($graphConfig->relationships as $relationshipConfig) {
+                    $summary['total_relationships_checked']++;
+
+                    $foreignKeyValue = $data[$relationshipConfig->foreignKey] ?? null;
+
+                    // Skip if foreign key is not set
+                    if ($foreignKeyValue === null) {
+                        continue;
+                    }
+
+                    try {
+                        // Check if target node exists
+                        $targetExists = $this->graphStore->nodeExists(
+                            $relationshipConfig->targetLabel,
+                            $foreignKeyValue
+                        );
+
+                        if (!$targetExists) {
+                            Log::debug("Target node still doesn't exist", [
+                                'from_label' => $graphConfig->label,
+                                'from_id' => $entityId,
+                                'to_label' => $relationshipConfig->targetLabel,
+                                'to_id' => $foreignKeyValue,
+                            ]);
+                            $summary['relationships_failed']++;
+                            continue;
+                        }
+
+                        // Check if relationship already exists
+                        $relationshipExists = $this->graphStore->relationshipExists(
+                            fromLabel: $graphConfig->label,
+                            fromId: $entityId,
+                            toLabel: $relationshipConfig->targetLabel,
+                            toId: $foreignKeyValue,
+                            type: $relationshipConfig->type
+                        );
+
+                        if ($relationshipExists) {
+                            Log::debug("Relationship already exists", [
+                                'from_label' => $graphConfig->label,
+                                'from_id' => $entityId,
+                                'to_label' => $relationshipConfig->targetLabel,
+                                'to_id' => $foreignKeyValue,
+                                'type' => $relationshipConfig->type,
+                            ]);
+                            $summary['relationships_skipped']++;
+                            continue;
+                        }
+
+                        // Extract relationship properties
+                        $relationshipProperties = [];
+                        if ($relationshipConfig->hasProperties()) {
+                            foreach ($relationshipConfig->properties as $key => $sourceField) {
+                                if (isset($data[$sourceField])) {
+                                    $relationshipProperties[$key] = $data[$sourceField];
+                                }
+                            }
+                        }
+
+                        // Create the relationship
+                        $this->graphStore->createRelationship(
+                            fromLabel: $graphConfig->label,
+                            fromId: $entityId,
+                            toLabel: $relationshipConfig->targetLabel,
+                            toId: $foreignKeyValue,
+                            type: $relationshipConfig->type,
+                            properties: $relationshipProperties
+                        );
+
+                        Log::info("Relationship created during sync", [
+                            'from_label' => $graphConfig->label,
+                            'from_id' => $entityId,
+                            'to_label' => $relationshipConfig->targetLabel,
+                            'to_id' => $foreignKeyValue,
+                            'type' => $relationshipConfig->type,
+                        ]);
+
+                        $summary['relationships_created']++;
+
+                    } catch (\Exception $e) {
+                        Log::error("Failed to sync relationship", [
+                            'from_label' => $graphConfig->label,
+                            'from_id' => $entityId,
+                            'to_label' => $relationshipConfig->targetLabel,
+                            'to_id' => $foreignKeyValue,
+                            'type' => $relationshipConfig->type,
+                            'error' => $e->getMessage(),
+                        ]);
+
+                        $summary['relationships_failed']++;
+                        $summary['errors'][$entityId][] = sprintf(
+                            "Failed to create %s relationship to %s:%s - %s",
+                            $relationshipConfig->type,
+                            $relationshipConfig->targetLabel,
+                            $foreignKeyValue,
+                            $e->getMessage()
+                        );
+                    }
+                }
+
+            } catch (\Exception $e) {
+                Log::error("Failed to sync relationships for entity", [
+                    'entity_class' => get_class($entity),
+                    'entity_id' => $entity->getId(),
+                    'error' => $e->getMessage(),
+                ]);
+
+                $summary['errors'][$entity->getId()][] = $e->getMessage();
+            }
+        }
+
+        Log::info("Relationship synchronization completed", $summary);
+
+        return $summary;
+    }
+
+    /**
+     * Ensure Qdrant collection exists, create if missing
+     *
+     * Creates collection lazily on first use with proper vector dimensions
+     * and distance metric. Subsequent calls are cached to avoid redundant checks.
+     *
+     * @param VectorConfig $config Vector configuration with collection name
+     * @return void
+     */
+    private function ensureCollectionExists(VectorConfig $config): void
+    {
+        static $checkedCollections = [];
+
+        $collectionName = $config->collection;
+
+        // Skip if already checked in this request
+        if (isset($checkedCollections[$collectionName])) {
+            return;
+        }
+
+        try {
+            // Check if collection exists
+            if (!$this->vectorStore->collectionExists($collectionName)) {
+                // Create collection with configured dimensions
+                $vectorSize = config('ai.embeddings.dimensions', 1536);
+                $distance = config('ai.embeddings.distance', 'Cosine');
+
+                Log::info("Creating Qdrant collection: {$collectionName}", [
+                    'vector_size' => $vectorSize,
+                    'distance' => $distance,
+                ]);
+
+                $this->vectorStore->createCollection(
+                    name: $collectionName,
+                    vectorSize: $vectorSize,
+                    distance: $distance
+                );
+
+                Log::info("Qdrant collection created successfully: {$collectionName}");
+            }
+
+            // Mark as checked
+            $checkedCollections[$collectionName] = true;
+
+        } catch (\Throwable $e) {
+            Log::error("Failed to ensure collection exists: {$collectionName}", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            throw new \RuntimeException(
+                "Failed to create Qdrant collection '{$collectionName}': {$e->getMessage()}",
+                0,
+                $e
+            );
+        }
     }
 }

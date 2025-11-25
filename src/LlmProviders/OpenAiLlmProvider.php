@@ -73,8 +73,8 @@ class OpenAiLlmProvider implements LlmProviderInterface
 
         $this->apiKey = $config['api_key'];
         $this->model = $config['model'] ?? self::DEFAULT_MODEL;
-        $this->temperature = $config['temperature'] ?? 0.3;
-        $this->maxResponseTokens = $config['max_tokens'] ?? 2000;
+        $this->temperature = (float) ($config['temperature'] ?? 0.3);
+        $this->maxResponseTokens = (int) ($config['max_tokens'] ?? 2000);
     }
 
     /**

@@ -184,6 +184,7 @@ class IngestEntitiesCommand extends Command
         }
 
         // Process in chunks with progress bar
+        // Note: Collections are automatically created by DataIngestionService on first use
         $progressBar = $this->output->createProgressBar($total);
         $progressBar->setFormat('  [%bar%] %current%/%max% (%percent:3s%%) %message%');
         $progressBar->setMessage('Ingesting...');
@@ -198,7 +199,7 @@ class IngestEntitiesCommand extends Command
                 // Use batch ingestion for efficiency
                 $results = $this->ingestionService->ingestBatch($entities->all());
 
-                $ingested += $results['successful'];
+                $ingested += $results['succeeded'];
                 $failed += $results['failed'];
 
                 if (!empty($results['errors'])) {
@@ -239,44 +240,6 @@ class IngestEntitiesCommand extends Command
      */
     private function findNodeableModels(): array
     {
-        $models = [];
-
-        // Search in app/Models directory
-        $modelsPath = app_path('Models');
-
-        if (!File::isDirectory($modelsPath)) {
-            return [];
-        }
-
-        $finder = new Finder();
-        $finder->files()->in($modelsPath)->name('*.php');
-
-        foreach ($finder as $file) {
-            $namespace = $this->getNamespaceFromFile($file->getPathname());
-            $class = $namespace . '\\' . $file->getBasename('.php');
-
-            if (class_exists($class) && in_array(Nodeable::class, class_implements($class) ?: [])) {
-                $models[] = $class;
-            }
-        }
-
-        return $models;
-    }
-
-    /**
-     * Extract namespace from PHP file
-     *
-     * @param string $filePath Path to PHP file
-     * @return string Namespace
-     */
-    private function getNamespaceFromFile(string $filePath): string
-    {
-        $contents = File::get($filePath);
-
-        if (preg_match('/namespace\s+([^;]+);/', $contents, $matches)) {
-            return $matches[1];
-        }
-
-        return 'App\\Models';
+        return array_keys(config('entities'));
     }
 }

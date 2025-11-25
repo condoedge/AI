@@ -26,6 +26,7 @@ class EmbedFieldDetector
      * Field patterns that indicate embeddable text
      */
     private const TEXT_FIELD_PATTERNS = [
+        'name',
         'description',
         'bio',
         'notes',

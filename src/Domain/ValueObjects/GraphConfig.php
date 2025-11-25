@@ -57,7 +57,7 @@ class GraphConfig
         return new self(
             label: $config['label'],
             properties: $config['properties'],
-            relationships: $relationships
+            relationships: array_filter($relationships)
         );
     }
 

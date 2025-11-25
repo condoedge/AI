@@ -1,33 +1,69 @@
 # Simple Usage (AI Facade)
 
-The `AI` Facade provides a simple, one-line interface to all AI system features. This is the **recommended approach** for most use cases.
+The `AI` Facade provides a simple, one-line interface to all AI system features.
 
 ---
 
 ## Overview
 
-The AI Facade automatically handles:
+The AI Facade provides access to all AI system capabilities:
+
+```php
+use Condoedge\Ai\Facades\AI;
+
+// RAG context retrieval (most common)
+$context = AI::retrieveContext("Show all teams");
+
+// Chat with LLM
+$response = AI::chat("What is 2+2?");
+
+// Manual ingestion (rarely needed - auto-sync handles this!)
+AI::ingest($customer);
+```
+
+**The AI Facade automatically handles:**
 - Dependency instantiation
 - Configuration loading
 - Service coordination
 - Error handling
 
-> **Architecture Note**: The AI system was recently refactored to follow Laravel best practices. The facade now properly leverages Laravel's service container and dependency injection, making it fully testable. See [Migration Guide](https://github.com/your-repo/MIGRATION-GUIDE.md) for details.
+---
+
+## Auto-Sync vs Manual Operations
+
+**⚠️ Important:** Most ingestion methods are **rarely needed** because **auto-sync handles this automatically**.
+
+When you use the `HasNodeableConfig` trait, entities automatically sync to Neo4j + Qdrant on model events:
 
 ```php
-use Condoedge\Ai\Facades\AI;
+class Customer extends Model implements Nodeable
+{
+    use HasNodeableConfig;
+}
 
-// Facade usage (recommended)
-AI::ingest($customer);
-$context = AI::retrieveContext("Show all teams");
-$response = AI::chat("What is 2+2?");
+// Auto-synced - no manual AI::ingest() needed!
+$customer = Customer::create(['name' => 'Acme']);  // ✓ Auto-ingested
+$customer->update(['name' => 'Acme Corp']);        // ✓ Auto-synced
+$customer->delete();                                // ✓ Auto-removed
 ```
 
-> **Note**: The old `Condoedge\Ai\Wrappers\AI` class is **deprecated** and will be removed in v2.0. Please update your imports to use `Condoedge\Ai\Facades\AI`.
+**Manual ingestion methods are only needed when:**
+- Auto-sync is disabled globally or for specific models
+- You need explicit control over ingestion timing
+- Running bulk operations outside of model events
+
+For most applications, you'll primarily use:
+1. **`AI::retrieveContext()`** - RAG for query generation
+2. **`AI::chat()` / `AI::chatJson()`** - LLM interactions
+3. **`AI::embed()`** - Custom embedding operations
+
+See: [Data Ingestion Guide](/docs/{{version}}/usage/data-ingestion) for auto-sync configuration.
 
 ---
 
 ## Data Ingestion Methods
+
+**Note:** These methods are typically **not needed** due to auto-sync. See section above.
 
 ### ingest() - Ingest Single Entity
 
@@ -485,57 +521,123 @@ See [Testing Documentation](/docs/{{version}}/usage/testing) for comprehensive t
 
 ## Complete Usage Example
 
-Here's a complete example combining multiple features:
+Here's a complete RAG-powered natural language query system:
 
 ```php
 use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\GraphStore\Neo4jStore;
 
-// 1. Ingest customer data
+// 1. Create customer (auto-synced to Neo4j + Qdrant!)
 $customer = Customer::create([
     'name' => 'Acme Corporation',
     'email' => 'contact@acme.com',
     'description' => 'Leading software development company'
 ]);
+// ✓ Automatically ingested via auto-sync - no manual AI::ingest() needed!
 
-$status = AI::ingest($customer);
-if (!empty($status['errors'])) {
-    Log::warning('Ingestion errors', $status['errors']);
-}
-
-// 2. User asks a question
+// 2. User asks a natural language question
 $question = "Which customers are in the software industry?";
 
 // 3. Retrieve context using RAG
 $context = AI::retrieveContext($question, [
     'collection' => 'customers',
     'limit' => 5,
-    'includeSchema' => true
+    'includeSchema' => true,
+    'includeExamples' => true
 ]);
 
-// 4. Build LLM prompt with context
-$systemPrompt = "You are a Cypher query expert. Generate valid Neo4j queries.";
-$userPrompt = sprintf(
-    "Question: %s\n\nSchema: %s\n\nSimilar Queries: %s\n\nGenerate Cypher query (JSON format).",
-    $question,
-    json_encode($context['graph_schema']),
-    json_encode($context['similar_queries'])
+// 4. Build LLM prompt with retrieved context + project context
+$projectContext = config('ai.project');
+
+$systemPrompt = sprintf(
+    "You are a Cypher query expert for a %s application.\n\nProject: %s\nDescription: %s\n\nGenerate valid Neo4j queries based on the provided schema, examples, and business rules.",
+    $projectContext['domain'] ?? 'business',
+    $projectContext['name'] ?? 'Application',
+    $projectContext['description'] ?? ''
 );
 
-// 5. Generate query using LLM
-$result = AI::chatJson($userPrompt, ['temperature' => 0.2]);
+$businessRules = !empty($projectContext['business_rules'])
+    ? "\n\nBusiness Rules:\n" . implode("\n", array_map(fn($rule) => "- $rule", $projectContext['business_rules']))
+    : '';
+
+$userPrompt = sprintf(
+    "Question: %s\n\nGraph Schema:\n%s\n\nSimilar Previous Queries:\n%s\n\nExample Entities:\n%s%s\n\nGenerate a Cypher query (JSON format with 'query' and 'explanation' fields).",
+    $question,
+    json_encode($context['graph_schema'], JSON_PRETTY_PRINT),
+    json_encode($context['similar_queries'], JSON_PRETTY_PRINT),
+    json_encode($context['relevant_entities'], JSON_PRETTY_PRINT),
+    $businessRules
+);
+
+// 5. Generate Cypher query using LLM
+$result = AI::chatJson([
+    ['role' => 'system', 'content' => $systemPrompt],
+    ['role' => 'user', 'content' => $userPrompt]
+], [
+    'temperature' => 0.2  // Low temperature for consistency
+]);
+
 $cypherQuery = $result->query ?? '';
+$explanation = $result->explanation ?? '';
 
-// 6. Execute query (not part of AI wrapper - use Neo4jStore directly)
-// $results = Neo4jStore::query($cypherQuery);
+// 6. Execute query against Neo4j
+$neo4j = app(Neo4jStore::class);
+$results = $neo4j->query($cypherQuery);
 
-// 7. Generate human-readable response
+// 7. Generate human-readable response with full context
+$responseSystemPrompt = sprintf(
+    "You are a helpful assistant for a %s application (%s).\n\nProject Description: %s%s\n\nDomain Knowledge:\n%s\n\nGraph Schema:\n%s\n\nUse this context to provide accurate, domain-specific explanations to non-technical users.",
+    $projectContext['domain'] ?? 'business',
+    $projectContext['name'] ?? 'Application',
+    $projectContext['description'] ?? '',
+    $businessRules,
+    json_encode([
+        'entities' => array_map(function($entity) {
+            return [
+                'label' => $entity['graph']['label'] ?? '',
+                'aliases' => $entity['metadata']['aliases'] ?? [],
+                'description' => $entity['metadata']['description'] ?? ''
+            ];
+        }, config('entities', [])),
+    ], JSON_PRETTY_PRINT),
+    json_encode($context['graph_schema'], JSON_PRETTY_PRINT)
+);
+
+$responseUserPrompt = sprintf(
+    "Original question: \"%s\"\n\nCypher query executed:\n%s\n\nQuery explanation: %s\n\nResults:\n%s\n\nExplain these results in plain English, using proper terminology from the domain.",
+    $question,
+    $cypherQuery,
+    $explanation,
+    json_encode($results, JSON_PRETTY_PRINT)
+);
+
 $response = AI::complete(
-    "Explain these results to the user: " . json_encode($results ?? []),
-    "You are a helpful assistant explaining database query results"
+    $responseUserPrompt,
+    $responseSystemPrompt
 );
 
 echo $response;
 ```
+
+**What happens here:**
+
+1. **Customer created** - Auto-synced to Neo4j (graph) + Qdrant (vectors)
+2. **User question** - Natural language query received
+3. **RAG retrieval** - Semantic search finds similar queries + graph schema
+4. **LLM query generation** - Cypher query generated with full context
+5. **Query execution** - Cypher executed against Neo4j
+6. **Response generation** - Results explained with **same domain context** as query generation
+7. **User receives** - Natural language answer using proper domain terminology
+
+**Key Points:**
+- No manual `AI::ingest()` call needed - auto-sync handles it!
+- Both query and response generators receive **full project context**:
+  - Project name, description, and domain type
+  - Business rules specific to your application
+  - Entity metadata (aliases, descriptions)
+  - Graph schema (labels, relationships, properties)
+- Ensures consistent terminology between query generation and response explanation
+- LLM understands your business domain, not just generic database operations
 
 ---
 
@@ -571,8 +673,22 @@ if (!empty($context['errors'])) {
 
 ## Performance Tips
 
-### Use Batch Operations
+### Queue Auto-Sync Operations
+
+For high-throughput applications, queue sync operations:
+
+```env
+AI_AUTO_SYNC_QUEUE=true
+AI_AUTO_SYNC_QUEUE_CONNECTION=redis
+```
+
+Now all model events dispatch queued jobs instead of blocking.
+
+### Use Batch Operations (When Auto-Sync Disabled)
+
 ```php
+// If auto-sync is disabled and you must manually ingest:
+
 // Slow - multiple API calls
 foreach ($customers as $customer) {
     AI::ingest($customer);
@@ -582,19 +698,51 @@ foreach ($customers as $customer) {
 AI::ingestBatch($customers->toArray());
 ```
 
-### Cache Embeddings
+### Cache Embeddings for Static Content
+
 ```php
-// Cache frequently used embeddings
-$embedding = Cache::remember("embed:{$text}", 3600, function() use ($text) {
+// Cache embeddings for content that doesn't change often
+$embedding = Cache::remember("embed:faq_{$id}", 3600, function() use ($text) {
     return AI::embed($text);
 });
 ```
 
-### Configure Timeouts
+### Batch Embed Multiple Texts
+
 ```php
-// Set in .env for slow operations
+// Slow - multiple API calls
+$vectors = [];
+foreach ($texts as $text) {
+    $vectors[] = AI::embed($text);
+}
+
+// Fast - single API call
+$vectors = AI::embedBatch($texts);
+```
+
+### Configure Timeouts
+
+```env
+# Set in .env for slow operations
 QDRANT_TIMEOUT=60
 AI_QUERY_TIMEOUT=60
+NEO4J_TIMEOUT=60
+```
+
+### Disable Auto-Sync During Seeding
+
+```php
+// database/seeders/DatabaseSeeder.php
+public function run()
+{
+    // Disable auto-sync for bulk seeding
+    config(['ai.auto_sync.enabled' => false]);
+
+    Customer::factory()->count(10000)->create();
+
+    // Bulk ingest after seeding (one-time)
+    Artisan::call('ai:ingest', ['--model' => 'App\\Models\\Customer']);
+}
 ```
 
 ---

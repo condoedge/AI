@@ -322,4 +322,7 @@ class FileProcessingPlugin extends ModelPlugin
             throw $e;
         }
     }
+
+    // Model methods
+    
 }

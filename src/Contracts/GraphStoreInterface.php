@@ -104,6 +104,24 @@ interface GraphStoreInterface
     public function nodeExists(string $label, string|int $id): bool;
 
     /**
+     * Check if a relationship exists
+     *
+     * @param string $fromLabel Source node label
+     * @param string|int $fromId Source node application ID
+     * @param string $toLabel Target node label
+     * @param string|int $toId Target node application ID
+     * @param string $type Relationship type
+     * @return bool
+     */
+    public function relationshipExists(
+        string $fromLabel,
+        string|int $fromId,
+        string $toLabel,
+        string|int $toId,
+        string $type
+    ): bool;
+
+    /**
      * Get a node by ID
      *
      * @param string $label Node label

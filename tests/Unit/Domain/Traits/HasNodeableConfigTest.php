@@ -123,7 +123,7 @@ class HasNodeableConfigTest extends TestCase
         $className = get_class($model);
 
         // Set config using Laravel's Config facade (array syntax)
-        $entities = config('ai.entities', []);
+        $entities = config('entities', []);
         $entities[$className] = [
             'graph' => [
                 'label' => 'ConfigNode',
@@ -131,7 +131,7 @@ class HasNodeableConfigTest extends TestCase
                 'relationships' => [],
             ],
         ];
-        Config::set('ai.entities', $entities);
+        Config::set('entities', $entities);
 
         // Get graph config
         $graphConfig = $model->getGraphConfig();
@@ -155,7 +155,7 @@ class HasNodeableConfigTest extends TestCase
         };
 
         // Set config with short name
-        Config::set('ai.entities.TestModel', [
+        Config::set('entities.TestModel', [
             'graph' => [
                 'label' => 'ShortNameNode',
                 'properties' => ['id', 'name'],
@@ -258,7 +258,7 @@ class HasNodeableConfigTest extends TestCase
     {
         // Disable auto-discovery
         Config::set('ai.auto_discovery.enabled', false);
-        Config::set('ai.entities', []);
+        Config::set('entities', []);
 
         // Create model without config
         $model = new class extends Model implements Nodeable {
@@ -307,7 +307,7 @@ class HasNodeableConfigTest extends TestCase
     public function it_respects_config_priority_order()
     {
         // Set up config file
-        Config::set('ai.entities.TestModel', [
+        Config::set('entities.TestModel', [
             'graph' => [
                 'label' => 'ConfigNode',
                 'properties' => ['id'],
@@ -399,7 +399,7 @@ class HasNodeableConfigTest extends TestCase
         $this->app->instance(EntityAutoDiscovery::class, $discoveryMock);
 
         Config::set('ai.auto_discovery.enabled', true);
-        Config::set('ai.entities', []);
+        Config::set('entities', []);
 
         // Create model without config
         $model = new class extends Model implements Nodeable {

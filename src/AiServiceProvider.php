@@ -41,6 +41,8 @@ use Condoedge\Ai\Services\Extractors\PdfExtractor;
 use Condoedge\Ai\Services\Extractors\DocxExtractor;
 use Condoedge\Ai\Services\PatternLibrary;
 use Condoedge\Ai\Services\SemanticPromptBuilder;
+use Condoedge\Ai\Services\SemanticMatcher;
+use Condoedge\Ai\Services\SemanticIndexer;
 use Condoedge\Ai\Services\Discovery\SchemaInspector;
 use Condoedge\Ai\Services\Discovery\CypherScopeAdapter;
 use Condoedge\Ai\Services\Discovery\CypherQueryBuilderSpy;
@@ -50,6 +52,8 @@ use Condoedge\Ai\Services\Discovery\RelationshipDiscoverer;
 use Condoedge\Ai\Services\Discovery\AliasGenerator;
 use Condoedge\Ai\Services\Discovery\EmbedFieldDetector;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
+use Condoedge\Utils\Models\Files\File;
+use Condoedge\Ai\Models\Plugins\FileProcessingPlugin;
 
 /**
  * AI System Service Provider
@@ -125,29 +129,6 @@ class AiServiceProvider extends ServiceProvider
             __DIR__ . '/../config/ai.php',
             'ai'
         );
-
-        // Register Auto-Discovery Services
-        $this->app->singleton(\Condoedge\Ai\Services\Discovery\SchemaInspector::class);
-        $this->app->singleton(\Condoedge\Ai\Services\Discovery\CypherScopeAdapter::class);
-        $this->app->singleton(\Condoedge\Ai\Services\Discovery\PropertyDiscoverer::class);
-        $this->app->singleton(\Condoedge\Ai\Services\Discovery\RelationshipDiscoverer::class);
-        $this->app->singleton(\Condoedge\Ai\Services\Discovery\AliasGenerator::class);
-
-        $this->app->singleton(\Condoedge\Ai\Services\Discovery\EmbedFieldDetector::class, function ($app) {
-            return new \Condoedge\Ai\Services\Discovery\EmbedFieldDetector(
-                $app->make(\Condoedge\Ai\Services\Discovery\SchemaInspector::class)
-            );
-        });
-
-        $this->app->singleton(\Condoedge\Ai\Services\Discovery\EntityAutoDiscovery::class, function ($app) {
-            return new \Condoedge\Ai\Services\Discovery\EntityAutoDiscovery(
-                propertyDiscoverer: $app->make(\Condoedge\Ai\Services\Discovery\PropertyDiscoverer::class),
-                relationshipDiscoverer: $app->make(\Condoedge\Ai\Services\Discovery\RelationshipDiscoverer::class),
-                aliasGenerator: $app->make(\Condoedge\Ai\Services\Discovery\AliasGenerator::class),
-                embedFieldDetector: $app->make(\Condoedge\Ai\Services\Discovery\EmbedFieldDetector::class),
-                scopeAdapter: $app->make(\Condoedge\Ai\Services\Discovery\CypherScopeAdapter::class)
-            );
-        });
 
         // Register Vector Store
         $this->app->singleton(VectorStoreInterface::class, function ($app) {
@@ -325,15 +306,44 @@ class AiServiceProvider extends ServiceProvider
                 llm: $app->make(LlmProviderInterface::class),
                 queryGenerator: $app->make(QueryGeneratorInterface::class),
                 queryExecutor: $app->make(QueryExecutorInterface::class),
-                responseGenerator: $app->make(ResponseGeneratorInterface::class)
+                responseGenerator: $app->make(ResponseGeneratorInterface::class),
+                vectorStore: $app->make(VectorStoreInterface::class)
             );
         });
 
         // Alias for dependency injection
         $this->app->alias('ai', AiManager::class);
 
+        // Register Semantic Matching Services
+        $this->registerSemanticServices();
+
         // Register Discovery Services
         $this->registerDiscoveryServices();
+    }
+
+    /**
+     * Register semantic matching services
+     *
+     * @return void
+     */
+    private function registerSemanticServices(): void
+    {
+        // Register SemanticMatcher
+        $this->app->singleton(SemanticMatcher::class, function ($app) {
+            return new SemanticMatcher(
+                embedding: $app->make(EmbeddingProviderInterface::class),
+                vectorStore: $app->make(VectorStoreInterface::class)
+            );
+        });
+
+        // Register SemanticIndexer
+        $this->app->singleton(SemanticIndexer::class, function ($app) {
+            return new SemanticIndexer(
+                embedding: $app->make(EmbeddingProviderInterface::class),
+                vectorStore: $app->make(VectorStoreInterface::class),
+                entityConfigs: config('entities', [])
+            );
+        });
     }
 
     /**
@@ -344,19 +354,13 @@ class AiServiceProvider extends ServiceProvider
     private function registerDiscoveryServices(): void
     {
         // Register SchemaInspector
-        $this->app->singleton(SchemaInspector::class, function ($app) {
-            return new SchemaInspector();
-        });
+        $this->app->singleton(SchemaInspector::class);
 
         // Register CypherQueryBuilderSpy
-        $this->app->bind(CypherQueryBuilderSpy::class, function ($app) {
-            return new CypherQueryBuilderSpy();
-        });
+        $this->app->bind(CypherQueryBuilderSpy::class);
 
         // Register CypherPatternGenerator
-        $this->app->singleton(CypherPatternGenerator::class, function ($app) {
-            return new CypherPatternGenerator();
-        });
+        $this->app->singleton(CypherPatternGenerator::class);
 
         // Register CypherScopeAdapter
         $this->app->singleton(CypherScopeAdapter::class, function ($app) {
@@ -381,9 +385,7 @@ class AiServiceProvider extends ServiceProvider
         });
 
         // Register AliasGenerator
-        $this->app->singleton(AliasGenerator::class, function ($app) {
-            return new AliasGenerator();
-        });
+        $this->app->singleton(AliasGenerator::class);
 
         // Register EmbedFieldDetector
         $this->app->singleton(EmbedFieldDetector::class, function ($app) {
@@ -433,8 +435,15 @@ class AiServiceProvider extends ServiceProvider
             $this->commands([
                 \Condoedge\Ai\Console\Commands\DiscoverEntitiesCommand::class,
                 \Condoedge\Ai\Console\Commands\IngestEntitiesCommand::class,
+                \Condoedge\Ai\Console\Commands\SyncRelationshipsCommand::class,
+                \Condoedge\Ai\Console\Commands\ProcessFilesCommand::class,
+                \Condoedge\Ai\Console\Commands\IndexSemanticCommand::class,
             ]);
         }
+
+        File::setPlugins([
+            FileProcessingPlugin::class,
+        ]);
     }
 
     /**

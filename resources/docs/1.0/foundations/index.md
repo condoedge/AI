@@ -11,10 +11,25 @@ The Foundations track helps you install the AI Text-to-Query package, verify you
 ## What You Will Learn
 
 1. **Core Requirements** – Supported PHP/Laravel versions, extension prerequisites, and recommended hardware sizing.
-2. **Installation Workflow** – Composer install, provider registration, config publishing, and environment hardening.
+2. **Installation Workflow** – Composer install, provider registration, config publishing, entity discovery, and initial data ingestion.
 3. **Infrastructure Playbooks** – Battle-tested Docker Compose recipes for Neo4j + Qdrant, plus connectivity diagnostics.
-4. **Configuration Reference** – A single place to audit every `.env` knob and `config/ai.php` option.
+4. **Configuration Reference** – Complete guide to project context, auto-discovery, auto-sync, file processing, and all `.env` settings.
 5. **Operational Safety Nets** – Troubleshooting checklists, log locations, health probes, and documentation routing via `binarytorch/larecipe`.
+
+## Key Commands You'll Use
+
+```bash
+# Generate entity configurations
+php artisan ai:discover
+
+# Bulk ingest existing data
+php artisan ai:ingest
+
+# Reconcile missing relationships
+php artisan ai:sync-relationships
+
+# Process files for semantic search
+php artisan ai:process-files
 
 ## Recommended Reading Order
 
