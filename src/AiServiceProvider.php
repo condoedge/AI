@@ -43,6 +43,10 @@ use Condoedge\Ai\Services\PatternLibrary;
 use Condoedge\Ai\Services\SemanticPromptBuilder;
 use Condoedge\Ai\Services\SemanticMatcher;
 use Condoedge\Ai\Services\SemanticIndexer;
+use Condoedge\Ai\Services\ScopeSemanticMatcher;
+use Condoedge\Ai\Services\SemanticContextSelector;
+use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
+use Condoedge\Ai\Services\Chat\AiChatService;
 use Condoedge\Ai\Services\Discovery\SchemaInspector;
 use Condoedge\Ai\Services\Discovery\CypherScopeAdapter;
 use Condoedge\Ai\Services\Discovery\CypherQueryBuilderSpy;
@@ -51,6 +55,7 @@ use Condoedge\Ai\Services\Discovery\PropertyDiscoverer;
 use Condoedge\Ai\Services\Discovery\RelationshipDiscoverer;
 use Condoedge\Ai\Services\Discovery\AliasGenerator;
 use Condoedge\Ai\Services\Discovery\EmbedFieldDetector;
+use Condoedge\Ai\Services\Discovery\TraversalScopeGenerator;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Condoedge\Utils\Models\Files\File;
 use Condoedge\Ai\Models\Plugins\FileProcessingPlugin;
@@ -189,7 +194,10 @@ class AiServiceProvider extends ServiceProvider
             return new ContextRetriever(
                 vectorStore: $app->make(VectorStoreInterface::class),
                 graphStore: $app->make(GraphStoreInterface::class),
-                embeddingProvider: $app->make(EmbeddingProviderInterface::class)
+                embeddingProvider: $app->make(EmbeddingProviderInterface::class),
+                entityConfigs: null, // Load from config
+                scopeMatcher: $app->make(ScopeSemanticMatcher::class),
+                contextSelector: $app->make(SemanticContextSelector::class)
             );
         });
 
@@ -208,6 +216,9 @@ class AiServiceProvider extends ServiceProvider
                 patternLibrary: $app->make(PatternLibrary::class)
             );
         });
+
+        // The way to add a new section to the Semantic Prompt Builders
+        // $this->app->make(SemanticPromptBuilder::class)->addSection($section);
 
         // Register Query Generator
         $this->app->singleton(QueryGeneratorInterface::class, function ($app) {
@@ -319,6 +330,9 @@ class AiServiceProvider extends ServiceProvider
 
         // Register Discovery Services
         $this->registerDiscoveryServices();
+
+        // Register Chat Service
+        $this->registerChatServices();
     }
 
     /**
@@ -342,6 +356,24 @@ class AiServiceProvider extends ServiceProvider
                 embedding: $app->make(EmbeddingProviderInterface::class),
                 vectorStore: $app->make(VectorStoreInterface::class),
                 entityConfigs: config('entities', [])
+            );
+        });
+
+        // Register ScopeSemanticMatcher
+        $this->app->singleton(ScopeSemanticMatcher::class, function ($app) {
+            return new ScopeSemanticMatcher(
+                vectorStore: $app->make(VectorStoreInterface::class),
+                embeddingProvider: $app->make(EmbeddingProviderInterface::class),
+                config: config('ai.scope_matching', [])
+            );
+        });
+
+        // Register SemanticContextSelector
+        $this->app->singleton(SemanticContextSelector::class, function ($app) {
+            return new SemanticContextSelector(
+                vectorStore: $app->make(VectorStoreInterface::class),
+                embeddingProvider: $app->make(EmbeddingProviderInterface::class),
+                config: config('ai.semantic_context', [])
             );
         });
     }
@@ -394,6 +426,9 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
+        // Register TraversalScopeGenerator
+        $this->app->singleton(TraversalScopeGenerator::class);
+
         // Register EntityAutoDiscovery
         $this->app->singleton(EntityAutoDiscovery::class, function ($app) {
             return new EntityAutoDiscovery(
@@ -402,9 +437,28 @@ class AiServiceProvider extends ServiceProvider
                 relationships: $app->make(RelationshipDiscoverer::class),
                 properties: $app->make(PropertyDiscoverer::class),
                 aliases: $app->make(AliasGenerator::class),
-                embedFields: $app->make(EmbedFieldDetector::class)
+                embedFields: $app->make(EmbedFieldDetector::class),
+                traversalGenerator: $app->make(TraversalScopeGenerator::class)
             );
         });
+    }
+
+    /**
+     * Register chat services
+     *
+     * @return void
+     */
+    private function registerChatServices(): void
+    {
+        // Register AI Chat Service
+        $this->app->singleton(AiChatServiceInterface::class, function ($app) {
+            return new AiChatService(
+                config: config('ai.chat', [])
+            );
+        });
+
+        // Alias for easier access
+        $this->app->alias(AiChatServiceInterface::class, AiChatService::class);
     }
 
     /**
@@ -438,6 +492,8 @@ class AiServiceProvider extends ServiceProvider
                 \Condoedge\Ai\Console\Commands\SyncRelationshipsCommand::class,
                 \Condoedge\Ai\Console\Commands\ProcessFilesCommand::class,
                 \Condoedge\Ai\Console\Commands\IndexSemanticCommand::class,
+                \Condoedge\Ai\Console\Commands\IndexScopesCommand::class,
+                \Condoedge\Ai\Console\Commands\IndexContextCommand::class,
             ]);
         }
 
@@ -488,6 +544,8 @@ class AiServiceProvider extends ServiceProvider
             AliasGenerator::class,
             EmbedFieldDetector::class,
             EntityAutoDiscovery::class,
+            AiChatServiceInterface::class,
+            AiChatService::class,
         ];
     }
 }

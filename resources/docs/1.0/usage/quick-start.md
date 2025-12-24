@@ -1,27 +1,45 @@
 # Quick Start Guide
 
-Get up and running with the AI Text-to-Query System in 10 minutes! This guide shows you the recommended workflow for new projects.
+Get AI-powered natural language queries working in 5 minutes!
+
+---
+
+## TL;DR - The 30-Second Version
+
+```php
+// 1. Make your model Nodeable
+class Customer extends Model implements Nodeable
+{
+    use HasNodeableConfig;
+}
+
+// 2. Run commands
+// php artisan ai:discover
+// php artisan ai:ingest
+
+// 3. Ask questions in natural language
+$response = AI::chat("How many active customers do we have?");
+```
+
+That's it! Keep reading for the complete walkthrough.
 
 ---
 
 ## Prerequisites
 
-Before starting, ensure you have:
+Before starting:
 
-- ✅ Installed the package ([Installation Guide](/docs/{{version}}/foundations/installing))
-- ✅ Neo4j and Qdrant running
-- ✅ Environment variables configured
-- ✅ OpenAI or Anthropic API key
+- ✅ Package installed (`composer require condoedge/ai`)
+- ✅ Neo4j and Qdrant running ([Infrastructure Setup](/docs/{{version}}/foundations/infrastructure))
+- ✅ API key configured (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`)
 
-**Optional but recommended:** Configure project context in `.env`:
+**Recommended:** Configure project context in `.env`:
 
 ```env
 APP_NAME="My E-Commerce Platform"
-AI_PROJECT_DESCRIPTION="E-commerce platform managing products, orders, and customers with real-time inventory"
+AI_PROJECT_DESCRIPTION="E-commerce platform managing products, orders, and customers"
 AI_PROJECT_DOMAIN=e-commerce
 ```
-
-This helps the LLM understand your business domain when generating queries and responses. See: [Project Metadata Configuration](/docs/{{version}}/foundations/configuration#project-metadata-configuration)
 
 ---
 
@@ -372,24 +390,56 @@ AI::chat("How many customers do we have?");
 
 ---
 
-## Next Steps
+## Bonus: Add Chat UI (2 minutes)
 
-You've completed the quick start! Here's what to explore next:
+Want a beautiful chat interface? Add the floating chat button to your layout:
 
-### Configuration
-- **[Configuration Reference](/docs/{{version}}/foundations/configuration)** - All settings explained
-- **[Advanced Usage](/docs/{{version}}/usage/advanced-usage)** - Complete NodeableConfig API and direct service usage
+```php
+use Condoedge\Ai\Kompo\AiChatFloating;
 
-### APIs and Integration
-- **[Simple Usage (AI Facade)](/docs/{{version}}/usage/simple-usage)** - All AI wrapper methods
-- **[Data Ingestion API](/docs/{{version}}/usage/data-ingestion)** - Manual ingestion and batch operations
-- **[Context Retrieval & RAG](/docs/{{version}}/usage/context-retrieval)** - Deep dive into RAG system
+// In your layout component
+public function render()
+{
+    return _Rows(
+        // Your page content...
 
-### Examples and Extensions
-- **[Laravel Integration](/docs/{{version}}/usage/laravel-integration)** - Controllers, commands, queues
-- **[Real-World Examples](/docs/{{version}}/usage/examples)** - Complete implementations
-- **[Extending the Package](/docs/{{version}}/usage/extending)** - Custom providers and services
+        // Add floating chat button
+        new AiChatFloating()
+    );
+}
+```
+
+Or open chat from any button:
+
+```php
+use Condoedge\Ai\Kompo\AiChatModal;
+
+_Button('Ask AI')
+    ->selfGet('openChat')
+    ->inModal();
+
+public function openChat()
+{
+    return new AiChatModal(null, [
+        'welcome_title' => 'AI Assistant',
+        'example_questions' => [
+            'How many customers?',
+            'Show recent orders',
+        ],
+    ]);
+}
+```
+
+**See:** [Chat UI Components](/docs/{{version}}/chat/chat-ui) for full customization options.
 
 ---
 
-**Questions?** Check the [Troubleshooting Guide](/docs/{{version}}/foundations/troubleshooting)!
+## Next Steps
+
+| What you want | Documentation |
+|--------------|---------------|
+| **Chat UI** | [Chat Components](/docs/{{version}}/chat/chat-ui) |
+| **All AI methods** | [AI Facade Reference](/docs/{{version}}/usage/simple-usage) |
+| **Custom configuration** | [Advanced Usage](/docs/{{version}}/usage/advanced-usage) |
+| **Extend the system** | [Extending Guide](/docs/{{version}}/usage/extending) |
+| **Troubleshooting** | [Troubleshooting](/docs/{{version}}/foundations/troubleshooting) |

@@ -214,6 +214,143 @@ Zero-boilerplate synchronization via Laravel events:
 - **Configurable**: Per-model, per-operation granularity
 - **Error Handling**: Silent failure with logging or exception throwing
 
+### Extensible Prompt Builders
+
+Both the Query Generator and Response Generator use extensible section-based architectures that allow you to customize how prompts are built.
+
+#### SemanticPromptBuilder (Query Generation)
+
+The `SemanticPromptBuilder` constructs prompts for Cypher query generation using a pipeline of sections:
+
+| Section | Priority | Purpose |
+|---------|----------|---------|
+| `project_context` | 10 | Project name, description, domain, business rules |
+| `generic_context` | 15 | Current date/time |
+| `schema` | 20 | Graph schema (labels, relationships, properties) |
+| `relationships` | 30 | Entity relationships with exact directions |
+| `example_entities` | 40 | Sample data showing actual types/formats |
+| `similar_queries` | 50 | RAG: similar past queries for few-shot learning |
+| `detected_entities` | 60 | Entities detected in user's question |
+| `detected_scopes` | 65 | Business concepts detected in question |
+| `pattern_library` | 70 | Available query patterns |
+| `query_rules` | 75 | Query generation rules |
+| `question` | 80 | User's question |
+| `task_instructions` | 90 | Final task instructions |
+
+**Extension Methods:**
+
+```php
+use Condoedge\Ai\Services\SemanticPromptBuilder;
+
+// Global extension (applies to all new instances)
+SemanticPromptBuilder::extendBuild(function($builder) {
+    $builder->setProjectContext([
+        'name' => 'My CRM',
+        'description' => 'Customer relationship management system',
+        'domain' => 'Sales',
+        'business_rules' => [
+            'All dates are stored as ISO strings',
+            'Active customers have status = "active"',
+        ],
+    ]);
+});
+
+// Instance-level extensions
+$builder = app(SemanticPromptBuilder::class);
+
+// Add custom section
+$builder->addSection(new CustomContextSection());
+
+// Remove a section
+$builder->removeSection('similar_queries');
+
+// Replace a section
+$builder->replaceSection('project_context', new MyProjectContextSection());
+
+// Extend with callbacks (before/after sections)
+$builder->extendAfter('schema', function($question, $context, $options) {
+    return "\n=== CUSTOM INFO ===\n\nAdditional context here\n\n";
+});
+
+// Convenience methods
+$builder->addBusinessRule('Orders cannot be deleted once shipped');
+$builder->addQueryRule('PERFORMANCE', 'Always use indexed properties');
+$builder->setMaxSimilarQueries(5);
+```
+
+**Creating Custom Sections:**
+
+```php
+use Condoedge\Ai\Contracts\PromptSectionInterface;
+use Condoedge\Ai\Services\PromptSections\BasePromptSection;
+
+class DomainTermsSection extends BasePromptSection
+{
+    protected string $name = 'domain_terms';
+    protected int $priority = 25; // After schema, before relationships
+
+    public function format(string $question, array $context, array $options = []): string
+    {
+        return $this->header('DOMAIN TERMINOLOGY') .
+               "- 'Client' and 'Customer' are synonyms\n" .
+               "- 'Active' means status = 'active' or 'enabled'\n\n";
+    }
+
+    public function shouldInclude(string $question, array $context, array $options = []): bool
+    {
+        // Only include if question mentions domain terms
+        return str_contains(strtolower($question), 'client') ||
+               str_contains(strtolower($question), 'active');
+    }
+}
+```
+
+#### ResponseGenerator (Response Generation)
+
+The `ResponseGenerator` uses the same extensible pattern for building prompts that explain query results:
+
+| Section | Priority | Purpose |
+|---------|----------|---------|
+| `system` | 10 | System prompt (LLM role) |
+| `project_context` | 20 | Project context for explanations |
+| `question` | 30 | Original user question |
+| `query` | 40 | Executed Cypher query |
+| `data` | 50 | Query results |
+| `statistics` | 60 | Execution statistics |
+| `guidelines` | 70 | Response guidelines (style, format) |
+| `task` | 80 | Final task instruction |
+
+**Extension Methods:**
+
+```php
+use Condoedge\Ai\Services\ResponseGenerator;
+
+// Global extension
+ResponseGenerator::extendBuild(function($generator) {
+    $generator->setSystemPrompt(
+        "You are a friendly data analyst who explains results clearly.\n\n"
+    );
+    $generator->addGuideline('Always mention the total count first');
+});
+
+// Instance-level extensions
+$generator = app(ResponseGenerator::class);
+
+// Add/remove/replace sections
+$generator->addSection(new CustomAnalysisSection());
+$generator->removeSection('statistics');
+
+// Convenience methods
+$generator->setProjectContext(['name' => 'My App', 'domain' => 'E-commerce']);
+$generator->setMaxDataItems(20);
+
+// Extend with callbacks
+$generator->extendAfter('data', function($context, $options) {
+    $count = count($context['data']);
+    return "\nNote: Showing {$count} results.\n\n";
+});
+```
+
 ## Security Architecture
 
 The package implements **defense-in-depth security** with multiple layers of protection. All security features are enabled by default with no configuration required.
@@ -478,6 +615,20 @@ ai/
 │   │   │   ├── CypherScopeAdapter.php
 │   │   │   ├── SchemaInspector.php
 │   │   │   └── ...
+│   │   ├── PromptSections/  # Extensible prompt sections
+│   │   │   ├── BasePromptSection.php
+│   │   │   ├── ProjectContextSection.php
+│   │   │   ├── SchemaSection.php
+│   │   │   ├── RelationshipsSection.php
+│   │   │   ├── ExampleEntitiesSection.php
+│   │   │   ├── SimilarQueriesSection.php
+│   │   │   ├── QueryRulesSection.php
+│   │   │   └── ...
+│   │   ├── ResponseSections/ # Extensible response sections
+│   │   │   ├── BaseResponseSection.php
+│   │   │   ├── SystemPromptSection.php
+│   │   │   ├── GuidelinesSection.php
+│   │   │   └── ...
 │   │   ├── Resilience/
 │   │   │   ├── RetryPolicy.php
 │   │   │   └── CircuitBreaker.php
@@ -485,6 +636,7 @@ ai/
 │   │   │   └── SensitiveDataSanitizer.php
 │   │   ├── DataIngestionService.php
 │   │   ├── ContextRetriever.php
+│   │   ├── SemanticPromptBuilder.php
 │   │   ├── QueryGenerator.php
 │   │   ├── QueryExecutor.php
 │   │   └── ResponseGenerator.php
@@ -530,9 +682,16 @@ ai/
 - `EntityAutoDiscovery.php`: Model introspection and config extraction
 - `CypherScopeAdapter.php`: Eloquent scope to Cypher conversion
 - `ContextRetriever.php`: RAG context fetching (similar queries + schema)
+- `SemanticPromptBuilder.php`: Extensible prompt builder with section pipeline
 - `QueryGenerator.php`: LLM-powered Cypher generation with validation
 - `QueryExecutor.php`: Safe query execution with timeouts
-- `ResponseGenerator.php`: Natural language response generation
+- `ResponseGenerator.php`: Natural language response generation with extensible sections
+
+**Extensible Sections:**
+- `PromptSectionInterface.php`: Contract for query prompt sections
+- `ResponseSectionInterface.php`: Contract for response prompt sections
+- `BasePromptSection.php`: Base class for query prompt sections
+- `BaseResponseSection.php`: Base class for response prompt sections
 
 **Security:**
 - `CypherSanitizer.php`: Injection prevention for Cypher identifiers

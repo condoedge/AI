@@ -294,4 +294,52 @@ class QdrantStore implements VectorStoreInterface
             return false;
         }
     }
+
+    /**
+     * Ensure a collection exists, create if it doesn't
+     */
+    public function ensureCollection(string $name, int $vectorSize, string $distance = 'cosine'): void
+    {
+        if (!$this->collectionExists($name)) {
+            $this->createCollection($name, $vectorSize, $distance);
+        }
+    }
+
+    /**
+     * Delete all points in a collection (but keep the collection structure)
+     */
+    public function deleteAll(string $collection): bool
+    {
+        try {
+            // Get collection info first to preserve settings
+            $info = $this->getCollectionInfo($collection);
+            $vectorSize = $info['config']['params']['vectors']['size'] ?? 1536;
+            $distance = $info['config']['params']['vectors']['distance'] ?? 'Cosine';
+
+            // Delete and recreate the collection (fastest way to clear all points)
+            $this->deleteCollection($collection);
+            $this->createCollection($collection, $vectorSize, strtolower($distance));
+
+            return true;
+        } catch (\Exception $e) {
+            throw new \RuntimeException("Failed to delete all points in '{$collection}': " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Batch upsert points (optimized for large batches)
+     */
+    public function upsertBatch(string $collection, array $points): bool
+    {
+        // Transform points to Qdrant format if needed
+        $qdrantPoints = array_map(function ($point) {
+            return [
+                'id' => $point['id'],
+                'vector' => $point['vector'],
+                'payload' => $point['metadata'] ?? $point['payload'] ?? [],
+            ];
+        }, $points);
+
+        return $this->upsert($collection, $qdrantPoints);
+    }
 }

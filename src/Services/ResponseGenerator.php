@@ -6,25 +6,122 @@ namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Contracts\ResponseSectionInterface;
+use Condoedge\Ai\Services\ResponseSections\SystemPromptSection;
+use Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection;
+use Condoedge\Ai\Services\ResponseSections\ResultsDataSection;
+use Condoedge\Ai\Services\ResponseSections\GuidelinesSection;
 
 /**
- * Response Generator Service
+ * ResponseGenerator - Transforms Query Results to Natural Language
  *
- * Transforms raw query results into natural language explanations
- * using LLM to make data accessible to non-technical users.
+ * Converts raw database query results into human-readable explanations using LLM.
+ * Uses the HasInternalModules trait for extensible prompt composition.
  *
- * @package Condoedge\Ai\Services
+ * ## Architecture
+ *
+ * The generator uses a priority-based module pipeline where each section contributes
+ * to the prompt sent to the LLM. Sections are processed in priority order (lower = first).
+ *
+ * Default sections (in priority order):
+ * - system (10): System prompt setting the LLM's role
+ * - project_context (20): Project name and description
+ * - question (30): The user's original question
+ * - query_info (40): The Cypher query that was executed
+ * - data (50): The actual results data
+ * - statistics (60): Statistics about the results
+ * - guidelines (70): Guidelines for response formatting
+ * - task (80): Final task instructions for the LLM
+ *
+ * ## Configuration
+ *
+ * Default sections are loaded from `config('ai.response_generator_sections')`.
+ *
+ * ```php
+ * // config/ai.php
+ * return [
+ *     'response_generator_sections' => [
+ *         \Condoedge\Ai\Services\ResponseSections\SystemPromptSection::class,
+ *         \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
+ *         // ... more sections
+ *     ],
+ * ];
+ * ```
+ *
+ * ## Extension Methods
+ *
+ * ### Add a new section
+ * ```php
+ * $generator->addModule(new CustomInsightsSection());
+ * ```
+ *
+ * ### Remove a section
+ * ```php
+ * $generator->removeModule('statistics');
+ * ```
+ *
+ * ### Replace a section
+ * ```php
+ * $generator->replaceModule('guidelines', new MyGuidelinesSection());
+ * ```
+ *
+ * ### Extend with callbacks
+ * ```php
+ * $generator->extendAfter('data', function($context, $options) {
+ *     return "\n=== CUSTOM ANALYSIS ===\n\nYour analysis here\n\n";
+ * });
+ * ```
+ *
+ * ### Global extensions (applied to all instances)
+ * ```php
+ * ResponseGenerator::extendBuild(function($generator) {
+ *     $generator->addModule(new GlobalCustomSection());
+ * });
+ * ```
+ *
+ * ## Usage Example
+ *
+ * ```php
+ * $generator = new ResponseGenerator($llmProvider, $config);
+ *
+ * // Customize for your needs
+ * $generator->setProjectContext([
+ *     'name' => 'My CRM',
+ *     'description' => 'Customer relationship management',
+ * ]);
+ * $generator->addGuideline('Always include percentage changes');
+ *
+ * // Generate response
+ * $response = $generator->generate(
+ *     originalQuestion: "How many customers do we have?",
+ *     queryResult: ['data' => [...], 'stats' => [...]],
+ *     cypherQuery: "MATCH (c:Customer) RETURN count(c) as count",
+ *     options: ['format' => 'text', 'style' => 'detailed']
+ * );
+ *
+ * // $response contains: answer, insights, visualizations, format, metadata
+ * ```
+ *
+ * ## Response Structure
+ *
+ * The generate() method returns:
+ * - `answer`: The natural language explanation
+ * - `insights`: Array of automatically extracted insights
+ * - `visualizations`: Suggested visualization types
+ * - `format`: The output format used
+ * - `metadata`: Additional info (style, result count, etc.)
+ *
+ * @uses HasInternalModules<ResponseSectionInterface> For module pipeline functionality
+ *
+ * @see HasInternalModules For module management methods
+ * @see ResponseSectionInterface For creating custom sections
+ * @see SemanticPromptBuilder For building query generation prompts
  */
 class ResponseGenerator implements ResponseGeneratorInterface
 {
-    /**
-     * Response style prompts
-     */
-    private array $stylePrompts = [
-        'concise' => 'Be brief and to the point. 1-2 sentences maximum.',
-        'detailed' => 'Provide comprehensive explanation with context and examples.',
-        'technical' => 'Include technical details and reference the Cypher query.',
-    ];
+    use HasInternalModules;
+
+    protected $defaultModulesConfigKey = 'ai.response_generator_sections';
 
     /**
      * Constructor
@@ -36,7 +133,77 @@ class ResponseGenerator implements ResponseGeneratorInterface
         private readonly LlmProviderInterface $llm,
         private readonly array $config = []
     ) {
+        $this->registerDefaultModules();
+        $this->applyGlobalExtensions();
     }
+
+    // =========================================================================
+    // CONVENIENCE METHODS
+    // =========================================================================
+
+    /**
+     * Set project context
+     *
+     * @param array $context Project context array
+     * @return self
+     */
+    public function setProjectContext(array $context): self
+    {
+        $section = $this->getModule('project_context');
+        if ($section instanceof ResponseProjectContextSection) {
+            $section->setContext($context);
+        }
+        return $this;
+    }
+
+    /**
+     * Set custom system prompt
+     *
+     * @param string $prompt Custom system prompt
+     * @return self
+     */
+    public function setSystemPrompt(string $prompt): self
+    {
+        $section = $this->getModule('system');
+        if ($section instanceof SystemPromptSection) {
+            $section->setPrompt($prompt);
+        }
+        return $this;
+    }
+
+    /**
+     * Add a custom guideline
+     *
+     * @param string $guideline Guideline text
+     * @return self
+     */
+    public function addGuideline(string $guideline): self
+    {
+        $section = $this->getModule('guidelines');
+        if ($section instanceof GuidelinesSection) {
+            $section->addGuideline($guideline);
+        }
+        return $this;
+    }
+
+    /**
+     * Set maximum data items to show
+     *
+     * @param int $max Maximum items
+     * @return self
+     */
+    public function setMaxDataItems(int $max): self
+    {
+        $section = $this->getModule('data');
+        if ($section instanceof ResultsDataSection) {
+            $section->setMaxItems($max);
+        }
+        return $this;
+    }
+
+    // =========================================================================
+    // CORE GENERATION METHODS
+    // =========================================================================
 
     /**
      * Generate natural language response from query results
@@ -67,27 +234,22 @@ class ResponseGenerator implements ResponseGeneratorInterface
             return $this->generateEmptyResponse($originalQuestion, $cypherQuery, $options);
         }
 
-        // Prepare data
-        $data = $queryResult['data'];
-        $stats = $queryResult['stats'] ?? [];
+        // Prepare context for sections
+        $context = [
+            'question' => $originalQuestion,
+            'cypher' => $cypherQuery,
+            'data' => $queryResult['data'],
+            'stats' => $queryResult['stats'] ?? [],
+        ];
 
-        // Summarize if too large
-        if (count($data) > 10) {
-            $summarizedData = $this->summarize($data, 10);
-        } else {
-            $summarizedData = $data;
-        }
+        $sectionOptions = [
+            'format' => $format,
+            'style' => $style,
+            'max_length' => $maxLength,
+        ];
 
-        // Build prompt
-        $prompt = $this->buildPrompt(
-            $originalQuestion,
-            $cypherQuery,
-            $summarizedData,
-            $stats,
-            $style,
-            $format,
-            $maxLength
-        );
+        // Build prompt using section pipeline
+        $prompt = $this->buildPrompt($context, $sectionOptions);
 
         try {
             // Generate response
@@ -97,11 +259,11 @@ class ResponseGenerator implements ResponseGeneratorInterface
             ]);
 
             // Extract insights
-            $insights = $includeInsights ? $this->extractInsights($data) : [];
+            $insights = $includeInsights ? $this->extractInsights($queryResult['data']) : [];
 
             // Suggest visualizations
             $visualizations = $includeVisualization
-                ? $this->suggestVisualizations($data, $cypherQuery)
+                ? $this->suggestVisualizations($queryResult['data'], $cypherQuery)
                 : [];
 
             return [
@@ -111,8 +273,8 @@ class ResponseGenerator implements ResponseGeneratorInterface
                 'format' => $format,
                 'metadata' => [
                     'style' => $style,
-                    'result_count' => count($data),
-                    'summarized' => count($data) > 10,
+                    'result_count' => count($queryResult['data']),
+                    'summarized' => count($queryResult['data']) > 10,
                 ],
             ];
 
@@ -123,6 +285,34 @@ class ResponseGenerator implements ResponseGeneratorInterface
                 $e
             );
         }
+    }
+
+    /**
+     * Build prompt using section pipeline
+     *
+     * @param array $context Context with question, data, etc.
+     * @param array $options Options for sections
+     * @return string Complete prompt
+     */
+    public function buildPrompt(array $context, array $options = []): string
+    {
+        $prompt = '';
+
+        $this->processModules(
+            beforeCallbackProcess: function($callback) use (&$prompt, $context, $options) {
+                $prompt .= $callback($context, $options);
+            },
+            moduleProcess: function(ResponseSectionInterface $section) use (&$prompt, $context, $options) {
+                if ($section->shouldInclude($context, $options)) {
+                    $prompt .= $section->format($context, $options);
+                }
+            },
+            afterCallbackProcess: function($callback) use (&$prompt, $context, $options) {
+                $prompt .= $callback($context, $options);
+            }
+        );
+
+        return $prompt;
     }
 
     /**
@@ -239,7 +429,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
             return $queryResult;
         }
 
-        // Take first N items
         return array_slice($queryResult, 0, $maxItems);
     }
 
@@ -357,65 +546,12 @@ class ResponseGenerator implements ResponseGeneratorInterface
         return $suggestions;
     }
 
-    /**
-     * Build prompt for response generation
-     *
-     * @param string $question Original question
-     * @param string $cypher Cypher query
-     * @param array $data Query results
-     * @param array $stats Execution statistics
-     * @param string $style Response style
-     * @param string $format Output format
-     * @param int $maxLength Max response length
-     * @return string Prompt for LLM
-     */
-    private function buildPrompt(
-        string $question,
-        string $cypher,
-        array $data,
-        array $stats,
-        string $style,
-        string $format,
-        int $maxLength
-    ): string {
-        $prompt = "You are a data analyst who explains query results clearly and accurately.\n\n";
-
-        $prompt .= "Original Question: {$question}\n\n";
-
-        $prompt .= "Query Executed:\n{$cypher}\n\n";
-
-        $prompt .= "Results:\n" . json_encode($data, JSON_PRETTY_PRINT) . "\n\n";
-
-        if (!empty($stats)) {
-            $prompt .= "Statistics:\n";
-            $prompt .= "- Execution time: " . ($stats['execution_time_ms'] ?? 'N/A') . "ms\n";
-            $prompt .= "- Rows returned: " . ($stats['rows_returned'] ?? count($data)) . "\n\n";
-        }
-
-        $prompt .= "Task: Explain these results in natural language.\n\n";
-
-        $prompt .= "Guidelines:\n";
-        $prompt .= "- Start with a direct answer to the question\n";
-        $prompt .= "- Use specific numbers and facts from the data\n";
-        $prompt .= "- " . ($this->stylePrompts[$style] ?? $this->stylePrompts['detailed']) . "\n";
-        $prompt .= "- Keep response under {$maxLength} words\n";
-
-        if ($format === 'markdown') {
-            $prompt .= "- Format response in Markdown\n";
-        } elseif ($format === 'json') {
-            $prompt .= "- Structure response as JSON with 'summary' and 'details' keys\n";
-        }
-
-        $prompt .= "\nGenerate response:";
-
-        return $prompt;
-    }
+    // =========================================================================
+    // PRIVATE HELPER METHODS
+    // =========================================================================
 
     /**
      * Check if data contains numeric values
-     *
-     * @param array $data Query results
-     * @return bool True if data contains numeric values
      */
     private function isNumericData(array $data): bool
     {
@@ -434,9 +570,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
 
     /**
      * Calculate statistics for numeric data
-     *
-     * @param array $data Query results
-     * @return array|null Statistics (avg, min, max, sum) or null
      */
     private function calculateStatistics(array $data): ?array
     {
@@ -465,9 +598,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
 
     /**
      * Check if data has time component
-     *
-     * @param array $data Query results
-     * @return bool True if data contains time/date fields
      */
     private function hasTimeComponent(array $data): bool
     {
@@ -489,13 +619,9 @@ class ResponseGenerator implements ResponseGeneratorInterface
 
     /**
      * Calculate max tokens based on word limit
-     *
-     * @param int $maxWords Max words in response
-     * @return int Max tokens
      */
     private function calculateMaxTokens(int $maxWords): int
     {
-        // Rough estimate: 1 token ≈ 0.75 words
         return (int) ceil($maxWords / 0.75);
     }
 }

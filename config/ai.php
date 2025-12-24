@@ -1,5 +1,7 @@
 <?php
 
+use Condoedge\Ai\Services\SemanticPromptBuilder;
+
 return [
     /*
     |--------------------------------------------------------------------------
@@ -84,6 +86,29 @@ return [
             // (password, tokens, etc. are excluded by default)
             // 'internal_notes',
             // 'admin_only_field',
+        ],
+
+        // Role mappings for auto-generating traversal scopes
+        // Maps discriminator field values to scope names
+        'role_mappings' => [
+            // Example: PersonTeam role_type mappings
+            // 'PersonTeam' => [
+            //     'role_type' => [
+            //         3 => 'volunteers',
+            //         4 => 'scouts',
+            //         5 => 'parents',
+            //         6 => 'leaders',
+            //     ],
+            // ],
+            //
+            // Example: Order status mappings
+            // 'Order' => [
+            //     'status' => [
+            //         'pending' => 'pending_orders',
+            //         'completed' => 'completed_orders',
+            //         'cancelled' => 'cancelled_orders',
+            //     ],
+            // ],
         ],
     ],
 
@@ -241,15 +266,34 @@ return [
     |--------------------------------------------------------------------------
     | Response Generation Settings
     |--------------------------------------------------------------------------
+    |
+    | Controls how the AI generates natural language responses.
+    |
+    | Available styles:
+    | - 'minimal': Just the answer, nothing else (e.g., "Admin System" or "42")
+    | - 'concise': One sentence answer (e.g., "The next birthday is Admin System on Nov 29.")
+    | - 'friendly': Natural conversational style, 2-3 sentences max (RECOMMENDED)
+    | - 'detailed': Full explanation with context
+    | - 'technical': Includes query details for debugging
+    |
+    | The hide_* options control what technical details are excluded from responses.
+    | These apply to 'detailed' style. 'minimal', 'concise', and 'friendly' styles
+    | automatically hide all technical details.
+    |
     */
     'response_generation' => [
         'default_format' => env('AI_RESPONSE_FORMAT', 'text'), // text, markdown, json
-        'default_style' => env('AI_RESPONSE_STYLE', 'detailed'), // concise, detailed, technical
-        'default_max_length' => env('AI_RESPONSE_MAX_LENGTH', 200), // words
+        'default_style' => env('AI_RESPONSE_STYLE', 'friendly'), // minimal, concise, friendly, detailed, technical
+        'default_max_length' => env('AI_RESPONSE_MAX_LENGTH', 100), // words (auto-adjusted by style)
         'temperature' => env('AI_RESPONSE_TEMPERATURE', 0.3),
         'include_insights' => env('AI_RESPONSE_INSIGHTS', true),
         'include_visualizations' => env('AI_RESPONSE_VIZ', true),
         'summarize_threshold' => env('AI_RESPONSE_SUMMARIZE_THRESHOLD', 10), // rows
+
+        // Hide technical details from responses (affects 'detailed' style)
+        'hide_technical_details' => env('AI_RESPONSE_HIDE_TECHNICAL', true),
+        'hide_execution_stats' => env('AI_RESPONSE_HIDE_STATS', true),
+        'hide_project_info' => env('AI_RESPONSE_HIDE_PROJECT', true),
     ],
 
     /*
@@ -314,6 +358,70 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Semantic Context Selection
+    |--------------------------------------------------------------------------
+    |
+    | Intelligent context selection uses vector similarity to determine which
+    | entities, relationships, and schema information are relevant to a question.
+    | This significantly reduces token consumption by only including relevant
+    | context instead of all available metadata.
+    |
+    | Benefits:
+    | - Reduced token usage (up to 80% reduction)
+    | - Faster LLM responses
+    | - More focused context for better query generation
+    |
+    | Workflow:
+    |   1. Run: php artisan ai:index-context
+    |   2. System will automatically use semantic context selection
+    |
+    */
+    'semantic_context' => [
+        // Enable semantic context selection (falls back to full context if false)
+        'enabled' => env('AI_SEMANTIC_CONTEXT_ENABLED', true),
+
+        // Vector store collection for context index
+        'collection' => env('AI_SEMANTIC_CONTEXT_COLLECTION', 'context_index'),
+
+        // Similarity threshold for context selection (0.0 - 1.0)
+        // Higher = more precise, Lower = more recall
+        'threshold' => (float) env('AI_SEMANTIC_CONTEXT_THRESHOLD', 0.65),
+
+        // Maximum number of context items to retrieve
+        'top_k' => (int) env('AI_SEMANTIC_CONTEXT_TOP_K', 10),
+
+        // Vector dimensions (should match embedding provider)
+        'dimension' => (int) env('AI_SEMANTIC_CONTEXT_DIMENSION', 1536),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Scope Semantic Matching
+    |--------------------------------------------------------------------------
+    |
+    | Semantic matching for scope detection uses vector embeddings to match
+    | natural language phrases to registered scopes.
+    |
+    | Example: "show me volunteers" → matches volunteers scope
+    |
+    | Workflow:
+    |   1. Run: php artisan ai:index-scopes
+    |   2. System will automatically use semantic scope matching
+    |
+    */
+    'scope_matching' => [
+        // Vector store collection for scope examples
+        'collection' => env('AI_SCOPE_MATCHING_COLLECTION', 'scope_examples'),
+
+        // Similarity threshold for scope matching (0.0 - 1.0)
+        'threshold' => (float) env('AI_SCOPE_MATCHING_THRESHOLD', 0.70),
+
+        // Maximum number of scopes to retrieve
+        'top_k' => (int) env('AI_SCOPE_MATCHING_TOP_K', 5),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | File Processing Configuration
     |--------------------------------------------------------------------------
     |
@@ -356,6 +464,88 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Chat UI Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configuration for the AI Chat UI components (AiChatPanel, AiChatModal,
+    | AiChatDrawer, AiChatFloating).
+    |
+    */
+    'chat' => [
+        // Service class for chat functionality
+        'service' => env('AI_CHAT_SERVICE', \Condoedge\Ai\Services\Chat\AiChatService::class),
+
+        // Default theme: modern, minimal, gradient, glassmorphism
+        'theme' => env('AI_CHAT_THEME', 'modern'),
+
+        // Primary brand color
+        'primary_color' => env('AI_CHAT_PRIMARY_COLOR', '#6366f1'),
+
+        // Welcome screen
+        'welcome' => [
+            'title' => env('AI_CHAT_WELCOME_TITLE', 'AI Assistant'),
+            'message' => env('AI_CHAT_WELCOME_MESSAGE', 'Ask me anything about your data. I can help you find information, generate reports, and answer questions.'),
+        ],
+
+        // Example questions shown on welcome screen
+        'example_questions' => [
+            'How many records do we have?',
+            'Show me recent activity',
+            'What are the top items?',
+            'Give me a summary',
+        ],
+
+        // Conversation persistence
+        'persist_history' => env('AI_CHAT_PERSIST_HISTORY', true),
+        'max_messages' => env('AI_CHAT_MAX_MESSAGES', 50),
+        'session_key_prefix' => env('AI_CHAT_SESSION_PREFIX', 'ai_chat_history'),
+
+        // Conversation history for LLM context
+        'max_history_messages' => env('AI_CHAT_MAX_HISTORY_MESSAGES', 10), // Messages to send to LLM
+        'system_prompt' => env('AI_CHAT_SYSTEM_PROMPT', null), // Custom system prompt (null = auto-generate)
+
+        // UI Features
+        'show_timestamps' => env('AI_CHAT_SHOW_TIMESTAMPS', false),
+        'show_avatars' => env('AI_CHAT_SHOW_AVATARS', true),
+        'show_typing_indicator' => env('AI_CHAT_SHOW_TYPING', true),
+        'show_suggestions' => env('AI_CHAT_SHOW_SUGGESTIONS', true),
+        'max_suggestions' => env('AI_CHAT_MAX_SUGGESTIONS', 3),
+        'show_metrics' => env('AI_CHAT_SHOW_METRICS', false),
+
+        // Input configuration
+        'input_placeholder' => env('AI_CHAT_INPUT_PLACEHOLDER', 'Ask a question...'),
+        'auto_focus' => env('AI_CHAT_AUTO_FOCUS', true),
+
+        // Features
+        'enable_copy' => env('AI_CHAT_ENABLE_COPY', true),
+        'enable_feedback' => env('AI_CHAT_ENABLE_FEEDBACK', false),
+        'enable_markdown' => env('AI_CHAT_ENABLE_MARKDOWN', true),
+        'enable_code_highlight' => env('AI_CHAT_ENABLE_CODE_HIGHLIGHT', true),
+
+        // Floating button defaults
+        'floating' => [
+            'position' => env('AI_CHAT_FLOATING_POSITION', 'bottom-right'),
+            'offset_x' => env('AI_CHAT_FLOATING_OFFSET_X', 24),
+            'offset_y' => env('AI_CHAT_FLOATING_OFFSET_Y', 24),
+            'size' => env('AI_CHAT_FLOATING_SIZE', 'lg'),
+            'style' => env('AI_CHAT_FLOATING_STYLE', 'gradient'),
+        ],
+
+        // Modal defaults
+        'modal' => [
+            'size' => env('AI_CHAT_MODAL_SIZE', 'xl'),
+            'full_screen' => env('AI_CHAT_MODAL_FULLSCREEN', false),
+        ],
+
+        // Drawer defaults
+        'drawer' => [
+            'position' => env('AI_CHAT_DRAWER_POSITION', 'right'),
+            'width' => env('AI_CHAT_DRAWER_WIDTH', '400px'),
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Query Pattern Library
     |--------------------------------------------------------------------------
     |
@@ -380,4 +570,31 @@ return [
     |
     */
     'entities' => require __DIR__ . '/entities.php',
+
+    'query_generator_sections' => [
+        \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
+        \Condoedge\Ai\Services\PromptSections\GenericContextSection::class,
+        \Condoedge\Ai\Services\PromptSections\CurrentUserContextSection::class,
+        \Condoedge\Ai\Services\PromptSections\SchemaSection::class,
+        \Condoedge\Ai\Services\PromptSections\RelationshipsSection::class,
+        \Condoedge\Ai\Services\PromptSections\ExampleEntitiesSection::class,
+        \Condoedge\Ai\Services\PromptSections\SimilarQueriesSection::class,
+        \Condoedge\Ai\Services\PromptSections\DetectedEntitiesSection::class,
+        \Condoedge\Ai\Services\PromptSections\DetectedScopesSection::class,
+        fn(SemanticPromptBuilder $promptBuilder) => new \Condoedge\Ai\Services\PromptSections\PatternLibrarySection($promptBuilder->getPatternLibrary()),
+        \Condoedge\Ai\Services\PromptSections\QueryRulesSection::class,
+        \Condoedge\Ai\Services\PromptSections\QuestionSection::class,
+        \Condoedge\Ai\Services\PromptSections\TaskInstructionsSection::class,
+    ],
+
+    'response_generator_sections' => [
+        \Condoedge\Ai\Services\ResponseSections\SystemPromptSection::class,
+        \Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection::class,
+        \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
+        \Condoedge\Ai\Services\ResponseSections\QueryInfoSection::class,
+        \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,
+        \Condoedge\Ai\Services\ResponseSections\StatisticsSection::class,
+        \Condoedge\Ai\Services\ResponseSections\GuidelinesSection::class,
+        \Condoedge\Ai\Services\ResponseSections\ResponseTaskSection::class,
+    ]
 ];

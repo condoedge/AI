@@ -8,8 +8,6 @@ use Condoedge\Ai\Contracts\QueryGeneratorInterface;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
-use Condoedge\Ai\Exceptions\QueryValidationException;
-use Condoedge\Ai\Exceptions\UnsafeQueryException;
 
 /**
  * Query Generator Service

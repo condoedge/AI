@@ -43,7 +43,10 @@
       "Bash(done)",
       "Bash(find:*)",
       "Bash(tree:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(for file in \"C:\\Users\\jkend\\Documents\\kompo\\ai\\src\\Services\\PromptSections\"/*.php)",
+      "Bash(do php -l \"$file\")",
+      "Bash(for file in \"C:\\Users\\jkend\\Documents\\kompo\\ai\\src\\Services\\ResponseSections\"/*.php)"
     ],
     "deny": [],
     "ask": []

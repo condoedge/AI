@@ -285,7 +285,7 @@ class CypherScopeAdapter
         $filter = $this->extractFilterFromCalls($calls);
 
         // Generate examples
-        $examples = $this->generateExamples($scopeName, $entityName);
+        $examples = $this->generateExamples($scopeName, $entityName, 'property_filter');
 
         return [
             'specification_type' => 'property_filter',
@@ -314,16 +314,49 @@ class CypherScopeAdapter
         // Generate Cypher pattern for relationship
         $cypherPattern = $this->generator->generateFullQuery($parsedStructure);
 
-        // Generate examples
-        $examples = $this->generateExamples($scopeName, $entityName);
+        // Generate examples (with relationship type for better examples)
+        $examples = $this->generateExamples($scopeName, $entityName, 'relationship_traversal');
+
+        // Extract the filter value if it's a role-type scope
+        $roleValue = $this->extractRoleValueFromCalls($calls);
 
         return [
             'specification_type' => 'relationship_traversal',
             'concept' => $this->generateConcept($scopeName, $entityName, 'relationship'),
             'cypher_pattern' => $cypherPattern,
             'parsed_structure' => $parsedStructure,
+            'role_value' => $roleValue, // e.g., 'volunteer', 'scout'
             'examples' => $examples,
         ];
+    }
+
+    /**
+     * Extract role value from whereHas calls (for scopes like volunteers, scouts)
+     *
+     * @param array $calls Recorded calls
+     * @return string|null The role value if found
+     */
+    private function extractRoleValueFromCalls(array $calls): ?string
+    {
+        foreach ($calls as $call) {
+            if (($call['method'] ?? '') === 'whereHas') {
+                $nestedCalls = $call['nested_calls'] ?? [];
+
+                foreach ($nestedCalls as $nestedCall) {
+                    if (($nestedCall['method'] ?? '') === 'where') {
+                        $column = $nestedCall['column'] ?? '';
+                        $value = $nestedCall['value'] ?? '';
+
+                        // Check if it's a role/type field
+                        if (in_array($column, ['role_type', 'type', 'role', 'status'])) {
+                            return $value;
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -338,9 +371,10 @@ class CypherScopeAdapter
     {
         $cypherPattern = $this->generator->generate($calls, 'n');
         $entityName = $this->getEntityName($modelClass);
-        $examples = $this->generateExamples($scopeName, $entityName);
+        $examples = $this->generateExamples($scopeName, $entityName, 'generic');
 
         return [
+            'specification_type' => 'generic',
             'concept' => $this->generateConcept($scopeName, $entityName),
             'cypher_pattern' => $cypherPattern,
             'examples' => $examples,
@@ -433,12 +467,25 @@ class CypherScopeAdapter
         // Convert snake_case to title case
         $readableName = Str::title(str_replace('_', ' ', $scopeName));
         $pluralEntity = Str::plural($entityName);
+        $lowerReadable = strtolower($readableName);
 
         if ($type === 'relationship') {
-            return "{$pluralEntity} that are {$readableName}";
+            // Check for role-like scope names
+            $roleNames = ['volunteers', 'scouts', 'leaders', 'admins', 'members', 'managers', 'staff', 'customers'];
+            if (in_array($scopeName, $roleNames)) {
+                // e.g., "People who are volunteers" or just "Volunteers"
+                return "{$pluralEntity} who are {$lowerReadable}";
+            }
+
+            return "{$pluralEntity} that have {$lowerReadable}";
         }
 
-        return "{$pluralEntity} with {$readableName} status";
+        // For property filters, make more natural
+        if (in_array($scopeName, ['active', 'inactive', 'pending', 'approved', 'completed'])) {
+            return "{$readableName} {$pluralEntity}";
+        }
+
+        return "{$pluralEntity} with {$lowerReadable} status";
     }
 
     /**
@@ -446,14 +493,42 @@ class CypherScopeAdapter
      *
      * @param string $scopeName Scope name
      * @param string $entityName Entity name
+     * @param string $scopeType Type of scope (property_filter, relationship_traversal)
      * @return array Example queries
      */
-    private function generateExamples(string $scopeName, string $entityName): array
+    private function generateExamples(string $scopeName, string $entityName, string $scopeType = 'property_filter'): array
     {
         $readableName = str_replace('_', ' ', $scopeName);
         $lowerEntity = strtolower(Str::plural($entityName));
         $singularEntity = strtolower($entityName);
 
+        // For relationship-based scopes like "volunteers", the scope name IS the role
+        // so we want "Show volunteers" not "Show volunteers people"
+        if ($scopeType === 'relationship_traversal') {
+            // Check if scope name is a role-like word (ends with 's' or is a noun)
+            $isRoleName = in_array($scopeName, ['volunteers', 'scouts', 'leaders', 'admins', 'members', 'managers']);
+
+            if ($isRoleName) {
+                return [
+                    "Show all {$readableName}",
+                    "List {$readableName}",
+                    "Find {$readableName}",
+                    "How many {$readableName} are there?",
+                    "Who are the {$readableName}?",
+                    "Show {$lowerEntity} who are {$readableName}",
+                ];
+            }
+
+            // For other relationship traversals
+            return [
+                "Show {$lowerEntity} with {$readableName}",
+                "List {$lowerEntity} that have {$readableName}",
+                "Find {$lowerEntity} with {$readableName}",
+                "How many {$lowerEntity} have {$readableName}?",
+            ];
+        }
+
+        // For simple property filters
         return [
             "Show {$readableName} {$lowerEntity}",
             "List {$readableName} {$lowerEntity}",

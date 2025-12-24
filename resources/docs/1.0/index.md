@@ -1,25 +1,43 @@
-- ## Foundations
+- ## Getting Started
     - [Overview](/docs/{{version}}/foundations/index)
     - [Requirements](/docs/{{version}}/foundations/requirements)
     - [Installation](/docs/{{version}}/foundations/installing)
     - [Infrastructure Setup](/docs/{{version}}/foundations/infrastructure)
-    - [Configuration](/docs/{{version}}/foundations/configuration)
-    - [Troubleshooting](/docs/{{version}}/foundations/troubleshooting)
-- ## Usage & Extension
+    - [Quick Start (5 min)](/docs/{{version}}/usage/quick-start)
+- ## Chat UI
+    - [Chat Components](/docs/{{version}}/chat/chat-ui)
+    - [Chat Pipeline](/docs/{{version}}/chat/module-pipeline)
+- ## Configuration
+    - [Basic Configuration](/docs/{{version}}/foundations/configuration)
+    - [Entity Configuration](/docs/{{version}}/configuration/entities)
+    - [Response Styles](/docs/{{version}}/configuration/response-styles)
+    - [Environment Variables](/docs/{{version}}/configuration/environment)
+- ## Usage Guide
     - [Overview](/docs/{{version}}/usage/index)
-    - [Quick Start](/docs/{{version}}/usage/quick-start)
-    - [Simple Usage (AI Facade)](/docs/{{version}}/usage/simple-usage)
-    - [Advanced Usage (Direct Services)](/docs/{{version}}/usage/advanced-usage)
-    - [Data Ingestion API](/docs/{{version}}/usage/data-ingestion)
+    - [AI Facade (Simple)](/docs/{{version}}/usage/simple-usage)
+    - [Direct Services (Advanced)](/docs/{{version}}/usage/advanced-usage)
+    - [Data Ingestion](/docs/{{version}}/usage/data-ingestion)
+    - [File Search](/docs/{{version}}/usage/file-search)
     - [Context Retrieval & RAG](/docs/{{version}}/usage/context-retrieval)
-    - [Embeddings Providers](/docs/{{version}}/usage/embeddings)
-    - [LLM Providers](/docs/{{version}}/usage/llm)
-    - [Laravel Integration](/docs/{{version}}/usage/laravel-integration)
-    - [Testing Playbook](/docs/{{version}}/usage/testing)
-    - [Examples](/docs/{{version}}/usage/examples)
-    - [Extending the Package](/docs/{{version}}/usage/extending)
-- ## Internals & Architecture
-    - [Overview](/docs/{{version}}/internals/index)
+- ## Advanced Topics
+    - [Semantic Matching](/docs/{{version}}/advanced/semantic-matching)
+    - [Context Selection (Token Optimization)](/docs/{{version}}/advanced/context-selection)
+    - [Scopes & Business Logic](/docs/{{version}}/advanced/scopes)
+    - [Query Patterns](/docs/{{version}}/advanced/patterns)
+    - [Auto-Discovery](/docs/{{version}}/advanced/auto-discovery)
+- ## Extending
+    - [Overview](/docs/{{version}}/usage/extending)
+    - [Custom Chat Service](/docs/{{version}}/usage/extending#custom-chat-service)
+    - [Custom LLM Providers](/docs/{{version}}/extending/llm-providers)
+    - [Custom Embedding Providers](/docs/{{version}}/extending/embedding-providers)
+    - [Custom Prompt Sections](/docs/{{version}}/extending/prompt-sections)
+    - [Custom File Extractors](/docs/{{version}}/extending/file-extractors)
+- ## Reference
+    - [Artisan Commands](/docs/{{version}}/reference/commands)
+    - [Facades API](/docs/{{version}}/reference/facades)
+    - [Interfaces](/docs/{{version}}/reference/interfaces)
+    - [Troubleshooting](/docs/{{version}}/foundations/troubleshooting)
+- ## Internals
     - [System Architecture](/docs/{{version}}/internals/architecture)
     - [Core Components](/docs/{{version}}/internals/components)
     - [Data & Control Flows](/docs/{{version}}/internals/data-flows)

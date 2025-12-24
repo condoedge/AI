@@ -1,0 +1,790 @@
+/**
+ * AI Chat Component Styles
+ * Beautiful, configurable styles for the AI Chat UI components
+ */
+
+/* ==========================================================================
+   CSS Variables & Theme System
+   ========================================================================== */
+
+:root {
+    /* Primary Colors */
+    --ai-primary: #6366f1;
+    --ai-primary-hover: #4f46e5;
+    --ai-primary-light: #eef2ff;
+
+    /* Gradient Colors */
+    --ai-gradient-start: #6366f1;
+    --ai-gradient-middle: #8b5cf6;
+    --ai-gradient-end: #d946ef;
+
+    /* Background Colors */
+    --ai-bg-primary: #ffffff;
+    --ai-bg-secondary: #f9fafb;
+    --ai-bg-tertiary: #f3f4f6;
+
+    /* Text Colors */
+    --ai-text-primary: #1f2937;
+    --ai-text-secondary: #6b7280;
+    --ai-text-muted: #9ca3af;
+
+    /* Border Colors */
+    --ai-border-light: #e5e7eb;
+    --ai-border-medium: #d1d5db;
+
+    /* Shadow */
+    --ai-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --ai-shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --ai-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --ai-shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+
+    /* Sizing */
+    --ai-chat-max-height: 70vh;
+    --ai-chat-min-height: 400px;
+    --ai-chat-radius: 1rem;
+    --ai-message-radius: 1.25rem;
+
+    /* Transitions */
+    --ai-transition-fast: 150ms;
+    --ai-transition-normal: 200ms;
+    --ai-transition-slow: 300ms;
+}
+
+/* Dark Mode Variables */
+.dark .ai-chat-panel,
+.ai-theme-dark {
+    --ai-bg-primary: #1f2937;
+    --ai-bg-secondary: #111827;
+    --ai-bg-tertiary: #374151;
+    --ai-text-primary: #f9fafb;
+    --ai-text-secondary: #d1d5db;
+    --ai-text-muted: #9ca3af;
+    --ai-border-light: #374151;
+    --ai-border-medium: #4b5563;
+}
+
+
+/* ==========================================================================
+   Base Container Styles
+   ========================================================================== */
+
+.ai-chat-panel,
+.ai-chat-modal,
+.ai-chat-drawer {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.ai-chat-wrapper {
+    display: flex;
+    flex-direction: column;
+    background: var(--ai-bg-primary);
+    border-radius: var(--ai-chat-radius);
+    box-shadow: var(--ai-shadow-lg);
+    overflow: hidden;
+}
+
+.ai-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+    scrollbar-width: thin;
+    scrollbar-color: var(--ai-border-medium) transparent;
+}
+
+.ai-chat-messages::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ai-chat-messages::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.ai-chat-messages::-webkit-scrollbar-thumb {
+    background-color: var(--ai-border-medium);
+    border-radius: 3px;
+}
+
+
+/* ==========================================================================
+   Message Styles
+   ========================================================================== */
+
+.ai-message-row {
+    opacity: 0;
+    animation: fadeSlideIn var(--ai-transition-slow) ease-out forwards;
+}
+
+.ai-message {
+    max-width: 85%;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+/* User Message */
+.ai-message-user {
+    background: linear-gradient(135deg, var(--ai-gradient-start), var(--ai-gradient-middle));
+    color: #ffffff;
+    border-radius: var(--ai-message-radius) var(--ai-message-radius) 0.375rem var(--ai-message-radius);
+    box-shadow: var(--ai-shadow-md);
+}
+
+/* Assistant Message */
+.ai-message-assistant {
+    background: var(--ai-bg-primary);
+    color: var(--ai-text-primary);
+    border: 1px solid var(--ai-border-light);
+    border-radius: var(--ai-message-radius) var(--ai-message-radius) var(--ai-message-radius) 0.375rem;
+    box-shadow: var(--ai-shadow-sm);
+}
+
+/* Avatar Styles */
+.ai-avatar {
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 9999px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+.ai-avatar-user {
+    background: linear-gradient(135deg, var(--ai-gradient-start), var(--ai-gradient-middle));
+    color: #ffffff;
+    box-shadow: var(--ai-shadow-sm);
+}
+
+.ai-avatar-assistant {
+    background: linear-gradient(135deg, #8b5cf6, #d946ef);
+    color: #ffffff;
+    box-shadow: var(--ai-shadow-sm);
+}
+
+
+/* ==========================================================================
+   Welcome Screen
+   ========================================================================== */
+
+.ai-welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+}
+
+.ai-welcome-card {
+    background: linear-gradient(135deg, var(--ai-bg-secondary) 0%, var(--ai-bg-primary) 100%);
+    border-radius: 1.5rem;
+    padding: 2rem;
+    margin-bottom: 1.5rem;
+}
+
+.ai-avatar-animated {
+    position: relative;
+    display: inline-block;
+}
+
+.ai-avatar-animated::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    background: linear-gradient(135deg, var(--ai-gradient-start), var(--ai-gradient-middle), var(--ai-gradient-end));
+    border-radius: 9999px;
+    opacity: 0.3;
+    filter: blur(8px);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.ai-example-question {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.875rem 1rem;
+    background: var(--ai-bg-primary);
+    border: 1px solid var(--ai-border-light);
+    border-radius: 0.75rem;
+    color: var(--ai-text-primary);
+    font-size: 0.875rem;
+    transition: all var(--ai-transition-normal) ease;
+    cursor: pointer;
+}
+
+.ai-example-question:hover {
+    border-color: var(--ai-primary);
+    background: var(--ai-primary-light);
+    transform: translateX(4px);
+    box-shadow: var(--ai-shadow-md);
+}
+
+.ai-example-question svg {
+    color: var(--ai-primary);
+    opacity: 0.7;
+    transition: opacity var(--ai-transition-normal);
+}
+
+.ai-example-question:hover svg {
+    opacity: 1;
+}
+
+
+/* ==========================================================================
+   Input Section
+   ========================================================================== */
+
+.ai-input-section {
+    padding: 1rem;
+    background: var(--ai-bg-primary);
+    border-top: 1px solid var(--ai-border-light);
+}
+
+.ai-input-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--ai-bg-primary);
+    border: 1px solid var(--ai-border-light);
+    border-radius: 1.25rem;
+    transition: all var(--ai-transition-normal) ease;
+}
+
+.ai-input-wrapper:focus-within {
+    border-color: var(--ai-primary);
+    box-shadow: 0 0 0 3px var(--ai-primary-light);
+}
+
+.ai-chat-input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-size: 0.9375rem;
+    color: var(--ai-text-primary);
+}
+
+.ai-chat-input::placeholder {
+    color: var(--ai-text-muted);
+}
+
+.ai-send-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 0.75rem;
+    background: linear-gradient(135deg, var(--ai-gradient-start), var(--ai-gradient-middle));
+    color: #ffffff;
+    border: none;
+    cursor: pointer;
+    transition: all var(--ai-transition-normal) ease;
+    box-shadow: var(--ai-shadow-sm);
+}
+
+.ai-send-btn:hover:not(:disabled) {
+    transform: scale(1.05);
+    box-shadow: var(--ai-shadow-md);
+}
+
+.ai-send-btn:active:not(:disabled) {
+    transform: scale(0.95);
+}
+
+.ai-send-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+
+/* ==========================================================================
+   Response Data (Tables, Metrics, Lists)
+   ========================================================================== */
+
+/* Tables */
+.ai-response-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+    border-radius: 0.75rem;
+    overflow: hidden;
+    box-shadow: var(--ai-shadow-sm);
+}
+
+.ai-response-table th {
+    background: var(--ai-bg-secondary);
+    padding: 0.75rem 1rem;
+    text-align: left;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ai-text-secondary);
+    border-bottom: 1px solid var(--ai-border-light);
+}
+
+.ai-response-table td {
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    color: var(--ai-text-primary);
+    border-bottom: 1px solid var(--ai-border-light);
+}
+
+.ai-response-table tr:last-child td {
+    border-bottom: none;
+}
+
+.ai-response-table tr:hover {
+    background: var(--ai-primary-light);
+}
+
+/* Metrics */
+.ai-metric-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: linear-gradient(135deg, var(--ai-bg-secondary) 0%, var(--ai-bg-primary) 100%);
+    border-radius: 1rem;
+    margin-top: 1rem;
+}
+
+.ai-metric-value {
+    font-size: 2.5rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--ai-gradient-start), var(--ai-gradient-middle));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.ai-metric-label {
+    font-size: 0.875rem;
+    color: var(--ai-text-secondary);
+    margin-top: 0.25rem;
+}
+
+/* Lists */
+.ai-response-list {
+    margin-top: 1rem;
+    background: var(--ai-bg-secondary);
+    border-radius: 0.75rem;
+    overflow: hidden;
+}
+
+.ai-list-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.875rem 1rem;
+    border-bottom: 1px solid var(--ai-border-light);
+    transition: background var(--ai-transition-fast);
+}
+
+.ai-list-item:last-child {
+    border-bottom: none;
+}
+
+.ai-list-item:hover {
+    background: var(--ai-primary-light);
+}
+
+
+/* ==========================================================================
+   Suggestions & Actions
+   ========================================================================== */
+
+.ai-suggestions {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--ai-border-light);
+}
+
+.ai-suggestion {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 0.875rem;
+    font-size: 0.8125rem;
+    background: var(--ai-bg-secondary);
+    color: var(--ai-text-secondary);
+    border: 1px solid transparent;
+    border-radius: 9999px;
+    cursor: pointer;
+    transition: all var(--ai-transition-normal) ease;
+}
+
+.ai-suggestion:hover {
+    background: var(--ai-primary-light);
+    color: var(--ai-primary);
+    border-color: var(--ai-primary);
+}
+
+.ai-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--ai-border-light);
+}
+
+.ai-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 0.875rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    background: var(--ai-primary-light);
+    color: var(--ai-primary);
+    border-radius: 0.5rem;
+    transition: all var(--ai-transition-normal) ease;
+}
+
+.ai-action-btn:hover {
+    background: var(--ai-primary);
+    color: #ffffff;
+}
+
+
+/* ==========================================================================
+   Message Actions (Copy, Feedback)
+   ========================================================================== */
+
+.ai-message-actions {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: 0.5rem;
+    opacity: 0;
+    transition: opacity var(--ai-transition-normal) ease;
+}
+
+.ai-message-assistant:hover .ai-message-actions,
+.ai-message-row:hover .ai-message-actions {
+    opacity: 1;
+}
+
+.ai-btn-copy,
+.ai-btn-feedback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.375rem;
+    color: var(--ai-text-muted);
+    transition: all var(--ai-transition-fast) ease;
+    cursor: pointer;
+}
+
+.ai-btn-copy:hover {
+    background: var(--ai-bg-secondary);
+    color: var(--ai-text-primary);
+}
+
+.ai-btn-feedback:hover {
+    background: var(--ai-bg-secondary);
+}
+
+
+/* ==========================================================================
+   Typing Indicator
+   ========================================================================== */
+
+.ai-typing-dots {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.5rem 0;
+}
+
+.ai-typing-dots span {
+    width: 0.5rem;
+    height: 0.5rem;
+    background: var(--ai-primary);
+    border-radius: 9999px;
+    animation: typingBounce 1.4s ease-in-out infinite;
+}
+
+.ai-typing-dots span:nth-child(2) {
+    animation-delay: 0.15s;
+}
+
+.ai-typing-dots span:nth-child(3) {
+    animation-delay: 0.3s;
+}
+
+.ai-typing-wave span {
+    width: 0.25rem;
+    background: var(--ai-primary);
+    border-radius: 9999px;
+    animation: typingWave 1s ease-in-out infinite;
+}
+
+
+/* ==========================================================================
+   Floating Button
+   ========================================================================== */
+
+.ai-chat-floating-wrapper {
+    z-index: 9999;
+}
+
+.ai-floating-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    user-select: none;
+}
+
+.ai-floating-btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: inherit;
+    opacity: 0;
+    transition: opacity var(--ai-transition-normal);
+}
+
+.ai-floating-btn:hover::before {
+    opacity: 0.1;
+}
+
+
+/* ==========================================================================
+   Theme Variations
+   ========================================================================== */
+
+/* Modern Theme (Default) */
+.ai-theme-modern {
+    --ai-chat-radius: 1rem;
+}
+
+/* Minimal Theme */
+.ai-theme-minimal {
+    --ai-shadow-sm: none;
+    --ai-shadow-md: none;
+    --ai-shadow-lg: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+    --ai-chat-radius: 0.5rem;
+    --ai-message-radius: 0.75rem;
+}
+
+.ai-theme-minimal .ai-message-user {
+    background: var(--ai-bg-tertiary);
+    color: var(--ai-text-primary);
+}
+
+/* Gradient Theme */
+.ai-theme-gradient {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.ai-theme-gradient .ai-chat-messages {
+    background: rgba(255, 255, 255, 0.95);
+}
+
+.ai-theme-gradient .ai-input-section {
+    background: rgba(255, 255, 255, 0.95);
+}
+
+/* Glassmorphism Theme */
+.ai-theme-glassmorphism {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.ai-theme-glassmorphism .ai-message-assistant {
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(5px);
+}
+
+
+/* ==========================================================================
+   Animations
+   ========================================================================== */
+
+@keyframes fadeSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes scaleIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes slideInRight {
+    from {
+        opacity: 0;
+        transform: translateX(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes slideInLeft {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes typingBounce {
+    0%, 60%, 100% {
+        transform: translateY(0);
+    }
+    30% {
+        transform: translateY(-4px);
+    }
+}
+
+@keyframes typingWave {
+    0%, 100% {
+        height: 40%;
+    }
+    50% {
+        height: 100%;
+    }
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 0.3;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.5;
+        transform: scale(1.05);
+    }
+}
+
+@keyframes spin-slow {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Animation utility classes */
+.animate-fade-in {
+    animation: fadeIn var(--ai-transition-slow) ease-out forwards;
+}
+
+.animate-scale-in {
+    animation: scaleIn var(--ai-transition-slow) ease-out forwards;
+}
+
+.animate-slide-in-right {
+    animation: slideInRight var(--ai-transition-slow) ease-out forwards;
+}
+
+.animate-slide-in-left {
+    animation: slideInLeft var(--ai-transition-slow) ease-out forwards;
+}
+
+.animate-spin-slow {
+    animation: spin-slow 3s linear infinite;
+}
+
+.animate-stagger-in > * {
+    opacity: 0;
+    animation: fadeSlideIn var(--ai-transition-slow) ease-out forwards;
+}
+
+.animate-stagger-in > *:nth-child(1) { animation-delay: 0ms; }
+.animate-stagger-in > *:nth-child(2) { animation-delay: 100ms; }
+.animate-stagger-in > *:nth-child(3) { animation-delay: 200ms; }
+.animate-stagger-in > *:nth-child(4) { animation-delay: 300ms; }
+.animate-stagger-in > *:nth-child(5) { animation-delay: 400ms; }
+
+
+/* ==========================================================================
+   Responsive Adjustments
+   ========================================================================== */
+
+@media (max-width: 640px) {
+    .ai-chat-wrapper {
+        border-radius: 0;
+        max-height: 100vh;
+    }
+
+    .ai-message {
+        max-width: 90%;
+    }
+
+    .ai-welcome {
+        padding: 1rem;
+    }
+
+    .ai-metric-value {
+        font-size: 2rem;
+    }
+
+    .ai-floating-btn {
+        width: 3.5rem !important;
+        height: 3.5rem !important;
+    }
+
+    .ai-floating-label {
+        display: none;
+    }
+}
+
+
+/* ==========================================================================
+   Print Styles
+   ========================================================================== */
+
+@media print {
+    .ai-input-section,
+    .ai-floating-btn,
+    .ai-message-actions,
+    .ai-suggestions {
+        display: none !important;
+    }
+
+    .ai-chat-wrapper {
+        box-shadow: none;
+        border: 1px solid #000;
+    }
+}

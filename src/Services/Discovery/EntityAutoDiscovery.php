@@ -35,6 +35,7 @@ class EntityAutoDiscovery
      * @param PropertyDiscoverer $properties Property discoverer
      * @param AliasGenerator $aliases Alias generator
      * @param EmbedFieldDetector $embedFields Embed field detector
+     * @param TraversalScopeGenerator|null $traversalGenerator Traversal scope generator
      */
     public function __construct(
         private SchemaInspector $schema,
@@ -43,7 +44,10 @@ class EntityAutoDiscovery
         private PropertyDiscoverer $properties,
         private AliasGenerator $aliases,
         private EmbedFieldDetector $embedFields,
-    ) {}
+        private ?TraversalScopeGenerator $traversalGenerator = null,
+    ) {
+        $this->traversalGenerator = $traversalGenerator ?? new TraversalScopeGenerator();
+    }
 
     /**
      * Discover complete configuration for a model
@@ -95,8 +99,8 @@ class EntityAutoDiscovery
         // Get properties
         $graphProperties = $this->properties->discover($model);
 
-        // Get relationships
-        $graphRelationships = $this->relationships->discover($model);
+        // Get relationships (bidirectional)
+        $graphRelationships = $this->relationships->discoverBidirectional($model);
 
         return [
             'label' => $label,
@@ -161,6 +165,10 @@ class EntityAutoDiscovery
         } catch (\Throwable $e) {
             // If scope discovery fails, continue with empty scopes
         }
+
+        // Generate traversal scopes from relationships
+        $traversalScopes = $this->discoverTraversalScopes($model);
+        $scopes = array_merge($scopes, $traversalScopes);
 
         // Get property descriptions
         $commonProperties = $this->properties->discoverDescriptions($model);
@@ -283,6 +291,76 @@ class EntityAutoDiscovery
         $interfaces = class_implements($modelClass);
 
         return in_array('Condoedge\\Ai\\Domain\\Contracts\\Nodeable', $interfaces);
+    }
+
+    /**
+     * Discover traversal scopes from relationships with discriminator fields
+     *
+     * Analyzes relationships to find those with discriminator fields in the
+     * target entity and auto-generates traversal scopes for them.
+     *
+     * @param string|Model $model Model class name or instance
+     * @return array Discovered traversal scopes
+     */
+    private function discoverTraversalScopes(string|Model $model): array
+    {
+        if (!$this->traversalGenerator) {
+            return [];
+        }
+
+        $modelInstance = $this->resolveModel($model);
+        $modelClass = get_class($modelInstance);
+        $sourceEntity = class_basename($modelClass);
+
+        // Get all relationships
+        $relationships = $this->relationships->discover($model);
+
+        $traversalScopes = [];
+
+        foreach ($relationships as $relationship) {
+            // Check if this relationship has discriminator fields
+            $discriminatorFields = $relationship['discriminator_fields'] ?? [];
+
+            if (empty($discriminatorFields)) {
+                continue;
+            }
+
+            $targetEntity = $relationship['target_label'] ?? '';
+            $relationshipType = $relationship['inverse_type'] ?? $relationship['type'] ?? '';
+            $relatedModel = $relationship['related_model'] ?? '';
+
+            if (!$targetEntity || !$relationshipType || !$relatedModel) {
+                continue;
+            }
+
+            // For each discriminator field, generate scopes
+            foreach ($discriminatorFields as $discriminatorField) {
+                // Get role mappings from configuration
+                $roleMappings = $this->traversalGenerator->getRoleMappings(
+                    $targetEntity,
+                    $discriminatorField
+                );
+
+                if (empty($roleMappings)) {
+                    continue;
+                }
+
+                // Generate scopes for this relationship + discriminator combination
+                $generatedScopes = $this->traversalGenerator->generateFromRelationship(
+                    $sourceEntity,
+                    $targetEntity,
+                    $relationshipType,
+                    [
+                        'field' => $discriminatorField,
+                        'values' => $roleMappings,
+                    ]
+                );
+
+                $traversalScopes = array_merge($traversalScopes, $generatedScopes);
+            }
+        }
+
+        return $traversalScopes;
     }
 
     /**

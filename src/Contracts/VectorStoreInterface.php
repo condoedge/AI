@@ -105,4 +105,31 @@ interface VectorStoreInterface
      * @return int Number of points
      */
     public function count(string $collection, array $filter = []): int;
+
+    /**
+     * Ensure a collection exists, create if it doesn't
+     *
+     * @param string $name Collection name
+     * @param int $vectorSize Dimension of vectors
+     * @param string $distance Distance metric ('cosine', 'euclidean', 'dot')
+     * @return void
+     */
+    public function ensureCollection(string $name, int $vectorSize, string $distance = 'cosine'): void;
+
+    /**
+     * Delete all points in a collection (but keep the collection)
+     *
+     * @param string $collection Collection name
+     * @return bool Success status
+     */
+    public function deleteAll(string $collection): bool;
+
+    /**
+     * Batch upsert points (alias for upsert, ensures batch optimization)
+     *
+     * @param string $collection Collection name
+     * @param array $points Array of points with 'id', 'vector', 'metadata' keys
+     * @return bool Success status
+     */
+    public function upsertBatch(string $collection, array $points): bool;
 }

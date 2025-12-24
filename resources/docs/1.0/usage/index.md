@@ -17,7 +17,7 @@ This track walks you through consuming the package (AI facade, ingestion workflo
 - **Project Context** – Configure your business domain for smarter LLM query generation.
 - **API Surfaces** – AI facade, `AiManager`, and granular services for ingestion, context, embeddings, and LLM I/O.
 - **Batch Commands** – `ai:discover`, `ai:ingest`, `ai:sync-relationships`, `ai:process-files` for setup and maintenance.
-- **Extensibility** – Override auto-discovery, inject custom providers, or plug into Laravel jobs/queues.
+- **Extensibility** – Override auto-discovery, customize prompt builders, add query patterns, inject custom providers, or plug into Laravel jobs/queues.
 - **Quality Gates** – Testing recipes, observability hooks, and troubleshooting flows focused on runtime behavior.
 
 ## Reading Path
@@ -29,6 +29,7 @@ This track walks you through consuming the package (AI facade, ingestion workflo
 5. [Context Retrieval & RAG](/docs/{{version}}/usage/context-retrieval)
 6. [Embeddings & LLM Providers](/docs/{{version}}/usage/embeddings) · [/llm](/docs/{{version}}/usage/llm)
 7. [Laravel Integration Points](/docs/{{version}}/usage/laravel-integration)
-8. [Testing Playbook](/docs/{{version}}/usage/testing) & [Examples](/docs/{{version}}/usage/examples)
+8. [Extending the Package](/docs/{{version}}/usage/extending) – Query patterns, prompt builders, providers
+9. [Testing Playbook](/docs/{{version}}/usage/testing) & [Examples](/docs/{{version}}/usage/examples)
 
 Need to see how everything is built internally? Jump to the [Internals & Architecture track](/docs/{{version}}/internals).
