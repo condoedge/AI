@@ -308,6 +308,9 @@ class AiServiceProvider extends ServiceProvider
         // Alias for dependency injection
         $this->app->alias('file-search', FileSearchService::class);
 
+        // Register Access Level Resolver
+        $this->app->singleton(AccessLevelResolver::class);
+
         // Register AI Manager as singleton
         $this->app->singleton('ai', function ($app) {
             return new AiManager(
@@ -496,6 +499,9 @@ class AiServiceProvider extends ServiceProvider
                 \Condoedge\Ai\Console\Commands\IndexContextCommand::class,
             ]);
         }
+
+        // Register sync observers for related models
+        $this->registerSyncObservers();
 
         File::setPlugins([
             FileProcessingPlugin::class,
