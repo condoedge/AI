@@ -129,6 +129,10 @@ class EntityAutoDiscovery
         // Get embed fields
         $embedFields = $this->embedFields->detect($model);
 
+        // Exclude sensible columns from embed fields (they shouldn't be in vector content)
+        $sensibleColumns = $this->getSensibleColumns($modelInstance);
+        $embedFields = array_values(array_diff($embedFields, $sensibleColumns));
+
         // Get metadata fields (all properties except embed fields)
         $allProperties = $this->properties->discover($model);
         $metadata = array_values(array_diff($allProperties, $embedFields));
@@ -387,6 +391,7 @@ class EntityAutoDiscovery
             'team_query_scope' => null,
             'multiple_teams' => false,
             'has_owner_bypass' => false,
+            'sensible_columns' => [],
         ];
 
         // Strategy 1: Check for securityRelatedTeamIds method
@@ -414,7 +419,28 @@ class EntityAutoDiscovery
             $config['has_owner_bypass'] = true;
         }
 
+        // Get sensible columns from model
+        $config['sensible_columns'] = $this->getSensibleColumns($modelInstance);
+
         return $config;
+    }
+
+    /**
+     * Get sensible columns from model
+     *
+     * Reads the $sensibleColumns property from the model, which defines
+     * fields that should be protected/hidden without proper permissions.
+     *
+     * @param Model $model Model instance
+     * @return array List of sensible column names
+     */
+    protected function getSensibleColumns(Model $model): array
+    {
+        if (property_exists($model, 'sensibleColumns')) {
+            return $this->getModelProperty($model, 'sensibleColumns') ?? [];
+        }
+
+        return [];
     }
 
     /**
