@@ -93,6 +93,10 @@ class DataIngestionService implements DataIngestionServiceInterface
             // Create relationships after node is created
             $relationshipsCreated = $this->createRelationships($entity, $graphConfig);
 
+            // Create BELONGS_TO_TEAM relationships for security filtering
+            $teamRelationshipsCreated = $this->ingestTeamRelationships($entity, $graphConfig);
+            $relationshipsCreated += $teamRelationshipsCreated;
+
             try {
                 // Phase 2: Ingest into vector store
                 $vectorConfig = $entity->getVectorConfig();
@@ -633,8 +637,12 @@ class DataIngestionService implements DataIngestionServiceInterface
 
         $data = $entity->toArray();
 
-        // Build text to embed from specified fields
-        $textToEmbed = $this->buildEmbedText($data, $config->embedFields);
+        // Get sensible columns to exclude from embedding
+        $sensibleColumns = $this->getSensibleColumns($entity);
+
+        // Build text to embed, excluding sensible columns
+        $safeEmbedFields = array_diff($config->embedFields, $sensibleColumns);
+        $textToEmbed = $this->buildEmbedText($data, $safeEmbedFields);
 
         if (empty($textToEmbed)) {
             throw new \RuntimeException(
@@ -650,6 +658,17 @@ class DataIngestionService implements DataIngestionServiceInterface
 
         // Always include entity ID in metadata
         $metadata['id'] = $entity->getId();
+
+        // Add security metadata
+        $metadata['_entity_type'] = class_basename($entity);
+        $metadata['_entity_class'] = get_class($entity);
+        $metadata['_team_ids'] = $this->resolveTeamIds($entity);
+
+        // Add owner ID if available
+        $ownerId = $entity->getAttribute('user_id') ?? $entity->getAttribute('owner_id');
+        if ($ownerId) {
+            $metadata['_owner_id'] = $ownerId;
+        }
 
         // Store in vector database
         $this->vectorStore->upsert(
@@ -1060,6 +1079,112 @@ class DataIngestionService implements DataIngestionServiceInterface
         Log::info("Relationship synchronization completed", $summary);
 
         return $summary;
+    }
+
+    /**
+     * Resolve team IDs for a model using auth package patterns
+     *
+     * @param Nodeable $entity Entity to resolve teams for
+     * @return array List of team IDs
+     */
+    private function resolveTeamIds(Nodeable $entity): array
+    {
+        if (method_exists($entity, 'securityRelatedTeamIds')) {
+            $teamIds = $entity->securityRelatedTeamIds();
+            return $teamIds instanceof \Illuminate\Support\Collection
+                ? $teamIds->toArray()
+                : (array) $teamIds;
+        }
+
+        if (property_exists($entity, 'TEAM_ID_COLUMN')) {
+            $reflection = new \ReflectionProperty($entity, 'TEAM_ID_COLUMN');
+            $reflection->setAccessible(true);
+            $column = $reflection->getValue($entity);
+            $teamId = $entity->getAttribute($column);
+            return $teamId ? [$teamId] : [];
+        }
+
+        $teamId = $entity->getAttribute('team_id');
+        if ($teamId) {
+            return [$teamId];
+        }
+
+        if (method_exists($entity, 'team')) {
+            $team = $entity->team;
+            return $team ? [$team->id] : [];
+        }
+
+        return [];
+    }
+
+    /**
+     * Get sensible columns from model
+     *
+     * @param Nodeable $entity Entity to check
+     * @return array List of sensible column names
+     */
+    private function getSensibleColumns(Nodeable $entity): array
+    {
+        if (property_exists($entity, 'sensibleColumns')) {
+            $reflection = new \ReflectionProperty($entity, 'sensibleColumns');
+            $reflection->setAccessible(true);
+            return $reflection->getValue($entity) ?? [];
+        }
+
+        return [];
+    }
+
+    /**
+     * Create BELONGS_TO_TEAM relationships in Neo4j
+     *
+     * @param Nodeable $entity Entity to create team relationships for
+     * @param GraphConfig $config Graph configuration
+     * @return int Number of team relationships created
+     */
+    private function ingestTeamRelationships(Nodeable $entity, GraphConfig $config): int
+    {
+        $teamIds = $this->resolveTeamIds($entity);
+        $count = 0;
+
+        foreach ($teamIds as $teamId) {
+            try {
+                $teamExists = $this->graphStore->nodeExists('Team', $teamId);
+                if (!$teamExists) {
+                    continue;
+                }
+
+                $relationshipExists = $this->graphStore->relationshipExists(
+                    fromLabel: $config->label,
+                    fromId: $entity->getId(),
+                    toLabel: 'Team',
+                    toId: $teamId,
+                    type: 'BELONGS_TO_TEAM'
+                );
+
+                if ($relationshipExists) {
+                    continue;
+                }
+
+                $this->graphStore->createRelationship(
+                    fromLabel: $config->label,
+                    fromId: $entity->getId(),
+                    toLabel: 'Team',
+                    toId: $teamId,
+                    type: 'BELONGS_TO_TEAM',
+                    properties: []
+                );
+
+                $count++;
+            } catch (\Exception $e) {
+                Log::warning("Failed to create BELONGS_TO_TEAM relationship", [
+                    'entity_id' => $entity->getId(),
+                    'team_id' => $teamId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $count;
     }
 
     /**
