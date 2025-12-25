@@ -71,11 +71,13 @@ class EntityAutoDiscovery
             // Discover all parts
             $graph = $this->discoverGraph($model);
             $vector = $this->discoverVector($model);
+            $security = $this->discoverSecurityConfig($model);
             $metadata = $this->discoverMetadata($model);
 
             return [
                 'graph' => $graph,
                 'vector' => $vector,
+                'security' => $security,
                 'metadata' => $metadata,
             ];
         });
@@ -363,6 +365,100 @@ class EntityAutoDiscovery
         return $traversalScopes;
     }
 
+    
+    /**
+     * Discover security configuration for a model
+     *
+     * Detects team resolution patterns from the Kompo Auth package:
+     * - securityRelatedTeamIds() method
+     * - TEAM_ID_COLUMN property
+     * - team_id column
+     * - scopeSecurityForTeams() scope
+     *
+     * @param string|Model $model Model class name or instance
+     * @return array Security configuration
+     */
+    protected function discoverSecurityConfig(string|Model $model): array
+    {
+        $modelInstance = $this->resolveModel($model);
+
+        $config = [
+            'team_resolution' => null,
+            'team_query_scope' => null,
+            'multiple_teams' => false,
+            'has_owner_bypass' => false,
+        ];
+
+        // Strategy 1: Check for securityRelatedTeamIds method
+        if (method_exists($modelInstance, 'securityRelatedTeamIds')) {
+            $config['team_resolution'] = 'method:securityRelatedTeamIds';
+            $config['multiple_teams'] = true; // Method typically returns collection
+        }
+        // Strategy 2: Check for TEAM_ID_COLUMN property
+        elseif (property_exists($modelInstance, 'TEAM_ID_COLUMN')) {
+            $column = $this->getModelProperty($modelInstance, 'TEAM_ID_COLUMN');
+            $config['team_resolution'] = $column;
+        }
+        // Strategy 3: Check for team_id column
+        elseif ($this->hasColumn($modelInstance, 'team_id')) {
+            $config['team_resolution'] = 'team_id';
+        }
+
+        // Check for scopeSecurityForTeams
+        if (method_exists($modelInstance, 'scopeSecurityForTeams')) {
+            $config['team_query_scope'] = 'scope:securityForTeams';
+        }
+
+        // Check for owner bypass methods
+        if (method_exists($modelInstance, 'usersIdsAllowedToManage')) {
+            $config['has_owner_bypass'] = true;
+        }
+
+        return $config;
+    }
+
+    /**
+     * Get a model property value using reflection
+     *
+     * @param Model $model Model instance
+     * @param string $property Property name
+     * @return mixed Property value or null if not found
+     */
+    protected function getModelProperty(Model $model, string $property): mixed
+    {
+        if (!property_exists($model, $property)) {
+            return null;
+        }
+
+        $reflection = new \ReflectionProperty($model, $property);
+        $reflection->setAccessible(true);
+        return $reflection->getValue($model);
+    }
+
+    /**
+     * Check if model's table has a column
+     *
+     * Uses database schema if available, falls back to checking fillable array.
+     *
+     * @param Model $model Model instance
+     * @param string $column Column name
+     * @return bool True if column exists
+     */
+    protected function hasColumn(Model $model, string $column): bool
+    {
+        try {
+            $columns = $model->getConnection()->getSchemaBuilder()->getColumnListing($model->getTable());
+            if (!empty($columns)) {
+                return in_array($column, $columns);
+            }
+        } catch (\Throwable $e) {
+            // DB not available, fall through
+        }
+
+        // Fallback: check fillable
+        $fillable = $model->getFillable();
+        return in_array($column, $fillable);
+    }
     /**
      * Execute discovery in a safe context
      *
