@@ -319,10 +319,11 @@ trait HasNodeableConfig
     /**
      * Resolve configuration with fallback chain
      *
-     * Priority:
-     * 1. nodeableConfig() method on model (highest priority)
-     * 2. config/entities.php for model class
-     * 3. EntityAutoDiscovery service (fallback)
+     * Priority (layered - later overrides earlier):
+     * 1. Model properties (base layer: $embedFields, $graphLabel, etc.)
+     * 2. nodeableConfig() method on model (override layer)
+     * 3. config/entities.php for model class (legacy override)
+     * 4. EntityAutoDiscovery service (fills missing parts)
      *
      * @return array<string, mixed> Entity configuration
      */
@@ -333,47 +334,137 @@ trait HasNodeableConfig
             return $this->resolvedConfig;
         }
 
-        // 1. Check for nodeableConfig() method (developer override)
+        // 1. Start with model properties (base layer)
+        $config = $this->readModelProperties();
+
+        // 2. Merge with nodeableConfig() if exists (override layer)
         if (method_exists($this, 'nodeableConfig')) {
-            $result = $this->nodeableConfig();
+            $overrides = $this->nodeableConfig();
 
             // If returns NodeableConfig builder, convert to array
-            if ($result instanceof \Condoedge\Ai\Domain\ValueObjects\NodeableConfig) {
-                $this->resolvedConfig = $result->toArray();
-                return $this->resolvedConfig;
+            if ($overrides instanceof \Condoedge\Ai\Domain\ValueObjects\NodeableConfig) {
+                $overrides = $overrides->toArray();
             }
 
-            $this->resolvedConfig = $result;
-            return $this->resolvedConfig;
+            $config = $this->mergeConfigDeep($config, $overrides);
         }
 
-        // 2. Check config/entities.php (legacy support)
+        // 3. Check config/entities.php (legacy override)
         $entityConfigs = config('entities', []);
         $modelClass = get_class($this);
         $configKey = $this->getConfigKey();
 
         if (isset($entityConfigs[$modelClass])) {
-            $this->resolvedConfig = $entityConfigs[$modelClass];
-            return $this->resolvedConfig;
+            $config = $this->mergeConfigDeep($config, $entityConfigs[$modelClass]);
+        } elseif (isset($entityConfigs[$configKey])) {
+            $config = $this->mergeConfigDeep($config, $entityConfigs[$configKey]);
         }
 
-        if (isset($entityConfigs[$configKey])) {
-            $this->resolvedConfig = $entityConfigs[$configKey];
-            return $this->resolvedConfig;
-        }
-
-        // 3. Auto-discovery (DISABLED by default - use php artisan ai:discover)
+        // 4. Auto-discover missing parts
         if (config('ai.auto_discovery.runtime_enabled', false)) {
-            $this->resolvedConfig = $this->autoDiscover();
-            return $this->resolvedConfig;
+            $discovered = $this->autoDiscover();
+            // Discovered goes first (base), config overrides
+            $config = $this->mergeConfigDeep($discovered, $config);
         }
 
-        // If nothing configured, throw helpful error
-        throw new \LogicException(
-            'No configuration found for entity ' . get_class($this) . '. ' .
-            'Run "php artisan ai:discover" to generate config/entities.php, or ' .
-            'add a nodeableConfig() method to your model.'
-        );
+        // Ensure minimum required config
+        $config = $this->ensureMinimumConfig($config);
+
+        $this->resolvedConfig = $config;
+        return $this->resolvedConfig;
+    }
+
+    /**
+     * Read configuration from model properties
+     *
+     * Convention-based properties:
+     * - $embedFields: array of fields to embed in vectors
+     * - $graphLabel: string label for Neo4j node
+     * - $graphRelationships: array of relationship configs
+     * - $sensibleColumns: array of sensitive field names
+     * - $nodeableAliases: array of entity aliases
+     *
+     * @return array Configuration from model properties
+     */
+    protected function readModelProperties(): array
+    {
+        $config = [];
+
+        // Read $embedFields
+        if (property_exists($this, 'embedFields') && !empty($this->embedFields)) {
+            $config['vector']['embed_fields'] = $this->embedFields;
+        }
+
+        // Read $graphLabel
+        if (property_exists($this, 'graphLabel') && !empty($this->graphLabel)) {
+            $config['graph']['label'] = $this->graphLabel;
+        }
+
+        // Read $graphRelationships
+        if (property_exists($this, 'graphRelationships') && !empty($this->graphRelationships)) {
+            $config['graph']['relationships'] = $this->graphRelationships;
+        }
+
+        // Read $sensibleColumns
+        if (property_exists($this, 'sensibleColumns') && !empty($this->sensibleColumns)) {
+            $config['security']['sensible_columns'] = $this->sensibleColumns;
+        }
+
+        // Read $nodeableAliases
+        if (property_exists($this, 'nodeableAliases') && !empty($this->nodeableAliases)) {
+            $config['metadata']['aliases'] = $this->nodeableAliases;
+        }
+
+        return $config;
+    }
+
+    /**
+     * Deep merge two config arrays (second overwrites first)
+     *
+     * @param array $base Base configuration
+     * @param array $override Override configuration
+     * @return array Merged configuration
+     */
+    protected function mergeConfigDeep(array $base, array $override): array
+    {
+        foreach ($override as $key => $value) {
+            if (is_array($value) && isset($base[$key]) && is_array($base[$key])) {
+                $base[$key] = $this->mergeConfigDeep($base[$key], $value);
+            } else {
+                $base[$key] = $value;
+            }
+        }
+        return $base;
+    }
+
+    /**
+     * Ensure minimum required configuration is present
+     *
+     * @param array $config Current configuration
+     * @return array Configuration with defaults filled in
+     */
+    protected function ensureMinimumConfig(array $config): array
+    {
+        // Ensure graph label
+        if (empty($config['graph']['label'])) {
+            $config['graph']['label'] = class_basename($this);
+        }
+
+        // Ensure graph properties from fillable if not set
+        if (empty($config['graph']['properties'])) {
+            if (property_exists($this, 'fillable') && !empty($this->fillable)) {
+                $config['graph']['properties'] = array_merge(['id'], $this->fillable);
+            } else {
+                $config['graph']['properties'] = ['id'];
+            }
+        }
+
+        // Ensure vector collection if embed_fields exist
+        if (!empty($config['vector']['embed_fields']) && empty($config['vector']['collection'])) {
+            $config['vector']['collection'] = strtolower(class_basename($this)) . 's';
+        }
+
+        return $config;
     }
 
     /**

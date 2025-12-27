@@ -39,24 +39,25 @@ return [
     |
     | Auto-discovery analyzes Eloquent models and generates entity configs.
     |
-    | IMPORTANT: Runtime auto-discovery is DISABLED by default for performance.
+    | Runtime auto-discovery is ENABLED by default for zero-config experience.
     |
     | Workflow:
-    |   1. Run: php artisan ai:discover
+    |   1. Run: php artisan ai:discover (optional - generates warm cache)
     |   2. Review generated config/entities.php
     |   3. Customize as needed
-    |   4. Use static config at runtime (fast!)
     |
-    | Only enable runtime_enabled for development/testing.
+    | Runtime discovery is enabled by default (works without running discover).
+    | For production with many entities, run ai:discover for faster startup.
     |
     */
     'auto_discovery' => [
         // Enable auto-discovery command (php artisan ai:discover)
         'enabled' => env('AI_AUTO_DISCOVERY_ENABLED', true),
 
-        // Enable runtime auto-discovery (SLOW - only for dev/testing)
-        // When false, entities MUST be in config/entities.php or have nodeableConfig() method
-        'runtime_enabled' => env('AI_AUTO_DISCOVERY_RUNTIME', false),
+        // Enable runtime auto-discovery (default: true)
+        // Works automatically without running ai:discover command.
+        // Set to false in production for faster startup (requires config/entities.php)
+        'runtime_enabled' => env('AI_AUTO_DISCOVERY_RUNTIME', true),
 
         // Cache discovered configurations
         'cache' => [

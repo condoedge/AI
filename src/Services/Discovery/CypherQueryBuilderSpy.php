@@ -179,9 +179,16 @@ class CypherQueryBuilderSpy
     public function whereHas(string $relation, ?Closure $callback = null, string $operator = '>=', int $count = 1): self
     {
         $nested = null;
+        $relatedModelClass = null;
+
+        // Try to determine the related model class for nested scope resolution
+        if ($this->modelClass !== null) {
+            $relatedModelClass = $this->getRelatedModelClass($relation);
+        }
 
         if ($callback !== null) {
-            $nested = new self($this->modelClass);
+            // Create spy with related model context so nested scope calls work
+            $nested = new self($relatedModelClass);
             $callback($nested);
         }
 
@@ -189,12 +196,60 @@ class CypherQueryBuilderSpy
             'method' => 'whereHas',
             'type' => 'relationship',
             'relation' => $relation,
+            'related_model' => $relatedModelClass,
             'nested_calls' => $nested ? $nested->getCalls() : [],
             'operator' => $operator,
             'count' => $count,
         ];
 
         return $this;
+    }
+
+    /**
+     * Get the related model class from a relationship name
+     *
+     * @param string $relation Relationship method name
+     * @return string|null Related model class or null if not found
+     */
+    private function getRelatedModelClass(string $relation): ?string
+    {
+        if ($this->modelClass === null) {
+            return null;
+        }
+
+        try {
+            $model = $this->createModelInstance($this->modelClass);
+
+            if (!method_exists($model, $relation)) {
+                return null;
+            }
+
+            $relationObj = $model->$relation();
+
+            if (method_exists($relationObj, 'getRelated')) {
+                return get_class($relationObj->getRelated());
+            }
+
+            return null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Create a model instance for relationship introspection
+     *
+     * @param string $modelClass Model class name
+     * @return object Model instance
+     */
+    private function createModelInstance(string $modelClass): object
+    {
+        try {
+            $reflection = new \ReflectionClass($modelClass);
+            return $reflection->newInstanceWithoutConstructor();
+        } catch (\Throwable $e) {
+            return new $modelClass();
+        }
     }
 
     /**
@@ -378,5 +433,49 @@ class CypherQueryBuilderSpy
     public function countCalls(): int
     {
         return count($this->calls);
+    }
+
+    /**
+     * Handle dynamic method calls (scope resolution)
+     *
+     * When a nested callback calls a scope method like $q->volunteer(),
+     * this method intercepts the call and resolves the scope to capture
+     * its underlying query builder calls.
+     *
+     * @param string $method Method name (e.g., 'volunteer', 'active')
+     * @param array $arguments Method arguments
+     * @return self
+     */
+    public function __call(string $method, array $arguments): self
+    {
+        // If we have model context, try to resolve the scope
+        if ($this->modelClass !== null) {
+            $scopeMethod = 'scope' . ucfirst($method);
+
+            // Check if the model has this scope
+            if (method_exists($this->modelClass, $scopeMethod)) {
+                try {
+                    // Create a fresh model instance
+                    $model = $this->createModelInstance($this->modelClass);
+
+                    // Execute the scope with this spy to capture calls
+                    $model->$scopeMethod($this, ...$arguments);
+
+                    return $this;
+                } catch (\Throwable $e) {
+                    // Fall through to record as unknown call
+                }
+            }
+        }
+
+        // Record as scope call (for debugging/analysis)
+        $this->calls[] = [
+            'method' => $method,
+            'type' => 'scope_call',
+            'arguments' => $arguments,
+            'resolved' => false,
+        ];
+
+        return $this;
     }
 }

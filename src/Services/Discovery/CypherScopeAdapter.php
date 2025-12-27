@@ -349,7 +349,7 @@ class CypherScopeAdapter
 
                         // Check if it's a role/type field
                         if (in_array($column, ['role_type', 'type', 'role', 'status'])) {
-                            return $value;
+                            return (string) $value;
                         }
                     }
                 }

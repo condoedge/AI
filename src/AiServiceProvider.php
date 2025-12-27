@@ -509,6 +509,20 @@ class AiServiceProvider extends ServiceProvider
     }
 
     /**
+     * Register sync observers for related model changes
+     *
+     * This allows the AI system to stay in sync when related models change.
+     * Currently a stub - full implementation coming in future update.
+     *
+     * @return void
+     */
+    protected function registerSyncObservers(): void
+    {
+        // TODO: Register observers for related model synchronization
+        // This will be implemented when RelatedModelSyncObserver is complete
+    }
+
+    /**
      * Get the services provided by the provider
      *
      * @return array
