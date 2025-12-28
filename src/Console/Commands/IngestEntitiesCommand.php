@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Console\Commands;
 
-use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Contracts\FileProcessorInterface;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Services\Files\PhysicalFileIndexer;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Symfony\Component\Finder\Finder;
@@ -35,7 +37,8 @@ class IngestEntitiesCommand extends Command
                             {--model= : Specific model class to ingest (e.g., App\\Models\\Customer)}
                             {--fresh : Clear all data from stores before ingesting}
                             {--chunk=100 : Batch size for processing}
-                            {--dry-run : Show what would be ingested without actually ingesting}';
+                            {--dry-run : Show what would be ingested without actually ingesting}
+                            {--docs : Index physical documentation files from configured paths}';
 
     /**
      * The console command description.
@@ -60,7 +63,12 @@ class IngestEntitiesCommand extends Command
      */
     public function handle(): int
     {
-        $this->info('🚀 Bulk Entity Ingestion');
+        // Handle --docs flag for physical file ingestion
+        if ($this->option('docs')) {
+            return $this->handleDocsIngestion();
+        }
+
+        $this->info('Bulk Entity Ingestion');
         $this->newLine();
 
         // Get models to ingest
@@ -241,5 +249,92 @@ class IngestEntitiesCommand extends Command
     private function findNodeableModels(): array
     {
         return array_keys(config('entities'));
+    }
+
+    /**
+     * Handle physical documentation file ingestion.
+     *
+     * Uses PhysicalFileIndexer to discover and create file objects,
+     * then processes them with FileProcessor into the configured collection.
+     *
+     * @return int
+     */
+    protected function handleDocsIngestion(): int
+    {
+        $this->info('Discovering physical documentation files...');
+
+        $indexer = app(PhysicalFileIndexer::class);
+        $fileObjects = $indexer->createFileObjects();
+
+        if (empty($fileObjects)) {
+            $this->warn('No files found matching configured patterns.');
+            $this->line('Configure patterns in config/ai.php: file_context.physical_paths');
+            return self::SUCCESS;
+        }
+
+        $this->info(sprintf('Found %d files to index.', count($fileObjects)));
+
+        if ($this->option('dry-run')) {
+            $this->newLine();
+            $this->table(['ID', 'Name', 'Path'], array_map(fn($f) => [
+                $f->id,
+                $f->name,
+                $f->path,
+            ], $fileObjects));
+            return self::SUCCESS;
+        }
+
+        $fileProcessor = app(FileProcessorInterface::class);
+        $collection = config('ai.file_context.physical_collection', 'documentation_chunks');
+        $force = $this->option('fresh');
+
+        $bar = $this->output->createProgressBar(count($fileObjects));
+        $bar->setFormat('  [%bar%] %current%/%max% (%percent:3s%%) %message%');
+        $bar->setMessage('Processing...');
+        $bar->start();
+
+        $results = ['success' => 0, 'skipped' => 0, 'failed' => 0];
+
+        foreach ($fileObjects as $fileObject) {
+            try {
+                $result = $fileProcessor->processFile($fileObject, [
+                    'collection' => $collection,
+                    'force' => $force,
+                ]);
+
+                if ($result->failed()) {
+                    $results['failed']++;
+                } elseif ($result->success && $result->chunksCreated === 0) {
+                    // Successful but no chunks created means it was skipped
+                    // (e.g., already processed)
+                    $results['skipped']++;
+                } else {
+                    $results['success']++;
+                }
+            } catch (\Throwable $e) {
+                $results['failed']++;
+                $this->newLine();
+                $this->error("Failed to index {$fileObject->name}: {$e->getMessage()}");
+            }
+
+            $bar->advance();
+            $bar->setMessage("Success: {$results['success']}, Failed: {$results['failed']}");
+        }
+
+        $bar->finish();
+        $this->newLine(2);
+
+        $this->info('Indexing complete:');
+        $this->line("  Success: {$results['success']}");
+
+        if ($results['skipped'] > 0) {
+            $this->line("  Skipped: {$results['skipped']}");
+        }
+
+        if ($results['failed'] > 0) {
+            $this->warn("  Failed: {$results['failed']}");
+        }
+
+        return $results['failed'] > 0 ? self::FAILURE : self::SUCCESS;
     }
 }
