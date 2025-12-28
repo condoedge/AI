@@ -507,6 +507,7 @@ class AiServiceProvider extends ServiceProvider
                 \Condoedge\Ai\Console\Commands\IndexScopesCommand::class,
                 \Condoedge\Ai\Console\Commands\IndexContextCommand::class,
                 \Condoedge\Ai\Console\Commands\ValidateConfigCommand::class,
+                \Condoedge\Ai\Console\Commands\LearnFromLogsCommand::class,
             ]);
         }
 
