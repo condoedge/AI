@@ -33,4 +33,20 @@ class AiMessage extends Model
     {
         return $this->belongsTo(AiConversation::class, 'conversation_id');
     }
+
+    /**
+     * Get referenced files from metadata.
+     */
+    public function getReferencedFiles(): array
+    {
+        return $this->metadata['referenced_files'] ?? [];
+    }
+
+    /**
+     * Check if message has file references.
+     */
+    public function hasFileReferences(): bool
+    {
+        return !empty($this->getReferencedFiles());
+    }
 }

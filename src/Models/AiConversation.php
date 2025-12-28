@@ -53,6 +53,12 @@ class AiConversation extends Model
 
     public function addMessage(string $role, string $content, array $data = []): AiMessage
     {
+        // Extract referenced_files and merge into metadata
+        $metadata = $data['metadata'] ?? [];
+        if (isset($data['referenced_files'])) {
+            $metadata['referenced_files'] = $data['referenced_files'];
+        }
+
         $message = $this->messages()->create([
             'role' => $role,
             'content' => $content,
@@ -61,7 +67,7 @@ class AiConversation extends Model
             'cypher_query' => $data['cypher_query'] ?? null,
             'execution_time_ms' => $data['execution_time_ms'] ?? null,
             'confidence_score' => $data['confidence_score'] ?? null,
-            'metadata' => $data['metadata'] ?? null,
+            'metadata' => !empty($metadata) ? $metadata : null,
         ]);
 
         $this->update(['last_message_at' => now()]);
@@ -69,6 +75,17 @@ class AiConversation extends Model
         // Auto-generate title from first user message
         if ($this->title === null && $role === 'user') {
             $this->update(['title' => Str::limit($content, 50)]);
+        }
+
+        // Track referenced files in context snapshot
+        if (!empty($metadata['referenced_files'])) {
+            $existingFiles = $this->context_snapshot['referenced_files'] ?? [];
+            $newFileIds = array_column($metadata['referenced_files'], 'id');
+            $allFiles = array_unique(array_merge($existingFiles, $newFileIds));
+
+            $this->updateContextSnapshot([
+                'referenced_files' => array_values($allFiles),
+            ]);
         }
 
         return $message;
