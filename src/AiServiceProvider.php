@@ -476,6 +476,9 @@ class AiServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Load routes
+        $this->loadRoutesFrom(__DIR__."/../routes/api.php");
+
         // Publish configuration
         $this->publishes([
             __DIR__ . '/../config/ai.php' => config_path('ai.php'),
