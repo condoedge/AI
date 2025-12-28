@@ -495,6 +495,7 @@ class AiServiceProvider extends ServiceProvider
         // Register console commands
         if ($this->app->runningInConsole()) {
             $this->commands([
+                \Condoedge\Ai\Console\Commands\DiagnoseCommand::class,
                 \Condoedge\Ai\Console\Commands\DiscoverEntitiesCommand::class,
                 \Condoedge\Ai\Console\Commands\IngestEntitiesCommand::class,
                 \Condoedge\Ai\Console\Commands\SyncRelationshipsCommand::class,
