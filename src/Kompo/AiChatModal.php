@@ -1,425 +1,315 @@
 <?php
 
-declare(strict_types=1);
-
 namespace Condoedge\Ai\Kompo;
 
-use Condoedge\Ai\Kompo\Traits\HasAiChatConfig;
-use Condoedge\Ai\Kompo\Traits\HasAiMessages;
-use Condoedge\Ai\Kompo\Traits\HasMessageBubbles;
-use Condoedge\Ai\Kompo\Traits\HasWelcomeScreen;
 use Condoedge\Ai\Services\Chat\AiChatMessage;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Utils\Kompo\Common\Modal;
 
 /**
- * AI Chat Modal - A beautiful modal dialog with AI chat functionality.
+ * AI Chat Modal - Opens a chat dialog with AI assistant.
  *
  * Usage:
- *   // Basic - uses config defaults
- *   public function openAiChat()
- *   {
- *       return new AiChatModal();
- *   }
+ *   // Basic
+ *   return new AiChatModal();
  *
  *   // With props
- *   public function openAiChat()
- *   {
- *       return new AiChatModal([
- *           'welcome_title' => 'My AI Assistant',
- *           'welcome_message' => 'How can I help?',
- *           'example_questions' => ['Question 1', 'Question 2'],
- *       ]);
- *   }
+ *   return new AiChatModal(null, [
+ *       'welcome_title' => 'My Assistant',
+ *       'example_questions' => ['Q1', 'Q2'],
+ *   ]);
  */
 class AiChatModal extends Modal
 {
-    use HasAiChatConfig;
-    use HasAiMessages;
-    use HasMessageBubbles;
-    use HasWelcomeScreen;
-
-    public $_Title = 'AI Assistant';
+    protected $_Title = 'AI Assistant';
     public $noHeaderButtons = true;
     public $class = 'overflow-y-auto mini-scroll max-w-3xl';
     public $style = 'max-height: 95vh;';
 
     protected AiChatServiceInterface $chatService;
+    protected array $messages = [];
+
+    // Config (loaded from props or config/ai.php)
+    protected string $welcomeTitle;
+    protected string $welcomeMessage;
+    protected array $exampleQuestions;
+    protected string $inputPlaceholder;
+    protected bool $showTimestamps;
+    protected bool $showAvatars;
+    protected bool $enableCopy;
+    protected bool $showSuggestions;
+    protected int $maxSuggestions;
+    protected int $maxMessages;
 
     public function created()
     {
-        $this->initChatConfig();
-        $this->storeChatConfig();
-        $this->chatService = app()->make(AiChatServiceInterface::class);
-
-        // Load conversation history
+        $this->chatService = app(AiChatServiceInterface::class);
+        $this->loadConfig();
         $this->loadHistory();
+    }
+
+    protected function loadConfig()
+    {
+        $cfg = config('ai.chat', []);
+
+        $this->welcomeTitle = $this->prop('welcome_title') ?? $cfg['welcome']['title'] ?? 'AI Assistant';
+        $this->welcomeMessage = $this->prop('welcome_message') ?? $cfg['welcome']['message'] ?? 'Ask me anything about your data.';
+        $this->exampleQuestions = $this->prop('example_questions') ?? $cfg['example_questions'] ?? [];
+        $this->inputPlaceholder = $this->prop('input_placeholder') ?? $cfg['input_placeholder'] ?? 'Ask a question...';
+        $this->showTimestamps = $this->prop('show_timestamps') ?? $cfg['show_timestamps'] ?? false;
+        $this->showAvatars = $this->prop('show_avatars') ?? $cfg['show_avatars'] ?? true;
+        $this->enableCopy = $this->prop('enable_copy') ?? $cfg['enable_copy'] ?? true;
+        $this->showSuggestions = $this->prop('show_suggestions') ?? $cfg['show_suggestions'] ?? true;
+        $this->maxSuggestions = $this->prop('max_suggestions') ?? $cfg['max_suggestions'] ?? 3;
+        $this->maxMessages = $this->prop('max_messages') ?? $cfg['max_messages'] ?? 50;
     }
 
     public function header()
     {
         return _FlexBetween(
             _Flex(
-                _Html($this->getHeaderAvatar())->class('mr-3'),
+                _Html($this->avatarHtml())->class('mr-3'),
                 _Rows(
                     _Html($this->_Title)->class('font-semibold text-gray-800'),
                     _Html($this->chatService->isAvailable() ? 'Online' : 'Offline')
                         ->class('text-xs ' . ($this->chatService->isAvailable() ? 'text-emerald-500' : 'text-gray-400'))
                 )
             )->class('items-center'),
-
             _FlexEnd(
                 $this->hasMessages()
-                    ? _Link()
-                        ->icon('trash')
-                        ->class('p-2 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all duration-200')
+                    ? _Link()->icon('trash')
+                        ->class('p-2 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all')
                         ->balloon('Clear chat', 'left')
-                        ->selfPost('clearChat')
-                        ->inPanel('ai-chat-messages')
+                        ->selfPost('clearChat')->inPanel('ai-chat-messages')
                     : null,
-                _Link()
-                    ->icon('x-mark')
-                    ->class('p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all duration-200 ml-1')
+                _Link()->icon('x-mark')
+                    ->class('p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all ml-1')
                     ->closeModal()
             )->class('items-center')
-        )
-        ->class("bg-white border-b border-gray-100 px-5 py-4 rounded-t-2xl");
+        )->class('bg-white border-b border-gray-100 px-5 py-4 rounded-t-2xl');
     }
 
     public function body()
     {
         return _Rows(
-            $this->chatContainer(),
-            _Rows($this->inputSection()),
+            _Panel($this->renderMessages())->id('ai-chat-messages')
+                ->class('flex-1 overflow-y-auto px-5 py-4 bg-gray-50/50')
+                ->style('max-height: 50vh;'),
+            $this->inputSection()
         )->class('h-full flex flex-col');
     }
 
-    protected function chatContainer()
-    {
-        return _Panel(
-            $this->renderConversationHistory()
-        )
-            ->id('ai-chat-messages')
-            ->class('flex-1 overflow-y-auto px-5 py-4 bg-gray-50/50 h-full')
-            ->style('max-height: 50vh;');
-    }
-
-    protected function renderConversationHistory()
+    protected function renderMessages()
     {
         if (!$this->hasMessages()) {
             return $this->renderWelcome();
         }
 
-        $bubbleConfig = $this->getBubbleConfig();
-        $messages = [];
-
-        foreach ($this->messages as $message) {
-            $messages[] = $this->renderMessageBubble($message, $bubbleConfig);
+        $bubbles = [];
+        foreach ($this->messages as $msg) {
+            $bubbles[] = $msg->isUser()
+                ? $this->userBubble($msg)
+                : $this->assistantBubble($msg);
         }
 
         return _Rows(
-            _Hidden()->onLoad->run($this->scrollToBottomScript()),
-            ...$messages
+            _Hidden()->onLoad->run($this->scrollScript()),
+            ...$bubbles
         )->class('gap-y-4');
     }
 
     protected function renderWelcome()
     {
-        return $this->renderWelcomeScreen([
-            'title' => $this->welcomeTitle,
-            'message' => $this->welcomeMessage,
-            'example_questions' => !empty($this->exampleQuestions)
-                ? $this->exampleQuestions
-                : $this->chatService->getExampleQuestions(),
-            'panel_id' => 'ai-chat-messages',
-        ]);
+        $elements = [
+            _Rows(
+                _Html($this->welcomeAvatarHtml())->class('mb-4'),
+                _Html($this->welcomeTitle)->class('text-2xl font-bold text-gray-800 mb-2 text-center'),
+                _Html($this->welcomeMessage)->class('text-gray-500 text-center max-w-md')
+            )->class('text-center mb-8'),
+        ];
+
+        if (!empty($this->exampleQuestions)) {
+            $questions = array_map(fn($q) =>
+                _Link($q)->icon('chat-bubble-left-ellipsis')
+                    ->class('w-full p-4 text-left rounded-xl border border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/30 transition-all flex items-center gap-3')
+                    ->selfPost('askQuestion', ['question' => $q])->inPanel('ai-chat-messages'),
+                $this->exampleQuestions
+            );
+
+            $elements[] = _Rows(
+                _Html('Try asking:')->class('text-sm font-medium text-gray-400 mb-3 text-center'),
+                _Rows(...$questions)->class('space-y-2 w-full max-w-md')
+            )->class('w-full flex flex-col items-center');
+        }
+
+        return _Rows(...$elements)->class('flex flex-col items-center justify-center py-8 px-4');
+    }
+
+    protected function userBubble(AiChatMessage $msg)
+    {
+        return _Rows(
+            _FlexEnd(
+                $this->showAvatars ? _Html($this->userAvatarHtml())->class('ml-3 order-2 flex-shrink-0') : null,
+                _Rows(
+                    _Html(e($msg->content))->class('whitespace-pre-wrap'),
+                    $this->showTimestamps ? _Html($msg->getFormattedTime())->class('text-xs opacity-70 mt-1') : null
+                )->class('px-4 py-3 rounded-2xl rounded-tr-md max-w-xs bg-level1 text-white shadow-md')
+            )->class('items-end gap-0')
+        )->class('mb-4');
+    }
+
+    protected function assistantBubble(AiChatMessage $msg)
+    {
+        $content = [_Html($this->renderMarkdown($msg->content))->class('prose prose-sm max-w-none')];
+
+        // Suggestions
+        if ($this->showSuggestions && $msg->responseData?->hasSuggestions()) {
+            $chips = array_map(fn($s) =>
+                _Link($s)->class('inline-flex items-center px-3 py-1.5 text-sm rounded-full bg-gray-100 text-gray-700 hover:bg-indigo-100 hover:text-indigo-700 transition-all cursor-pointer')
+                    ->selfPost('askQuestion', ['question' => $s])->inPanel('ai-chat-messages'),
+                array_slice($msg->responseData->suggestions, 0, $this->maxSuggestions)
+            );
+            $content[] = _Rows(
+                _Html('Related questions:')->class('text-xs font-medium text-gray-400 mb-2'),
+                _Flex(...$chips)->class('flex-wrap gap-2')
+            )->class('mt-4 pt-3 border-t border-gray-100');
+        }
+
+        // Copy button
+        if ($this->enableCopy) {
+            $content[] = _Flex(
+                _Link()->icon('clipboard-document')
+                    ->class('p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600')
+                    ->balloon('Copy', 'up')
+                    ->onClick->run("navigator.clipboard.writeText(" . json_encode($msg->content) . ")")
+            )->class('mt-2 opacity-0 group-hover:opacity-100 transition-all');
+        }
+
+        return _Rows(
+            _Flex(
+                $this->showAvatars ? _Html($this->assistantAvatarHtml())->class('mr-3 flex-shrink-0') : null,
+                _Rows(...$content)->class('group px-4 py-3 rounded-2xl rounded-tl-md max-w-2xl bg-white border border-gray-100 shadow-sm')
+            )->class('items-start gap-0')
+        )->class('mb-4');
     }
 
     protected function inputSection()
     {
-        $inputId = 'ai-chat-input';
-        $buttonId = 'ai-send-btn';
-
-        $inputElements = [];
-
-        // Main input
-        $inputElements[] = _Input()
-            // ->resetAfterChange()
-            ->name('question')
-            ->placeholder($this->inputPlaceholder)
-            ->id($inputId)
-            ->class('flex-1 bg-transparent !mb-0 border-0 focus:ring-0 text-gray-800 placeholder-gray-400')
-            ->dontSubmitOnEnter()
-            ->onEnter->run($this->submitOnEnterScript($buttonId));
-
-        // Send button
-        $inputElements[] = _Button()
-            ->icon(_Sax('send-1', 20))
-            ->id($buttonId)
-            ->onClick(fn($q) => 
-                    $q->selfPost('addQuestion')
-                    ->withAllFormValues()
-                    ->inPanel('ai-chat-messages')
-                && $q->selfPost('askQuestion')
-                    ->withAllFormValues()
-                    ->inPanel('ai-chat-messages')
-            );
-
         return _Rows(
-            _Flex(...$inputElements)
-                ->class('flex items-center gap-2 px-4 py-3 bg-white border border-gray-200 rounded-2xl shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 transition-all duration-200')
+            _Flex(
+                _Input()->name('question')->placeholder($this->inputPlaceholder)->id('ai-input')
+                    ->class('flex-1 bg-transparent !mb-0 border-0 focus:ring-0 text-gray-800 placeholder-gray-400')
+                    ->dontSubmitOnEnter()
+                    ->onEnter->run("() => document.getElementById('ai-send-btn')?.click()"),
+                _Button()->icon(_Sax('send-1', 20))->id('ai-send-btn')
+                    ->selfPost('askQuestion')->withAllFormValues()->inPanel('ai-chat-messages')
+            )->class('flex items-center gap-2 px-4 py-3 bg-white border border-gray-200 rounded-2xl shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 transition-all')
         )->class('p-4 !pb-0 border-t border-gray-100 bg-gradient-to-t from-white via-white to-transparent');
     }
 
-    public function addQuestion()
+    // Action methods
+    public function askQuestion()
     {
-        $question = request('question');
-
-        if (empty(trim($question))) {
-            return $this->renderConversationHistory();
+        $question = trim(request('question') ?? '');
+        if (empty($question)) {
+            return $this->renderMessages();
         }
 
         // Add user message
-        $userMessage = AiChatMessage::user($question);
-        $this->addMessage($userMessage);
-
-        // Return messages with loading indicator (askQuestion will replace this)
-        return $this->renderConversationWithLoading();
-    }
-
-    /**
-     * Render conversation with loading indicator.
-     */
-    protected function renderConversationWithLoading()
-    {
-        $bubbleConfig = $this->getBubbleConfig();
-        $messages = [];
-
-        foreach ($this->messages as $message) {
-            $messages[] = $this->renderMessageBubble($message, $bubbleConfig);
-        }
-
-        // Add loading indicator
-        $messages[] = $this->renderLoadingBubble();
-
-        return _Rows(
-            _Hidden()->onLoad->run($this->scrollToBottomInstantScript()),
-            ...$messages
-        )->class('gap-y-4');
-    }
-
-    /**
-     * Render beautiful loading bubble with animated typing dots.
-     */
-    protected function renderLoadingBubble()
-    {
-        $loadingHtml = <<<'HTML'
-            <div class="ai-typing-indicator flex items-center gap-1.5 py-1">
-                <span class="ai-dot"></span>
-                <span class="ai-dot"></span>
-                <span class="ai-dot"></span>
-            </div>
-            <style>
-                .ai-typing-indicator .ai-dot {
-                    width: 8px;
-                    height: 8px;
-                    background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
-                    border-radius: 50%;
-                    animation: ai-bounce 1.4s ease-in-out infinite;
-                }
-                .ai-typing-indicator .ai-dot:nth-child(1) { animation-delay: 0s; }
-                .ai-typing-indicator .ai-dot:nth-child(2) { animation-delay: 0.2s; }
-                .ai-typing-indicator .ai-dot:nth-child(3) { animation-delay: 0.4s; }
-                @keyframes ai-bounce {
-                    0%, 60%, 100% {
-                        transform: translateY(0);
-                        opacity: 0.4;
-                    }
-                    30% {
-                        transform: translateY(-10px);
-                        opacity: 1;
-                    }
-                }
-            </style>
-        HTML;
-
-        return _Flex(
-            _Html($this->getLoadingAvatar())->class('mr-3 flex-shrink-0'),
-            _Rows(
-                _Html($loadingHtml)
-            )->class('px-4 py-3 rounded-2xl rounded-tl-md bg-white border border-gray-100 shadow-sm min-w-[60px]')
-        )->class('items-start');
-    }
-
-    /**
-     * Get avatar for loading bubble.
-     */
-    protected function getLoadingAvatar(): string
-    {
-        return <<<'HTML'
-            <span class="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-fuchsia-500 flex items-center justify-center shadow-sm animate-pulse">
-                <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
-                </svg>
-            </span>
-        HTML;
-    }
-
-    /**
-     * Instant scroll to bottom (no delay).
-     */
-    protected function scrollToBottomInstantScript(): string
-    {
-        return <<<'JS'
-            () => {
-                const container = document.getElementById('ai-chat-messages');
-                if (container) {
-                    container.scrollTop = container.scrollHeight;
-                }
-            }
-        JS;
-    }
-    
-    public function askQuestion()
-    {
-        $question = request('question');
-
-        if (empty(trim($question))) {
-            return $this->renderConversationHistory();
-        }
+        $this->addMessage(AiChatMessage::user($question));
 
         try {
-            // Use askWithHistory if there's conversation history
-            if ($this->hasMessages() && count($this->messages) > 1) {
-                $response = $this->chatService->askWithHistory(
-                    $question,
-                    $this->messages,
-                    $this->getServiceConfig()
-                );
-            } else {
-                $response = $this->chatService->ask($question, $this->getServiceConfig());
-            }
+            $response = count($this->messages) > 1
+                ? $this->chatService->askWithHistory($question, $this->messages, ['style' => 'friendly'])
+                : $this->chatService->ask($question, ['style' => 'friendly']);
             $this->addMessage($response);
         } catch (\Exception $e) {
-            \Log::error('AI Chat Modal error', ['error' => $e->getMessage()]);
-            $errorMessage = AiChatMessage::assistant(
-                'I encountered an error processing your request. Please try again.',
-                \Condoedge\Ai\Services\Chat\AiChatResponseData::error($e->getMessage())
-            );
-            $this->addMessage($errorMessage);
+            \Log::error('AI Chat error', ['error' => $e->getMessage()]);
+            $this->addMessage(AiChatMessage::assistant('I encountered an error. Please try again.'));
         }
 
-        // Return with instant scroll
-        return $this->renderConversationHistoryWithInstantScroll();
-    }
-
-    /**
-     * Render conversation history with instant scroll.
-     */
-    protected function renderConversationHistoryWithInstantScroll()
-    {
-        if (!$this->hasMessages()) {
-            return $this->renderWelcome();
-        }
-
-        $bubbleConfig = $this->getBubbleConfig();
-        $messages = [];
-
-        foreach ($this->messages as $message) {
-            $messages[] = $this->renderMessageBubble($message, $bubbleConfig);
-        }
-
-        return _Rows(
-            _Hidden()->onLoad->run($this->scrollToBottomInstantScript()),
-            ...$messages
-        )->class('gap-y-4');
-    }
-    protected function submitOnEnterScript(string $buttonId): string
-    {
-        return <<<JS
-            () => {
-                const btn = document.getElementById('{$buttonId}');
-                if (btn && !btn.disabled) btn.click();
-            }
-        JS;
-    }
-
-    protected function clearInputScript(string $inputId): string
-    {
-        return <<<JS
-            () => {
-                const input = document.getElementById('{$inputId}');
-                if (input) {
-                    input.value = '';
-                    input.dispatchEvent(new Event('input'));
-                }
-            }
-        JS;
-    }
-
-    /**
-     * Get configuration for message bubbles.
-     */
-    protected function getBubbleConfig(): array
-    {
-        return [
-            'show_avatar' => $this->showAvatars,
-            'show_timestamp' => $this->showTimestamps,
-            'show_metrics' => $this->showMetrics,
-            'enable_copy' => $this->enableCopy,
-            'enable_feedback' => $this->enableFeedback,
-            'enable_markdown' => $this->enableMarkdown,
-            'show_suggestions' => $this->showSuggestions,
-            'max_suggestions' => $this->maxSuggestions,
-            'panel_id' => 'ai-chat-messages',
-        ];
+        return $this->renderMessages();
     }
 
     public function clearChat()
     {
-        $this->clearHistory();
-        return $this->renderConversationHistory();
+        $this->messages = [];
+        session()->forget($this->sessionKey());
+        return $this->renderMessages();
     }
 
-    public function submitFeedback()
+    // History management
+    protected function loadHistory()
     {
-        $messageId = request('message_id');
-        $feedback = request('feedback');
-
-        \Log::info('AI Chat feedback', [
-            'message_id' => $messageId,
-            'feedback' => $feedback,
-            'user_id' => auth()->id(),
-        ]);
-
-        return null;
+        $history = session($this->sessionKey(), []);
+        $this->messages = array_map(fn($d) => AiChatMessage::fromArray($d), $history);
+        if (count($this->messages) > $this->maxMessages) {
+            $this->messages = array_slice($this->messages, -$this->maxMessages);
+            $this->saveHistory();
+        }
     }
 
-    protected function getHeaderAvatar(): string
+    protected function saveHistory()
     {
-        return <<<'HTML'
-            <span class="relative">
-                <span class="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-fuchsia-500 flex items-center justify-center shadow-md">
-                    <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
-                    </svg>
-                </span>
-                <span class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-white"></span>
-            </span>
-        HTML;
+        session([$this->sessionKey() => array_map(fn($m) => $m->toArray(), $this->messages)]);
     }
 
-    protected function scrollToBottomScript(): string
+    protected function addMessage(AiChatMessage $msg)
     {
-        return <<<'JS'
-            () => {
-                const container = document.getElementById('ai-chat-messages');
-                if (container) {
-                    setTimeout(() => {
-                        container.scrollTop = container.scrollHeight;
-                    }, 100);
-                }
-            }
-        JS;
+        $this->messages[] = $msg;
+        if (count($this->messages) > $this->maxMessages) {
+            $this->messages = array_slice($this->messages, -$this->maxMessages);
+        }
+        $this->saveHistory();
+    }
+
+    protected function hasMessages(): bool
+    {
+        return !empty($this->messages);
+    }
+
+    protected function sessionKey(): string
+    {
+        $userId = auth()->id() ?? 'guest';
+        return "ai_chat_{$userId}";
+    }
+
+    // Helpers
+    protected function renderMarkdown(string $text): string
+    {
+        $text = e($text);
+        $text = preg_replace('/```(\w+)?\n(.*?)\n```/s', '<pre class="bg-gray-900 text-gray-100 p-3 rounded-lg overflow-x-auto text-sm my-2"><code>$2</code></pre>', $text);
+        $text = preg_replace('/`([^`]+)`/', '<code class="bg-gray-100 text-indigo-600 px-1.5 py-0.5 rounded text-sm">$1</code>', $text);
+        $text = preg_replace('/\*\*(.+?)\*\*/', '<strong>$1</strong>', $text);
+        $text = preg_replace('/\*(.+?)\*/', '<em>$1</em>', $text);
+        $text = preg_replace('/^- (.+)$/m', '<li class="ml-4 list-disc">$1</li>', $text);
+        return nl2br($text);
+    }
+
+    protected function scrollScript(): string
+    {
+        return "() => { const c = document.getElementById('ai-chat-messages'); if (c) c.scrollTop = c.scrollHeight; }";
+    }
+
+    // Avatar HTML
+    protected function avatarHtml(): string
+    {
+        return '<span class="relative"><span class="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-fuchsia-500 flex items-center justify-center shadow-md"><svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg></span><span class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-white"></span></span>';
+    }
+
+    protected function welcomeAvatarHtml(): string
+    {
+        return '<div class="relative"><div class="absolute inset-0 rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-fuchsia-500 opacity-30 blur-lg"></div><div class="relative w-20 h-20 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-fuchsia-500 flex items-center justify-center shadow-lg"><svg class="w-10 h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg></div><div class="absolute -bottom-1 -right-1 w-6 h-6 bg-emerald-500 rounded-full border-2 border-white flex items-center justify-center"><span class="w-2 h-2 bg-white rounded-full"></span></div></div>';
+    }
+
+    protected function userAvatarHtml(): string
+    {
+        $initial = strtoupper(substr(auth()->user()?->name ?? 'U', 0, 1));
+        return '<span class="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white flex items-center justify-center text-sm font-semibold shadow-sm">' . $initial . '</span>';
+    }
+
+    protected function assistantAvatarHtml(): string
+    {
+        return '<span class="w-9 h-9 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 text-white flex items-center justify-center shadow-sm"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg></span>';
     }
 }

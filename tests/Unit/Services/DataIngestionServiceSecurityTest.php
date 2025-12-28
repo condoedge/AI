@@ -19,7 +19,7 @@ class DataIngestionServiceSecurityTest extends TestCase
     private $embeddingProvider;
     private DataIngestionService $service;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 

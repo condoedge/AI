@@ -27,7 +27,7 @@
 The AI package transforms natural language questions into executable Neo4j Cypher queries using RAG-powered LLMs. It automatically discovers entity configurations from your existing Eloquent models, eliminating manual setup while maintaining dual-storage synchronization between Neo4j (graph relationships) and Qdrant (vector embeddings).
 
 **Core Value Proposition:**
-- Zero configuration for most use cases (convention over configuration)
+- Simple setup: Run `ai:discover` once to generate configuration
 - Automatic discovery from Eloquent models - no duplication
 - Dual-storage coordination with consistency guarantees
 - Production-ready security (injection protection, retry logic, circuit breakers)
@@ -184,7 +184,9 @@ Eliminates duplication by extracting entity configuration directly from your mod
 - **Embed Fields**: Text fields automatically identified for vector embeddings
 - **Aliases**: Generated from table names for semantic matching
 
-**Three-tier fallback**: Explicit config > Legacy config file > Auto-discovery
+**Configuration priority**: `nodeableConfig()` method > `config/entities.php`
+
+**Note:** You must run `php artisan ai:discover` to generate configuration. There is no runtime auto-discovery.
 
 ### Dual-Storage Coordination
 
@@ -783,17 +785,21 @@ php artisan ai:discover --dry-run
 
 **What it does:**
 - Scans `app/Models` for classes implementing `Nodeable`
+- Resolves model inheritance (merges child models into parents)
 - Analyzes models to discover:
   - Neo4j label, properties, relationships
   - Qdrant collection, embed fields
   - Aliases for natural language queries
-  - Eloquent scopes for Cypher conversion
+  - Eloquent scopes converted to Cypher patterns
 - Generates/merges `config/entities.php`
 
+**Important:** This command is **required**. There is no runtime auto-discovery.
+
 **When to run:**
-- Initial setup
+- Initial setup (required before using AI features)
 - After adding new Nodeable models
 - After changing model structure (new columns, relationships, scopes)
+- During CI/CD deployment
 
 ### `php artisan ai:ingest`
 
@@ -934,10 +940,11 @@ $this->app->singleton(GraphStoreInterface::class, ArangoDbStore::class);
 
 **Auto-Discovery Benefits:**
 
-- Single source of truth (Eloquent model)
+- Single source of truth (Eloquent model analyzed at discover time)
 - Zero duplication
-- Automatic updates when models change
+- Version-controlled configuration (`config/entities.php`)
 - Laravel philosophy: Convention over configuration
+- Re-run `ai:discover` after model changes to update
 
 **Escape Hatch**: Override via `nodeableConfig()` method when needed
 

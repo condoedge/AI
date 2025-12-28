@@ -9,7 +9,7 @@ class SensibleColumnsDiscoveryTest extends TestCase
 {
     private EntityAutoDiscovery $discovery;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
         $this->discovery = app(EntityAutoDiscovery::class);

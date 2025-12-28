@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class NodeableConfigTest extends TestCase
 {
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 

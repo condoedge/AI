@@ -34,46 +34,28 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Auto-Discovery Configuration
+    | Discovery Configuration
     |--------------------------------------------------------------------------
     |
-    | Auto-discovery analyzes Eloquent models and generates entity configs.
+    | Discovery analyzes Eloquent models and generates entity configs.
     |
-    | Runtime auto-discovery is ENABLED by default for zero-config experience.
+    | IMPORTANT: There is NO runtime auto-discovery.
+    | You MUST run `php artisan ai:discover` to generate config/entities.php.
     |
     | Workflow:
-    |   1. Run: php artisan ai:discover (optional - generates warm cache)
+    |   1. Run: php artisan ai:discover
     |   2. Review generated config/entities.php
     |   3. Customize as needed
-    |
-    | Runtime discovery is enabled by default (works without running discover).
-    | For production with many entities, run ai:discover for faster startup.
+    |   4. Re-run ai:discover after model changes
     |
     */
-    'auto_discovery' => [
-        // Enable auto-discovery command (php artisan ai:discover)
-        'enabled' => env('AI_AUTO_DISCOVERY_ENABLED', true),
-
-        // Enable runtime auto-discovery (default: true)
-        // Works automatically without running ai:discover command.
-        // Set to false in production for faster startup (requires config/entities.php)
-        'runtime_enabled' => env('AI_AUTO_DISCOVERY_RUNTIME', true),
-
-        // Cache discovered configurations
-        'cache' => [
-            'enabled' => env('AI_AUTO_DISCOVERY_CACHE', true),
-            'ttl' => env('AI_AUTO_DISCOVERY_CACHE_TTL', 3600), // 1 hour
-            'prefix' => 'ai.discovery.',
-        ],
-
-        // What to auto-discover
-        'discover' => [
-            'properties' => true,
-            'relationships' => true,
-            'scopes' => true,
-            'aliases' => true,
-            'embed_fields' => true,
-        ],
+    'discovery' => [
+        // What to discover
+        'properties' => true,
+        'relationships' => true,
+        'scopes' => true,
+        'aliases' => true,
+        'embed_fields' => true,
 
         // Customization
         'alias_mappings' => [
@@ -85,8 +67,6 @@ return [
         'exclude_properties' => [
             // Additional properties to exclude from discovery
             // (password, tokens, etc. are excluded by default)
-            // 'internal_notes',
-            // 'admin_only_field',
         ],
 
         // Role mappings for auto-generating traversal scopes
@@ -99,15 +79,6 @@ return [
             //         4 => 'scouts',
             //         5 => 'parents',
             //         6 => 'leaders',
-            //     ],
-            // ],
-            //
-            // Example: Order status mappings
-            // 'Order' => [
-            //     'status' => [
-            //         'pending' => 'pending_orders',
-            //         'completed' => 'completed_orders',
-            //         'cancelled' => 'cancelled_orders',
             //     ],
             // ],
         ],

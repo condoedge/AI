@@ -57,6 +57,7 @@ use Condoedge\Ai\Services\Discovery\AliasGenerator;
 use Condoedge\Ai\Services\Discovery\EmbedFieldDetector;
 use Condoedge\Ai\Services\Discovery\TraversalScopeGenerator;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
+use Condoedge\Ai\Services\Discovery\InheritanceResolver;
 use Condoedge\Utils\Models\Files\File;
 use Condoedge\Ai\Models\Plugins\FileProcessingPlugin;
 
@@ -432,6 +433,9 @@ class AiServiceProvider extends ServiceProvider
         // Register TraversalScopeGenerator
         $this->app->singleton(TraversalScopeGenerator::class);
 
+        // Register InheritanceResolver
+        $this->app->singleton(InheritanceResolver::class);
+
         // Register EntityAutoDiscovery
         $this->app->singleton(EntityAutoDiscovery::class, function ($app) {
             return new EntityAutoDiscovery(
@@ -441,7 +445,8 @@ class AiServiceProvider extends ServiceProvider
                 properties: $app->make(PropertyDiscoverer::class),
                 aliases: $app->make(AliasGenerator::class),
                 embedFields: $app->make(EmbedFieldDetector::class),
-                traversalGenerator: $app->make(TraversalScopeGenerator::class)
+                traversalGenerator: $app->make(TraversalScopeGenerator::class),
+                inheritanceResolver: $app->make(InheritanceResolver::class)
             );
         });
     }
@@ -564,6 +569,7 @@ class AiServiceProvider extends ServiceProvider
             AliasGenerator::class,
             EmbedFieldDetector::class,
             EntityAutoDiscovery::class,
+            InheritanceResolver::class,
             AiChatServiceInterface::class,
             AiChatService::class,
         ];

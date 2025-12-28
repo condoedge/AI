@@ -10,7 +10,7 @@ use Mockery;
 
 class PromptContextBuilderTest extends TestCase
 {
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 

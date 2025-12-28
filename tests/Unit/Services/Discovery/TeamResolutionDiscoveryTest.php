@@ -10,7 +10,7 @@ class TeamResolutionDiscoveryTest extends TestCase
 {
     private EntityAutoDiscovery $discovery;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
         $this->discovery = app(EntityAutoDiscovery::class);
@@ -24,12 +24,7 @@ class TeamResolutionDiscoveryTest extends TestCase
             protected $fillable = ['name', 'team_id'];
         };
 
-        // Use reflection to call protected method
-        $reflection = new \ReflectionClass($this->discovery);
-        $method = $reflection->getMethod('discoverSecurityConfig');
-        $method->setAccessible(true);
-
-        $config = $method->invoke($this->discovery, $model);
+        $config = $this->callDiscoverSecurityConfig($model);
 
         $this->assertEquals('team_id', $config['team_resolution']);
     }
@@ -43,12 +38,7 @@ class TeamResolutionDiscoveryTest extends TestCase
             protected $TEAM_ID_COLUMN = 'organization_id';
         };
 
-        // Use reflection to call protected method
-        $reflection = new \ReflectionClass($this->discovery);
-        $method = $reflection->getMethod('discoverSecurityConfig');
-        $method->setAccessible(true);
-
-        $config = $method->invoke($this->discovery, $model);
+        $config = $this->callDiscoverSecurityConfig($model);
 
         $this->assertEquals('organization_id', $config['team_resolution']);
     }
@@ -70,12 +60,7 @@ class TeamResolutionDiscoveryTest extends TestCase
             }
         };
 
-        // Use reflection to call protected method
-        $reflection = new \ReflectionClass($this->discovery);
-        $method = $reflection->getMethod('discoverSecurityConfig');
-        $method->setAccessible(true);
-
-        $config = $method->invoke($this->discovery, $model);
+        $config = $this->callDiscoverSecurityConfig($model);
 
         $this->assertEquals('method:securityRelatedTeamIds', $config['team_resolution']);
         $this->assertTrue($config['multiple_teams']);
@@ -93,13 +78,40 @@ class TeamResolutionDiscoveryTest extends TestCase
             }
         };
 
-        // Use reflection to call protected method
+        $config = $this->callDiscoverSecurityConfig($model);
+
+        $this->assertEquals('scope:securityForTeams', $config['team_query_scope']);
+    }
+
+    /** @test */
+    public function it_discovers_owner_bypass_method(): void
+    {
+        $model = new class extends \Illuminate\Database\Eloquent\Model {
+            protected $table = 'persons';
+
+            public function usersIdsAllowedToManage()
+            {
+                return [$this->user_id];
+            }
+        };
+
+        $config = $this->callDiscoverSecurityConfig($model);
+
+        $this->assertTrue($config['has_owner_bypass']);
+    }
+
+    /**
+     * Helper method to call protected discoverSecurityConfig method
+     *
+     * @param \Illuminate\Database\Eloquent\Model $model
+     * @return array
+     */
+    private function callDiscoverSecurityConfig($model): array
+    {
         $reflection = new \ReflectionClass($this->discovery);
         $method = $reflection->getMethod('discoverSecurityConfig');
         $method->setAccessible(true);
 
-        $config = $method->invoke($this->discovery, $model);
-
-        $this->assertEquals('scope:securityForTeams', $config['team_query_scope']);
+        return $method->invoke($this->discovery, $model);
     }
 }

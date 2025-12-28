@@ -11,7 +11,7 @@ class AccessLevelResolverTest extends TestCase
 {
     private AccessLevelResolver $resolver;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
         $this->resolver = new AccessLevelResolver();

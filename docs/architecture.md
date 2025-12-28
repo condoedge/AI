@@ -1,90 +1,177 @@
-# Condoedge AI Package - Architecture Documentation
+# Condoedge AI Package - Complete Architecture
 
-> Complete technical guide for developers working with the AI package.
+> Technical guide with diagrams for understanding the AI package flow.
 
 ---
 
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [The 6 Phases](#the-6-phases)
-3. [Phase 1: Configuration](#phase-1-configuration)
-4. [Phase 2: Ingestion](#phase-2-ingestion)
-5. [Phase 3: Context Retrieval](#phase-3-context-retrieval)
-6. [Phase 4: Prompt Building](#phase-4-prompt-building)
-7. [Phase 5: Query Generation](#phase-5-query-generation)
-8. [Phase 6: Response](#phase-6-response)
-9. [Code Structure](#code-structure)
-10. [Developer Quick Start](#developer-quick-start)
+1. [Overview - The Complete Flow](#overview---the-complete-flow)
+2. [Phase 1: Configuration](#phase-1-configuration)
+3. [Phase 2: Ingestion](#phase-2-ingestion)
+4. [Phase 3: Context Retrieval](#phase-3-context-retrieval)
+5. [Phase 4: Prompt Building](#phase-4-prompt-building)
+6. [Phase 5: Query Generation](#phase-5-query-generation)
+7. [Phase 6: Response](#phase-6-response)
+8. [Code Structure](#code-structure)
+9. [Developer Guide](#developer-guide)
 
 ---
 
-## Overview
-
-The AI package enables natural language queries against your Laravel application data using:
-- **Neo4j** for graph relationships and scope patterns
-- **Qdrant** for semantic vector search
-- **LLMs** (Claude/GPT) for query generation and response formatting
+## Overview - The Complete Flow
 
 ```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│ CONFIGURE   │───▶│   INGEST    │───▶│   QUERY     │
-│ (One-time)  │    │ (Sync/Batch)│    │(Per Request)│
-└─────────────┘    └─────────────┘    └─────────────┘
-      │                   │                  │
-      ▼                   ▼                  ▼
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│ Model props │    │ Neo4j nodes │    │ Context     │
-│ nodeableConfig│  │ Qdrant vecs │    │ Prompt      │
-│ entities.php│    │ Scope index │    │ Query → Ans │
-└─────────────┘    └─────────────┘    └─────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           AI PACKAGE COMPLETE FLOW                               │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│   PHASE 1        │    │   PHASE 2        │    │   PHASE 3        │
+│  CONFIGURATION   │───▶│   INGESTION      │───▶│ CONTEXT RETRIEVAL│
+│  (One-time)      │    │  (Sync/Batch)    │    │  (Per Question)  │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ • ai:discover    │    │ • Neo4j nodes    │    │ • Semantic search│
+│ • entities.php   │    │ • Neo4j rels     │    │ • Graph traversal│
+│ • Model props    │    │ • Qdrant vectors │    │ • Access filter  │
+│ • nodeableConfig │    │ • Scope patterns │    │ • Entity detect  │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+                                                         │
+         ┌───────────────────────────────────────────────┘
+         ▼
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│   PHASE 4        │    │   PHASE 5        │    │   PHASE 6        │
+│ PROMPT BUILDING  │───▶│ QUERY GENERATION │───▶│    RESPONSE      │
+│                  │    │                  │    │                  │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ • System prompt  │    │ • LLM generates  │    │ • Execute query  │
+│ • Context inject │    │   Cypher/SQL     │    │ • Filter results │
+│ • Access tags    │    │ • Pattern match  │    │ • LLM formats    │
+│ • Thresholds     │    │ • Scope resolve  │    │ • Return answer  │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
 ```
-
----
-
-## The 6 Phases
-
-| Phase | Name | When | Purpose |
-|-------|------|------|---------|
-| 1 | Configuration | Setup | Define how entities are structured |
-| 2 | Ingestion | Sync/Batch | Populate Neo4j and Qdrant |
-| 3 | Context Retrieval | Per Question | Find relevant data |
-| 4 | Prompt Building | Per Question | Build LLM prompt |
-| 5 | Query Generation | Per Question | LLM generates query |
-| 6 | Response | Per Question | Execute, filter, format |
 
 ---
 
 ## Phase 1: Configuration
 
-**Purpose:** Define how your Eloquent models integrate with the AI system.
+**Purpose:** Define how entities are configured for the AI system.
 
-### Configuration Resolution Order (Layered)
+### The Configuration Flow
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                  CONFIG RESOLUTION                       │
-│              (later layers override earlier)             │
-└─────────────────────────────────────────────────────────┘
-                           │
-     ┌─────────────────────┼─────────────────────┐
-     ▼                     ▼                     ▼
-┌──────────┐        ┌──────────────┐      ┌────────────┐
-│ Layer 1  │        │   Layer 2    │      │  Layer 3   │
-│ Model    │   +    │ nodeableConfig│  +  │entities.php│
-│Properties│        │   Method     │      │  (Legacy)  │
-└──────────┘        └──────────────┘      └────────────┘
-     │                     │                     │
-     └─────────────────────┼─────────────────────┘
-                           ▼
-                ┌─────────────────────┐
-                │     Layer 4         │
-                │  Auto-Discovery     │
-                │ (fills missing)     │
-                └─────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         PHASE 1: CONFIGURATION                                   │
+│                    "How entity config is resolved"                               │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+                    ┌─────────────────────────────────────┐
+                    │      php artisan ai:discover        │
+                    │    (Scans models, runs discovery)   │
+                    └─────────────────────────────────────┘
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │       config/entities.php           │
+                    │      ═══════════════════════        │
+                    │      WARM CACHE (Primary Source)    │
+                    │                                     │
+                    │  • Generated by ai:discover         │
+                    │  • Can be edited by developer       │
+                    │  • Re-generated when needed         │
+                    │  • SOURCE OF TRUTH storage          │
+                    └─────────────────────────────────────┘
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │         resolveConfig()             │
+                    │    (HasNodeableConfig trait)        │
+                    └─────────────────────────────────────┘
+                                     │
+                    ┌────────────────┼────────────────┐
+                    ▼                ▼                ▼
+           ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+           │   STEP 1     │ │   STEP 2     │ │   STEP 3     │
+           │ nodeableConfig│ │ entities.php │ │ Runtime Disc │
+           │  (Override)  │ │ (Warm Cache) │ │  (Fallback)  │
+           └──────────────┘ └──────────────┘ └──────────────┘
+                    │                │                │
+                    │   If defined   │  If not found  │  If nothing
+                    │   by developer │   in step 1    │   in cache
+                    ▼                ▼                ▼
+           ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+           │ Use override │ │ Read from    │ │ Auto-discover│
+           │ directly     │ │ entities.php │ │ at runtime   │
+           └──────────────┘ └──────────────┘ └──────────────┘
+                    │                │                │
+                    └────────────────┼────────────────┘
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │          STEP 4: Merge              │
+                    │    Model Properties on Top          │
+                    │                                     │
+                    │  $embedFields, $graphLabel, etc.    │
+                    │  (Quick tweaks without editing      │
+                    │   the cache file)                   │
+                    └─────────────────────────────────────┘
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │       FINAL MERGED CONFIG           │
+                    │  GraphConfig + VectorConfig +       │
+                    │  SecurityConfig + Metadata          │
+                    └─────────────────────────────────────┘
 ```
 
-### Layer 1: Model Properties (Convention-Based)
+### Resolution Priority
+
+| Priority | Source | When Used |
+|----------|--------|-----------|
+| 1 | `nodeableConfig()` method | Developer explicitly overrides |
+| 2 | `config/entities.php` | Warm cache exists (from ai:discover) |
+| 3 | Runtime auto-discovery | Nothing in cache |
+| 4 | Model properties | Always merged on top for quick tweaks |
+
+### Example: entities.php (Warm Cache)
+
+```php
+// config/entities.php - Generated by ai:discover, editable
+
+return [
+    'App\\Models\\Person' => [
+        'graph' => [
+            'label' => 'Person',
+            'properties' => ['id', 'name', 'bio', 'email'],
+            'relationships' => [
+                ['name' => 'teams', 'type' => 'HAS_TEAM', 'target' => 'Team'],
+            ],
+        ],
+        'vector' => [
+            'collection' => 'persons',
+            'embed_fields' => ['name', 'bio'],
+        ],
+        'security' => [
+            'sensible_columns' => ['ssn', 'salary'],
+            'team_resolution' => 'team_id',
+        ],
+        'scopes' => [
+            'active' => [
+                'cypher_pattern' => 'MATCH (n:Person) WHERE n.status = "active"',
+            ],
+            'volunteers' => [
+                'cypher_pattern' => 'MATCH (n:Person)-[:HAS_TEAM]->(t) WHERE t.role_type = 3',
+            ],
+        ],
+    ],
+];
+```
+
+### Example: Model with Properties (Quick Tweaks)
 
 ```php
 class Person extends Model implements Nodeable
@@ -93,131 +180,96 @@ class Person extends Model implements Nodeable
 
     protected $fillable = ['name', 'bio', 'email', 'ssn'];
 
-    // Convention-based properties (optional)
-    protected array $embedFields = ['name', 'bio'];        // For vector search
-    protected string $graphLabel = 'Person';               // Neo4j node label
-    protected array $sensibleColumns = ['ssn', 'salary'];  // Access-controlled
-    protected array $nodeableAliases = ['person', 'people', 'individual'];
-    protected array $graphRelationships = [
-        ['name' => 'teams', 'type' => 'HAS_TEAM', 'target' => 'Team'],
-    ];
+    // These MERGE on top of entities.php config
+    protected array $embedFields = ['name', 'bio'];       // Override embed fields
+    protected array $sensibleColumns = ['ssn', 'salary']; // Override sensitive cols
+
+    // Scopes are auto-discovered
+    public function scopeVolunteers($query)
+    {
+        return $query->whereHas('personTeams', fn($q) => $q->volunteer());
+    }
 }
 ```
 
-**Supported Properties:**
-
-| Property | Type | Purpose |
-|----------|------|---------|
-| `$embedFields` | `array` | Fields to embed for semantic search |
-| `$graphLabel` | `string` | Neo4j node label (defaults to class name) |
-| `$sensibleColumns` | `array` | Columns requiring special permission |
-| `$nodeableAliases` | `array` | Alternative names for entity detection |
-| `$graphRelationships` | `array` | Explicit relationship definitions |
-
-### Layer 2: nodeableConfig() Method (Explicit Override)
+### Example: nodeableConfig() Override (Full Control)
 
 ```php
 class Person extends Model implements Nodeable
 {
     use HasNodeableConfig;
 
+    // Full override - entities.php is ignored for this model
     public function nodeableConfig(): array
     {
         return [
             'graph' => [
-                'label' => 'Person',
-                'properties' => ['id', 'name', 'bio', 'email'],
-                'relationships' => [
-                    [
-                        'name' => 'teams',
-                        'type' => 'HAS_TEAM',
-                        'target_entity' => 'Team',
-                        'foreign_key' => 'team_id',
-                    ],
-                ],
+                'label' => 'CustomPerson',
+                'properties' => ['id', 'full_name', 'description'],
             ],
             'vector' => [
-                'collection' => 'persons',
-                'embed_fields' => ['name', 'bio'],
-            ],
-            'security' => [
-                'sensible_columns' => ['ssn', 'salary'],
-                'team_resolution' => 'team_id',
-            ],
-            'metadata' => [
-                'aliases' => ['person', 'people'],
-                'description' => 'A person in the system',
+                'collection' => 'people_vectors',
+                'embed_fields' => ['full_name', 'description'],
             ],
         ];
     }
 }
 ```
 
-### Layer 3: config/entities.php (Legacy/Global)
-
-```php
-// config/entities.php
-return [
-    'Person' => [
-        'graph' => [
-            'label' => 'Person',
-            'properties' => ['id', 'name', 'bio'],
-        ],
-        'vector' => [
-            'embed_fields' => ['name', 'bio'],
-        ],
-    ],
-];
-```
-
-### Layer 4: Auto-Discovery (Runtime)
-
-When enabled, automatically discovers:
-- Properties from `$fillable`, `$casts`, etc.
-- Relationships from `belongsTo()`, `hasMany()`, etc.
-- Scopes like `scopeActive()`, `scopeVolunteers()`
-
-```php
-// config/ai.php
-'auto_discovery' => [
-    'runtime_enabled' => true,  // Enable for zero-config
-],
-```
-
 ---
 
 ## Phase 2: Ingestion
 
-**Purpose:** Populate Neo4j with nodes/relationships and Qdrant with embeddings.
-
-### Data Flow
+**Purpose:** Populate Neo4j with graph data and Qdrant with embeddings.
 
 ```
-┌─────────────┐         ┌─────────────┐         ┌─────────────┐
-│   Model     │────────▶│   Neo4j     │         │   Qdrant    │
-│  (Person)   │         │  (Graph)    │         │  (Vectors)  │
-└─────────────┘         └─────────────┘         └─────────────┘
-       │                       │                       │
-       ▼                       ▼                       ▼
-┌─────────────┐         ┌─────────────┐         ┌─────────────┐
-│ Properties  │         │ (:Person    │         │ collection: │
-│ - id: 1     │         │  {id: 1,    │         │  persons    │
-│ - name: John│         │   name: ... │         │             │
-│ - bio: ...  │         │  })         │         │ vector[1536]│
-└─────────────┘         └─────────────┘         └─────────────┘
-       │                       │
-       ▼                       ▼
-┌─────────────┐         ┌─────────────┐
-│Relationships│         │ Relationships│
-│ - teams()   │────────▶│ -[:HAS_TEAM]│
-│ - roles()   │         │ -[:HAS_ROLE]│
-└─────────────┘         └─────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           PHASE 2: INGESTION                                     │
+│                    "Populating Neo4j and Qdrant"                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+                         ┌──────────────────┐
+                         │  Nodeable Model  │
+                         │  (Person, Event) │
+                         └────────┬─────────┘
+                                  │
+                    ┌─────────────┴─────────────┐
+                    ▼                           ▼
+         ┌─────────────────────┐     ┌─────────────────────┐
+         │   GRAPH INGESTION   │     │  VECTOR INGESTION   │
+         │      (Neo4j)        │     │     (Qdrant)        │
+         └─────────────────────┘     └─────────────────────┘
+                    │                           │
+    ┌───────────────┼───────────────┐           │
+    ▼               ▼               ▼           ▼
+┌────────┐   ┌───────────┐   ┌──────────┐  ┌──────────────┐
+│ Step 1 │   │  Step 2   │   │  Step 3  │  │   Step 1     │
+│ Create │   │  Create   │   │  Index   │  │  Generate    │
+│ Nodes  │   │   Rels    │   │  Scopes  │  │  Embeddings  │
+└────────┘   └───────────┘   └──────────┘  └──────────────┘
+    │               │               │              │
+    ▼               ▼               ▼              ▼
+┌────────┐   ┌───────────┐   ┌──────────┐  ┌──────────────┐
+│(:Person│   │(:Person)  │   │ Scope:   │  │ embedFields: │
+│ {id:1, │   │    │      │   │ volunteer│  │ "John Doe    │
+│ name:  │   │[HAS_TEAM] │   │ ────────▶│  │  is a dev"   │
+│ "John"}│   │    │      │   │ Cypher:  │  │              │
+│)       │   │    ▼      │   │ MATCH... │  │ vector[1536] │
+└────────┘   │(:Team)    │   └──────────┘  └──────────────┘
+             └───────────┘          │              │
+                                    ▼              ▼
+                           ┌──────────────────────────────┐
+                           │      Step 2: Store in DB     │
+                           ├──────────────────────────────┤
+                           │ Neo4j: ai_entity_scopes      │
+                           │ Qdrant: persons collection   │
+                           └──────────────────────────────┘
 ```
 
 ### Commands
 
 ```bash
-# Discover entities and generate cache
+# Discover entities and generate config cache
 php artisan ai:discover
 
 # Create Neo4j nodes from entities
@@ -233,40 +285,72 @@ php artisan ai:index-scopes
 php artisan ai:index-semantic
 ```
 
-### Scope Discovery (Complex Scopes)
+### Scope Discovery (Complex Scopes with Nested Calls)
 
-The system automatically converts Eloquent scopes to Cypher patterns:
-
-```php
-// Your Eloquent scope
-public function scopeVolunteers($query)
-{
-    return $query->whereHas('personTeams', fn($q) => $q->volunteer());
-}
-
-public function scopeVolunteer($query)  // On PersonTeam model
-{
-    return $query->where('role_type', 3);
-}
 ```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         SCOPE DISCOVERY DEEP DIVE                                │
+│              "How complex scopes become Cypher patterns"                         │
+└─────────────────────────────────────────────────────────────────────────────────┘
 
-**Becomes this Cypher pattern:**
-
-```cypher
-MATCH (n:Person)-[:HAS_TEAM]->(t:PersonTeam)
-WHERE t.role_type = 3
-RETURN n
+                    ┌─────────────────────────────────────┐
+                    │         ELOQUENT SCOPE              │
+                    │  scopeHasVolunteerTeamOccupation()  │
+                    └─────────────────────────────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ public function scopeHasVolunteerTeamOccupation($query)                         │
+│ {                                                                                │
+│     return $query->whereHas('personTeams', fn($q) => $q->volunteer());          │
+│ }                                                                     ▲          │
+└──────────────────────────────────────────────────────────────────────│──────────┘
+                                     │                                  │
+                                     │                    Calls nested scope
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │      CypherScopeAdapter             │
+                    │   Executes scope with Spy          │
+                    └─────────────────────────────────────┘
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │    CypherQueryBuilderSpy            │
+                    │    Records: whereHas('personTeams') │
+                    └─────────────────────────────────────┘
+                                     │
+                    ┌────────────────┴────────────────┐
+                    ▼                                 ▼
+         ┌─────────────────────┐          ┌─────────────────────┐
+         │  Create nested spy  │          │  Callback executed  │
+         │  for PersonTeam     │          │  $q->volunteer()    │
+         └─────────────────────┘          └─────────────────────┘
+                                                    │
+                                                    ▼
+                                     ┌─────────────────────────────────────┐
+                                     │   __call() intercepts 'volunteer'   │
+                                     │                                     │
+                                     │  1. Get related model (PersonTeam)  │
+                                     │  2. Find scopeVolunteer() method    │
+                                     │  3. Execute with spy                │
+                                     │  4. Capture: where('role_type', 3)  │
+                                     └─────────────────────────────────────┘
+                                                    │
+                                                    ▼
+                    ┌─────────────────────────────────────┐
+                    │     CypherPatternGenerator          │
+                    │     Converts calls to Cypher        │
+                    └─────────────────────────────────────┘
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │        GENERATED CYPHER             │
+                    │                                     │
+                    │  MATCH (n:Person)-[:HAS_TEAM]->(t)  │
+                    │  WHERE t.role_type = 3              │
+                    │  RETURN n                           │
+                    └─────────────────────────────────────┘
 ```
-
-**How it works:**
-
-1. `CypherScopeAdapter` finds scope methods
-2. `CypherQueryBuilderSpy` records query builder calls
-3. For nested scopes (like `$q->volunteer()`), `__call()` resolves them:
-   - Gets related model from relationship
-   - Finds scope method on related model
-   - Executes with spy to capture calls
-4. `CypherPatternGenerator` converts calls to Cypher
 
 ---
 
@@ -274,56 +358,84 @@ RETURN n
 
 **Purpose:** Find relevant data for the user's question.
 
-### Flow
-
 ```
-"Show me all active volunteers"
-              │
-              ▼
-┌─────────────────────────────────────┐
-│      1. Entity Detection            │
-│  "volunteers" → Person, PersonTeam  │
-└─────────────────────────────────────┘
-              │
-      ┌───────┴───────┐
-      ▼               ▼
-┌──────────────┐ ┌──────────────┐
-│2A. Semantic  │ │2B. Scope     │
-│   Search     │ │   Matching   │
-│   (Qdrant)   │ │  (Patterns)  │
-└──────────────┘ └──────────────┘
-      │               │
-      │ Similar       │ Matched:
-      │ entities      │ scopeVolunteers
-      │               │ + Cypher
-      └───────┬───────┘
-              ▼
-┌─────────────────────────────────────┐
-│      3. Access Control Filter       │
-│  User permissions → Access Tags     │
-└─────────────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────────────┐
-│      4. Aggregate Pre-calculation   │
-│  - Total count: 150                 │
-│  - Team count: 45                   │
-│  - Filtered count: 12               │
-└─────────────────────────────────────┘
-```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                       PHASE 3: CONTEXT RETRIEVAL                                 │
+│                    "Finding relevant data for question"                          │
+└─────────────────────────────────────────────────────────────────────────────────┘
 
-### Access Control
-
-```php
-// AccessLevelResolver determines what user can see
-$resolver = new AccessLevelResolver();
-$tags = $resolver->resolveForEntity($user, 'Person');
-
-// Returns based on permissions:
-// Guest:     ['Person_global_count']
-// Team Mem:  ['Person_global_count', 'Person_team_count']
-// Has READ:  ['...', 'Person_team_filtered_count', 'Person_team_details']
-// Has sens:  ['...', 'Person_team_sensitive']
+                    ┌─────────────────────────────────────┐
+                    │         USER QUESTION               │
+                    │  "Show me all active volunteers"    │
+                    └─────────────────────────────────────┘
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │      STEP 1: ENTITY DETECTION       │
+                    │      (What entities involved?)      │
+                    └─────────────────────────────────────┘
+                                     │
+            ┌────────────────────────┼────────────────────────┐
+            ▼                        ▼                        ▼
+   ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+   │  Keyword Match  │     │  Alias Match    │     │  LLM Detection  │
+   │  "volunteers"   │     │  "people" →     │     │  (fallback)     │
+   │   → Person      │     │   Person        │     │                 │
+   └─────────────────┘     └─────────────────┘     └─────────────────┘
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │  DETECTED: [Person, PersonTeam]     │
+                    └─────────────────────────────────────┘
+                                     │
+              ┌──────────────────────┴──────────────────────┐
+              ▼                                             ▼
+┌───────────────────────────┐              ┌───────────────────────────┐
+│  STEP 2A: SEMANTIC SEARCH │              │  STEP 2B: SCOPE MATCHING  │
+│         (Qdrant)          │              │     (Pattern Library)     │
+└───────────────────────────┘              └───────────────────────────┘
+              │                                             │
+              ▼                                             ▼
+┌───────────────────────────┐              ┌───────────────────────────┐
+│ 1. Embed question         │              │ 1. Match "volunteers"     │
+│    → vector[1536]         │              │    to scope patterns      │
+│                           │              │                           │
+│ 2. Search Qdrant          │              │ 2. Find matching scope:   │
+│    collection: persons    │              │    scopeVolunteers        │
+│    limit: 10              │              │                           │
+│                           │              │ 3. Get Cypher pattern:    │
+│ 3. Return similar:        │              │    MATCH (n:Person)       │
+│    - Person(id:5) 0.89    │              │    -[:HAS_TEAM]->(t)      │
+│    - Person(id:12) 0.85   │              │    WHERE t.role_type = 3  │
+└───────────────────────────┘              └───────────────────────────┘
+              │                                             │
+              └──────────────────────┬──────────────────────┘
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │    STEP 3: ACCESS CONTROL FILTER    │
+                    │    (What can THIS user see?)        │
+                    └─────────────────────────────────────┘
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │      AccessLevelResolver            │
+                    └─────────────────────────────────────┘
+                                     │
+    ┌────────────────────────────────┼────────────────────────────────┐
+    ▼                                ▼                                ▼
+┌────────────┐              ┌────────────────┐              ┌────────────────┐
+│ User: null │              │ User: TeamMem  │              │ User: Admin    │
+│ (Guest)    │              │ (Basic access) │              │ (Full access)  │
+└────────────┘              └────────────────┘              └────────────────┘
+      │                              │                              │
+      ▼                              ▼                              ▼
+┌────────────┐              ┌────────────────┐              ┌────────────────┐
+│ Tags:      │              │ Tags:          │              │ Tags:          │
+│ • global_  │              │ • global_count │              │ • global_count │
+│   count    │              │ • team_count   │              │ • team_count   │
+│            │              │ • team_details │              │ • team_details │
+│            │              │                │              │ • team_sensitive│
+└────────────┘              └────────────────┘              └────────────────┘
 ```
 
 ### Access Levels
@@ -342,59 +454,62 @@ $tags = $resolver->resolveForEntity($user, 'Person');
 
 **Purpose:** Construct the LLM prompt with context and access rules.
 
-### Prompt Structure
-
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    SYSTEM PROMPT                         │
-├─────────────────────────────────────────────────────────┤
-│ You are an AI assistant with access control.            │
-│                                                          │
-│ IMPORTANT RULES:                                         │
-│ - Respect count thresholds                              │
-│ - Never reveal sensibleColumns without permission       │
-│ - Only access data within user's teams                  │
-└─────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│                    CONTEXT SECTION                       │
-├─────────────────────────────────────────────────────────┤
-│ <context>                                                │
-│   Semantic Results:                                      │
-│   - Person(id:5): "John Doe is a software developer"    │
-│   - Person(id:12): "Jane Smith works in marketing"      │
-│                                                          │
-│   Available Aggregates:                                  │
-│   - Total Persons: 150                                   │
-│   - Active Volunteers: 12                                │
-│                                                          │
-│   Matched Scopes:                                        │
-│   - volunteers: MATCH (n:Person)-[:HAS_TEAM]->(t)...    │
-│ </context>                                               │
-└─────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│                   ACCESS RULES SECTION                   │
-├─────────────────────────────────────────────────────────┤
-│ <access_rules>                                           │
-│   User Access Tags: [Person_team_details]               │
-│                                                          │
-│   THRESHOLD: 5                                           │
-│   If filtered count < 5, say "fewer than 5"             │
-│                                                          │
-│   RESTRICTED COLUMNS: [ssn, salary]                      │
-│   Never include these in responses                       │
-│ </access_rules>                                          │
-└─────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│                    USER MESSAGE                          │
-├─────────────────────────────────────────────────────────┤
-│ Show me all active volunteers                            │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                          PHASE 4: PROMPT BUILDING                                │
+│                    "Building the complete LLM prompt"                            │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+                    ┌─────────────────────────────────────┐
+                    │    FROM PHASE 3: CONTEXT READY      │
+                    │ • Semantic results                  │
+                    │ • Matched scopes                    │
+                    │ • Access tags                       │
+                    │ • Aggregates                        │
+                    └─────────────────────────────────────┘
+                                     │
+    ┌────────────────────────────────┼────────────────────────────────┐
+    ▼                                ▼                                ▼
+┌────────────────┐          ┌────────────────┐          ┌────────────────┐
+│ SYSTEM PROMPT  │          │ CONTEXT SECTION│          │ ACCESS RULES   │
+└────────────────┘          └────────────────┘          └────────────────┘
+         │                           │                           │
+         ▼                           ▼                           ▼
+┌────────────────┐          ┌────────────────┐          ┌────────────────┐
+│ You are an AI  │          │ <context>      │          │ <access_rules> │
+│ assistant with │          │ Semantic:      │          │ User has tags: │
+│ access control │          │ - Person(5)... │          │ - Person_team_ │
+│                │          │ - Person(12).. │          │   _details     │
+│ IMPORTANT:     │          │                │          │                │
+│ - Respect      │          │ Aggregates:    │          │ THRESHOLD: 5   │
+│   thresholds   │          │ - Total: 150   │          │ If count < 5   │
+│ - Never reveal │          │ - Team: 45     │          │ say "fewer     │
+│   sensibleCols │          │ - Active: 12   │          │ than 5"        │
+│   without perm │          │                │          │                │
+│                │          │ Scopes:        │          │ RESTRICTED:    │
+│                │          │ - volunteers   │          │ [ssn, salary]  │
+│                │          │   Cypher:...   │          │ Never include  │
+└────────────────┘          └────────────────┘          └────────────────┘
+         │                           │                           │
+         └───────────────────────────┼───────────────────────────┘
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │        COMPLETE PROMPT              │
+                    │  ┌─────────────────────────────┐   │
+                    │  │ [SYSTEM]: You are an AI...  │   │
+                    │  │                             │   │
+                    │  │ <context>                   │   │
+                    │  │   ...semantic results...   │   │
+                    │  │   ...aggregates...         │   │
+                    │  │ </context>                  │   │
+                    │  │                             │   │
+                    │  │ <access_rules>              │   │
+                    │  │   ...tags, thresholds...   │   │
+                    │  │ </access_rules>             │   │
+                    │  │                             │   │
+                    │  │ [USER]: Show me volunteers  │   │
+                    │  └─────────────────────────────┘   │
+                    └─────────────────────────────────────┘
 ```
 
 ---
@@ -403,30 +518,41 @@ $tags = $resolver->resolveForEntity($user, 'Person');
 
 **Purpose:** LLM generates the appropriate query based on context.
 
-### Decision Flow
-
 ```
-┌─────────────────────────────────────┐
-│         LLM Analyzes Request        │
-└─────────────────────────────────────┘
-                   │
-       ┌───────────┴───────────┐
-       ▼                       ▼
-┌──────────────┐        ┌──────────────┐
-│ Pattern Match│        │ Generate New │
-│ (Use Scope)  │        │   (Custom)   │
-└──────────────┘        └──────────────┘
-       │                       │
-       ▼                       ▼
-┌──────────────┐        ┌──────────────┐
-│ Found:       │        │ LLM generates│
-│scopeVolunteer│        │ Cypher:      │
-│              │        │              │
-│Use pre-indexed│       │ MATCH (p:Per-│
-│Cypher pattern│        │ son)-[:HAS_  │
-│              │        │ TEAM]->(t)   │
-│              │        │ WHERE ...    │
-└──────────────┘        └──────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                       PHASE 5: QUERY GENERATION                                  │
+│                    "LLM decides how to get data"                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+                    ┌─────────────────────────────────────┐
+                    │         LLM Analyzes Request        │
+                    │    (Has context + access rules)     │
+                    └─────────────────────────────────────┘
+                                     │
+              ┌──────────────────────┴──────────────────────┐
+              ▼                                             ▼
+┌───────────────────────────┐              ┌───────────────────────────┐
+│   Option A: Use Scope     │              │   Option B: Generate New  │
+│   (Pattern matched)       │              │   (Custom query needed)   │
+└───────────────────────────┘              └───────────────────────────┘
+              │                                             │
+              ▼                                             ▼
+┌───────────────────────────┐              ┌───────────────────────────┐
+│ Found: scopeVolunteers    │              │ LLM generates Cypher:     │
+│                           │              │                           │
+│ Use pre-indexed Cypher:   │              │ MATCH (p:Person)          │
+│ MATCH (n:Person)          │              │ -[:HAS_TEAM]->(t:Team)    │
+│ -[:HAS_TEAM]->(t)         │              │ WHERE t.role_type = 3     │
+│ WHERE t.role_type = 3     │              │ AND t.status = 'active'   │
+│ RETURN n                  │              │ RETURN p.name, p.email    │
+└───────────────────────────┘              └───────────────────────────┘
+              │                                             │
+              └──────────────────────┬──────────────────────┘
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │         QUERY READY FOR             │
+                    │           EXECUTION                 │
+                    └─────────────────────────────────────┘
 ```
 
 ---
@@ -435,21 +561,41 @@ $tags = $resolver->resolveForEntity($user, 'Person');
 
 **Purpose:** Execute query, filter results, format response.
 
-### Flow
-
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│ Execute Query   │───▶│ Filter Results  │───▶│ Format Response │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                      │                      │
-         ▼                      ▼                      ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│ Neo4j/MySQL     │    │ Apply:          │    │ LLM formats:    │
-│ returns raw     │    │ - Team filter   │    │ natural language│
-│ results         │    │ - Remove sens.  │    │ response        │
-│                 │    │   columns       │    │                 │
-│                 │    │ - Check thresh  │    │                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         PHASE 6: RESPONSE                                        │
+│                    "Execute, filter, format answer"                              │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+         ┌───────────────────────────────────────────────────────────┐
+         ▼                           ▼                               ▼
+┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
+│ STEP 1: Execute │         │ STEP 2: Filter  │         │ STEP 3: Format  │
+│ Query           │         │ Results         │         │ Response        │
+└─────────────────┘         └─────────────────┘         └─────────────────┘
+         │                           │                           │
+         ▼                           ▼                           ▼
+┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
+│ Neo4j/MySQL     │         │ Apply access:   │         │ LLM formats:    │
+│ returns:        │         │ • Team filter   │         │                 │
+│                 │         │ • Remove ssn,   │         │ "Found 12 active│
+│ [              │         │   salary cols   │         │  volunteers in  │
+│  {id:5, name:  │         │ • Check thresh  │         │  your teams:    │
+│   "John",...}, │         │                 │         │                 │
+│  {id:12,...},  │         │ Result: 12 rows │         │  1. John Doe    │
+│  ...           │         │ (below thresh?) │         │  2. Jane Smith  │
+│ ]              │         │ → Show actual   │         │  ..."           │
+└─────────────────┘         └─────────────────┘         └─────────────────┘
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │         FINAL RESPONSE              │
+                    │  "Found 12 active volunteers in     │
+                    │   your teams:                       │
+                    │   1. John Doe - Software Developer  │
+                    │   2. Jane Smith - Marketing         │
+                    │   ..."                              │
+                    └─────────────────────────────────────┘
 ```
 
 ### Threshold Protection
@@ -474,9 +620,10 @@ src/
 │   │   └── Nodeable.php                 # Interface for AI-enabled models
 │   │
 │   ├── Traits/
-│   │   └── HasNodeableConfig.php        # Main trait (config resolution)
-│   │       ├── readModelProperties()    # Reads $embedFields, etc.
-│   │       ├── resolveConfig()          # 4-layer config merge
+│   │   └── HasNodeableConfig.php        # Main trait
+│   │       ├── resolveConfig()          # 4-step resolution
+│   │       ├── readFromEntitiesConfig() # Read from warm cache
+│   │       ├── readModelProperties()    # Read model properties
 │   │       ├── getGraphConfig()         # Returns GraphConfig VO
 │   │       └── getVectorConfig()        # Returns VectorConfig VO
 │   │
@@ -492,6 +639,7 @@ src/
 │   │   ├── RelationshipDiscoverer.php   # Discovers relationships
 │   │   ├── CypherScopeAdapter.php       # Converts scopes to Cypher
 │   │   ├── CypherQueryBuilderSpy.php    # Records QB calls
+│   │   │   └── __call()                 # Handles nested scope resolution
 │   │   └── CypherPatternGenerator.php   # Generates Cypher
 │   │
 │   ├── Security/
@@ -518,7 +666,7 @@ src/
 │       └── QdrantStore.php              # Qdrant operations
 │
 └── Console/Commands/
-    ├── DiscoverEntitiesCommand.php      # ai:discover
+    ├── DiscoverEntitiesCommand.php      # ai:discover → entities.php
     ├── IngestEntitiesCommand.php        # ai:ingest
     ├── SyncRelationshipsCommand.php     # ai:sync-rels
     ├── IndexScopesCommand.php           # ai:index-scopes
@@ -527,26 +675,55 @@ src/
 
 ---
 
-## Developer Quick Start
+## Developer Guide
 
-### 1. Minimum Setup (Zero-Config)
+### Setup Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                         DEVELOPER WORKFLOW                                       │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+Step 1: Create Model                    Step 2: Run Discovery
+────────────────────                    ─────────────────────
+class Person extends Model              php artisan ai:discover
+    implements Nodeable                       │
+{                                             ▼
+    use HasNodeableConfig;              config/entities.php
+                                        (Generated - can edit)
+    protected $fillable = [...];
+                                        Step 3: Review & Customize
+    public function scopeActive()       ────────────────────────────
+    {                                   • Edit entities.php directly
+        return $query->where(...);      • OR add $embedFields to model
+    }                                   • OR override nodeableConfig()
+}
+
+Step 4: Ingest Data                     Step 5: Query
+───────────────────                     ─────────────
+php artisan ai:ingest                   $response = app('ai')->ask(
+php artisan ai:sync-rels                    'Show volunteers',
+php artisan ai:index-scopes                 $user
+php artisan ai:index-semantic           );
+```
+
+### Zero-Config (Quick Start)
 
 ```php
 // Just implement Nodeable and use the trait
 class Person extends Model implements Nodeable
 {
     use HasNodeableConfig;
-
     protected $fillable = ['name', 'bio', 'email'];
 }
+
+// Run discovery once
+// php artisan ai:discover
+// php artisan ai:ingest
+// php artisan ai:index-semantic
 ```
 
-That's it! The system will:
-- Auto-discover properties from `$fillable`
-- Use class name as graph label
-- Generate embeddings from all string fields
-
-### 2. Recommended Setup
+### Recommended Setup
 
 ```php
 class Person extends Model implements Nodeable
@@ -555,18 +732,11 @@ class Person extends Model implements Nodeable
 
     protected $fillable = ['name', 'bio', 'email', 'ssn'];
 
-    // Be explicit about what to embed (better for semantic search)
+    // Quick tweaks (merge on top of entities.php)
     protected array $embedFields = ['name', 'bio'];
-
-    // Protect sensitive data
     protected array $sensibleColumns = ['ssn'];
 
-    // Define scopes for AI to use
-    public function scopeActive($query)
-    {
-        return $query->where('status', 'active');
-    }
-
+    // Scopes auto-discovered
     public function scopeVolunteers($query)
     {
         return $query->whereHas('personTeams', fn($q) => $q->volunteer());
@@ -574,45 +744,39 @@ class Person extends Model implements Nodeable
 }
 ```
 
-### 3. Run Ingestion
-
-```bash
-# First time or after model changes
-php artisan ai:discover
-php artisan ai:ingest
-php artisan ai:sync-rels
-php artisan ai:index-scopes
-php artisan ai:index-semantic
-```
-
-### 4. Query
+### Full Control
 
 ```php
-$response = app('ai')->ask('Show me all active volunteers', $user);
+class Person extends Model implements Nodeable
+{
+    use HasNodeableConfig;
+
+    // This OVERRIDES entities.php completely
+    public function nodeableConfig(): array
+    {
+        return [
+            'graph' => [
+                'label' => 'Person',
+                'properties' => ['id', 'name', 'bio'],
+            ],
+            'vector' => [
+                'embed_fields' => ['name', 'bio'],
+            ],
+        ];
+    }
+}
 ```
-
----
-
-## Key Concepts Summary
-
-| Concept | Purpose | File |
-|---------|---------|------|
-| **Nodeable** | Interface marking AI-enabled models | `Domain/Contracts/Nodeable.php` |
-| **HasNodeableConfig** | Main trait with config resolution | `Domain/Traits/HasNodeableConfig.php` |
-| **CypherScopeAdapter** | Converts Eloquent scopes to Cypher | `Services/Discovery/CypherScopeAdapter.php` |
-| **AccessLevelResolver** | Determines user's access tags | `Services/Security/AccessLevelResolver.php` |
-| **PromptContextBuilder** | Builds prompts with access rules | `Services/Security/PromptContextBuilder.php` |
 
 ---
 
 ## Configuration Reference
 
-See `config/ai.php` for all configuration options:
+### config/ai.php
 
 ```php
 'auto_discovery' => [
     'enabled' => true,           // Enable ai:discover command
-    'runtime_enabled' => true,   // Enable runtime discovery (zero-config)
+    'runtime_enabled' => true,   // Fallback if nothing in entities.php
 ],
 
 'access_control' => [
@@ -621,7 +785,22 @@ See `config/ai.php` for all configuration options:
         'Person' => 10,          // Entity-specific thresholds
     ],
     'identifying_fields' => [
-        '*' => ['date_of_birth', 'email'],  // Fields that could identify people
+        '*' => ['date_of_birth', 'email'],
     ],
 ],
+```
+
+### config/entities.php
+
+Generated by `php artisan ai:discover`. Can be edited manually.
+
+```php
+return [
+    'App\\Models\\Person' => [
+        'graph' => [...],
+        'vector' => [...],
+        'security' => [...],
+        'scopes' => [...],
+    ],
+];
 ```

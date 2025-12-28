@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Discovery;
 
+use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\File;
+use Symfony\Component\Finder\Finder;
 
 /**
  * EntityAutoDiscovery
@@ -36,6 +39,7 @@ class EntityAutoDiscovery
      * @param AliasGenerator $aliases Alias generator
      * @param EmbedFieldDetector $embedFields Embed field detector
      * @param TraversalScopeGenerator|null $traversalGenerator Traversal scope generator
+     * @param InheritanceResolver|null $inheritanceResolver Inheritance resolver
      */
     public function __construct(
         private SchemaInspector $schema,
@@ -45,8 +49,10 @@ class EntityAutoDiscovery
         private AliasGenerator $aliases,
         private EmbedFieldDetector $embedFields,
         private ?TraversalScopeGenerator $traversalGenerator = null,
+        private ?InheritanceResolver $inheritanceResolver = null,
     ) {
         $this->traversalGenerator = $traversalGenerator ?? new TraversalScopeGenerator();
+        $this->inheritanceResolver = $inheritanceResolver ?? new InheritanceResolver();
     }
 
     /**
@@ -81,6 +87,150 @@ class EntityAutoDiscovery
                 'metadata' => $metadata,
             ];
         });
+    }
+
+    /**
+     * Discover all Nodeable entities in the application
+     *
+     * This is the main entry point for discovery. It:
+     * 1. Finds all models implementing Nodeable
+     * 2. Resolves inheritance (merges child models into parents)
+     * 3. Discovers configuration for each canonical model
+     * 4. Returns complete configurations ready for config/entities.php
+     *
+     * @param string|null $specificModel Optional specific model to discover
+     * @param array $modelPaths Paths to search for models (default: app/Models)
+     * @return array{configurations: array, errors: array, stats: array}
+     */
+    public function discoverAll(?string $specificModel = null, array $modelPaths = []): array
+    {
+        $stats = [
+            'total_models_found' => 0,
+            'canonical_models' => 0,
+            'child_models_merged' => 0,
+            'configurations_generated' => 0,
+        ];
+        $errors = [];
+        $configurations = [];
+
+        // Get models to discover
+        $allModels = $specificModel
+            ? [$specificModel]
+            : $this->findNodeableModels($modelPaths);
+
+        $stats['total_models_found'] = count($allModels);
+
+        if (empty($allModels)) {
+            return [
+                'configurations' => [],
+                'errors' => [],
+                'stats' => $stats,
+            ];
+        }
+
+        // Resolve inheritance - deduplicate models sharing same table
+        $resolved = $this->inheritanceResolver->resolve($allModels);
+        $canonicalModels = $resolved['models'];
+        $inheritanceMap = $resolved['inheritance'];
+
+        $stats['canonical_models'] = count($canonicalModels);
+        $stats['child_models_merged'] = $stats['total_models_found'] - $stats['canonical_models'];
+
+        // Discover each canonical model
+        foreach ($canonicalModels as $modelClass) {
+            try {
+                $config = $this->discover($modelClass);
+
+                // Merge inheritance info if this model has children
+                if (isset($inheritanceMap[$modelClass])) {
+                    $config = $this->inheritanceResolver->mergeInheritanceInfo(
+                        $config,
+                        $inheritanceMap[$modelClass]
+                    );
+                }
+
+                // Only include if has graph, vector, or security config
+                if (!empty($config['graph']) || !empty($config['vector']) || !empty($config['security'])) {
+                    $configurations[$modelClass] = $config;
+                    $stats['configurations_generated']++;
+                }
+            } catch (\Throwable $e) {
+                $errors[$modelClass] = $e->getMessage();
+            }
+        }
+
+        return [
+            'configurations' => $configurations,
+            'errors' => $errors,
+            'stats' => $stats,
+            'inheritance' => $inheritanceMap,
+        ];
+    }
+
+    /**
+     * Find all Nodeable models in the application
+     *
+     * @param array $paths Additional paths to search
+     * @return array<string> Model class names
+     */
+    public function findNodeableModels(array $paths = []): array
+    {
+        $models = [];
+
+        // Default to app/Models
+        $searchPaths = $paths;
+        if (empty($searchPaths) && function_exists('app_path')) {
+            $modelsPath = app_path('Models');
+            if (File::isDirectory($modelsPath)) {
+                $searchPaths[] = $modelsPath;
+            }
+        }
+
+        foreach ($searchPaths as $path) {
+            if (!File::isDirectory($path)) {
+                continue;
+            }
+
+            $finder = new Finder();
+            $finder->files()->in($path)->name('*.php');
+
+            foreach ($finder as $file) {
+                $class = $this->getClassFromFile($file->getPathname());
+
+                if ($class && class_exists($class) && $this->implementsNodeable($class)) {
+                    $models[] = $class;
+                }
+            }
+        }
+
+        return $models;
+    }
+
+    /**
+     * Extract fully qualified class name from PHP file
+     *
+     * @param string $filePath Path to PHP file
+     * @return string|null Class name or null if not found
+     */
+    private function getClassFromFile(string $filePath): ?string
+    {
+        $contents = File::get($filePath);
+
+        $namespace = null;
+        if (preg_match('/namespace\s+([^;]+);/', $contents, $matches)) {
+            $namespace = $matches[1];
+        }
+
+        $className = null;
+        if (preg_match('/class\s+(\w+)/', $contents, $matches)) {
+            $className = $matches[1];
+        }
+
+        if ($namespace && $className) {
+            return $namespace . '\\' . $className;
+        }
+
+        return null;
     }
 
     /**

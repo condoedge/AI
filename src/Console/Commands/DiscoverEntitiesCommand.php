@@ -4,98 +4,80 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Console\Commands;
 
-use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
-use Symfony\Component\Finder\Finder;
 
 /**
  * DiscoverEntitiesCommand
  *
  * Discovers Nodeable entities and generates config/entities.php configuration.
- * Scans all models implementing Nodeable interface, runs auto-discovery,
- * and writes results to config file for review and editing.
+ * This is the ONLY way to generate entity configuration - there is no runtime
+ * auto-discovery. Run this command during deployment or after model changes.
  *
  * Usage:
  *   php artisan ai:discover
  *   php artisan ai:discover --model=App\\Models\\Customer
  *   php artisan ai:discover --force  (overwrite existing config)
+ *   php artisan ai:discover --dry-run (preview without writing)
  *
  * @package Condoedge\Ai\Console\Commands
  */
 class DiscoverEntitiesCommand extends Command
 {
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
     protected $signature = 'ai:discover
                             {--model= : Specific model class to discover}
                             {--force : Overwrite existing configuration}
                             {--dry-run : Show what would be generated without writing}';
 
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
     protected $description = 'Discover Nodeable entities and generate config/entities.php';
 
-    /**
-     * Create a new command instance.
-     */
     public function __construct(
         private EntityAutoDiscovery $discovery
     ) {
         parent::__construct();
     }
 
-    /**
-     * Execute the console command.
-     *
-     * @return int
-     */
     public function handle(): int
     {
-        $this->info('🔍 Discovering Nodeable entities...');
+        $this->info('Discovering Nodeable entities...');
         $this->newLine();
 
-        // Get models to discover
-        $models = $this->option('model')
-            ? [$this->option('model')]
-            : $this->findNodeableModels();
+        // Run discovery through the service (single source of truth)
+        $result = $this->discovery->discoverAll(
+            specificModel: $this->option('model')
+        );
 
-        if (empty($models)) {
-            $this->warn('No Nodeable models found.');
-            return self::SUCCESS;
+        $configurations = $result['configurations'];
+        $errors = $result['errors'];
+        $stats = $result['stats'];
+        $inheritance = $result['inheritance'] ?? [];
+
+        // Display stats
+        $this->info("Found {$stats['total_models_found']} Nodeable model(s)");
+
+        if ($stats['child_models_merged'] > 0) {
+            $this->comment("  ({$stats['child_models_merged']} child models merged into parents)");
         }
 
-        $this->info('Found ' . count($models) . ' Nodeable model(s)');
         $this->newLine();
 
-        // Discover each model
-        $configurations = [];
-        $errors = [];
+        // Display discovered models
+        foreach ($configurations as $modelClass => $config) {
+            $this->line("Discovered: <fg=cyan>{$modelClass}</>");
+            $this->displayConfig($config);
 
-        foreach ($models as $modelClass) {
-            try {
-                $this->line("Discovering: <fg=cyan>{$modelClass}</>");
-
-                $config = $this->discovery->discover($modelClass);
-
-                // Only include if has graph or vector config
-                if (!empty($config['graph']) || !empty($config['vector'])) {
-                    $configurations[$modelClass] = $config;
-                    $this->info("  ✓ Discovered successfully");
-                } else {
-                    $this->comment("  ⊘ Skipped (no configuration found)");
+            // Show merged children if any
+            if (isset($inheritance[$modelClass])) {
+                foreach ($inheritance[$modelClass]['children'] as $child) {
+                    $this->comment("    Merged: " . class_basename($child) . " (child model)");
                 }
-            } catch (\Throwable $e) {
-                $errors[$modelClass] = $e->getMessage();
-                $this->error("  ✗ Error: {$e->getMessage()}");
             }
+        }
+
+        // Display errors
+        foreach ($errors as $modelClass => $error) {
+            $this->error("  Error in {$modelClass}: {$error}");
         }
 
         $this->newLine();
@@ -113,7 +95,7 @@ class DiscoverEntitiesCommand extends Command
             return self::SUCCESS;
         }
 
-        // Check if config file exists
+        // Write config file
         $configPath = config_path('entities.php');
 
         if (File::exists($configPath) && !$this->option('force')) {
@@ -122,24 +104,22 @@ class DiscoverEntitiesCommand extends Command
                 return self::SUCCESS;
             }
 
-            // Merge with existing config
             $existingConfig = include $configPath;
             $configurations = array_merge($existingConfig, $configurations);
         }
 
-        // Write config file
         $content = $this->generateConfigFileContent($configurations);
         File::put($configPath, $content);
 
         $this->newLine();
-        $this->info("✓ Configuration written to config/entities.php");
-        $this->info("✓ Discovered " . count($configurations) . " entities");
+        $this->info("Configuration written to config/entities.php");
+        $this->info("Discovered {$stats['configurations_generated']} entities");
 
         if (!empty($errors)) {
             $this->newLine();
-            $this->warn("⚠ {" . count($errors) . "} errors occurred:");
+            $this->warn(count($errors) . " errors occurred:");
             foreach ($errors as $model => $error) {
-                $this->line("  <fg=red>✗</> {$model}: {$error}");
+                $this->line("  <fg=red>x</> {$model}: {$error}");
             }
         }
 
@@ -147,65 +127,40 @@ class DiscoverEntitiesCommand extends Command
         $this->comment('Next steps:');
         $this->line('  1. Review config/entities.php');
         $this->line('  2. Customize as needed (labels, properties, relationships)');
-        $this->line('  3. Re-run ai:discover to update configurations');
+        $this->line('  3. Run php artisan ai:ingest to populate stores');
 
         return self::SUCCESS;
     }
 
-    /**
-     * Find all Nodeable models in the application
-     *
-     * @return array<string> Model class names
-     */
-    private function findNodeableModels(): array
+    private function displayConfig(array $config): void
     {
-        $models = [];
-
-        // Search in app/Models directory
-        $modelsPath = app_path('Models');
-
-        if (!File::isDirectory($modelsPath)) {
-            return [];
+        if (!empty($config['graph']['label'])) {
+            $this->line("    Graph: <fg=green>{$config['graph']['label']}</>");
         }
 
-        $finder = new Finder();
-        $finder->files()->in($modelsPath)->name('*.php');
-
-        foreach ($finder as $file) {
-            $namespace = $this->getNamespaceFromFile($file->getPathname());
-            $class = $namespace . '\\' . $file->getBasename('.php');
-
-            if (class_exists($class) && in_array(Nodeable::class, class_implements($class) ?: [])) {
-                $models[] = $class;
-            }
+        if (!empty($config['vector']['collection'])) {
+            $this->line("    Vector: <fg=green>{$config['vector']['collection']}</>");
         }
 
-        return $models;
+        if (!empty($config['metadata']['aliases'])) {
+            $aliases = implode(', ', array_slice($config['metadata']['aliases'], 0, 5));
+            $more = count($config['metadata']['aliases']) > 5
+                ? ' (+' . (count($config['metadata']['aliases']) - 5) . ' more)'
+                : '';
+            $this->line("    Aliases: <fg=green>{$aliases}{$more}</>");
+        }
+
+        if (!empty($config['metadata']['scopes'])) {
+            $scopeCount = count($config['metadata']['scopes']);
+            $this->line("    Scopes: <fg=green>{$scopeCount} discovered</>");
+        }
+
+        if (!empty($config['metadata']['child_models'])) {
+            $children = array_map('class_basename', $config['metadata']['child_models']);
+            $this->line("    Children: <fg=yellow>" . implode(', ', $children) . "</>");
+        }
     }
 
-    /**
-     * Extract namespace from PHP file
-     *
-     * @param string $filePath Path to PHP file
-     * @return string Namespace
-     */
-    private function getNamespaceFromFile(string $filePath): string
-    {
-        $contents = File::get($filePath);
-
-        if (preg_match('/namespace\s+([^;]+);/', $contents, $matches)) {
-            return $matches[1];
-        }
-
-        return 'App\\Models';
-    }
-
-    /**
-     * Generate config file content
-     *
-     * @param array $configurations Entity configurations
-     * @return string PHP config file content
-     */
     private function generateConfigFileContent(array $configurations): string
     {
         $export = var_export($configurations, true);
@@ -216,17 +171,16 @@ class DiscoverEntitiesCommand extends Command
         $export = str_replace(')', ']', $export);
         $export = preg_replace('/\s+\]/', ']', $export);
 
-        // Improve array formatting
         $lines = explode("\n", $export);
         $formatted = [];
 
         foreach ($lines as $line) {
-            // Add proper indentation
             $indent = strlen($line) - strlen(ltrim($line));
             $formatted[] = str_repeat(' ', $indent) . ltrim($line);
         }
 
         $export = implode("\n", $formatted);
+        $date = date('Y-m-d H:i:s');
 
         return <<<PHP
 <?php
@@ -236,18 +190,14 @@ declare(strict_types=1);
 /**
  * Entity Configuration
  *
- * This file was auto-generated by: php artisan ai:discover
- * Generated at: {date('Y-m-d H:i:s')}
+ * Generated by: php artisan ai:discover
+ * Generated at: {$date}
  *
- * IMPORTANT: This is a static configuration file.
- * - Review and customize as needed
- * - Add manual overrides for fine-tuning
- * - Re-run ai:discover to regenerate (will merge with existing)
+ * This is the SOURCE OF TRUTH for entity configuration.
+ * There is no runtime auto-discovery - this file must exist.
  *
- * Configuration priority (highest to lowest):
- * 1. nodeableConfig() method on model
- * 2. This file (config/entities.php)
- * 3. Runtime auto-discovery (fallback only)
+ * To regenerate: php artisan ai:discover --force
+ * To customize: Edit this file directly or use nodeableConfig() on models
  */
 
 return {$export};

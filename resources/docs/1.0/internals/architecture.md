@@ -74,6 +74,74 @@ graph TB
 
 ---
 
+## Complete 6-Phase Flow
+
+The AI system operates in 6 distinct phases:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    COMPLETE SYSTEM FLOW                             │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  PHASE 1: CONFIGURATION                                             │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │  Model Properties  ──┐                                       │   │
+│  │  entities.php        ├──> HasNodeableConfig ──> GraphConfig  │   │
+│  │  nodeableConfig()  ──┘                      └──> VectorConfig│   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                              │                                      │
+│                              ▼                                      │
+│  PHASE 2: INGESTION                                                 │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │  AI::ingest($entity) ──> DataIngestionService                │   │
+│  │      ├──> Neo4jStore::createNode()     (Graph)               │   │
+│  │      ├──> EmbeddingProvider::embed()   (Vectors)             │   │
+│  │      └──> QdrantStore::upsert()        (Search)              │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                              │                                      │
+│                              ▼                                      │
+│  PHASE 3: CONTEXT RETRIEVAL (at query time)                        │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │  User Question ──> ContextRetriever                          │   │
+│  │      ├──> Qdrant: Similar past queries (few-shot)            │   │
+│  │      ├──> Neo4j: Graph schema                                │   │
+│  │      └──> AccessLevelResolver: User permissions              │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                              │                                      │
+│                              ▼                                      │
+│  PHASE 4: PROMPT BUILDING                                          │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │  PromptBuilder assembles:                                    │   │
+│  │      ├──> System prompt with entity schemas                  │   │
+│  │      ├──> Available scopes (from entities.php)               │   │
+│  │      ├──> Access level constraints                           │   │
+│  │      ├──> Similar queries (few-shot examples)                │   │
+│  │      └──> User question                                      │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                              │                                      │
+│                              ▼                                      │
+│  PHASE 5: QUERY GENERATION                                         │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │  LLM Provider generates:                                     │   │
+│  │      ├──> Cypher query (if graph query needed)               │   │
+│  │      ├──> Entity selection                                   │   │
+│  │      └──> Scope applications                                 │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                              │                                      │
+│                              ▼                                      │
+│  PHASE 6: EXECUTION & RESPONSE                                     │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │  Execute & Format:                                           │   │
+│  │      ├──> Neo4j executes Cypher query                        │   │
+│  │      ├──> Results filtered by access level                   │   │
+│  │      └──> LLM formats response for user                      │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Data Flow: User Question to Answer
 
 ```mermaid
@@ -157,7 +225,35 @@ interface Nodeable
 
 #### Traits
 
-**`HasNodeableConfig`** - Auto-loads config from `config/entities.php`
+**`HasNodeableConfig`** - Configuration resolution with layered approach:
+
+```
+┌────────────────────────────────────────────────────────┐
+│  HasNodeableConfig::resolveConfig()                    │
+├────────────────────────────────────────────────────────┤
+│  1. nodeableConfig() override?  ──Yes──> Use directly  │
+│         │ No                                           │
+│         ▼                                              │
+│  2. config/entities.php (WARM CACHE)                   │
+│         │ Empty?                                       │
+│         ▼                                              │
+│  3. Runtime auto-discovery (if enabled)                │
+│         │                                              │
+│         ▼                                              │
+│  4. Merge model properties on top                      │
+│     ($embedFields, $graphLabel, $sensibleColumns)      │
+│         │                                              │
+│         ▼                                              │
+│  5. Ensure minimum defaults                            │
+└────────────────────────────────────────────────────────┘
+```
+
+**Model properties supported:**
+- `$embedFields` - Fields to embed for semantic search
+- `$graphLabel` - Neo4j node label
+- `$sensibleColumns` - Sensitive fields requiring permission
+- `$nodeableAliases` - Alternative names for LLM
+- `$graphRelationships` - Explicit relationship definitions
 
 ---
 

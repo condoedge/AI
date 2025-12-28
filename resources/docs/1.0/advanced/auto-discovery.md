@@ -122,7 +122,7 @@ Discovered from:
 
 ```php
 // config/ai.php
-'auto_discovery' => [
+'discovery' => [
     'exclude_properties' => [
         'internal_notes',
         'admin_flag',
@@ -184,6 +184,45 @@ public function scopePremium($query) {
 ],
 ```
 
+### Nested Scope Discovery
+
+Complex scopes with `whereHas` and nested scope calls are automatically resolved:
+
+```php
+// In Person model
+public function scopeHasVolunteerTeamOccupation($query)
+{
+    return $query->whereHas('personTeams', fn ($q) => $q->volunteer());
+}
+
+// In PersonTeam model
+public function scopeVolunteer($query)
+{
+    return $query->where('role_type', 3);
+}
+```
+
+**Auto-generated Cypher:**
+
+```php
+'scopes' => [
+    'hasVolunteerTeamOccupation' => [
+        'name' => 'hasVolunteerTeamOccupation',
+        'type' => 'traversal',
+        'cypher_pattern' => "EXISTS((n)-[:MEMBER_OF]->(:PersonTeam {role_type: 3}))",
+        'description' => 'Filter persons with volunteer team occupation',
+    ],
+],
+```
+
+**Supported nested patterns:**
+
+| Laravel Pattern | Cypher Result |
+|-----------------|---------------|
+| `whereHas('rel', fn($q) => $q->scope())` | `EXISTS((n)-[:REL]->(:Target {field: value}))` |
+| `whereHas('rel', fn($q) => $q->where('x', 'y'))` | `EXISTS((n)-[:REL]->(:Target {x: 'y'}))` |
+| `whereHas('rel', fn($q) => $q->whereIn('x', [...]))` | `EXISTS((n)-[:REL]->(:Target) WHERE x IN [...])` |
+
 ### Traversal Scopes
 
 Auto-generated from relationship discriminator fields.
@@ -192,7 +231,7 @@ Auto-generated from relationship discriminator fields.
 
 ```php
 // config/ai.php
-'auto_discovery' => [
+'discovery' => [
     'role_mappings' => [
         'PersonTeam' => [
             'role_type' => [
@@ -233,7 +272,7 @@ Auto-generated from:
 
 ```php
 // config/ai.php
-'auto_discovery' => [
+'discovery' => [
     'alias_mappings' => [
         'customers' => ['client', 'buyer', 'account'],
         'orders' => ['purchase', 'transaction', 'sale'],
@@ -269,7 +308,7 @@ Automatically selected:
 ### Exclude Properties
 
 ```php
-'auto_discovery' => [
+'discovery' => [
     'exclude_properties' => [
         'internal_notes',
         'admin_only_field',
@@ -281,7 +320,7 @@ Automatically selected:
 ### Custom Alias Mappings
 
 ```php
-'auto_discovery' => [
+'discovery' => [
     'alias_mappings' => [
         'customers' => ['client', 'buyer', 'account', 'purchaser'],
         'orders' => ['purchase', 'transaction', 'sale', 'booking'],
@@ -293,7 +332,7 @@ Automatically selected:
 ### Role Mappings for Traversal Scopes
 
 ```php
-'auto_discovery' => [
+'discovery' => [
     'role_mappings' => [
         // Model name => [field => [value => scope_name]]
         'PersonTeam' => [
@@ -320,63 +359,94 @@ Automatically selected:
 ### What to Discover
 
 ```php
-'auto_discovery' => [
-    'discover' => [
-        'properties' => true,
-        'relationships' => true,
-        'scopes' => true,
-        'aliases' => true,
-        'embed_fields' => true,
-    ],
+'discovery' => [
+    'properties' => true,
+    'relationships' => true,
+    'scopes' => true,
+    'aliases' => true,
+    'embed_fields' => true,
 ],
 ```
 
 ---
 
-## Runtime vs Command Discovery
+## Discovery is Required
 
-### Command Discovery (Recommended)
+**Important:** There is no runtime auto-discovery. You must run the discovery command to generate configuration.
 
 ```bash
 php artisan ai:discover
 ```
 
-- Generates `config/entities.php`
-- Fast at runtime (no analysis)
-- Review before deploying
+This generates `config/entities.php` which is the **source of truth** for entity configuration.
+
+**Benefits:**
+- Fast at runtime (no analysis needed)
+- Review and customize before deploying
 - Version controlled
+- Consistent behavior across environments
 
-### Runtime Discovery
-
-```env
-AI_AUTO_DISCOVERY_RUNTIME=true  # NOT recommended for production
-```
-
-- Analyzes models on every request
-- **SLOW** - impacts performance
-- Only for development/testing
-- Not cached by default
-
-**Use runtime discovery for:**
-- Initial prototyping
-- Development environment
-- Learning the system
-
-**Never use in production!**
+**Workflow:**
+1. Add `Nodeable` interface to your models
+2. Run `php artisan ai:discover`
+3. Review and customize `config/entities.php`
+4. Commit to version control
+5. Re-run after model changes
 
 ---
 
-## Discovery Priority
+## Configuration Resolution Flow
 
-Entity configuration is resolved in order:
+The `config/entities.php` file is the **source of truth**:
 
-1. **`nodeableConfig()` method** (highest)
-2. **`config/entities.php`** (middle)
-3. **Runtime discovery** (lowest, if enabled)
+```
+┌────────────────────────────────────────────────────────────┐
+│  Configuration Resolution (HasNodeableConfig trait)        │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
+│  1. nodeableConfig() defined?                              │
+│     └──> Yes: Use it directly (full override)              │
+│     └──> No: Continue to step 2                            │
+│                                                            │
+│  2. Check config/entities.php                              │
+│     └──> Has config: Use it as base                        │
+│     └──> Empty: Throw RuntimeException                     │
+│                                                            │
+│  3. Merge model properties on top                          │
+│     └──> $embedFields, $graphLabel, $sensibleColumns       │
+│     └──> $nodeableAliases, $graphRelationships             │
+│                                                            │
+│  4. Ensure minimum defaults                                │
+│     └──> Label from class name                             │
+│     └──> Properties from $fillable                         │
+│                                                            │
+└────────────────────────────────────────────────────────────┘
+```
 
-### Override Specific Entities
+**Note:** If no configuration is found (neither `nodeableConfig()` nor `config/entities.php`), a `RuntimeException` is thrown with instructions to run `php artisan ai:discover`.
 
-Use `nodeableConfig()` to override discovered config:
+### Model Properties (Quick Tweaks)
+
+Use model properties to customize without editing `entities.php`:
+
+```php
+class Customer extends Model implements Nodeable
+{
+    use HasNodeableConfig;
+
+    protected $fillable = ['name', 'email', 'company'];
+
+    // These merge ON TOP of entities.php config
+    protected array $embedFields = ['name', 'company'];
+    protected string $graphLabel = 'Customer';
+    protected array $sensibleColumns = ['ssn'];
+    protected array $nodeableAliases = ['customer', 'client'];
+}
+```
+
+### Full Override with nodeableConfig()
+
+For complete control, override everything:
 
 ```php
 class Customer extends Model implements Nodeable
@@ -385,32 +455,13 @@ class Customer extends Model implements Nodeable
 
     public function nodeableConfig(): NodeableConfig
     {
-        // This overrides auto-discovered config
+        // This overrides everything - entities.php is ignored
         return NodeableConfig::for(static::class)
             ->label('Customer')
-            ->properties('id', 'name', 'email')  // Custom selection
-            ->aliases('customer', 'client', 'vip');  // Custom aliases
+            ->properties('id', 'name', 'email')
+            ->aliases('customer', 'client', 'vip');
     }
 }
-```
-
----
-
-## Caching
-
-Discovery results can be cached:
-
-```env
-AI_AUTO_DISCOVERY_CACHE=true
-AI_AUTO_DISCOVERY_CACHE_TTL=3600  # 1 hour
-```
-
-### Clear Cache
-
-```bash
-php artisan cache:clear
-# or
-php artisan ai:discover --force
 ```
 
 ---
