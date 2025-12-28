@@ -58,6 +58,9 @@ use Condoedge\Ai\Services\Discovery\EmbedFieldDetector;
 use Condoedge\Ai\Services\Discovery\TraversalScopeGenerator;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Condoedge\Ai\Services\Discovery\InheritanceResolver;
+use Condoedge\Ai\Services\Context\EntityExtractor;
+use Condoedge\Ai\Services\Context\ReferenceResolver;
+use Condoedge\Ai\Services\Context\ConversationContextManager;
 use Condoedge\Utils\Models\Files\File;
 use Condoedge\Ai\Models\Plugins\FileProcessingPlugin;
 
@@ -337,6 +340,9 @@ class AiServiceProvider extends ServiceProvider
 
         // Register Chat Service
         $this->registerChatServices();
+
+        // Register Context Management Services
+        $this->registerContextServices();
     }
 
     /**
@@ -470,6 +476,28 @@ class AiServiceProvider extends ServiceProvider
     }
 
     /**
+     * Register context management services
+     *
+     * @return void
+     */
+    private function registerContextServices(): void
+    {
+        // Register EntityExtractor
+        $this->app->singleton(EntityExtractor::class);
+
+        // Register ReferenceResolver
+        $this->app->singleton(ReferenceResolver::class);
+
+        // Register ConversationContextManager with dependencies
+        $this->app->singleton(ConversationContextManager::class, function ($app) {
+            return new ConversationContextManager(
+                $app->make(EntityExtractor::class),
+                $app->make(ReferenceResolver::class)
+            );
+        });
+    }
+
+    /**
      * Bootstrap services
      *
      * @return void
@@ -578,6 +606,9 @@ class AiServiceProvider extends ServiceProvider
             InheritanceResolver::class,
             AiChatServiceInterface::class,
             AiChatService::class,
+            EntityExtractor::class,
+            ReferenceResolver::class,
+            ConversationContextManager::class,
         ];
     }
 }
