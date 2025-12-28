@@ -686,7 +686,12 @@ class AiManager
             // Step 1: Retrieve context
             $context = $this->retrieveContext($question);
 
-            // Step 2: Generate query
+            // Merge conversation context if provided
+            if (!empty($options['conversation_context'])) {
+                $context['conversation_context'] = $options['conversation_context'];
+            }
+
+            // Step 2: Generate query (context now includes conversation_context)
             $queryResult = $this->generateQuery($question, $context, $options);
 
             // Step 3: Execute query
