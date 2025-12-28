@@ -691,7 +691,15 @@ class AiManager
                 $context['conversation_context'] = $options['conversation_context'];
             }
 
-            // Step 2: Generate query (context now includes conversation_context)
+            // Merge file context if enabled
+            if (config('ai.file_context.enabled', true)) {
+                $fileContext = $this->retrieveFileContext($question, $options['user'] ?? null);
+                if (!empty($fileContext)) {
+                    $context['file_context'] = $fileContext;
+                }
+            }
+
+            // Step 2: Generate query (context now includes conversation_context and file_context)
             $queryResult = $this->generateQuery($question, $context, $options);
 
             // Step 3: Execute query
@@ -705,6 +713,11 @@ class AiManager
                 $options
             );
 
+            // Enrich response with file references
+            if (!empty($context['file_context'])) {
+                $responseResult = $this->enrichResponseWithFiles($responseResult, $context['file_context'], $options);
+            }
+
             return [
                 'question' => $question,
                 'answer' => $responseResult['answer'],
@@ -713,6 +726,7 @@ class AiManager
                 'cypher' => $queryResult['cypher'],
                 'data' => $executionResult['data'],
                 'stats' => $executionResult['stats'],
+                'referenced_files' => $responseResult['referenced_files'] ?? [],
                 'metadata' => [
                     'query' => $queryResult['metadata'],
                     'execution' => $executionResult['metadata'],
@@ -732,8 +746,45 @@ class AiManager
                 'cypher' => null,
                 'data' => [],
                 'stats' => [],
+                'referenced_files' => [],
                 'metadata' => $errorResponse['metadata'],
             ];
         }
+    }
+
+    // =========================================================================
+    // File Context Methods
+    // =========================================================================
+
+    /**
+     * Retrieve file context for the question.
+     *
+     * @param string $question The question to retrieve file context for
+     * @param mixed $user The user to check access for
+     * @return array File context array or empty if unavailable
+     */
+    protected function retrieveFileContext(string $question, mixed $user): array
+    {
+        try {
+            $provider = app(\Condoedge\Ai\Services\Context\FileContextProvider::class);
+            return $provider->getFileContext($question, $user);
+        } catch (\Throwable $e) {
+            \Log::warning('Failed to retrieve file context: ' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Enrich response with file references.
+     *
+     * @param array $response The response array to enrich
+     * @param array $fileContext The file context containing relevant files
+     * @param array $options Additional options for enrichment
+     * @return array The enriched response array
+     */
+    protected function enrichResponseWithFiles(array $response, array $fileContext, array $options): array
+    {
+        $enricher = app(\Condoedge\Ai\Services\Response\ResponseFileEnricher::class);
+        return $enricher->enrichResponse($response, $fileContext, $options);
     }
 }
