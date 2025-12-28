@@ -5,6 +5,10 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Chat;
 
 use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Models\AiConversation;
+use Condoedge\Ai\Services\Context\ConversationContextManager;
+use Condoedge\Ai\Services\Context\EntityExtractor;
+use Condoedge\Ai\Services\Context\ReferenceResolver;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -13,10 +17,31 @@ use Illuminate\Support\Facades\Log;
  */
 class AiChatService implements AiChatServiceInterface
 {
+    /**
+     * Context manager instance (lazy-loaded)
+     */
+    protected ?ConversationContextManager $contextManager = null;
+
     public function __construct(
         protected array $config = [],
     ) {
         $this->config = array_merge($this->getDefaultConfig(), $config);
+    }
+
+    /**
+     * Get the conversation context manager instance.
+     * Lazy-loads the manager on first access.
+     */
+    public function getContextManager(): ConversationContextManager
+    {
+        if ($this->contextManager === null) {
+            $this->contextManager = new ConversationContextManager(
+                new EntityExtractor(),
+                new ReferenceResolver()
+            );
+        }
+
+        return $this->contextManager;
     }
 
     /**
@@ -138,6 +163,167 @@ class AiChatService implements AiChatServiceInterface
                 $this->getUserFriendlyError($e),
                 $errorData
             );
+        }
+    }
+
+    /**
+     * Process a question within a persistent conversation context.
+     *
+     * This method uses ConversationContextManager to:
+     * - Track entity focus across the conversation
+     * - Resolve references in follow-up questions (e.g., "those", "them")
+     * - Build enriched prompts with conversation context
+     * - Store messages in the conversation
+     *
+     * @param string $question The user's question
+     * @param AiConversation $conversation The conversation to use for context
+     * @param array $options Additional options (schema, style, etc.)
+     * @return AiChatMessage The assistant's response message
+     */
+    public function askWithConversation(
+        string $question,
+        AiConversation $conversation,
+        array $options = []
+    ): AiChatMessage {
+        $startTime = microtime(true);
+        $options = array_merge($this->config, $options);
+
+        try {
+            // Get schema for entity extraction
+            $schema = $this->getSchemaForContext($options);
+
+            // Process question through context manager
+            $contextResult = $this->getContextManager()->processQuestion(
+                $conversation,
+                $question,
+                $schema
+            );
+
+            // Use enriched question if this is a follow-up
+            $questionToAsk = $contextResult['enriched_question'];
+
+            // Build conversation context for the prompt
+            $conversationContext = $this->getContextManager()->buildPromptContext($conversation);
+
+            // Store the user message
+            $conversation->addMessage('user', $question, [
+                'context_used' => $conversationContext,
+            ]);
+
+            // Call AI with conversation context
+            $aiResponse = AI::answerQuestion($questionToAsk, [
+                'style' => $options['style'] ?? 'friendly',
+                'conversation_context' => $conversationContext,
+            ]);
+
+            $executionTime = (int) ((microtime(true) - $startTime) * 1000);
+
+            // Extract the answer text from the response array
+            $answerText = $aiResponse['answer'] ?? 'I could not generate a response.';
+            $cypherQuery = $aiResponse['cypher'] ?? '';
+            $queryResult = $aiResponse['data'] ?? [];
+
+            // Record response in context manager (updates conversation context)
+            if (!empty($cypherQuery)) {
+                $this->getContextManager()->recordResponse(
+                    $conversation,
+                    $answerText,
+                    $cypherQuery,
+                    ['data' => $queryResult]
+                );
+            }
+
+            // Build response data
+            $responseData = $this->buildResponseData($question, $answerText, $executionTime, $options);
+
+            // Add data from AI response if available
+            if (!empty($aiResponse['data'])) {
+                $responseData = $this->enrichResponseData($responseData, $aiResponse);
+            }
+
+            // Store the assistant message
+            $conversation->addMessage('assistant', $answerText, [
+                'response_data' => $responseData->toArray(),
+                'cypher_query' => $cypherQuery,
+                'execution_time_ms' => $executionTime,
+            ]);
+
+            return AiChatMessage::assistant($answerText, $responseData);
+
+        } catch (\Exception $e) {
+            Log::error('AI Chat with conversation error', [
+                'question' => $question,
+                'conversation_id' => $conversation->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            $errorData = AiChatResponseData::error($this->getUserFriendlyError($e));
+
+            // Store error response in conversation
+            $conversation->addMessage('assistant', $this->getUserFriendlyError($e), [
+                'response_data' => $errorData->toArray(),
+            ]);
+
+            return AiChatMessage::assistant(
+                $this->getUserFriendlyError($e),
+                $errorData
+            );
+        }
+    }
+
+    /**
+     * Prepare a question with conversation context without executing.
+     *
+     * Use this to preview how a question will be enriched before sending to AI,
+     * or to get the enriched question for custom processing.
+     *
+     * @param string $question The user's question
+     * @param AiConversation $conversation The conversation context
+     * @param array $schema Schema with available entity labels
+     * @return array Context result including enriched_question, is_follow_up, focused_entity, etc.
+     */
+    public function prepareQuestionWithContext(
+        string $question,
+        AiConversation $conversation,
+        array $schema
+    ): array {
+        // Process question through context manager
+        $contextResult = $this->getContextManager()->processQuestion(
+            $conversation,
+            $question,
+            $schema
+        );
+
+        // Build the conversation context
+        $conversationContext = $this->getContextManager()->buildPromptContext($conversation);
+
+        return [
+            'is_follow_up' => $contextResult['is_follow_up'],
+            'enriched_question' => $contextResult['enriched_question'],
+            'focused_entity' => $contextResult['focused_entity'],
+            'query_type' => $contextResult['query_type'],
+            'mentioned_entities' => $contextResult['mentioned_entities'],
+            'resolved_entity' => $contextResult['resolved_entity'],
+            'context' => $conversationContext,
+        ];
+    }
+
+    /**
+     * Get schema for context processing.
+     * Uses schema from options if provided, otherwise fetches from AI facade.
+     */
+    protected function getSchemaForContext(array $options): array
+    {
+        if (isset($options['schema'])) {
+            return $options['schema'];
+        }
+
+        try {
+            return AI::getSchema();
+        } catch (\Exception $e) {
+            // Return empty schema if unable to fetch
+            Log::warning('Unable to fetch schema for context', ['error' => $e->getMessage()]);
+            return ['labels' => [], 'relationships' => []];
         }
     }
 
