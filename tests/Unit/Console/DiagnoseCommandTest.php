@@ -103,4 +103,17 @@ class DiagnoseCommandTest extends TestCase
             }
         }
     }
+
+    /** @test */
+    public function it_reports_failure_when_neo4j_connection_fails(): void
+    {
+        $graphStore = Mockery::mock(GraphStoreInterface::class);
+        $graphStore->shouldReceive('getSchema')
+            ->andThrow(new \RuntimeException('Connection refused'));
+        $this->app->instance(GraphStoreInterface::class, $graphStore);
+
+        $this->artisan('ai:diagnose')
+            ->expectsOutputToContain('Connection failed')
+            ->assertExitCode(1);
+    }
 }

@@ -17,13 +17,12 @@ use Illuminate\Support\Facades\File;
  *
  * Usage:
  *   php artisan ai:diagnose
- *   php artisan ai:diagnose --fix (attempt to fix issues)
  *
  * @package Condoedge\Ai\Console\Commands
  */
 class DiagnoseCommand extends Command
 {
-    protected $signature = 'ai:diagnose {--fix : Attempt to fix issues}';
+    protected $signature = 'ai:diagnose';
     protected $description = 'Diagnose AI package configuration and connectivity';
 
     private int $passed = 0;
@@ -178,8 +177,19 @@ class DiagnoseCommand extends Command
         $provider = config('ai.embedding.default', 'openai');
         $model = config("ai.embedding.{$provider}.model", 'text-embedding-3-small');
         $dimensions = config("ai.embedding.{$provider}.dimensions", 1536);
+        $apiKey = config("ai.embedding.{$provider}.api_key");
 
         $this->reportPass("Provider: {$provider}, Model: {$model}, Dimensions: {$dimensions}");
+
+        if (!$apiKey) {
+            $this->reportFail('API key not set - add to .env: AI_' . strtoupper($provider) . '_EMBEDDING_API_KEY=xxx');
+        } elseif (strlen($apiKey) < 20) {
+            $this->reportWarn('API key looks invalid (too short)');
+        } else {
+            $maskedKey = substr($apiKey, 0, 8) . '...' . substr($apiKey, -4);
+            $this->reportPass("API key configured ({$maskedKey})");
+        }
+
         $this->newLine();
     }
 
