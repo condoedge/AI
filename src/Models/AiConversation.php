@@ -22,11 +22,13 @@ class AiConversation extends Model
         'title',
         'status',
         'metadata',
+        'context_snapshot',
         'last_message_at',
     ];
 
     protected $casts = [
         'metadata' => 'array',
+        'context_snapshot' => 'array',
         'last_message_at' => 'datetime',
     ];
 
@@ -81,5 +83,54 @@ class AiConversation extends Model
             ->reverse()
             ->values()
             ->toArray();
+    }
+
+    /**
+     * Update the conversation's context snapshot
+     */
+    public function updateContextSnapshot(array $context): void
+    {
+        $this->update(['context_snapshot' => array_merge(
+            $this->context_snapshot ?? [],
+            $context
+        )]);
+    }
+
+    /**
+     * Get the currently focused entity type
+     */
+    public function getFocusedEntity(): ?string
+    {
+        return $this->context_snapshot['focused_entity'] ?? null;
+    }
+
+    /**
+     * Get the last query type (count, list, aggregate, etc.)
+     */
+    public function getLastQueryType(): ?string
+    {
+        return $this->context_snapshot['last_query_type'] ?? null;
+    }
+
+    /**
+     * Get mentioned entities from context
+     */
+    public function getMentionedEntities(): array
+    {
+        return $this->context_snapshot['mentioned_entities'] ?? [];
+    }
+
+    /**
+     * Get the last Cypher query from most recent assistant message
+     */
+    public function getLastCypherQuery(): ?string
+    {
+        $lastAssistantMessage = $this->messages()
+            ->where('role', 'assistant')
+            ->whereNotNull('cypher_query')
+            ->orderBy('created_at', 'desc')
+            ->first();
+
+        return $lastAssistantMessage?->cypher_query;
     }
 }
