@@ -311,6 +311,42 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Relationship Importance Weights
+    |--------------------------------------------------------------------------
+    |
+    | Configurable weights for different relationship types to prioritize
+    | more important relationships (like PURCHASED) over less important ones
+    | (like VIEWED) when retrieving context for queries.
+    |
+    | Weights should be between 0.0 and 1.0, where:
+    | - 1.0 = highest importance (direct business relationships)
+    | - 0.5 = medium importance (secondary relationships)
+    | - 0.0 = lowest importance (can be filtered out)
+    |
+    */
+    'relationship_weights' => [
+        // High importance - direct business relationships
+        'PURCHASED' => 1.0,
+        'BELONGS_TO' => 0.9,
+        'MEMBER_OF' => 0.9,
+        'CREATED_BY' => 0.8,
+        'OWNS' => 0.8,
+
+        // Medium importance - secondary relationships
+        'RELATED_TO' => 0.6,
+        'TAGGED_WITH' => 0.5,
+        'CATEGORIZED_AS' => 0.5,
+
+        // Low importance - metadata relationships
+        'VIEWED' => 0.3,
+        'LOGGED' => 0.2,
+
+        // Default for unspecified relationships
+        'default' => 0.5,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Semantic Matching Configuration
     |--------------------------------------------------------------------------
     |

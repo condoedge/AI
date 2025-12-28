@@ -1293,4 +1293,31 @@ class ContextRetriever implements ContextRetrieverInterface
 
         return $confidence;
     }
+
+    /**
+     * Get the importance weight for a relationship type
+     *
+     * @param string $relationshipType The relationship type name
+     * @return float Weight between 0.0 and 1.0
+     */
+    public function getRelationshipWeight(string $relationshipType): float
+    {
+        $weights = config('ai.relationship_weights', []);
+        return $weights[$relationshipType] ?? $weights['default'] ?? 0.5;
+    }
+
+    /**
+     * Filter relationships by minimum importance threshold
+     *
+     * @param array $relationships Array of relationships with 'type' key
+     * @param float $threshold Minimum weight threshold (0.0 - 1.0)
+     * @return array Filtered relationships
+     */
+    public function filterRelationshipsByImportance(array $relationships, float $threshold = 0.5): array
+    {
+        return array_filter($relationships, function ($rel) use ($threshold) {
+            $type = is_array($rel) ? ($rel['type'] ?? '') : $rel;
+            return $this->getRelationshipWeight($type) >= $threshold;
+        });
+    }
 }
