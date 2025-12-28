@@ -501,6 +501,73 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | File Context Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure how files are used as context for AI responses.
+    | Supports two modes: physical files (docs) and database files.
+    |
+    */
+    'file_context' => [
+        // Enable file context in AI responses
+        'enabled' => env('AI_FILE_CONTEXT_ENABLED', true),
+
+        // Security mode for database files (can be overridden via boot method)
+        'security_enabled' => env('AI_FILE_SECURITY_ENABLED', true),
+
+        // Physical file paths (glob patterns) - no security, you define what's available
+        // These are indexed via `ai:ingest --docs`
+        'physical_paths' => [
+            // 'docs/**/*.mdx',
+            // 'resources/docs/**/*.md',
+        ],
+
+        // Supported extensions for physical files
+        'supported_extensions' => ['md', 'mdx', 'txt', 'rst'],
+
+        // Base path for physical files (relative to project root)
+        'base_path' => env('AI_DOCS_BASE_PATH', base_path()),
+
+        // Collection name for physical file chunks in Qdrant
+        'physical_collection' => 'documentation_chunks',
+
+        // Maximum file references to include in response
+        'max_references' => 5,
+
+        // Minimum relevance score for file inclusion
+        'min_relevance_score' => 0.7,
+
+        // Include file snippets in response metadata
+        'include_snippets' => true,
+
+        // Maximum snippet length (characters)
+        'snippet_length' => 200,
+
+        /*
+        |--------------------------------------------------------------------------
+        | Database File Access Configuration
+        |--------------------------------------------------------------------------
+        |
+        | Configure how database files are accessed and filtered.
+        | Single entry point: specify your File model and the scope to use.
+        |
+        */
+
+        // The Eloquent File model class (your app's File model)
+        'file_model' => env('AI_FILE_MODEL', 'App\\Models\\File'),
+
+        // The scope method to call for user-accessible files
+        // Will be called as: File::accessibleBy($user)->pluck('id')
+        // Set to null to allow all files (when security_enabled is true but no scope)
+        'access_scope' => 'accessibleBy',
+
+        // Alternative: closure-based resolver (takes precedence over scope)
+        // Set in boot method: config(['ai.file_context.access_resolver' => fn($user) => [...]])
+        'access_resolver' => null,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Chat UI Configuration
     |--------------------------------------------------------------------------
     |
