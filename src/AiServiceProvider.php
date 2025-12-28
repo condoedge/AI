@@ -61,6 +61,11 @@ use Condoedge\Ai\Services\Discovery\InheritanceResolver;
 use Condoedge\Ai\Services\Context\EntityExtractor;
 use Condoedge\Ai\Services\Context\ReferenceResolver;
 use Condoedge\Ai\Services\Context\ConversationContextManager;
+use Condoedge\Ai\Contracts\FileAccessResolverInterface;
+use Condoedge\Ai\Services\Context\FileAccessResolver;
+use Condoedge\Ai\Services\Context\FileContextProvider;
+use Condoedge\Ai\Services\Files\PhysicalFileIndexer;
+use Condoedge\Ai\Services\Response\ResponseFileEnricher;
 use Condoedge\Utils\Models\Files\File;
 use Condoedge\Ai\Models\Plugins\FileProcessingPlugin;
 
@@ -343,6 +348,9 @@ class AiServiceProvider extends ServiceProvider
 
         // Register Context Management Services
         $this->registerContextServices();
+
+        // Register File Context Services
+        $this->registerFileContextServices();
     }
 
     /**
@@ -498,6 +506,30 @@ class AiServiceProvider extends ServiceProvider
     }
 
     /**
+     * Register file context services.
+     */
+    private function registerFileContextServices(): void
+    {
+        // File access resolver (singleton for consistent security checks)
+        $this->app->singleton(FileAccessResolverInterface::class, FileAccessResolver::class);
+        $this->app->singleton(FileAccessResolver::class);
+
+        // Physical file indexer
+        $this->app->singleton(PhysicalFileIndexer::class);
+
+        // File context provider
+        $this->app->singleton(FileContextProvider::class, function ($app) {
+            return new FileContextProvider(
+                $app->make(FileSearchService::class),
+                $app->make(FileAccessResolverInterface::class)
+            );
+        });
+
+        // Response enricher
+        $this->app->singleton(ResponseFileEnricher::class);
+    }
+
+    /**
      * Bootstrap services
      *
      * @return void
@@ -609,6 +641,11 @@ class AiServiceProvider extends ServiceProvider
             EntityExtractor::class,
             ReferenceResolver::class,
             ConversationContextManager::class,
+            FileAccessResolverInterface::class,
+            FileAccessResolver::class,
+            FileContextProvider::class,
+            PhysicalFileIndexer::class,
+            ResponseFileEnricher::class,
         ];
     }
 }
