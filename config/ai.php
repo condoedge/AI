@@ -616,6 +616,7 @@ return [
         \Condoedge\Ai\Services\PromptSections\RelationshipsSection::class,
         \Condoedge\Ai\Services\PromptSections\ExampleEntitiesSection::class,
         \Condoedge\Ai\Services\PromptSections\SimilarQueriesSection::class,
+        \Condoedge\Ai\Services\PromptSections\ConversationContextSection::class, // Priority 55: After SimilarQueries (50), before DetectedEntities (60)
         \Condoedge\Ai\Services\PromptSections\DetectedEntitiesSection::class,
         \Condoedge\Ai\Services\PromptSections\DetectedScopesSection::class,
         fn(SemanticPromptBuilder $promptBuilder) => new \Condoedge\Ai\Services\PromptSections\PatternLibrarySection($promptBuilder->getPatternLibrary()),
