@@ -7,6 +7,8 @@
 - ## Chat UI
     - [Chat Components](/docs/{{version}}/chat/chat-ui)
     - [Chat Pipeline](/docs/{{version}}/chat/module-pipeline)
+    - [Conversation Context](/docs/{{version}}/chat/conversation-context-management)
+    - [File Context System](/docs/{{version}}/chat/file-context-system)
 - ## Configuration
     - [Basic Configuration](/docs/{{version}}/foundations/configuration)
     - [Entity Configuration](/docs/{{version}}/configuration/entities)

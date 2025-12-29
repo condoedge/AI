@@ -136,7 +136,7 @@ class RelatedModelSyncObserverTest extends TestCase
         $this->assertEmpty($triggers);
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();

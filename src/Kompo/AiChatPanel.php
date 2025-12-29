@@ -1,15 +1,32 @@
 <?php
-// src/Kompo/ChatPanel.php
+// src/Kompo/AiChatPanel.php
 
 namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\Models\AiConversation;
+use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Ai\Kompo\Traits\HasChatConfig;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasTypingIndicator;
 use Condoedge\Utils\Kompo\Common\Query;
 
-class ChatPanel extends Query
+/**
+ * AI Chat Panel - Full-featured chat interface with conversation management.
+ *
+ * Features: Conversation list, search, pin/archive, feedback, regenerate, edit,
+ * export, file references, rich data display, response style selector.
+ *
+ * Usage:
+ *   // Basic
+ *   new AiChatPanel()
+ *
+ *   // With configuration
+ *   new AiChatPanel(null, [
+ *       'welcome_title' => 'Sales Assistant',
+ *       'example_questions' => ['Show top customers', 'Monthly revenue'],
+ *   ])
+ */
+class AiChatPanel extends Query
 {
     use HasChatConfig, HasAvatars, HasTypingIndicator;
 
@@ -21,6 +38,7 @@ class ChatPanel extends Query
     protected ?int $selectedConversationId = null;
     protected ?AiConversation $conversation = null;
     protected bool $isLoading = false;
+    protected bool $isOnline = true;
 
     public function created()
     {
@@ -28,6 +46,14 @@ class ChatPanel extends Query
         $this->loadChatConfig();
         $this->selectedConversationId = $this->prop('conversation_id');
         $this->isLoading = $this->prop('is_loading') ?? false;
+
+        // Check AI service availability
+        try {
+            $chatService = app(AiChatServiceInterface::class);
+            $this->isOnline = $chatService->isAvailable();
+        } catch (\Exception $e) {
+            $this->isOnline = false;
+        }
 
         if ($this->selectedConversationId) {
             $this->conversation = AiConversation::where('user_id', auth()->id())
@@ -50,7 +76,7 @@ class ChatPanel extends Query
         return _Columns(
             $this->sidebar(),
             $this->chatArea(),
-        )->class('h-full min-h-[700px] bg-white rounded-xl shadow-xl overflow-hidden');
+        )->class('h-full min-h-[700px] bg-gradient-to-br from-white via-gray-50/50 to-indigo-50/30 rounded-2xl shadow-2xl overflow-hidden ring-1 ring-gray-200/50');
     }
 
     protected function sidebar()
@@ -62,26 +88,34 @@ class ChatPanel extends Query
                 new ConversationListQuery(null, [
                     'selected_id' => $this->selectedConversationId,
                 ])
-            )->id(self::CONVERSATIONS_PANEL_ID)->class('flex-1 overflow-y-auto'),
+            )->id(self::CONVERSATIONS_PANEL_ID)->class('flex-1 overflow-y-auto mini-scroll'),
             $this->sidebarFooter(),
-        )->class('w-80 border-r border-gray-200 bg-gray-50 flex flex-col');
+        )->class('w-80 border-r border-gray-200/70 bg-gradient-to-b from-gray-50 via-white to-gray-50/80 flex flex-col backdrop-blur-sm');
     }
 
     protected function sidebarHeader()
     {
+        $statusClass = $this->isOnline
+            ? 'text-emerald-500'
+            : 'text-gray-400';
+        $statusText = $this->isOnline ? 'Online' : 'Offline';
+        $statusDot = $this->isOnline
+            ? '<span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white animate-pulse"></span>'
+            : '<span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-gray-400 rounded-full border-2 border-white"></span>';
+
         return _FlexBetween(
             _Flex(
-                _Html($this->assistantAvatarHtml())->class('mr-3'),
+                _Html('<span class="relative">' . $this->assistantAvatarHtml() . $statusDot . '</span>')->class('mr-3'),
                 _Rows(
                     _Html('AI Assistant')->class('font-semibold text-gray-800'),
-                    _Html('Online')->class('text-xs text-emerald-500'),
+                    _Html($statusText)->class('text-xs ' . $statusClass),
                 ),
             )->class('items-center'),
             _Link()->icon('plus')
-                ->class('p-2 rounded-lg hover:bg-gray-200 text-gray-600 transition-all')
+                ->class('p-2.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200')
                 ->balloon('New conversation', 'left')
                 ->selfPost('createConversation')->inPanel(self::ID),
-        )->class('p-4 border-b border-gray-200 bg-white');
+        )->class('p-4 border-b border-gray-200/70 bg-white/80 backdrop-blur-sm');
     }
 
     protected function searchInput()
@@ -90,21 +124,21 @@ class ChatPanel extends Query
             _Input()->name('search')
                 ->placeholder('Search conversations...')
                 ->icon('magnifying-glass')
-                ->class('bg-white border-gray-200')
+                ->class('bg-white/80 border-gray-200/50 rounded-xl shadow-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300 transition-all')
                 ->selfGet('searchConversations')->inPanel(self::CONVERSATIONS_PANEL_ID),
-        )->class('px-3 py-2 border-b border-gray-100');
+        )->class('px-3 py-3 border-b border-gray-100/70');
     }
 
     protected function sidebarFooter()
     {
         return _FlexBetween(
             _Link('Settings')->icon('cog-6-tooth')
-                ->class('text-sm text-gray-500 hover:text-gray-700 p-2')
+                ->class('text-sm text-gray-500 hover:text-indigo-600 p-2 rounded-lg hover:bg-indigo-50 transition-all')
                 ->selfGet('openSettings')->inModal(),
             _Link('Help')->icon('question-mark-circle')
-                ->class('text-sm text-gray-500 hover:text-gray-700 p-2')
+                ->class('text-sm text-gray-500 hover:text-indigo-600 p-2 rounded-lg hover:bg-indigo-50 transition-all')
                 ->selfGet('openHelp')->inModal(),
-        )->class('p-3 border-t border-gray-200 bg-white');
+        )->class('p-3 border-t border-gray-200/70 bg-white/80 backdrop-blur-sm');
     }
 
     protected function chatArea()
@@ -113,11 +147,11 @@ class ChatPanel extends Query
             $this->chatHeader(),
             _Panel(
                 $this->renderMessages()
-            )->id(self::MESSAGES_PANEL_ID)->class('flex-1 overflow-y-auto p-6 bg-gradient-to-b from-gray-50 to-white'),
+            )->id(self::MESSAGES_PANEL_ID)->class('flex-1 overflow-y-auto p-6 bg-gradient-to-b from-indigo-50/30 via-white to-purple-50/20 mini-scroll'),
             _Panel(
                 $this->inputArea()
             )->id(self::INPUT_PANEL_ID),
-        )->class('flex-1 flex flex-col');
+        )->class('flex-1 flex flex-col bg-gradient-to-br from-white to-gray-50/50');
     }
 
     protected function chatHeader()
@@ -126,49 +160,56 @@ class ChatPanel extends Query
             return null;
         }
 
+        $isPinned = $this->conversation->metadata['pinned'] ?? false;
+        $messageCount = $this->conversation->messages()->count();
+
         return _FlexBetween(
             _Rows(
                 _Flex(
                     _Html($this->conversation->title ?? 'New Conversation')
-                        ->class('font-semibold text-gray-800'),
-                    $this->conversation->metadata['pinned'] ?? false
-                        ? _Sax('star', 14)->class('ml-2 text-amber-500')
+                        ->class('font-semibold text-gray-800 text-lg'),
+                    $isPinned
+                        ? _Html('<span class="ml-2 px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full font-medium flex items-center gap-1"><svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg> Pinned</span>')
                         : null,
                 )->class('items-center'),
                 _Flex(
-                    _Html($this->conversation->messages()->count() . ' messages')->class('text-xs text-gray-400'),
+                    _Html('<span class="inline-flex items-center px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">' . $messageCount . ' messages</span>'),
                     _Html('•')->class('mx-2 text-gray-300'),
                     _Html($this->conversation->last_message_at?->diffForHumans() ?? 'Just now')
                         ->class('text-xs text-gray-400'),
-                )->class('items-center'),
+                )->class('items-center mt-1'),
             ),
             $this->headerActions(),
-        )->class('px-6 py-4 border-b border-gray-100 bg-white/80 backdrop-blur-sm');
+        )->class('px-6 py-4 border-b border-gray-100/70 bg-white/90 backdrop-blur-md shadow-sm');
     }
 
     protected function headerActions()
     {
+        $isPinned = $this->conversation->metadata['pinned'] ?? false;
+
         return _Flex(
             _Link()->icon(_Sax('star', 18))
-                ->class('p-2 rounded-lg text-gray-400 hover:text-amber-500 hover:bg-amber-50 transition-all')
-                ->balloon('Pin conversation', 'down')
+                ->class('p-2.5 rounded-xl transition-all duration-200 ' . ($isPinned
+                    ? 'bg-amber-100 text-amber-600 shadow-sm'
+                    : 'text-gray-400 hover:text-amber-500 hover:bg-amber-50'))
+                ->balloon($isPinned ? 'Unpin' : 'Pin conversation', 'down')
                 ->selfPost('togglePin', ['id' => $this->conversation->id])
                 ->inPanel(self::ID),
             _Link()->icon(_Sax('export-2', 18))
-                ->class('p-2 rounded-lg text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 transition-all')
+                ->class('p-2.5 rounded-xl text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 transition-all duration-200')
                 ->balloon('Export', 'down')
                 ->selfGet('exportConversation', ['id' => $this->conversation->id]),
             _Link()->icon(_Sax('archive', 18))
-                ->class('p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all')
+                ->class('p-2.5 rounded-xl text-gray-400 hover:text-purple-500 hover:bg-purple-50 transition-all duration-200')
                 ->balloon('Archive', 'down')
                 ->selfPost('archiveConversation', ['id' => $this->conversation->id])
                 ->inPanel(self::ID),
             _Link()->icon(_Sax('trash', 18))
-                ->class('p-2 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all')
+                ->class('p-2.5 rounded-xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all duration-200')
                 ->balloon('Delete', 'down')
                 ->selfPost('deleteConversation', ['id' => $this->conversation->id])
                 ->inPanel(self::ID),
-        )->class('gap-1');
+        )->class('gap-1 bg-gray-50/50 rounded-2xl p-1');
     }
 
     public function renderMessages()

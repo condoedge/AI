@@ -157,7 +157,7 @@ class AccessLevelResolverTest extends TestCase
         return $user;
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();

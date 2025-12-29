@@ -30,13 +30,13 @@ class ConversationListQuery extends Query
         return _Flex(
             _Link('All')
                 ->class($this->filterClass('all'))
-                ->selfGet('filterConversations', ['filter' => 'all'])->inPanel(ChatPanel::CONVERSATIONS_PANEL_ID),
+                ->selfGet('filterConversations', ['filter' => 'all'])->inPanel(AiChatPanel::CONVERSATIONS_PANEL_ID),
             _Link('Pinned')
                 ->class($this->filterClass('pinned'))
-                ->selfGet('filterConversations', ['filter' => 'pinned'])->inPanel(ChatPanel::CONVERSATIONS_PANEL_ID),
+                ->selfGet('filterConversations', ['filter' => 'pinned'])->inPanel(AiChatPanel::CONVERSATIONS_PANEL_ID),
             _Link('Archived')
                 ->class($this->filterClass('archived'))
-                ->selfGet('filterConversations', ['filter' => 'archived'])->inPanel(ChatPanel::CONVERSATIONS_PANEL_ID),
+                ->selfGet('filterConversations', ['filter' => 'archived'])->inPanel(AiChatPanel::CONVERSATIONS_PANEL_ID),
         )->class('px-3 py-2 gap-2 border-b border-gray-100');
     }
 
@@ -104,7 +104,7 @@ class ConversationListQuery extends Query
             ? 'bg-indigo-50 border-indigo-500'
             : 'hover:bg-gray-100 border-transparent'))
          ->selfPost('selectConversation', ['id' => $conversation->id])
-         ->inPanel(ChatPanel::ID);
+         ->inPanel(AiChatPanel::ID);
     }
 
     protected function getPreviewText($message): string
@@ -138,7 +138,7 @@ class ConversationListQuery extends Query
 
     public function selectConversation($id)
     {
-        return (new ChatPanel(null, ['conversation_id' => $id]))->render();
+        return (new AiChatPanel(null, ['conversation_id' => $id]))->render();
     }
 
     public function filterConversations($filter)

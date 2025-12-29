@@ -207,7 +207,7 @@ class DataIngestionServiceSecurityTest extends TestCase
         return $entity;
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();

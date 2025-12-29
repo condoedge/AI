@@ -169,7 +169,7 @@ class TeamFilteredQueryTest extends TestCase
         $this->assertEquals(100, $count);
     }
 
-    protected function tearDown(): void
+    public function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();
