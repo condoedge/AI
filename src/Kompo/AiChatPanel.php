@@ -527,6 +527,7 @@ class AiChatPanel extends Query
 
         return new ChatMessageForm(null, [
             'conversation_id' => $this->conversation->id,
+            'panel_id' => self::MESSAGES_PANEL_ID,
             'response_style' => $this->cfg('response_style'),
         ]);
     }
