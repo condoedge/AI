@@ -30,7 +30,7 @@ trait HasChatConfig
         ];
     }
 
-    protected function cfg(string $key, $default = null)
+    protected function cfg(string $key, mixed $default = null): mixed
     {
         return $this->chatConfig[$key] ?? $default;
     }

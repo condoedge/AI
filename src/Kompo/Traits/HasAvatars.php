@@ -8,6 +8,7 @@ trait HasAvatars
     {
         $user = auth()->user();
         $initial = strtoupper(substr($user?->name ?? 'U', 0, 1));
+        $initial = htmlspecialchars($initial, ENT_QUOTES, 'UTF-8');
         $colors = ['from-blue-500 to-cyan-500', 'from-green-500 to-emerald-500', 'from-purple-500 to-pink-500', 'from-orange-500 to-amber-500'];
         $colorIndex = $user ? ($user->id % count($colors)) : 0;
 
