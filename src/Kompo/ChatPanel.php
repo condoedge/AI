@@ -572,7 +572,11 @@ class ChatPanel extends Query
 
     public function regenerate($id)
     {
-        $message = $this->conversation?->messages()->find($id);
+        if (!$this->conversation) {
+            return $this->renderMessages();
+        }
+
+        $message = $this->conversation->messages()->find($id);
         if (!$message || $message->role !== 'assistant') {
             return $this->renderMessages();
         }
@@ -682,8 +686,16 @@ class ChatPanel extends Query
         $text = preg_replace('/^### (.+)$/m', '<h4 class="text-lg font-semibold text-gray-800 mt-4 mb-2">$1</h4>', $text);
         $text = preg_replace('/^## (.+)$/m', '<h3 class="text-xl font-semibold text-gray-800 mt-4 mb-2">$1</h3>', $text);
 
-        // Links
-        $text = preg_replace('/\[([^\]]+)\]\(([^\)]+)\)/', '<a href="$2" class="text-indigo-600 hover:underline" target="_blank">$1</a>', $text);
+        // Links - validate URLs to prevent XSS
+        $text = preg_replace_callback('/\[([^\]]+)\]\(([^\)]+)\)/', function($matches) {
+            $label = $matches[1];
+            $url = $matches[2];
+            // Only allow http(s), mailto, tel, and anchor links
+            if (preg_match('/^(https?:|mailto:|tel:|#)/', $url) || filter_var($url, FILTER_VALIDATE_URL)) {
+                return '<a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" class="text-indigo-600 hover:underline" target="_blank">' . $label . '</a>';
+            }
+            return '[' . $label . '](' . $url . ')'; // Return as plain text if invalid
+        }, $text);
 
         // Citations [1], [2] etc
         $text = preg_replace('/\[(\d+)\]/', '<sup class="text-indigo-600 font-medium">[$1]</sup>', $text);
