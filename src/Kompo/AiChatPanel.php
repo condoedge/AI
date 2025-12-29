@@ -8,6 +8,10 @@ use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Ai\Kompo\Traits\HasChatConfig;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasTypingIndicator;
+use Condoedge\Ai\Kompo\Modals\FilePreviewModal;
+use Condoedge\Ai\Kompo\Modals\EditMessageModal;
+use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
+use Condoedge\Ai\Kompo\Modals\ChatHelpModal;
 use Condoedge\Utils\Kompo\Common\Query;
 
 /**
