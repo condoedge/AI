@@ -357,3 +357,113 @@ tests/Unit/StressTests/AdversarialSecurityTest.php
 tests/Unit/StressTests/DualStorageFailureTest.php
 tests/Unit/StressTests/RealBusinessScenarioStressTest.php
 ```
+
+## Configuration (config/)
+
+### Files (4 total)
+```
+config/ai.php
+config/ai-patterns.php
+config/entities.php
+config/larecipe.php
+```
+
+## Routes (routes/)
+
+### Files (2 total)
+```
+routes/api.php
+routes/web.php
+```
+
+## Database (database/)
+
+### Migration Files (4 total)
+```
+database/migrations/2025_01_01_000001_create_ai_conversations_table.php
+database/migrations/2025_01_01_000002_create_ai_query_logs_table.php
+database/migrations/2025_01_02_000001_add_context_snapshot_to_ai_conversations.php
+database/migrations/2025_01_03_000001_create_ai_user_settings_table.php
+```
+
+## Resources (resources/)
+
+### Files (46 total)
+```
+resources/css/ai-chat.css
+resources/docs/1.0/advanced/auto-discovery.md
+resources/docs/1.0/advanced/context-selection.md
+resources/docs/1.0/advanced/patterns.md
+resources/docs/1.0/advanced/scopes.md
+resources/docs/1.0/advanced/semantic-matching.md
+resources/docs/1.0/chat/chat-ui.md
+resources/docs/1.0/chat/conversation-context-management.md
+resources/docs/1.0/chat/file-context-system.md
+resources/docs/1.0/chat/module-pipeline.md
+resources/docs/1.0/configuration/entities.md
+resources/docs/1.0/configuration/environment.md
+resources/docs/1.0/configuration/response-styles.md
+resources/docs/1.0/extending/embedding-providers.md
+resources/docs/1.0/extending/file-extractors.md
+resources/docs/1.0/extending/llm-providers.md
+resources/docs/1.0/extending/prompt-sections.md
+resources/docs/1.0/foundations/configuration.md
+resources/docs/1.0/foundations/index.md
+resources/docs/1.0/foundations/infrastructure.md
+resources/docs/1.0/foundations/installing.md
+resources/docs/1.0/foundations/requirements.md
+resources/docs/1.0/foundations/troubleshooting.md
+resources/docs/1.0/index.md
+resources/docs/1.0/internals/architecture.md
+resources/docs/1.0/internals/components.md
+resources/docs/1.0/internals/data-flows.md
+resources/docs/1.0/internals/index.md
+resources/docs/1.0/internals/resilience.md
+resources/docs/1.0/internals/storage-guide.md
+resources/docs/1.0/reference/commands.md
+resources/docs/1.0/reference/facades.md
+resources/docs/1.0/reference/interfaces.md
+resources/docs/1.0/usage/advanced-usage.md
+resources/docs/1.0/usage/context-retrieval.md
+resources/docs/1.0/usage/data-ingestion.md
+resources/docs/1.0/usage/embeddings.md
+resources/docs/1.0/usage/examples.md
+resources/docs/1.0/usage/extending.md
+resources/docs/1.0/usage/file-search.md
+resources/docs/1.0/usage/index.md
+resources/docs/1.0/usage/laravel-integration.md
+resources/docs/1.0/usage/llm.md
+resources/docs/1.0/usage/quick-start.md
+resources/docs/1.0/usage/simple-usage.md
+resources/docs/1.0/usage/testing.md
+```
+
+## Project Documentation (docs/)
+
+### Files (17 total)
+```
+docs/architecture.md
+docs/diagrams.md
+docs/quick-start.md
+docs/plans/2025-01-01-ai-package-improvements.md
+docs/plans/2025-01-02-conversation-context-management.md
+docs/plans/2025-01-02-file-context-system.md
+docs/plans/2025-01-03-chat-ui-theming.md
+docs/plans/2025-01-03-frontend-chat-components.md
+docs/plans/2025-12-24-ai-package-improvements.md
+docs/plans/2025-12-27-discovery-simplification.md
+docs/plans/2025-12-30-architectural-audit.md
+docs/plans/2025-12-30-chat-settings-store.md
+```
+
+## Root Files
+
+### Files (6 total)
+```
+composer.json
+composer.lock
+docker-compose.yml
+phpunit.xml
+README.md
+testbench.yaml
+```
