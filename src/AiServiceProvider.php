@@ -68,6 +68,11 @@ use Condoedge\Ai\Services\Files\PhysicalFileIndexer;
 use Condoedge\Ai\Services\Response\ResponseFileEnricher;
 use Condoedge\Utils\Models\Files\File;
 use Condoedge\Ai\Models\Plugins\FileProcessingPlugin;
+use Condoedge\Ai\Services\UI\ChatThemeFactoryInterface;
+use Condoedge\Ai\Services\UI\ChatThemeInterface;
+use Condoedge\Ai\Services\UI\ConfigChatThemeFactory;
+use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
+use Condoedge\Ai\Services\Settings\UserChatSettings;
 
 /**
  * AI System Service Provider
@@ -351,6 +356,12 @@ class AiServiceProvider extends ServiceProvider
 
         // Register File Context Services
         $this->registerFileContextServices();
+
+        // Register UI Theming Services
+        $this->registerUiServices();
+
+        // Register Settings Services
+        $this->registerSettingsServices();
     }
 
     /**
@@ -530,6 +541,36 @@ class AiServiceProvider extends ServiceProvider
     }
 
     /**
+     * Register UI theming services.
+     */
+    private function registerUiServices(): void
+    {
+        // Register the configured factory implementation
+        $this->app->singleton(ChatThemeFactoryInterface::class, function ($app) {
+            $factoryClass = config('ai.ui.factory', ConfigChatThemeFactory::class);
+            return new $factoryClass();
+        });
+
+        // Alias for convenience
+        $this->app->alias(ChatThemeFactoryInterface::class, 'chat-theme-factory');
+
+        // Register the default theme from factory
+        $this->app->singleton(ChatThemeInterface::class, function ($app) {
+            return $app->make(ChatThemeFactoryInterface::class)->create();
+        });
+    }
+
+    /**
+     * Register settings services.
+     */
+    private function registerSettingsServices(): void
+    {
+        $this->app->singleton(ChatSettingsInterface::class, function ($app) {
+            return new UserChatSettings();
+        });
+    }
+
+    /**
      * Bootstrap services
      *
      * @return void
@@ -538,6 +579,10 @@ class AiServiceProvider extends ServiceProvider
     {
         // Load routes
         $this->loadRoutesFrom(__DIR__."/../routes/api.php");
+        $this->loadRoutesFrom(__DIR__."/../routes/web.php");
+
+        // Load migrations
+        $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
 
         // Publish configuration
         $this->publishes([
@@ -646,6 +691,9 @@ class AiServiceProvider extends ServiceProvider
             FileContextProvider::class,
             PhysicalFileIndexer::class,
             ResponseFileEnricher::class,
+            ChatThemeFactoryInterface::class,
+            ChatThemeInterface::class,
+            ChatSettingsInterface::class,
         ];
     }
 }
