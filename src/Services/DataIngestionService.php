@@ -224,8 +224,17 @@ class DataIngestionService implements DataIngestionServiceInterface
             return $summary;
         }
 
+        // Filtering the ones that are already ingested in graphs
+        $entityIds = implode(',', array_map(fn($e) => $e->getId(), $entities));
+        $alreadyIngestedIntoGraphsIds = $this->graphStore->query(
+            "MATCH (n) WHERE n.id IN ($entityIds) RETURN n.id AS id"
+        );
+        $filteredGraphEntities = collect($entities)->reject(fn($e) => in_array($e->getId(), $alreadyIngestedIntoGraphsIds))->all();
+
         // Process batch ingestion
-        $graphResults = $this->batchIngestToGraph($entities);
+        $graphResults = $this->batchIngestToGraph($filteredGraphEntities);
+
+        // vector already does like a kind of upsert because they are vectors
         $vectorResults = $this->batchIngestToVector($entities);
 
         // Aggregate results

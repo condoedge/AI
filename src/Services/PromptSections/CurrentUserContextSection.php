@@ -9,7 +9,7 @@ class CurrentUserContextSection extends BasePromptSection
 
     public function format(string $question, array $context, array $options = []): string
     {
-        $output = $this->header('CURRENT USER CONTEXT');
+        $output = $this->header('CURRENT USER CONTEXT. USE IT TO HAVE CURRENT TEAM AND CURRENT USER CONTEXT');
         $output .= "Current user name: " . (auth()->check() ? auth()->user()->name : 'Guest') . "\n\n";
         $output .= "Current user email: " . (auth()->check() ? auth()->user()->email : 'N/A') . "\n\n";
         $output .= "Current user ID: " . (auth()->check() ? auth()->id() : 'N/A') . "\n\n";

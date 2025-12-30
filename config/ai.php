@@ -650,6 +650,34 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | UI Theming Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure the visual theme for AI chat components.
+    |
+    | Built-in themes: 'indigo' (default), 'green', 'config'
+    |
+    | Factory options:
+    |   - ConfigChatThemeFactory: reads from config only (default)
+    |   - UserChatThemeFactory: reads from user database settings first
+    |
+    */
+    'ui' => [
+        // Factory class to use for theme resolution
+        // Options: ConfigChatThemeFactory::class, UserChatThemeFactory::class
+        'factory' => env('AI_UI_FACTORY', \Condoedge\Ai\Services\UI\UserChatThemeFactory::class),
+
+        // Default theme (used when factory is ConfigChatThemeFactory or user has no preference)
+        'theme' => env('AI_UI_THEME', 'green'),
+
+        // Color overrides (optional)
+        'colors' => [
+            // 'primary_gradient' => 'from-indigo-600 to-purple-600',
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Query Pattern Library
     |--------------------------------------------------------------------------
     |
@@ -695,6 +723,7 @@ return [
 
     'response_generator_sections' => [
         \Condoedge\Ai\Services\ResponseSections\SystemPromptSection::class,
+        \Condoedge\Ai\Services\ResponseSections\PrivacyAndSecurityGuidelinesSection::class,
         \Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection::class,
         \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
         \Condoedge\Ai\Services\ResponseSections\QueryInfoSection::class,

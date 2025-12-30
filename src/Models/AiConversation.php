@@ -41,6 +41,7 @@ class AiConversation extends Model
         });
     }
 
+    // RELATIONSHIPS
     public function messages(): HasMany
     {
         return $this->hasMany(AiMessage::class, 'conversation_id');
@@ -51,6 +52,79 @@ class AiConversation extends Model
         return $this->belongsTo(config('auth.providers.users.model', 'App\\Models\\User'));
     }
 
+    // SCOPES
+    public function scopeForFilter($query, string $filter)
+    {
+        if ($filter === 'pinned') {
+            return $query->whereRaw("JSON_EXTRACT(metadata, '$.pinned') = true");
+        } elseif ($filter === 'archived') {
+            return $query->where('status', 'archived');
+        } else {
+            return $query->where('status', 'active');
+        }
+    }
+
+    public function scopeSearch($query, $search)
+    {
+        return $query->where(function ($q) use ($search) {
+            $q->where('title', 'like', wildcardSpace($search))
+                ->orWhereHas('messages', function ($mq) use ($search) {
+                    $mq->where('content', 'like', wildcardSpace($search));
+                });
+        });
+    }
+
+    // CALCULATED FIELDS
+    public function getRecentMessages(int $limit = 10): array
+    {
+        return $this->messages()
+            ->orderBy('created_at', 'desc')
+            ->limit($limit)
+            ->get()
+            ->reverse()
+            ->values()
+            ->toArray();
+    }
+
+    /**
+     * Get the currently focused entity type
+     */
+    public function getFocusedEntity(): ?string
+    {
+        return $this->context_snapshot['focused_entity'] ?? null;
+    }
+
+    /**
+     * Get the last query type (count, list, aggregate, etc.)
+     */
+    public function getLastQueryType(): ?string
+    {
+        return $this->context_snapshot['last_query_type'] ?? null;
+    }
+
+    /**
+     * Get mentioned entities from context
+     */
+    public function getMentionedEntities(): array
+    {
+        return $this->context_snapshot['mentioned_entities'] ?? [];
+    }
+
+    /**
+     * Get the last Cypher query from most recent assistant message
+     */
+    public function getLastCypherQuery(): ?string
+    {
+        $lastAssistantMessage = $this->messages()
+            ->where('role', 'assistant')
+            ->whereNotNull('cypher_query')
+            ->orderBy('created_at', 'desc')
+            ->first();
+
+        return $lastAssistantMessage?->cypher_query;
+    }
+
+    // ACTIONS
     public function addMessage(string $role, string $content, array $data = []): AiMessage
     {
         // Extract referenced_files and merge into metadata
@@ -91,17 +165,6 @@ class AiConversation extends Model
         return $message;
     }
 
-    public function getRecentMessages(int $limit = 10): array
-    {
-        return $this->messages()
-            ->orderBy('created_at', 'desc')
-            ->limit($limit)
-            ->get()
-            ->reverse()
-            ->values()
-            ->toArray();
-    }
-
     /**
      * Update the conversation's context snapshot
      */
@@ -111,43 +174,5 @@ class AiConversation extends Model
             $this->context_snapshot ?? [],
             $context
         )]);
-    }
-
-    /**
-     * Get the currently focused entity type
-     */
-    public function getFocusedEntity(): ?string
-    {
-        return $this->context_snapshot['focused_entity'] ?? null;
-    }
-
-    /**
-     * Get the last query type (count, list, aggregate, etc.)
-     */
-    public function getLastQueryType(): ?string
-    {
-        return $this->context_snapshot['last_query_type'] ?? null;
-    }
-
-    /**
-     * Get mentioned entities from context
-     */
-    public function getMentionedEntities(): array
-    {
-        return $this->context_snapshot['mentioned_entities'] ?? [];
-    }
-
-    /**
-     * Get the last Cypher query from most recent assistant message
-     */
-    public function getLastCypherQuery(): ?string
-    {
-        $lastAssistantMessage = $this->messages()
-            ->where('role', 'assistant')
-            ->whereNotNull('cypher_query')
-            ->orderBy('created_at', 'desc')
-            ->first();
-
-        return $lastAssistantMessage?->cypher_query;
     }
 }

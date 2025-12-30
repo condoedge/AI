@@ -3,6 +3,9 @@
 
 namespace Condoedge\Ai\Kompo\Modals;
 
+use Condoedge\Ai\Kompo\Traits\HasChatTheme;
+use Condoedge\Ai\Models\AiUserSetting;
+use Condoedge\Ai\Services\UI\ChatThemeFactoryInterface;
 use Condoedge\Utils\Kompo\Common\Modal;
 
 /**
@@ -10,14 +13,20 @@ use Condoedge\Utils\Kompo\Common\Modal;
  */
 class ChatSettingsModal extends Modal
 {
+    use HasChatTheme;
+
     protected $_Title = 'Chat Settings';
     public $class = 'overflow-hidden max-w-lg rounded-2xl';
 
-    protected array $config = [];
+    public $model = AiUserSetting::class;
 
-    public function created()
+    protected $noHeaderButtons = true;
+
+    public function created() 
     {
-        $this->config = $this->prop('config') ?? [];
+        if (!$this->model) {
+            $this->model(auth()->check() ? AiUserSetting::forUser(auth()->id()) : new AiUserSetting());
+        }
     }
 
     public function body()
@@ -30,7 +39,16 @@ class ChatSettingsModal extends Modal
 
     protected function settingsForm()
     {
+        $factory = app(ChatThemeFactoryInterface::class);
+        $themeAllowUserOverrides = property_exists($factory, 'allowUserOverrides') ? $factory->allowUserOverrides : false;
+
         return _Rows(
+            // Theme section
+            !$themeAllowUserOverrides ? null : _Rows(
+                $this->sectionHeader('Theme', 'Choose your color theme'),
+                $this->themeSelector(),
+            ),
+            
             // Appearance section
             $this->sectionHeader('Appearance', 'How the chat looks'),
             _Rows(
@@ -58,10 +76,39 @@ class ChatSettingsModal extends Modal
                     'concise' => 'Concise - Brief and to the point',
                     'detailed' => 'Detailed - Thorough explanations',
                 ])
-                ->value($this->config['response_style'] ?? 'friendly')
-                ->class('w-full border border-gray-200 rounded-xl p-3 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 transition-all'),
+                ->default('friendly')
+                ->class('w-full border border-gray-200 rounded-xl p-3 transition-all'),
 
         )->class('p-6 overflow-y-auto max-h-[60vh] mini-scroll');
+    }
+
+    protected function themeSelector()
+    {
+        $factory = app(ChatThemeFactoryInterface::class);
+        $availableThemes = $factory->available();
+        $currentTheme = $this->getCurrentTheme();
+
+        $themeOptions = [];
+
+        foreach ($availableThemes as $theme) {
+            $themeOptions[$theme] = __('translate.ai.themes.' . $theme);
+        }
+
+        return _Select()->name('ui_theme')
+            ->options($themeOptions)
+            ->value($currentTheme)
+            ->class('w-full border border-gray-200 rounded-xl p-3 transition-all mb-6');
+    }
+
+    protected function getCurrentTheme(): string
+    {
+        if (auth()->check()) {
+            $settings = AiUserSetting::forUser(auth()->id());
+            if ($settings->getThemeName()) {
+                return $settings->getThemeName();
+            }
+        }
+        return config('ai.ui.theme', 'indigo');
     }
 
     protected function sectionHeader($title, $subtitle)
@@ -74,14 +121,12 @@ class ChatSettingsModal extends Modal
 
     protected function toggleSetting($key, $label, $description)
     {
-        $isEnabled = $this->config[$key] ?? true;
-
         return _FlexBetween(
             _Rows(
                 _Html($label)->class('font-medium text-gray-700'),
                 _Html($description)->class('text-xs text-gray-400'),
             ),
-            _Toggle()->name($key)->value($isEnabled)
+            _Toggle()->name($key)->checkColor($this->mainHexColor(), '#ECEFF3')
                 ->class('flex-shrink-0'),
         )->class('p-3 rounded-xl hover:bg-gray-50 transition-all');
     }
@@ -90,47 +135,29 @@ class ChatSettingsModal extends Modal
     {
         return _FlexBetween(
             _Link('Reset to Defaults')
-                ->class('text-sm text-gray-500 hover:text-indigo-600 transition-all')
+                ->class('text-sm text-gray-500 transition-all !bg-none ' . $this->link_hover)
                 ->selfPost('resetSettings'),
             _Flex(
                 _Link('Cancel')
                     ->class('px-4 py-2 text-gray-500 hover:text-gray-700 transition-all')
                     ->closeModal(),
-                _Button('Save Settings')->icon('check')
-                    ->class('px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:from-indigo-700 hover:to-purple-700 shadow-lg transition-all')
-                    ->selfPost('saveSettings')
+                _SubmitButton('Save Settings')->icon('check')
+                    ->class('px-4 py-2 text-white rounded-xl shadow-lg transition-all' . $this->theme_gradient)
                     ->closeModal(),
             )->class('gap-3'),
         )->class('px-6 py-4 border-t border-gray-200 bg-gray-50');
     }
 
-    public function saveSettings()
-    {
-        $settings = [
-            'show_avatars' => (bool) request('show_avatars'),
-            'show_timestamps' => (bool) request('show_timestamps'),
-            'show_metrics' => (bool) request('show_metrics'),
-            'show_suggestions' => (bool) request('show_suggestions'),
-            'enable_copy' => (bool) request('enable_copy'),
-            'enable_feedback' => (bool) request('enable_feedback'),
-            'enable_regenerate' => (bool) request('enable_regenerate'),
-            'enable_edit' => (bool) request('enable_edit'),
-            'response_style' => request('response_style') ?? 'friendly',
-        ];
-
-        // Store in user preferences or session
-        session(['ai_chat_settings' => $settings]);
-
-        // Could also store in user preferences table if available
-        // auth()->user()?->update(['ai_chat_settings' => $settings]);
-    }
 
     public function resetSettings()
     {
         session()->forget('ai_chat_settings');
 
-        // Return updated form with defaults
-        $this->config = config('ai.chat', []);
+        if (auth()->check()) {
+            $userSettings = AiUserSetting::forUser(auth()->id());
+            $userSettings->setTheme(null);
+        }
+
         return $this->settingsForm();
     }
 }

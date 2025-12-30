@@ -447,14 +447,16 @@ class AiManager
         
         $generation =  $this->queryGenerator->generate($question, $context, $options);
 
-        $this->storeQuery(
-            question: $question,
-            cypherQuery: $generation['cypher'],
-            metadata: [
-                'confidence' => $generation['confidence'],
-                'generated_at' => now()->toIso8601String(),
-            ]
-        );
+        if (isset($generation['cypher']) && $generation['cypher']) {
+            $this->storeQuery(
+                question: $question,
+                cypherQuery: $generation['cypher'],
+                metadata: [
+                    'confidence' => $generation['confidence'],
+                    'generated_at' => now()->toIso8601String(),
+                ]
+            );
+        }
 
         return $generation;
     }
@@ -684,7 +686,7 @@ class AiManager
     {
         try {
             // Step 1: Retrieve context
-            $context = $this->retrieveContext($question);
+            $context = $this->retrieveContext($question, $options);
 
             // Merge conversation context if provided
             if (!empty($options['conversation_context'])) {
@@ -735,6 +737,8 @@ class AiManager
             ];
 
         } catch (\Throwable $e) {
+            \Log::error('Error answering question: ' . $e->getMessage());
+
             // Generate error response
             $errorResponse = $this->responseGenerator->generateErrorResponse($question, $e, $options);
 

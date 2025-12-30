@@ -3,6 +3,7 @@
 
 namespace Condoedge\Ai\Kompo\Modals;
 
+use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Utils\Kompo\Common\Modal;
 
 /**
@@ -10,8 +11,11 @@ use Condoedge\Utils\Kompo\Common\Modal;
  */
 class ChatHelpModal extends Modal
 {
+    use HasChatTheme;
+    
     protected $_Title = 'Help & Tips';
     public $class = 'overflow-hidden max-w-2xl rounded-2xl';
+    protected $noHeaderButtons = true;
 
     public function body()
     {
@@ -25,25 +29,21 @@ class ChatHelpModal extends Modal
 
     protected function tabBar()
     {
-        return _Flex(
-            _Link('Getting Started')->class($this->tabClass(true))
-                ->selfGet('showTab', ['tab' => 'getting-started'])->inPanel('help-tab-content'),
-            _Link('Tips & Tricks')->class($this->tabClass(false))
-                ->selfGet('showTab', ['tab' => 'tips'])->inPanel('help-tab-content'),
-            _Link('Keyboard Shortcuts')->class($this->tabClass(false))
-                ->selfGet('showTab', ['tab' => 'shortcuts'])->inPanel('help-tab-content'),
-            _Link('FAQ')->class($this->tabClass(false))
-                ->selfGet('showTab', ['tab' => 'faq'])->inPanel('help-tab-content'),
-        )->class('px-6 py-3 border-b border-gray-200 gap-2 overflow-x-auto');
+        return _ButtonGroup()
+            ->noInputWrapper()
+            ->containerClass('px-3 gap-2 flex border-none')
+            ->commonClass('px-4 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap !border-none focus:!shadow-none !rounded-lg text-center')
+            ->selectedClass($this->active_badge, 'text-gray-500 hover:bg-gray-100')
+            ->options([
+                'getting_started' => __('Getting Started'),
+                'tips' => __('Tips & Tricks'),
+                'shortcuts' => __('Shortcuts'),
+                'faq' => __('FAQ'),
+            ])->name('help_tab')
+            ->selfGet('showTab')->inPanel('help-tab-content')
+            ->default('getting_started');
     }
 
-    protected function tabClass($active)
-    {
-        $base = 'px-4 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap';
-        return $active
-            ? "$base bg-indigo-100 text-indigo-700"
-            : "$base text-gray-500 hover:bg-gray-100";
-    }
 
     public function showTab($tab)
     {
@@ -123,7 +123,7 @@ class ChatHelpModal extends Modal
     protected function helpSection($title, $description, $icon)
     {
         return _Flex(
-            _Html($icon)->class('w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-100 to-purple-100 flex items-center justify-center text-indigo-600 mr-4 flex-shrink-0'),
+            _Html($icon)->class('w-10 h-10 rounded-xl flex items-center justify-center' . $this->theme_light_gradient . $this->theme_text . ' mr-4 flex-shrink-0'),
             _Rows(
                 _Html($title)->class('font-semibold text-gray-800'),
                 _Html($description)->class('text-sm text-gray-500'),
@@ -134,7 +134,7 @@ class ChatHelpModal extends Modal
     protected function featureCard($icon, $title, $description)
     {
         return _Rows(
-            _Html($this->iconHtml($icon))->class('w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center mb-2'),
+            _Html($this->iconHtml($icon))->class('w-8 h-8 rounded-lg flex items-center justify-center mb-2' . $this->theme_text . $this->theme_light_bg),
             _Html($title)->class('font-medium text-gray-800 text-sm'),
             _Html($description)->class('text-xs text-gray-500'),
         )->class('p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-all');
@@ -143,7 +143,7 @@ class ChatHelpModal extends Modal
     protected function exampleQuery($query)
     {
         return _Html('"' . $query . '"')
-            ->class('p-3 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-medium');
+            ->class('p-3 rounded-lg text-sm font-medium' . $this->theme_text . $this->theme_light_bg);
     }
 
     protected function tipCard($title, $description, $icon)
@@ -177,7 +177,7 @@ class ChatHelpModal extends Modal
     {
         return _FlexEnd(
             _Link('Got it!')
-                ->class('px-6 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:from-indigo-700 hover:to-purple-700 shadow-lg transition-all')
+                ->class('px-6 py-2 text-white rounded-xl shadow-lg transition-all' . $this->theme_gradient)
                 ->closeModal(),
         )->class('px-6 py-4 border-t border-gray-200 bg-gray-50');
     }

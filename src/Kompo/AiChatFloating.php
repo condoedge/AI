@@ -92,7 +92,7 @@ class AiChatFloating extends Form
 
     public function openChatModal()
     {
-        return new AiChatModal(null, $this->modalConfig);
+        return new AiChatPanel(null, $this->modalConfig);
     }
 
     protected function chatIcon(string $sizeClass): string

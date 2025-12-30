@@ -54,6 +54,14 @@ class RelationshipsSection extends BasePromptSection
                 $targetLabel = $rel['target_label'] ?? 'Unknown';
                 $foreignKey = $rel['foreign_key'] ?? 'id';
                 $direction = $rel['direction'] ?? 'outgoing';
+                $pivot = $rel['pivot'] ?? false;
+                $inferred = $rel['inferred'] ?? false;
+                $description = $rel['description'] ?? '';
+
+                if ($pivot || !$inferred) {
+                    // Skip pivot and non inferred relationships for clarity
+                    continue;
+                }
 
                 // Show the relationship pattern with direction
                 if ($direction === 'incoming') {
@@ -64,6 +72,7 @@ class RelationshipsSection extends BasePromptSection
                     $output .= "    Cypher: MATCH (x:{$label})-[:{$type}]->(y:{$targetLabel})\n";
                 }
                 $output .= "    Foreign key: {$foreignKey}\n\n";
+                $output .= !empty($description) ? "    Description: {$description}\n\n" : '';
             }
         }
 

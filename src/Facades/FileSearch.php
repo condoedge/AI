@@ -131,7 +131,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static array searchByContent(string $query, array $options = [])
  * @method static array searchByMetadata(array $criteria, int $limit = 10)
  * @method static array hybridSearch(string $contentQuery, array $metadataFilters = [], array $options = [])
- * @method static array getRelatedFiles(\Condoedge\Ai\Models\File $file, ?string $relationshipType = null, int $limit = 10)
+ * @method static array getRelatedFiles(\Condoedge\Utils\Models\Files\File $file, ?string $relationshipType = null, int $limit = 10)
  * @method static array getFilesByUser(int $userId, int $limit = 10)
  * @method static array getFilesByTeam(int $teamId, int $limit = 10)
  *

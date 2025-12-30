@@ -6,13 +6,14 @@ namespace Condoedge\Ai\Kompo;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Ai\Kompo\Traits\HasChatConfig;
+use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasTypingIndicator;
 use Condoedge\Ai\Kompo\Modals\FilePreviewModal;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
 use Condoedge\Ai\Kompo\Modals\ChatHelpModal;
-use Condoedge\Utils\Kompo\Common\Query;
+use Condoedge\Utils\Kompo\Common\Form;
 
 /**
  * AI Chat Panel - Full-featured chat interface with conversation management.
@@ -30,18 +31,18 @@ use Condoedge\Utils\Kompo\Common\Query;
  *       'example_questions' => ['Show top customers', 'Monthly revenue'],
  *   ])
  */
-class AiChatPanel extends Query
+class AiChatPanel extends Form
 {
-    use HasChatConfig, HasAvatars, HasTypingIndicator;
+    use HasChatConfig, HasChatTheme, HasAvatars, HasTypingIndicator;
+
+    public $style = 'max-height: 95vh;';
 
     public const ID = 'chat-panel';
     public const MESSAGES_PANEL_ID = 'chat-messages-panel';
-    public const CONVERSATIONS_PANEL_ID = 'conversations-panel';
     public const INPUT_PANEL_ID = 'chat-input-panel';
 
     protected ?int $selectedConversationId = null;
     protected ?AiConversation $conversation = null;
-    protected bool $isLoading = false;
     protected bool $isOnline = true;
 
     public function created()
@@ -49,7 +50,6 @@ class AiChatPanel extends Query
         $this->id(self::ID);
         $this->loadChatConfig();
         $this->selectedConversationId = $this->prop('conversation_id');
-        $this->isLoading = $this->prop('is_loading') ?? false;
 
         // Check AI service availability
         try {
@@ -65,34 +65,29 @@ class AiChatPanel extends Query
         }
     }
 
-    public function query()
+    public function render()
     {
-        return AiConversation::where('user_id', auth()->id())->limit(0);
-    }
-
-    public function render($item = null)
-    {
-        return $this->mainLayout();
+        return _Panel(
+            $this->mainLayout()
+        )->class('h-full')->id(self::ID . '-wrapper');
     }
 
     protected function mainLayout()
     {
-        return _Columns(
+        return _Flex(
             $this->sidebar(),
             $this->chatArea(),
-        )->class('h-full min-h-[700px] bg-gradient-to-br from-white via-gray-50/50 to-indigo-50/30 rounded-2xl shadow-2xl overflow-hidden ring-1 ring-gray-200/50');
+        )->class('!items-start h-full min-h-[700px] bg-gradient-to-br from-white via-gray-50/50 to-gray-50/30 rounded-2xl shadow-2xl overflow-hidden ring-1 ring-gray-200/50')
+            ->style('height: 95vh;');
     }
 
     protected function sidebar()
     {
         return _Rows(
             $this->sidebarHeader(),
-            $this->searchInput(),
-            _Panel(
-                new ConversationListQuery(null, [
-                    'selected_id' => $this->selectedConversationId,
-                ])
-            )->id(self::CONVERSATIONS_PANEL_ID)->class('flex-1 overflow-y-auto mini-scroll'),
+            new ConversationListQuery([
+                'selected_id' => $this->selectedConversationId,
+            ]),
             $this->sidebarFooter(),
         )->class('w-80 border-r border-gray-200/70 bg-gradient-to-b from-gray-50 via-white to-gray-50/80 flex flex-col backdrop-blur-sm');
     }
@@ -116,31 +111,26 @@ class AiChatPanel extends Query
                 ),
             )->class('items-center'),
             _Link()->icon('plus')
-                ->class('p-2.5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200')
+                ->class('p-2.5 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200')
                 ->balloon('New conversation', 'left')
-                ->selfPost('createConversation')->inPanel(self::ID),
+                ->selfPost('createConversation')
+                ->refresh()
+                ->run('() => {
+                    setTimeout(() => {
+                        $("#conversation-list .vlQueryWrapper>div:first-child>div:first-child").click();
+                    }, 1000);
+                }'),
         )->class('p-4 border-b border-gray-200/70 bg-white/80 backdrop-blur-sm');
-    }
-
-    protected function searchInput()
-    {
-        return _Rows(
-            _Input()->name('search')
-                ->placeholder('Search conversations...')
-                ->icon('magnifying-glass')
-                ->class('bg-white/80 border-gray-200/50 rounded-xl shadow-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300 transition-all')
-                ->selfGet('searchConversations')->inPanel(self::CONVERSATIONS_PANEL_ID),
-        )->class('px-3 py-3 border-b border-gray-100/70');
     }
 
     protected function sidebarFooter()
     {
         return _FlexBetween(
             _Link('Settings')->icon('cog-6-tooth')
-                ->class('text-sm text-gray-500 hover:text-indigo-600 p-2 rounded-lg hover:bg-indigo-50 transition-all')
+                ->class('text-sm text-gray-500 ' . $this->theme()->linkHover() . ' p-2 rounded-lg transition-all')
                 ->selfGet('openSettings')->inModal(),
             _Link('Help')->icon('question-mark-circle')
-                ->class('text-sm text-gray-500 hover:text-indigo-600 p-2 rounded-lg hover:bg-indigo-50 transition-all')
+                ->class('text-sm text-gray-500 ' . $this->theme()->linkHover() . ' p-2 rounded-lg transition-all')
                 ->selfGet('openHelp')->inModal(),
         )->class('p-3 border-t border-gray-200/70 bg-white/80 backdrop-blur-sm');
     }
@@ -151,11 +141,12 @@ class AiChatPanel extends Query
             $this->chatHeader(),
             _Panel(
                 $this->renderMessages()
-            )->id(self::MESSAGES_PANEL_ID)->class('flex-1 overflow-y-auto p-6 bg-gradient-to-b from-indigo-50/30 via-white to-purple-50/20 mini-scroll'),
+            )->id(self::MESSAGES_PANEL_ID)->class('!static flex-1 overflow-y-auto p-6 bg-gradient-to-b ' . $this->theme()->heroBackground() . ' mini-scroll')
+                ->when($this->selectedConversationId, fn($el) => $el->style('max-height: calc(95vh - 200px);')),
             _Panel(
                 $this->inputArea()
             )->id(self::INPUT_PANEL_ID),
-        )->class('flex-1 flex flex-col bg-gradient-to-br from-white to-gray-50/50');
+        )->class('flex-1 flex flex-col bg-gradient-to-br from-white to-gray-50/50 h-full');
     }
 
     protected function chatHeader()
@@ -198,21 +189,22 @@ class AiChatPanel extends Query
                     : 'text-gray-400 hover:text-amber-500 hover:bg-amber-50'))
                 ->balloon($isPinned ? 'Unpin' : 'Pin conversation', 'down')
                 ->selfPost('togglePin', ['id' => $this->conversation->id])
-                ->inPanel(self::ID),
+                ->refresh(self::ID),
             _Link()->icon(_Sax('export-2', 18))
-                ->class('p-2.5 rounded-xl text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 transition-all duration-200')
+                ->class('p-2.5 rounded-xl text-gray-400 ' . $this->theme()->linkHover() . ' transition-all duration-200')
                 ->balloon('Export', 'down')
-                ->selfGet('exportConversation', ['id' => $this->conversation->id]),
+                ->href('ai.export-chat', ['id' => $this->conversation->id])
+                ->attr(['download' => 'conversation-' . $this->conversation->id . '.md']),
             _Link()->icon(_Sax('archive', 18))
-                ->class('p-2.5 rounded-xl text-gray-400 hover:text-purple-500 hover:bg-purple-50 transition-all duration-200')
+                ->class('p-2.5 rounded-xl text-gray-400 ' . $this->theme()->linkHover() . ' transition-all duration-200')
                 ->balloon('Archive', 'down')
                 ->selfPost('archiveConversation', ['id' => $this->conversation->id])
-                ->inPanel(self::ID),
-            _Link()->icon(_Sax('trash', 18))
+                ->refresh(self::ID),
+            _DeleteLink()->icon(_Sax('trash', 18))
                 ->class('p-2.5 rounded-xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all duration-200')
                 ->balloon('Delete', 'down')
                 ->selfPost('deleteConversation', ['id' => $this->conversation->id])
-                ->inPanel(self::ID),
+                ->refresh(self::ID),
         )->class('gap-1 bg-gray-50/50 rounded-2xl p-1');
     }
 
@@ -235,10 +227,6 @@ class AiChatPanel extends Query
             ...$bubbles,
         ];
 
-        if ($this->isLoading) {
-            $elements[] = $this->typingIndicator();
-        }
-
         return _Rows(...$elements)->class('space-y-6');
     }
 
@@ -258,7 +246,7 @@ class AiChatPanel extends Query
                     $this->cfg('show_timestamps')
                         ? _Html($message->created_at->format('g:i A'))->class('text-xs opacity-60 mt-2')
                         : null,
-                )->class('group relative px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'),
+                )->class('group relative px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md'),
                 $this->cfg('show_avatars')
                     ? _Html($this->userAvatarHtml())->class('ml-3 flex-shrink-0')
                     : null,
@@ -349,7 +337,7 @@ class AiChatPanel extends Query
         // Regenerate button
         if ($this->cfg('enable_regenerate')) {
             $actions[] = _Link()->icon(_Sax('refresh', 16))
-                ->class('p-1.5 rounded-lg hover:bg-indigo-50 text-gray-400 hover:text-indigo-600 transition-all')
+                ->class('p-1.5 rounded-lg text-gray-400 ' . $this->theme()->linkHover() . ' transition-all')
                 ->balloon('Regenerate', 'up')
                 ->selfPost('regenerate', ['id' => $message->id])
                 ->inPanel(self::MESSAGES_PANEL_ID);
@@ -363,7 +351,7 @@ class AiChatPanel extends Query
     {
         $chips = array_map(fn($s) =>
             _Link($s)
-                ->class('inline-flex items-center px-3 py-1.5 text-sm rounded-full bg-gray-100 text-gray-700 hover:bg-indigo-100 hover:text-indigo-700 transition-all cursor-pointer')
+                ->class('inline-flex items-center px-3 py-1.5 text-sm rounded-full bg-gray-100 text-gray-700 ' . $this->theme()->primaryLightBgHover() . ' transition-all cursor-pointer')
                 ->selfPost('askSuggestion', ['question' => $s])->inPanel(self::MESSAGES_PANEL_ID),
             array_slice($suggestions, 0, $this->cfg('max_suggestions'))
         );
@@ -424,7 +412,7 @@ class AiChatPanel extends Query
                         ->class(str_contains($data['trend'], '+') ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700') : null,
                 )->class('items-center gap-2'),
             ),
-        )->class('mt-4 p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl items-center gap-4');
+        )->class('mt-4 p-4 ' . $this->theme()->primaryLightBg() . ' rounded-xl items-center gap-4');
     }
 
     protected function renderListData($data)
@@ -434,9 +422,10 @@ class AiChatPanel extends Query
             return null;
         }
 
+        $badgeColors = $this->theme()->activeBadge();
         $listHtml = '<ul class="mt-4 space-y-2">' . implode('', array_map(fn($item) =>
             '<li class="flex items-start gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">' .
-            '<span class="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-medium flex-shrink-0">' . ($item['icon'] ?? '•') . '</span>' .
+            '<span class="w-6 h-6 rounded-full ' . $badgeColors . ' flex items-center justify-center text-xs font-medium flex-shrink-0">' . ($item['icon'] ?? '•') . '</span>' .
             '<div><div class="font-medium text-gray-800">' . e($item['title'] ?? '') . '</div>' .
             '<div class="text-sm text-gray-500">' . e($item['description'] ?? '') . '</div></div></li>',
             array_slice($items, 0, 5))) . '</ul>';
@@ -476,9 +465,9 @@ class AiChatPanel extends Query
         };
 
         return _Flex(
-            _Sax($icon, 16)->class('text-indigo-500'),
+            _Sax($icon, 16)->class($this->theme()->primaryText()),
             _Html($file['name'])->class('text-sm text-gray-700 font-medium'),
-        )->class('inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 cursor-pointer transition-all border border-indigo-100')
+        )->class('inline-flex items-center gap-2 px-3 py-2 rounded-lg ' . $this->theme()->primaryLightBg() . ' ' . $this->theme()->primaryLightBgHover() . ' cursor-pointer transition-all')
          ->balloon('Click to view', 'up')
          ->selfGet('viewFile', ['id' => $file['id']])->inModal();
     }
@@ -491,8 +480,14 @@ class AiChatPanel extends Query
             _Html('Choose an existing conversation from the sidebar or start a new one.')
                 ->class('text-gray-500 text-center max-w-md mb-8'),
             _Button('Start New Chat')->icon('plus')
-                ->class('px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:from-indigo-700 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all')
-                ->selfPost('createConversation')->inPanel(self::ID),
+                ->class('px-6 py-3 bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white rounded-xl shadow-lg hover:shadow-xl transition-all')
+                ->selfPost('createConversation')
+                ->refresh()
+                ->run('() => {
+                    setTimeout(() => {
+                        $("#conversation-list .vlQueryWrapper>div:first-child>div:first-child").click();
+                    }, 500);
+                }'),
         )->class('flex flex-col items-center justify-center h-full py-16');
     }
 
@@ -509,7 +504,7 @@ class AiChatPanel extends Query
         if (!empty($examples)) {
             $questionButtons = array_map(fn($q) =>
                 _Link($q)->icon('chat-bubble-left-ellipsis')
-                    ->class('w-full p-4 text-left rounded-xl border border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/50 transition-all flex items-center gap-3 group')
+                    ->class('w-full p-4 text-left rounded-xl border border-gray-200 bg-white ' . $this->theme()->primaryLightBgHover() . ' transition-all flex items-center gap-3 group')
                     ->selfPost('askSuggestion', ['question' => $q])->inPanel(self::MESSAGES_PANEL_ID),
                 $examples
             );
@@ -544,6 +539,7 @@ class AiChatPanel extends Query
             'user_id' => auth()->id(),
             'team_id' => currentTeamId(),
             'status' => 'active',
+            'title' => 'New Conversation',
         ]);
 
         $this->selectedConversationId = $conversation->id;
@@ -594,16 +590,6 @@ class AiChatPanel extends Query
         return $this->mainLayout();
     }
 
-    public function searchConversations()
-    {
-        $search = request('search');
-
-        return new ConversationListQuery(null, [
-            'selected_id' => $this->selectedConversationId,
-            'search' => $search,
-        ]);
-    }
-
     public function feedback($id, $type)
     {
         $message = $this->conversation?->messages()->find($id);
@@ -651,28 +637,9 @@ class AiChatPanel extends Query
     {
         request()->merge(['message' => $question]);
         $form = new ChatMessageForm(null, ['conversation_id' => $this->conversation->id]);
-        return $form->sendMessage();
-    }
+        $form->sendMessage();
 
-    public function exportConversation($id)
-    {
-        $conversation = AiConversation::where('user_id', auth()->id())->find($id);
-        if (!$conversation) {
-            return;
-        }
-
-        $markdown = "# " . ($conversation->title ?? 'Conversation') . "\n\n";
-        $markdown .= "Exported: " . now()->format('F j, Y g:i A') . "\n\n---\n\n";
-
-        foreach ($conversation->messages as $msg) {
-            $role = $msg->role === 'user' ? '**You**' : '**AI Assistant**';
-            $time = $msg->created_at->format('g:i A');
-            $markdown .= "{$role} ({$time}):\n\n{$msg->content}\n\n---\n\n";
-        }
-
-        return response($markdown)
-            ->header('Content-Type', 'text/markdown')
-            ->header('Content-Disposition', 'attachment; filename="conversation-' . $conversation->id . '.md"');
+        return $this->renderMessages();
     }
 
     public function viewFile($id)
@@ -712,9 +679,10 @@ class AiChatPanel extends Query
         );
 
         // Inline code
+        $codeClasses = $this->theme()->activeBadge();
         $text = preg_replace(
             '/`([^`]+)`/',
-            '<code class="bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded text-sm font-mono">$1</code>',
+            '<code class="' . $codeClasses . ' px-1.5 py-0.5 rounded text-sm font-mono">$1</code>',
             $text
         );
 
@@ -738,13 +706,14 @@ class AiChatPanel extends Query
             $url = $matches[2];
             // Only allow http(s), mailto, tel, and anchor links
             if (preg_match('/^(https?:|mailto:|tel:|#)/', $url) || filter_var($url, FILTER_VALIDATE_URL)) {
-                return '<a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" class="text-indigo-600 hover:underline" target="_blank">' . $label . '</a>';
+                return '<a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" class="' . $this->theme()->primaryText() . ' hover:underline" target="_blank">' . $label . '</a>';
             }
             return '[' . $label . '](' . $url . ')'; // Return as plain text if invalid
         }, $text);
 
         // Citations [1], [2] etc
-        $text = preg_replace('/\[(\d+)\]/', '<sup class="text-indigo-600 font-medium">[$1]</sup>', $text);
+        $primaryText = $this->theme()->primaryText();
+        $text = preg_replace('/\[(\d+)\]/', '<sup class="' . $primaryText . ' font-medium">[$1]</sup>', $text);
 
         return nl2br($text);
     }

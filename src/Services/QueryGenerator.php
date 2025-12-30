@@ -139,6 +139,20 @@ class QueryGenerator implements QueryGeneratorInterface
                     'max_tokens' => 500,
                 ]);
 
+                if ($response == 'NO QUERY REQUIRED') {
+                    return [
+                        'cypher' => '',
+                        'explanation' => 'No query required to answer the question.',
+                        'confidence' => 1.0,
+                        'warnings' => [],
+                        'metadata' => [
+                            'template_used' => null,
+                            'retry_count' => $retryCount,
+                            'complexity' => 0,
+                        ],
+                    ];
+                }
+
                 // Extract and clean Cypher
                 $cypher = $this->extractCypher($response);
 

@@ -9,8 +9,6 @@ use Condoedge\Ai\Contracts\FileProcessorInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Services\Files\PhysicalFileIndexer;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\File;
-use Symfony\Component\Finder\Finder;
 
 /**
  * IngestEntitiesCommand

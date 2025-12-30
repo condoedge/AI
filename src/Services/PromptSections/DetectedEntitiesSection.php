@@ -49,7 +49,7 @@ class DetectedEntitiesSection extends BasePromptSection
                     }
                 }
             }
-
+            
             $output .= "\n";
         }
 

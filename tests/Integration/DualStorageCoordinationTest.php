@@ -2,7 +2,7 @@
 
 namespace Condoedge\Ai\Tests\Integration;
 
-use Condoedge\Ai\Models\File;
+use Condoedge\Utils\Models\Files\File;
 use Condoedge\Ai\Models\Plugins\FileProcessingPlugin;
 use Condoedge\Ai\Services\FileSearchService;
 use Condoedge\Ai\Contracts\FileProcessorInterface;

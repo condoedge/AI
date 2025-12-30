@@ -59,9 +59,15 @@ class QueryExecutor implements QueryExecutorInterface
         $format = $options['format'] ?? $this->config['default_format'] ?? 'table';
         $includeStats = $options['include_stats'] ?? true;
 
-        // Pre-execution validation
+        // Some cases we'll send an empty cypher query because there's nothing to run, just a direct answers, so we don't throw a direct error
         if (empty(trim($cypherQuery))) {
-            throw new QueryExecutionException('Query cannot be empty');
+            return [
+                'success' => true,
+                'data' => [],
+                'stats' => [],
+                'metadata' => [],
+                'context' => 'NO QUERY',
+            ];
         }
 
         // Check read-only mode

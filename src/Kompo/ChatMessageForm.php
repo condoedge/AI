@@ -6,6 +6,8 @@ namespace Condoedge\Ai\Kompo;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Services\AiManager;
 use Condoedge\Ai\Kompo\Traits\HasChatConfig;
+use Condoedge\Ai\Kompo\Traits\HasChatTheme;
+use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Utils\Kompo\Common\Form;
 
 /**
@@ -21,7 +23,7 @@ use Condoedge\Utils\Kompo\Common\Form;
  */
 class ChatMessageForm extends Form
 {
-    use HasChatConfig;
+    use HasChatConfig, HasChatTheme;
 
     public $id = 'chat-message-form';
     public $class = 'w-full';
@@ -63,8 +65,8 @@ class ChatMessageForm extends Form
                     ->attr(['oninput' => "this.style.height='auto';this.style.height=this.scrollHeight+'px'"]),
                 $this->responseStyleSelector(),
                 _Button()->icon(_Sax('send-1', 20))->id('chat-send-btn')
-                    ->class('p-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all flex-shrink-0')
-                    ->selfPost('sendMessage')
+                    ->class('p-3 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all flex-shrink-0')
+                    ->selfPost('sendMessage')->withAllFormValues()
                     ->refresh($this->panelId)
                     ->refresh('chat-message-form'),
             )->class('flex items-end gap-3 px-4 py-3 bg-white/90 border border-gray-200/70 rounded-2xl shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 backdrop-blur-sm transition-all'),
@@ -122,7 +124,7 @@ class ChatMessageForm extends Form
         $this->conversation->addMessage('user', $message);
 
         try {
-            $aiManager = app(AiManager::class);
+            $aiManager = app(AiChatServiceInterface::class);
 
             // Get conversation context for history
             $recentMessages = $this->conversation->getRecentMessages(10);
@@ -131,21 +133,11 @@ class ChatMessageForm extends Form
                 'content' => $m['content'],
             ], $recentMessages);
 
-            // Build context options
-            $options = [
+            // Call AI service
+            $response = $aiManager->askWithHistory($message, $history, [
                 'style' => $style,
                 'conversation_id' => $this->conversation->id,
-                'user_id' => auth()->id(),
-            ];
-
-            // Get context snapshot for better responses
-            $contextSnapshot = $this->conversation->context_snapshot ?? [];
-            if (!empty($contextSnapshot)) {
-                $options['context'] = $contextSnapshot;
-            }
-
-            // Call AI service
-            $response = $aiManager->answerQuestion($message, $options);
+            ]);
 
             // Extract response data
             $responseContent = $response['answer'] ?? $response['content'] ?? 'I could not generate a response.';

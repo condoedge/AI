@@ -25,6 +25,7 @@ use Condoedge\Ai\Services\ResponseSections\GuidelinesSection;
  *
  * Default sections (in priority order):
  * - system (10): System prompt setting the LLM's role
+ * - security_restrictions (15): Security and data privacy guidelines
  * - project_context (20): Project name and description
  * - question (30): The user's original question
  * - query_info (40): The Cypher query that was executed
@@ -230,7 +231,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $temperature = $options['temperature'] ?? 0.3;
 
         // Handle empty results
-        if (empty($queryResult['data'])) {
+        if (empty($queryResult['data']) && ($queryResult['context'] ?? '') !== 'NO QUERY') {
             return $this->generateEmptyResponse($originalQuestion, $cypherQuery, $options);
         }
 

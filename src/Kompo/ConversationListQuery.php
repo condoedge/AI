@@ -4,78 +4,57 @@
 namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\Models\AiConversation;
+use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Utils\Kompo\Common\Query;
 use Illuminate\Support\Str;
 
 class ConversationListQuery extends Query
 {
+    use HasChatTheme;
     public const ID = 'conversation-list';
 
+    public $itemsWrapperClass = '[&>div>.vlNoItems]:px-6 [&>div>.vlNoItems]:pb-4 overflow-y-auto mini-scroll';
+
     protected ?int $selectedId = null;
-    protected ?string $search = null;
-    protected string $filter = 'all'; // all, pinned, archived
 
     public function created()
     {
         $this->id(self::ID);
+        
         $this->selectedId = $this->prop('selected_id');
-        $this->search = $this->prop('search');
-        $this->filter = $this->prop('filter') ?? 'all';
-        $this->perPage = 30;
-        $this->hasPagination = true;
     }
 
     public function top()
     {
-        return _Flex(
-            _Link('All')
-                ->class($this->filterClass('all'))
-                ->selfGet('filterConversations', ['filter' => 'all'])->inPanel(AiChatPanel::CONVERSATIONS_PANEL_ID),
-            _Link('Pinned')
-                ->class($this->filterClass('pinned'))
-                ->selfGet('filterConversations', ['filter' => 'pinned'])->inPanel(AiChatPanel::CONVERSATIONS_PANEL_ID),
-            _Link('Archived')
-                ->class($this->filterClass('archived'))
-                ->selfGet('filterConversations', ['filter' => 'archived'])->inPanel(AiChatPanel::CONVERSATIONS_PANEL_ID),
-        )->class('px-3 py-2 gap-2 border-b border-gray-100');
-    }
+        return _Rows(
+            _Rows(
+                _Input()->name('search', false)
+                    ->placeholder('Search conversations...')
+                    ->class('bg-white/80 border-gray-200/50 rounded-xl shadow-sm ' . $this->theme()->primaryRing() . ' ' . $this->theme()->primaryBorder() . ' transition-all')
+                    ->filter(),
+            )->class('px-3 pb-1 pt-4 border-b border-gray-100/70'),
 
-    protected function filterClass($filter)
-    {
-        $base = 'px-3 py-1 text-xs font-medium rounded-full transition-all';
-        return $this->filter === $filter
-            ? "$base bg-indigo-100 text-indigo-700"
-            : "$base text-gray-500 hover:bg-gray-100";
+            _ButtonGroup()
+                ->noInputWrapper()
+                ->containerClass('px-3 py-2 gap-2 flex border-none')
+                ->commonClass('text-center px-3 py-1 text-xs font-medium rounded-full transition-all !rounded-2xl !border-none focus:!shadow-none')
+                ->selectedClass($this->theme()->activeBadge(), $this->theme()->inactiveBadge())
+                ->options([
+                    'all' => __('All'),
+                    'pinned' => __('Pinned'),
+                    'archived' => __('Archived'),
+                ])->default('all')
+                ->name('filter', false)->filter(),
+        );
     }
 
     public function query()
     {
-        $query = AiConversation::where('user_id', auth()->id());
-
-        // Apply filter
-        if ($this->filter === 'pinned') {
-            $query->whereRaw("JSON_EXTRACT(metadata, '$.pinned') = true");
-        } elseif ($this->filter === 'archived') {
-            $query->where('status', 'archived');
-        } else {
-            $query->where('status', 'active');
-        }
-
-        // Apply search
-        if ($this->search) {
-            $query->where(function ($q) {
-                $q->where('title', 'like', "%{$this->search}%")
-                  ->orWhereHas('messages', function ($mq) {
-                      $mq->where('content', 'like', "%{$this->search}%");
-                  });
-            });
-        }
-
-        // Pinned first, then by last message
-        return $query
+        return AiConversation::where('user_id', auth()->id())
+            ->forFilter(request('filter', 'all'))
+            ->when(request('search'), fn($q, $search) => $q->search($search))
             ->orderByRaw("JSON_EXTRACT(metadata, '$.pinned') DESC")
-            ->orderByDesc('last_message_at')
-            ->orderByDesc('created_at');
+            ->orderByRaw('IFNULL(last_message_at, created_at) DESC');
     }
 
     public function render($conversation)
@@ -101,10 +80,10 @@ class ConversationListQuery extends Query
                 $messageCount > 0 ? _Badge($messageCount)->class('text-xs bg-gray-200 text-gray-600 ml-2') : null,
             )->class('mt-1'),
         )->class('px-4 py-3 cursor-pointer transition-all border-l-4 ' . ($isSelected
-            ? 'bg-indigo-50 border-indigo-500'
+            ? $this->theme()->selectedBg() . ' ' . $this->theme()->selectedBorder()
             : 'hover:bg-gray-100 border-transparent'))
          ->selfPost('selectConversation', ['id' => $conversation->id])
-         ->inPanel(AiChatPanel::ID);
+         ->inPanel(AiChatPanel::ID . '-wrapper');
     }
 
     protected function getPreviewText($message): string
@@ -138,14 +117,6 @@ class ConversationListQuery extends Query
 
     public function selectConversation($id)
     {
-        return (new AiChatPanel(null, ['conversation_id' => $id]))->render();
-    }
-
-    public function filterConversations($filter)
-    {
-        return new self(null, [
-            'selected_id' => $this->selectedId,
-            'filter' => $filter,
-        ]);
+        return new AiChatPanel(null, ['conversation_id' => $id]);
     }
 }

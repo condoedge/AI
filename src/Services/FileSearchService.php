@@ -4,7 +4,7 @@ namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\ChunkStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
-use Condoedge\Ai\Models\File;
+use Condoedge\Utils\Models\Files\File;
 
 /**
  * File Search Service

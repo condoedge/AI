@@ -50,6 +50,9 @@ class TaskInstructionsSection extends BasePromptSection
         $output .= "5. Uses the appropriate query patterns from the library\n";
         $output .= "6. Follows all query generation rules\n";
         $output .= "7. Returns clean Cypher only (no markdown, no explanations, no formatting)\n\n";
+
+        $output .= "If the question cannot be answered with a Cypher query based on the provided context or a query it's not required to answer the question, return an strict text: 'NO QUERY REQUIRED'.\n\n";
+
         $output .= "CYPHER QUERY:";
 
         return $output;
