@@ -193,66 +193,6 @@ class SemanticMatcher
     }
 
     /**
-     * Match scopes in a question using semantic similarity
-     *
-     * Detects which scopes are mentioned by matching against:
-     * - Scope names (e.g., "volunteers", "premium_customers")
-     * - Scope descriptions
-     * - Scope concepts
-     *
-     * @param string $question Natural language question
-     * @param array $scopes All scopes from all entities
-     * @param float $threshold Minimum similarity score
-     * @return array Array of matched scopes with details
-     */
-    public function matchScopes(
-        string $question,
-        array $scopes,
-        float $threshold = 0.70
-    ): array {
-        $matches = [];
-
-        foreach ($scopes as $scopeName => $scopeConfig) {
-            // Build candidate texts: name + description + concept
-            $candidateTexts = [$scopeName];
-
-            if (!empty($scopeConfig['description'])) {
-                $candidateTexts[] = $scopeConfig['description'];
-            }
-
-            if (!empty($scopeConfig['concept'])) {
-                $candidateTexts[] = $scopeConfig['concept'];
-            }
-
-            // Check each candidate
-            foreach ($candidateTexts as $candidateText) {
-                $match = $this->findBestMatch(
-                    query: $question,
-                    candidates: [$scopeName => $candidateText],
-                    threshold: $threshold
-                );
-
-                if ($match) {
-                    $matches[] = [
-                        'scope' => $scopeName,
-                        'entity' => $scopeConfig['entity'] ?? null,
-                        'score' => $match['score'],
-                        'exact' => $match['exact'],
-                        'matched_text' => $candidateText,
-                        'config' => $scopeConfig,
-                    ];
-                    break;
-                }
-            }
-        }
-
-        // Sort by score (highest first)
-        usort($matches, fn($a, $b) => $b['score'] <=> $a['score']);
-
-        return $matches;
-    }
-
-    /**
      * Match a label (entity type) in a question
      *
      * Finds the most relevant label by matching against:
