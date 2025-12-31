@@ -9,6 +9,7 @@ use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Exceptions\QueryExecutionException;
 use Condoedge\Ai\Exceptions\QueryTimeoutException;
 use Condoedge\Ai\Exceptions\ReadOnlyViolationException;
+use Condoedge\Ai\Services\Resilience\RateLimiter;
 
 /**
  * Query Executor Service
@@ -28,15 +29,27 @@ class QueryExecutor implements QueryExecutorInterface
     ];
 
     /**
+     * Rate limiter instance
+     */
+    protected RateLimiter $rateLimiter;
+
+    /**
      * Constructor
      *
      * @param GraphStoreInterface $graphStore Graph database interface
      * @param array $config Configuration options
+     * @param RateLimiter|null $rateLimiter Optional rate limiter (creates default if null)
      */
     public function __construct(
         private readonly GraphStoreInterface $graphStore,
-        private readonly array $config = []
+        private readonly array $config = [],
+        ?RateLimiter $rateLimiter = null
     ) {
+        $this->rateLimiter = $rateLimiter ?? new RateLimiter(
+            key: 'query_executor',
+            maxRequests: (int) config('ai.rate_limits.queries_per_minute', 30),
+            windowSeconds: 60
+        );
     }
 
     /**
@@ -68,6 +81,13 @@ class QueryExecutor implements QueryExecutorInterface
                 'metadata' => [],
                 'context' => 'NO QUERY',
             ];
+        }
+
+        // SECURITY: Enforce rate limiting to prevent DoS via expensive query flooding
+        if (!$this->rateLimiter->attempt()) {
+            throw new QueryExecutionException(
+                'Rate limit exceeded for query execution. Please wait before trying again.'
+            );
         }
 
         // Check read-only mode

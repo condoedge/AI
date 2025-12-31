@@ -265,6 +265,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Rate Limiting Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure rate limits to prevent DoS attacks via expensive query flooding.
+    | These limits apply to query execution and LLM API calls.
+    |
+    */
+    'rate_limits' => [
+        'queries_per_minute' => env('AI_QUERIES_PER_MINUTE', 30),
+        'llm_requests_per_minute' => env('AI_LLM_REQUESTS_PER_MINUTE', 60),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Response Generation Settings
     |--------------------------------------------------------------------------
     |
