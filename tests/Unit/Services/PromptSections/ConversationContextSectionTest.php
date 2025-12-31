@@ -38,7 +38,7 @@ class ConversationContextSectionTest extends TestCase
         $context = [
             'conversation_context' => [
                 'focused_entity' => 'Customer',
-                'recent_exchanges' => [['user' => ['content' => 'test']]],
+                'recent_exchanges' => [['question' => 'test']],
             ],
         ];
 
@@ -59,7 +59,7 @@ class ConversationContextSectionTest extends TestCase
 
         $output = $this->section->format('show top 5', $context);
 
-        $this->assertStringContainsString('CONVERSATION CONTEXT', $output);
+        $this->assertStringContainsString('## Conversation Context', $output);
         $this->assertStringContainsString('Customer', $output);
         $this->assertStringContainsString('count', $output);
         $this->assertStringContainsString('MATCH (c:Customer)', $output);
@@ -73,11 +73,8 @@ class ConversationContextSectionTest extends TestCase
                 'focused_entity' => 'Customer',
                 'recent_exchanges' => [
                     [
-                        'user' => ['content' => 'How many customers?'],
-                        'assistant' => [
-                            'content' => 'There are 150 customers.',
-                            'cypher_query' => 'MATCH (c:Customer) RETURN count(c)',
-                        ],
+                        'question' => 'How many customers?',
+                        'answer_summary' => 'There are 150 customers.',
                     ],
                 ],
             ],
@@ -90,18 +87,17 @@ class ConversationContextSectionTest extends TestCase
     }
 
     /** @test */
-    public function it_includes_continuation_hint_for_follow_ups(): void
+    public function it_includes_follow_up_hint_in_instructions(): void
     {
         $context = [
             'conversation_context' => [
                 'focused_entity' => 'Customer',
                 'last_cypher_query' => 'MATCH (c:Customer) RETURN count(c)',
-                'is_follow_up' => true,
             ],
         ];
 
         $output = $this->section->format('and in Sales?', $context);
 
-        $this->assertStringContainsString('continuation', strtolower($output));
+        $this->assertStringContainsString('follow-up', strtolower($output));
     }
 }
