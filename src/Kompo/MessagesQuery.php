@@ -467,7 +467,7 @@ class MessagesQuery extends Query
     {
         request()->merge(['message' => $question]);
         $form = new ChatMessageForm(null, ['conversation_id' => $this->conversation->id]);
-        $form->sendMessage()
+        $form->sendMessage();
     }
 
     public function viewFile($id)
