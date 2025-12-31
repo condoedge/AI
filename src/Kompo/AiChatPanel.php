@@ -8,7 +8,6 @@ use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
-use Condoedge\Ai\Kompo\Traits\HasTypingIndicator;
 use Condoedge\Ai\Kompo\Modals\FilePreviewModal;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
@@ -35,7 +34,7 @@ use Condoedge\Utils\Kompo\Common\Form;
  */
 class AiChatPanel extends Form
 {
-    use HasChatSettings, HasChatTheme, HasAvatars, HasTypingIndicator, HasMethodsAsProperties;
+    use HasChatSettings, HasChatTheme, HasAvatars, HasMethodsAsProperties;
 
     public $style = 'max-height: 95vh;';
 
