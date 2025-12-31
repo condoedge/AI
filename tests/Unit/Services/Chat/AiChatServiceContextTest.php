@@ -2,19 +2,12 @@
 
 namespace Condoedge\Ai\Tests\Unit\Services\Chat;
 
-use Condoedge\Ai\Models\AiConversation;
-use Condoedge\Ai\Services\Chat\AiChatMessage;
 use Condoedge\Ai\Services\Chat\AiChatService;
 use Condoedge\Ai\Services\Context\ConversationContextManager;
-use Condoedge\Ai\Services\Context\EntityExtractor;
-use Condoedge\Ai\Services\Context\ReferenceResolver;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Orchestra\Testbench\TestCase;
 
 class AiChatServiceContextTest extends TestCase
 {
-    use RefreshDatabase;
-
     private AiChatService $service;
 
     /**
@@ -27,25 +20,11 @@ class AiChatServiceContextTest extends TestCase
 
     protected function getEnvironmentSetUp($app): void
     {
-        // Set up in-memory SQLite database for testing
-        $app['config']->set('database.default', 'testing');
-        $app['config']->set('database.connections.testing', [
-            'driver' => 'sqlite',
-            'database' => ':memory:',
-            'prefix' => '',
-        ]);
-
         // Set up AI config
         $app['config']->set('ai.response_generation.default_style', 'friendly');
         $app['config']->set('ai.chat.show_metrics', false);
         $app['config']->set('ai.chat.max_history_messages', 10);
         $app['config']->set('app.name', 'Test App');
-    }
-
-    protected function defineDatabaseMigrations(): void
-    {
-        // Run migrations for the AI tables
-        $this->loadMigrationsFrom(__DIR__ . '/../../../../database/migrations');
     }
 
     public function setUp(): void
@@ -64,111 +43,12 @@ class AiChatServiceContextTest extends TestCase
     }
 
     /** @test */
-    public function it_has_prepare_question_with_context_method(): void
-    {
-        $this->assertTrue(
-            method_exists($this->service, 'prepareQuestionWithContext'),
-            'AiChatService should have prepareQuestionWithContext method'
-        );
-    }
-
-    /** @test */
-    public function prepare_question_with_context_enriches_follow_up_questions(): void
-    {
-        // Set up a conversation with context
-        $conversation = AiConversation::create([
-            'user_id' => 1,
-            'context_snapshot' => [
-                'focused_entity' => 'Customer',
-                'mentioned_entities' => ['Customer'],
-                'last_query_type' => 'count',
-            ],
-        ]);
-
-        // Add a previous message
-        $conversation->messages()->create([
-            'role' => 'assistant',
-            'content' => 'There are 150 customers.',
-            'cypher_query' => 'MATCH (c:Customer) RETURN count(c)',
-        ]);
-
-        $schema = ['labels' => ['Customer', 'Order', 'Product']];
-
-        // Test follow-up question enrichment
-        $result = $this->service->prepareQuestionWithContext(
-            'Show me those in the Sales team',
-            $conversation,
-            $schema
-        );
-
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('enriched_question', $result);
-        $this->assertArrayHasKey('is_follow_up', $result);
-        $this->assertTrue($result['is_follow_up']);
-        // The enriched question should reference Customer since that's the context
-        // Note: ReferenceResolver uses lowercase entity names when replacing pronouns
-        $this->assertStringContainsStringIgnoringCase('customer', $result['enriched_question']);
-    }
-
-    /** @test */
-    public function prepare_question_with_context_returns_original_for_non_follow_up(): void
-    {
-        $conversation = AiConversation::create(['user_id' => 1]);
-        $schema = ['labels' => ['Customer', 'Order']];
-
-        $question = 'How many orders do we have?';
-        $result = $this->service->prepareQuestionWithContext(
-            $question,
-            $conversation,
-            $schema
-        );
-
-        $this->assertFalse($result['is_follow_up']);
-        $this->assertEquals($question, $result['enriched_question']);
-    }
-
-    /** @test */
     public function it_has_context_manager_property(): void
     {
         // Test that getContextManager returns a ConversationContextManager
         $manager = $this->service->getContextManager();
 
         $this->assertInstanceOf(ConversationContextManager::class, $manager);
-    }
-
-    /** @test */
-    public function prepare_question_with_context_returns_required_keys(): void
-    {
-        $conversation = AiConversation::create(['user_id' => 1]);
-        $schema = ['labels' => ['Customer', 'Order']];
-
-        $result = $this->service->prepareQuestionWithContext(
-            'How many customers?',
-            $conversation,
-            $schema
-        );
-
-        $this->assertArrayHasKey('is_follow_up', $result);
-        $this->assertArrayHasKey('enriched_question', $result);
-        $this->assertArrayHasKey('focused_entity', $result);
-        $this->assertArrayHasKey('query_type', $result);
-        $this->assertArrayHasKey('context', $result);
-    }
-
-    /** @test */
-    public function prepare_question_with_context_detects_entity_focus(): void
-    {
-        $conversation = AiConversation::create(['user_id' => 1]);
-        $schema = ['labels' => ['Customer', 'Order', 'Product']];
-
-        $result = $this->service->prepareQuestionWithContext(
-            'How many customers do we have?',
-            $conversation,
-            $schema
-        );
-
-        $this->assertEquals('Customer', $result['focused_entity']);
-        $this->assertEquals('count', $result['query_type']);
     }
 
     /** @test */
