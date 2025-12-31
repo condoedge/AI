@@ -77,15 +77,6 @@ class RateLimiter
     }
 
     /**
-     * Get remaining requests in current window
-     */
-    public function remaining(): int
-    {
-        $current = (int) Cache::get($this->key, 0);
-        return max(0, $this->maxRequests - $current);
-    }
-
-    /**
      * Create a rate limiter for LLM API calls
      */
     public static function forLlm(): self

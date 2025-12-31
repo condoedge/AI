@@ -337,15 +337,4 @@ class CircuitBreaker
         $this->openedAt = $this->getCachedOpenedAt();
     }
 
-    /**
-     * Sync local state to cache
-     * Call this after modifying local properties
-     */
-    private function syncToCache(): void
-    {
-        $this->setCachedState($this->state);
-        $this->setCachedFailureCount($this->failureCount);
-        $this->setCachedLastFailureTime($this->lastFailureTime);
-        $this->setCachedOpenedAt($this->openedAt);
-    }
 }
