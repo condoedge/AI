@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Context;
 
 use Condoedge\Ai\Models\AiConversation;
+use Illuminate\Support\Str;
 
 /**
  * ConversationContextManager
@@ -79,16 +80,24 @@ class ConversationContextManager
     }
 
     /**
-     * Record an AI response and update context with query info
+     * Record an AI response and update context with enhanced entity data.
+     *
+     * Stores query results, entity filters, and answer summaries to enable
+     * resolution of references like "those", "them", "the same" in follow-up questions.
      */
     public function recordResponse(
         AiConversation $conversation,
         string $response,
-        string $cypherQuery,
+        ?string $cypherQuery,
         array $queryResult
     ): void {
-        // Extract entities from the Cypher query
-        $cypherEntities = $this->entityExtractor->extractFromCypher($cypherQuery);
+        $snapshot = $conversation->context_snapshot ?? [];
+
+        // Extract entities from the Cypher query (if available)
+        $cypherEntities = ['entities' => [], 'relationships' => []];
+        if ($cypherQuery) {
+            $cypherEntities = $this->entityExtractor->extractFromCypher($cypherQuery);
+        }
 
         // Update context with the entities from the executed query
         $currentEntities = $conversation->getMentionedEntities();
@@ -99,54 +108,95 @@ class ConversationContextManager
             $focusedEntity = $cypherEntities['entities'][0];
         }
 
+        // Extract entity filter from Cypher WHERE clause
+        $entityFilter = $this->extractEntityFilter($cypherQuery);
+
+        // Store result sample (first 3 results for context)
+        $resultSample = array_slice($queryResult['data'] ?? [], 0, 3);
+
+        // Update snapshot with enhanced data
         $conversation->updateContextSnapshot([
             'focused_entity' => $focusedEntity,
             'mentioned_entities' => $newEntities,
             'last_relationships' => $cypherEntities['relationships'],
+            'last_cypher_query' => $cypherQuery,
             'last_result_count' => count($queryResult['data'] ?? []),
+            'last_result_sample' => $resultSample,
+            'focused_entity_filter' => $entityFilter,
+            'last_answer_summary' => Str::limit($response, 200),
+            'updated_at' => now()->toIso8601String(),
         ]);
     }
 
     /**
-     * Build context data for the prompt builder
+     * Extract WHERE clause conditions from Cypher query.
+     *
+     * Used to track entity filters for reference resolution in follow-up questions.
+     */
+    protected function extractEntityFilter(?string $cypherQuery): ?string
+    {
+        if (!$cypherQuery) {
+            return null;
+        }
+
+        // Extract WHERE clause
+        if (preg_match('/WHERE\s+(.+?)(?:RETURN|ORDER|LIMIT|$)/is', $cypherQuery, $matches)) {
+            return trim($matches[1]);
+        }
+
+        return null;
+    }
+
+    /**
+     * Build enhanced prompt context with entity data.
+     *
+     * Provides comprehensive context for prompt building including:
+     * - Current focused entity and filter conditions
+     * - Sample results from last query for reference resolution
+     * - Recent conversation exchanges for continuity
      */
     public function buildPromptContext(AiConversation $conversation, int $maxHistory = 5): array
     {
         $snapshot = $conversation->context_snapshot ?? [];
-        $lastQuery = $conversation->getLastCypherQuery();
 
-        // Get recent message exchanges
-        $recentMessages = $conversation->messages()
-            ->orderBy('created_at', 'desc')
-            ->limit($maxHistory * 2) // User + assistant pairs
-            ->get()
-            ->reverse()
-            ->values();
-
-        $recentExchanges = [];
-        foreach ($recentMessages->chunk(2) as $pair) {
-            $exchange = [];
-            foreach ($pair as $message) {
-                $exchange[$message->role] = [
-                    'content' => $message->content,
-                    'cypher_query' => $message->cypher_query,
-                ];
-            }
-            if (!empty($exchange)) {
-                $recentExchanges[] = $exchange;
-            }
-        }
-
-        // Limit to maxHistory exchanges
-        $recentExchanges = array_slice($recentExchanges, -$maxHistory);
+        // Get recent messages for exchange formatting
+        $recentMessages = $conversation->getRecentMessages($maxHistory);
 
         return [
             'focused_entity' => $snapshot['focused_entity'] ?? null,
-            'mentioned_entities' => $snapshot['mentioned_entities'] ?? [],
+            'focused_entity_filter' => $snapshot['focused_entity_filter'] ?? null,
+            'last_result_sample' => $snapshot['last_result_sample'] ?? [],
+            'last_result_count' => $snapshot['last_result_count'] ?? 0,
+            'last_cypher_query' => $snapshot['last_cypher_query'] ?? null,
             'last_query_type' => $snapshot['last_query_type'] ?? null,
-            'last_cypher_query' => $lastQuery,
-            'last_result_count' => $snapshot['last_result_count'] ?? null,
-            'recent_exchanges' => $recentExchanges,
+            'last_relationships' => $snapshot['last_relationships'] ?? [],
+            'mentioned_entities' => $snapshot['mentioned_entities'] ?? [],
+            'last_answer_summary' => $snapshot['last_answer_summary'] ?? null,
+            'recent_exchanges' => $this->formatRecentExchanges($recentMessages),
         ];
+    }
+
+    /**
+     * Format recent messages as exchanges for prompt context.
+     *
+     * Structures messages into a format suitable for context injection,
+     * with summarized answers to keep prompt size manageable.
+     */
+    protected function formatRecentExchanges(array $messages): array
+    {
+        $exchanges = [];
+        foreach ($messages as $message) {
+            $role = $message['role'] ?? 'unknown';
+            $content = $message['content'] ?? '';
+
+            $exchanges[] = [
+                'role' => $role,
+                'question' => $role === 'user' ? $content : null,
+                'answer_summary' => $role === 'assistant'
+                    ? Str::limit($content, 100)
+                    : null,
+            ];
+        }
+        return $exchanges;
     }
 }
