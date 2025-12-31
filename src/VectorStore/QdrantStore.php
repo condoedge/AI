@@ -93,7 +93,7 @@ class QdrantStore implements VectorStoreInterface
         }
     }
 
-    public function listCollections()
+    public function listCollections(): array
     {
         try {
             $response = $this->request('GET', '/collections');

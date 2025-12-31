@@ -14,7 +14,7 @@ class ProcessingResult
      * Create a new ProcessingResult instance
      *
      * @param bool $success Whether the processing was successful
-     * @param int $fileId The ID of the processed file
+     * @param string|int $fileId The ID of the processed file (string for physical files like "physical:path/to/file")
      * @param int $chunksCreated Number of chunks created
      * @param int $embeddingsGenerated Number of embeddings generated
      * @param float $processingTimeSeconds Time taken to process (in seconds)
@@ -23,7 +23,7 @@ class ProcessingResult
      */
     public function __construct(
         public readonly bool $success,
-        public readonly int $fileId,
+        public readonly string|int $fileId,
         public readonly int $chunksCreated,
         public readonly int $embeddingsGenerated,
         public readonly float $processingTimeSeconds,
@@ -34,7 +34,7 @@ class ProcessingResult
     /**
      * Create a successful processing result
      *
-     * @param int $fileId
+     * @param string|int $fileId
      * @param int $chunksCreated
      * @param int $embeddingsGenerated
      * @param float $processingTimeSeconds
@@ -42,7 +42,7 @@ class ProcessingResult
      * @return self
      */
     public static function success(
-        int $fileId,
+        string|int $fileId,
         int $chunksCreated,
         int $embeddingsGenerated,
         float $processingTimeSeconds,
@@ -62,14 +62,14 @@ class ProcessingResult
     /**
      * Create a failed processing result
      *
-     * @param int $fileId
+     * @param string|int $fileId
      * @param string $error
      * @param float $processingTimeSeconds
      * @param array $metadata
      * @return self
      */
     public static function failure(
-        int $fileId,
+        string|int $fileId,
         string $error,
         float $processingTimeSeconds = 0.0,
         array $metadata = []

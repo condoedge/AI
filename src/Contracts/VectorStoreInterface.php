@@ -47,11 +47,11 @@ interface VectorStoreInterface
 
 
     /**
-     * List all collections
+     * List all collections in the vector store.
      *
-     * @return array Array of collection names
+     * @return array<string> Collection names
      */
-    public function listCollections();
+    public function listCollections(): array;
 
     /**
      * Search for similar vectors
