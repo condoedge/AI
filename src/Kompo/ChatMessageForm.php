@@ -5,7 +5,7 @@ namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Services\AiManager;
-use Condoedge\Ai\Kompo\Traits\HasChatConfig;
+use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Utils\Kompo\Common\Form;
@@ -23,7 +23,7 @@ use Condoedge\Utils\Kompo\Common\Form;
  */
 class ChatMessageForm extends Form
 {
-    use HasChatConfig, HasChatTheme;
+    use HasChatSettings, HasChatTheme;
 
     public $id = 'chat-message-form';
     public $class = 'w-full';
@@ -35,11 +35,10 @@ class ChatMessageForm extends Form
 
     public function created()
     {
-        $this->loadChatConfig();
 
         $this->conversationId = $this->prop('conversation_id');
         $this->panelId = $this->prop('panel_id') ?? AiChatPanel::MESSAGES_PANEL_ID;
-        $this->responseStyle = $this->prop('response_style') ?? $this->cfg('response_style') ?? 'friendly';
+        $this->responseStyle = $this->prop('response_style') ?? $this->settings()->responseStyle() ?? 'friendly';
 
         if ($this->conversationId) {
             $this->conversation = AiConversation::where('user_id', auth()->id())
@@ -58,7 +57,7 @@ class ChatMessageForm extends Form
         return _Rows(
             _Flex(
                 _Textarea()->name('message')
-                    ->placeholder($this->cfg('input_placeholder'))
+                    ->placeholder($this->settings()->inputPlaceholder())
                     ->id('chat-message-input')
                     ->class('flex-1 bg-transparent !mb-0 border-0 focus:ring-0 text-gray-800 placeholder-gray-400 resize-none min-h-[44px] max-h-[200px]')
                     ->rows(1)
@@ -134,9 +133,11 @@ class ChatMessageForm extends Form
             ], $recentMessages);
 
             // Call AI service
+            // SECURITY: Pass authenticated user for file access control
             $response = $aiManager->askWithHistory($message, $history, [
                 'style' => $style,
                 'conversation_id' => $this->conversation->id,
+                'user' => auth()->user(),
             ]);
 
             // Extract response data

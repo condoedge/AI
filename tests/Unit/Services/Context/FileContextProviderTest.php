@@ -41,6 +41,12 @@ class FileContextProviderTest extends TestCase
         $this->searchService = Mockery::mock(FileSearchService::class);
         $this->accessResolver = Mockery::mock(FileAccessResolverInterface::class);
 
+        // Default security behavior: allow pass-through (security check passes)
+        // Individual tests can override this with specific expectations
+        $this->accessResolver->shouldReceive('shouldEnforceSecurity')
+            ->byDefault()
+            ->andReturn(true);
+
         $this->provider = new FileContextProvider(
             $this->searchService,
             $this->accessResolver
@@ -741,8 +747,13 @@ class FileContextProviderTest extends TestCase
     // =========================================================================
 
     /** @test */
-    public function it_handles_null_user_gracefully(): void
+    public function it_handles_null_user_gracefully_when_security_disabled(): void
     {
+        // When security is disabled, null user should be allowed
+        $this->accessResolver
+            ->shouldReceive('shouldEnforceSecurity')
+            ->andReturn(false);
+
         $chunk = $this->createMockChunk(
             fileId: 'physical:/docs/public.md',
             fileName: 'public.md',
@@ -762,7 +773,7 @@ class FileContextProviderTest extends TestCase
                 ],
             ]);
 
-        // Even with null user, physical files should pass through
+        // Even with null user and security disabled, physical files should pass through
         $this->accessResolver
             ->shouldReceive('filterAccessibleFileIds')
             ->once()

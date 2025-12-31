@@ -53,9 +53,13 @@ class FileContextProvider
      *   - limit: Override max references limit
      *   - min_score: Override minimum relevance score
      * @return array Array of file references with standardized format
+     * @throws \RuntimeException When security is enabled and user is null
      */
     public function searchRelevantFiles(string $question, mixed $user, array $options = []): array
     {
+        // SECURITY: Require user when security is enabled
+        $this->validateUserForSecurity($user);
+
         // Get configuration values
         $minScore = $options['min_score'] ?? config('ai.file_context.min_relevance_score', 0.7);
         $maxReferences = $options['limit'] ?? config('ai.file_context.max_references', 5);
@@ -164,9 +168,13 @@ class FileContextProvider
      * @param string $question The search query/question
      * @param mixed $user The user to check access for
      * @return array Context array with: relevant_files, file_count, has_physical, has_database
+     * @throws \RuntimeException When security is enabled and user is null
      */
     public function getFileContext(string $question, mixed $user): array
     {
+        // SECURITY: Require user when security is enabled
+        $this->validateUserForSecurity($user);
+
         $relevantFiles = $this->searchRelevantFiles($question, $user);
 
         // Analyze sources
@@ -223,5 +231,18 @@ class FileContextProvider
         }
 
         return substr($content, 0, $maxLength) . '...';
+    }
+
+    /**
+     * Validate that user is provided when security is enabled
+     *
+     * @param mixed $user The user to validate
+     * @throws \RuntimeException When security is enabled and user is null
+     */
+    private function validateUserForSecurity(mixed $user): void
+    {
+        if ($this->accessResolver->shouldEnforceSecurity() && $user === null) {
+            throw new \RuntimeException('User required for file context retrieval');
+        }
     }
 }
