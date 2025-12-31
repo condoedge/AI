@@ -167,24 +167,13 @@ class AiChatService implements AiChatServiceInterface
     }
 
     /**
-     * Process a question within a persistent conversation context.
-     *
-     * This method uses ConversationContextManager to:
-     * - Track entity focus across the conversation
-     * - Resolve references in follow-up questions (e.g., "those", "them")
-     * - Build enriched prompts with conversation context
-     * - Store messages in the conversation
-     *
-     * @param string $question The user's question
-     * @param AiConversation $conversation The conversation to use for context
-     * @param array $options Additional options (schema, style, etc.)
-     * @return AiChatMessage The assistant's response message
+     * {@inheritdoc}
      */
     public function askWithConversation(
         string $question,
         AiConversation $conversation,
         array $options = []
-    ): AiChatMessage {
+    ): array {
         $startTime = microtime(true);
         $options = array_merge($this->config, $options);
 
@@ -248,7 +237,13 @@ class AiChatService implements AiChatServiceInterface
                 'execution_time_ms' => $executionTime,
             ]);
 
-            return AiChatMessage::assistant($answerText, $responseData);
+            return [
+                'answer' => $answerText,
+                'data' => $queryResult,
+                'suggestions' => $responseData->suggestions ?? [],
+                'sources' => $aiResponse['referenced_files'] ?? [],
+                'cypher_query' => $cypherQuery ?: null,
+            ];
 
         } catch (\Exception $e) {
             Log::error('AI Chat with conversation error', [
@@ -257,17 +252,21 @@ class AiChatService implements AiChatServiceInterface
                 'error' => $e->getMessage(),
             ]);
 
-            $errorData = AiChatResponseData::error($this->getUserFriendlyError($e));
+            $errorMessage = $this->getUserFriendlyError($e);
+            $errorData = AiChatResponseData::error($errorMessage);
 
             // Store error response in conversation
-            $conversation->addMessage('assistant', $this->getUserFriendlyError($e), [
+            $conversation->addMessage('assistant', $errorMessage, [
                 'response_data' => $errorData->toArray(),
             ]);
 
-            return AiChatMessage::assistant(
-                $this->getUserFriendlyError($e),
-                $errorData
-            );
+            return [
+                'answer' => $errorMessage,
+                'data' => [],
+                'suggestions' => [],
+                'sources' => [],
+                'cypher_query' => null,
+            ];
         }
     }
 
@@ -453,6 +452,14 @@ EOT;
         } catch (\Exception $e) {
             return false;
         }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function getSchema(): array
+    {
+        return $this->getSchemaForContext([]);
     }
 
     /**

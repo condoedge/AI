@@ -4,51 +4,56 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Chat;
 
+use Condoedge\Ai\Models\AiConversation;
+
 /**
- * Contract for AI Chat service implementations.
- * Allows for different chat backends while maintaining consistent interface.
+ * Interface for AI chat service operations.
+ *
+ * This is the primary interface for chat interactions. All chat requests
+ * should go through askWithConversation() to ensure proper context tracking.
  */
 interface AiChatServiceInterface
 {
     /**
-     * Process a user question and return an AI response.
+     * Ask a question within a conversation context.
+     *
+     * This method:
+     * - Processes the question through ConversationContextManager
+     * - Resolves references ("those", "them") to previous results
+     * - Extracts and tracks focused entities
+     * - Calls the AI with full conversation context
+     * - Records the response for future reference
      *
      * @param string $question The user's question
-     * @param array $options Additional options (style, context, etc.)
-     * @return AiChatMessage The assistant's response message
+     * @param AiConversation $conversation The conversation for context tracking
+     * @param array $options Options including:
+     *   - 'style' => string (friendly|professional|concise)
+     *   - 'user' => User model for file access authorization
+     * @return array{
+     *   answer: string,
+     *   data: array,
+     *   suggestions: array<string>,
+     *   sources: array,
+     *   cypher_query: ?string
+     * }
      */
-    public function ask(string $question, array $options = []): AiChatMessage;
+    public function askWithConversation(
+        string $question,
+        AiConversation $conversation,
+        array $options = []
+    ): array;
 
     /**
-     * Process a question within a conversation context.
+     * Get the graph schema for context building.
      *
-     * @param string $question The user's question
-     * @param array $history Previous messages in the conversation
-     * @param array $options Additional options
-     * @return AiChatMessage The assistant's response message
+     * @return array The schema with 'labels', 'relationships', 'properties'
      */
-    public function askWithHistory(string $question, array $history, array $options = []): AiChatMessage;
+    public function getSchema(): array;
 
     /**
-     * Get suggested follow-up questions based on context.
+     * Check if the chat service is available.
      *
-     * @param string $question The original question
-     * @param string $response The AI's response
-     * @return array List of suggested questions
-     */
-    public function getSuggestions(string $question, string $response): array;
-
-    /**
-     * Get example questions for the welcome screen.
-     *
-     * @return array List of example questions
-     */
-    public function getExampleQuestions(): array;
-
-    /**
-     * Check if the service is available and properly configured.
-     *
-     * @return bool
+     * @return bool True if LLM and graph store are accessible
      */
     public function isAvailable(): bool;
 }
