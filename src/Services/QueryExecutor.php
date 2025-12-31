@@ -9,7 +9,9 @@ use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Exceptions\QueryExecutionException;
 use Condoedge\Ai\Exceptions\QueryTimeoutException;
 use Condoedge\Ai\Exceptions\ReadOnlyViolationException;
+use Condoedge\Ai\Models\AiQueryLog;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Query Executor Service
@@ -129,6 +131,18 @@ class QueryExecutor implements QueryExecutorInterface
                 }
             }
 
+            // Log successful query execution (non-blocking)
+            $this->logQuerySuccess(
+                question: $options['original_question'] ?? null,
+                cypherQuery: $cypherQuery,
+                executionTimeMs: $executionTime,
+                resultCount: count($formattedData),
+                templateUsed: $options['template'] ?? null,
+                confidenceScore: $options['confidence_score'] ?? null,
+                contextStats: $options['context_stats'] ?? null,
+                metadata: $options['metadata'] ?? null
+            );
+
             return [
                 'success' => true,
                 'data' => $formattedData,
@@ -144,6 +158,16 @@ class QueryExecutor implements QueryExecutorInterface
         } catch (\Exception $e) {
             // Check if timeout
             $executionTime = round((microtime(true) - $startTime) * 1000, 2);
+
+            // Log failed query execution (non-blocking)
+            $this->logQueryFailure(
+                question: $options['original_question'] ?? null,
+                cypherQuery: $cypherQuery,
+                error: $e->getMessage(),
+                templateUsed: $options['template'] ?? null,
+                metadata: $options['metadata'] ?? null
+            );
+
             if ($executionTime >= ($timeout * 1000)) {
                 throw new QueryTimeoutException(
                     "Query exceeded timeout of {$timeout} seconds"
@@ -441,5 +465,114 @@ class QueryExecutor implements QueryExecutorInterface
             'database_hits' => null, // Would need Neo4j profile info
             'rows_scanned' => null,  // Would need Neo4j profile info
         ];
+    }
+
+    /**
+     * Log successful query execution to AiQueryLog
+     *
+     * This method is non-blocking - any logging failures are caught and logged
+     * to the application log without interrupting the main execution flow.
+     *
+     * @param string|null $question Original natural language question
+     * @param string $cypherQuery The executed Cypher query
+     * @param float $executionTimeMs Query execution time in milliseconds
+     * @param int $resultCount Number of results returned
+     * @param string|null $templateUsed Template identifier if applicable
+     * @param float|null $confidenceScore AI confidence score if available
+     * @param array|null $contextStats Context retrieval statistics
+     * @param array|null $metadata Additional metadata
+     */
+    protected function logQuerySuccess(
+        ?string $question,
+        string $cypherQuery,
+        float $executionTimeMs,
+        int $resultCount,
+        ?string $templateUsed = null,
+        ?float $confidenceScore = null,
+        ?array $contextStats = null,
+        ?array $metadata = null
+    ): void {
+        try {
+            AiQueryLog::logSuccess([
+                'user_id' => auth()->id(),
+                'team_id' => $this->getCurrentTeamId(),
+                'question' => $question,
+                'cypher_query' => $cypherQuery,
+                'execution_time_ms' => $executionTimeMs,
+                'result_count' => $resultCount,
+                'template_used' => $templateUsed,
+                'confidence_score' => $confidenceScore,
+                'context_stats' => $contextStats,
+                'metadata' => $metadata,
+            ]);
+        } catch (\Exception $e) {
+            // Non-blocking: log warning but don't interrupt query execution
+            Log::warning('Failed to log successful query to AiQueryLog', [
+                'error' => $e->getMessage(),
+                'query' => substr($cypherQuery, 0, 200),
+            ]);
+        }
+    }
+
+    /**
+     * Log failed query execution to AiQueryLog
+     *
+     * This method is non-blocking - any logging failures are caught and logged
+     * to the application log without interrupting the main execution flow.
+     *
+     * @param string|null $question Original natural language question
+     * @param string $cypherQuery The attempted Cypher query
+     * @param string $error Error message from the failure
+     * @param string|null $templateUsed Template identifier if applicable
+     * @param array|null $metadata Additional metadata
+     */
+    protected function logQueryFailure(
+        ?string $question,
+        string $cypherQuery,
+        string $error,
+        ?string $templateUsed = null,
+        ?array $metadata = null
+    ): void {
+        try {
+            AiQueryLog::logFailure([
+                'user_id' => auth()->id(),
+                'team_id' => $this->getCurrentTeamId(),
+                'question' => $question,
+                'cypher_query' => $cypherQuery,
+                'template_used' => $templateUsed,
+                'metadata' => $metadata,
+            ], $error);
+        } catch (\Exception $e) {
+            // Non-blocking: log warning but don't interrupt error handling
+            Log::warning('Failed to log query failure to AiQueryLog', [
+                'error' => $e->getMessage(),
+                'original_error' => substr($error, 0, 200),
+                'query' => substr($cypherQuery, 0, 200),
+            ]);
+        }
+    }
+
+    /**
+     * Get the current team ID if available
+     *
+     * @return int|null Current team ID or null
+     */
+    protected function getCurrentTeamId(): ?int
+    {
+        // Try common patterns for getting team ID
+        if (function_exists('currentTeamId')) {
+            return currentTeamId();
+        }
+
+        $user = auth()->user();
+        if ($user && method_exists($user, 'currentTeam')) {
+            return $user->currentTeam()?->id;
+        }
+
+        if ($user && property_exists($user, 'current_team_id')) {
+            return $user->current_team_id;
+        }
+
+        return null;
     }
 }
