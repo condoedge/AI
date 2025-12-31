@@ -3,6 +3,7 @@
 
 namespace Condoedge\Ai\Kompo\Modals;
 
+use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Models\AiUserSetting;
 use Condoedge\Ai\Services\UI\ChatThemeFactoryInterface;
@@ -13,7 +14,7 @@ use Condoedge\Utils\Kompo\Common\Modal;
  */
 class ChatSettingsModal extends Modal
 {
-    use HasChatTheme;
+    use HasChatSettings, HasChatTheme;
 
     protected $_Title = 'Chat Settings';
     public $class = 'overflow-hidden max-w-lg rounded-2xl';
@@ -148,6 +149,26 @@ class ChatSettingsModal extends Modal
         )->class('px-6 py-4 border-t border-gray-200 bg-gray-50');
     }
 
+
+
+    public function afterSave()
+    {
+        // Sync saved settings to session for immediate effect
+        if ($this->model && $this->model->exists) {
+            session()->put('ai_chat_settings', [
+                'show_avatars' => $this->model->show_avatars,
+                'show_timestamps' => $this->model->show_timestamps,
+                'show_metrics' => $this->model->show_metrics,
+                'show_suggestions' => $this->model->show_suggestions,
+                'enable_copy' => $this->model->enable_copy,
+                'enable_feedback' => $this->model->enable_feedback,
+                'enable_regenerate' => $this->model->enable_regenerate,
+                'enable_edit' => $this->model->enable_edit,
+                'response_style' => $this->model->response_style,
+                'ui_theme' => $this->model->ui_theme,
+            ]);
+        }
+    }
 
     public function resetSettings()
     {

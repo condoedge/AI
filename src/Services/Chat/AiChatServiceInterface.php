@@ -27,7 +27,7 @@ interface AiChatServiceInterface
      * @param array $options Additional options
      * @return AiChatMessage The assistant's response message
      */
-    public function askWithHistory(string $question, array $history, array $options = []): array;
+    public function askWithHistory(string $question, array $history, array $options = []): AiChatMessage;
 
     /**
      * Get suggested follow-up questions based on context.

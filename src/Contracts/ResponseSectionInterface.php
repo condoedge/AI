@@ -28,7 +28,7 @@ namespace Condoedge\Ai\Contracts;
  * }
  * ```
  */
-interface ResponseSectionInterface
+interface ResponseSectionInterface extends SectionModuleInterface
 {
     /**
      * Get the unique name of this section

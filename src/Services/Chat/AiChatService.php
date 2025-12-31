@@ -121,7 +121,7 @@ class AiChatService implements AiChatServiceInterface
     /**
      * {@inheritdoc}
      */
-    public function askWithHistory(string $question, array $history, array $options = []): array
+    public function askWithHistory(string $question, array $history, array $options = []): AiChatMessage
     {
         $startTime = microtime(true);
         $options = array_merge($this->config, $options);
@@ -135,22 +135,20 @@ class AiChatService implements AiChatServiceInterface
                 'style' => $options['style'] ?? 'friendly',
             ]);
 
-            return $aiResponse;
+            $executionTime = (int) ((microtime(true) - $startTime) * 1000);
 
-            // $executionTime = (int) ((microtime(true) - $startTime) * 1000);
+            // Extract the answer text from the response array
+            $answerText = $aiResponse['answer'] ?? 'I could not generate a response.';
 
-            // // Extract the answer text from the response array
-            // $answerText = $aiResponse['answer'] ?? 'I could not generate a response.';
+            // Build response data
+            $responseData = $this->buildResponseData($question, $answerText, $executionTime, $options);
 
-            // // Build response data
-            // $responseData = $this->buildResponseData($question, $answerText, $executionTime, $options);
+            // Add data from AI response if available
+            if (!empty($aiResponse['data'])) {
+                $responseData = $this->enrichResponseData($responseData, $aiResponse);
+            }
 
-            // // Add data from AI response if available
-            // if (!empty($aiResponse['data'])) {
-            //     $responseData = $this->enrichResponseData($responseData, $aiResponse);
-            // }
-
-            // return AiChatMessage::assistant($answerText, $responseData);
+            return AiChatMessage::assistant($answerText, $responseData);
 
         } catch (\Exception $e) {
             Log::error('AI Chat with history error', [

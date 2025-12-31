@@ -35,24 +35,6 @@ trait HasChatTheme
         return $this->chatTheme;
     }
 
-    public function __get($property)
-    {
-        // The idea is that the we can use properties in snake_case to access theme methods in camelCase. $this->primary_gradient -> $this->theme()->primaryGradient()
-        $snakeMethod = \Illuminate\Support\Str::snake($property);
-        $camelMethod = \Illuminate\Support\Str::camel($snakeMethod);
-
-        // Delegate unknown method calls to the theme instance if possible
-        if (method_exists($this->theme(), $camelMethod)) {
-            return ' ' . $this->theme()->$camelMethod() . ' ';
-        }
-
-        if (method_exists($this, $camelMethod)) {
-            return ' ' . $this->$camelMethod() . ' ';
-        }
-
-        return null;
-    }
-
     // Shorthand methods for common theme accesses
     protected function themeGradient(): string { return 'bg-gradient-to-r ' . $this->theme()->primaryGradient(); }
     protected function themeLightGradient(): string { return 'bg-gradient-to-r ' . $this->theme()->primaryLightGradient(); }

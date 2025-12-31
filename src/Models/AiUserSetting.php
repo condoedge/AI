@@ -61,4 +61,41 @@ class AiUserSetting extends Model
         ]);
         return $this;
     }
+
+    /**
+     * Get a specific chat setting.
+     */
+    public function getSetting(string $key, $default = null)
+    {
+        return $this->chat_settings[$key] ?? $default;
+    }
+
+    /**
+     * Get all chat settings.
+     */
+    public function getSettings(): array
+    {
+        return $this->chat_settings ?? [];
+    }
+
+    /**
+     * Set a specific chat setting.
+     */
+    public function setSetting(string $key, $value): self
+    {
+        $settings = $this->chat_settings ?? [];
+        $settings[$key] = $value;
+        $this->update(['chat_settings' => $settings]);
+        return $this;
+    }
+
+    /**
+     * Set multiple chat settings.
+     */
+    public function setSettings(array $settings): self
+    {
+        $current = $this->chat_settings ?? [];
+        $this->update(['chat_settings' => array_merge($current, $settings)]);
+        return $this;
+    }
 }

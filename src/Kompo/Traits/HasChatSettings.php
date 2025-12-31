@@ -49,38 +49,6 @@ trait HasChatSettings
     }
 
     /**
-     * Magic getter for snake_case property access to settings.
-     *
-     * Allows accessing settings methods via snake_case properties:
-     * - $this->welcome_title -> $this->settings()->welcomeTitle()
-     * - $this->show_avatars -> $this->settings()->showAvatars()
-     *
-     * Note: Unlike HasChatTheme, values are returned without surrounding spaces
-     * since settings values are not CSS classes.
-     *
-     * @param string $property The property name in snake_case
-     * @return mixed The setting value, or null if not found
-     */
-    public function __get($property)
-    {
-        // Convert snake_case property to camelCase method name
-        $snakeMethod = \Illuminate\Support\Str::snake($property);
-        $camelMethod = \Illuminate\Support\Str::camel($snakeMethod);
-
-        // First try settings methods
-        if (method_exists($this->settings(), $camelMethod)) {
-            return $this->settings()->$camelMethod();
-        }
-
-        // Then try this class methods
-        if (method_exists($this, $camelMethod)) {
-            return $this->$camelMethod();
-        }
-
-        return null;
-    }
-
-    /**
      * Get a configuration value by key with optional default.
      *
      * Provides backward compatibility and a convenient way to access

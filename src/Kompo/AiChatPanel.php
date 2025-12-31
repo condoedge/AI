@@ -5,7 +5,7 @@ namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
-use Condoedge\Ai\Kompo\Traits\HasChatConfig;
+use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasTypingIndicator;
@@ -13,6 +13,8 @@ use Condoedge\Ai\Kompo\Modals\FilePreviewModal;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
 use Condoedge\Ai\Kompo\Modals\ChatHelpModal;
+use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
+use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
 use Condoedge\Utils\Kompo\Common\Form;
 
 /**
@@ -33,7 +35,7 @@ use Condoedge\Utils\Kompo\Common\Form;
  */
 class AiChatPanel extends Form
 {
-    use HasChatConfig, HasChatTheme, HasAvatars, HasTypingIndicator;
+    use HasChatSettings, HasChatTheme, HasAvatars, HasTypingIndicator, HasMethodsAsProperties;
 
     public $style = 'max-height: 95vh;';
 
@@ -48,7 +50,6 @@ class AiChatPanel extends Form
     public function created()
     {
         $this->id(self::ID);
-        $this->loadChatConfig();
         $this->selectedConversationId = $this->prop('conversation_id');
 
         // Check AI service availability
@@ -243,16 +244,16 @@ class AiChatPanel extends Form
             _FlexEnd(
                 _Rows(
                     _Html(e($message->content))->class('whitespace-pre-wrap'),
-                    $this->cfg('show_timestamps')
+                    $this->settings()->showTimestamps()
                         ? _Html($message->created_at->format('g:i A'))->class('text-xs opacity-60 mt-2')
                         : null,
                 )->class('group relative px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md'),
-                $this->cfg('show_avatars')
+                $this->settings()->showAvatars()
                     ? _Html($this->userAvatarHtml())->class('ml-3 flex-shrink-0')
                     : null,
             )->class('items-end'),
             // Edit button on hover
-            $this->cfg('enable_edit') ? _FlexEnd(
+            $this->settings()->enableEdit() ? _FlexEnd(
                 _Link('Edit')->icon('pencil')
                     ->class('opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-gray-600 mt-1 transition-opacity')
                     ->selfGet('editMessage', ['id' => $message->id])->inModal(),
@@ -279,12 +280,12 @@ class AiChatPanel extends Form
 
         // Follow-up suggestions
         $suggestions = $message->metadata['suggestions'] ?? [];
-        if ($this->cfg('show_suggestions') && !empty($suggestions)) {
+        if ($this->settings()->showSuggestions() && !empty($suggestions)) {
             $content[] = $this->renderSuggestions($suggestions);
         }
 
         // Metrics (execution time, confidence)
-        if ($this->cfg('show_metrics') && $message->execution_time_ms) {
+        if ($this->settings()->showMetrics() && $message->execution_time_ms) {
             $content[] = $this->renderMetrics($message);
         }
 
@@ -293,7 +294,7 @@ class AiChatPanel extends Form
 
         return _Rows(
             _Flex(
-                $this->cfg('show_avatars')
+                $this->settings()->showAvatars()
                     ? _Html($this->assistantAvatarHtml())->class('mr-3 flex-shrink-0 self-start')
                     : null,
                 _Rows(...$content)
@@ -307,7 +308,7 @@ class AiChatPanel extends Form
         $actions = [];
 
         // Copy button
-        if ($this->cfg('enable_copy')) {
+        if ($this->settings()->enableCopy()) {
             $actions[] = _Link()->icon(_Sax('copy', 16))
                 ->class('p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all')
                 ->balloon('Copy', 'up')
@@ -315,7 +316,7 @@ class AiChatPanel extends Form
         }
 
         // Feedback buttons
-        if ($this->cfg('enable_feedback')) {
+        if ($this->settings()->enableFeedback()) {
             $feedback = $message->metadata['feedback'] ?? null;
             $actions[] = _Link()->icon(_Sax('like-1', 16))
                 ->class('p-1.5 rounded-lg transition-all ' . ($feedback === 'positive'
@@ -335,7 +336,7 @@ class AiChatPanel extends Form
         }
 
         // Regenerate button
-        if ($this->cfg('enable_regenerate')) {
+        if ($this->settings()->enableRegenerate()) {
             $actions[] = _Link()->icon(_Sax('refresh', 16))
                 ->class('p-1.5 rounded-lg text-gray-400 ' . $this->theme()->linkHover() . ' transition-all')
                 ->balloon('Regenerate', 'up')
@@ -353,7 +354,7 @@ class AiChatPanel extends Form
             _Link($s)
                 ->class('inline-flex items-center px-3 py-1.5 text-sm rounded-full bg-gray-100 text-gray-700 ' . $this->theme()->primaryLightBgHover() . ' transition-all cursor-pointer')
                 ->selfPost('askSuggestion', ['question' => $s])->inPanel(self::MESSAGES_PANEL_ID),
-            array_slice($suggestions, 0, $this->cfg('max_suggestions'))
+            array_slice($suggestions, 0, $this->settings()->maxSuggestions())
         );
 
         return _Rows(
@@ -495,12 +496,12 @@ class AiChatPanel extends Form
     {
         $elements = [
             _Html($this->welcomeAvatarHtml())->class('mb-6'),
-            _Html($this->cfg('welcome_title'))->class('text-2xl font-bold text-gray-800 mb-3'),
-            _Html($this->cfg('welcome_message'))->class('text-gray-500 text-center max-w-md mb-8'),
+            _Html($this->settings()->welcomeTitle())->class('text-2xl font-bold text-gray-800 mb-3'),
+            _Html($this->settings()->welcomeMessage())->class('text-gray-500 text-center max-w-md mb-8'),
         ];
 
         // Example questions
-        $examples = $this->cfg('example_questions');
+        $examples = $this->settings()->exampleQuestions();
         if (!empty($examples)) {
             $questionButtons = array_map(fn($q) =>
                 _Link($q)->icon('chat-bubble-left-ellipsis')
@@ -527,7 +528,7 @@ class AiChatPanel extends Form
         return new ChatMessageForm(null, [
             'conversation_id' => $this->conversation->id,
             'panel_id' => self::MESSAGES_PANEL_ID,
-            'response_style' => $this->cfg('response_style'),
+            'response_style' => $this->settings()->responseStyle(),
         ]);
     }
 
@@ -657,7 +658,7 @@ class AiChatPanel extends Form
 
     public function openSettings()
     {
-        return new ChatSettingsModal(null, ['config' => $this->chatConfig]);
+        return new ChatSettingsModal();
     }
 
     public function openHelp()
@@ -669,53 +670,12 @@ class AiChatPanel extends Form
 
     protected function renderMarkdown(string $text): string
     {
-        $text = e($text);
+        $renderer = new SafeMarkdownRenderer([
+            'activeBadge' => $this->theme()->activeBadge(),
+            'primaryText' => $this->theme()->primaryText(),
+        ]);
 
-        // Code blocks with syntax highlighting class
-        $text = preg_replace(
-            '/```(\w+)?\n(.*?)\n```/s',
-            '<pre class="bg-gray-900 text-gray-100 p-4 rounded-xl overflow-x-auto text-sm my-3 font-mono"><code class="language-$1">$2</code></pre>',
-            $text
-        );
-
-        // Inline code
-        $codeClasses = $this->theme()->activeBadge();
-        $text = preg_replace(
-            '/`([^`]+)`/',
-            '<code class="' . $codeClasses . ' px-1.5 py-0.5 rounded text-sm font-mono">$1</code>',
-            $text
-        );
-
-        // Bold
-        $text = preg_replace('/\*\*(.+?)\*\*/', '<strong class="font-semibold">$1</strong>', $text);
-
-        // Italic
-        $text = preg_replace('/\*(.+?)\*/', '<em>$1</em>', $text);
-
-        // Lists
-        $text = preg_replace('/^- (.+)$/m', '<li class="ml-4 list-disc text-gray-700">$1</li>', $text);
-        $text = preg_replace('/^(\d+)\. (.+)$/m', '<li class="ml-4 list-decimal text-gray-700">$2</li>', $text);
-
-        // Headers
-        $text = preg_replace('/^### (.+)$/m', '<h4 class="text-lg font-semibold text-gray-800 mt-4 mb-2">$1</h4>', $text);
-        $text = preg_replace('/^## (.+)$/m', '<h3 class="text-xl font-semibold text-gray-800 mt-4 mb-2">$1</h3>', $text);
-
-        // Links - validate URLs to prevent XSS
-        $text = preg_replace_callback('/\[([^\]]+)\]\(([^\)]+)\)/', function($matches) {
-            $label = $matches[1];
-            $url = $matches[2];
-            // Only allow http(s), mailto, tel, and anchor links
-            if (preg_match('/^(https?:|mailto:|tel:|#)/', $url) || filter_var($url, FILTER_VALIDATE_URL)) {
-                return '<a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" class="' . $this->theme()->primaryText() . ' hover:underline" target="_blank">' . $label . '</a>';
-            }
-            return '[' . $label . '](' . $url . ')'; // Return as plain text if invalid
-        }, $text);
-
-        // Citations [1], [2] etc
-        $primaryText = $this->theme()->primaryText();
-        $text = preg_replace('/\[(\d+)\]/', '<sup class="' . $primaryText . ' font-medium">[$1]</sup>', $text);
-
-        return nl2br($text);
+        return $renderer->render($text);
     }
 
     protected function scrollScript(): string

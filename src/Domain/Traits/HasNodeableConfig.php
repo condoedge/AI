@@ -458,21 +458,30 @@ trait HasNodeableConfig
     }
 
     /**
-     * Deep merge two config arrays (second overwrites first)
+     * Deep merge two arrays recursively
      *
      * @param array $base Base configuration
      * @param array $override Override configuration
+     * @param int $depth Current recursion depth
      * @return array Merged configuration
+     * @throws \RuntimeException If max depth exceeded
      */
-    protected function mergeConfigDeep(array $base, array $override): array
+    protected function mergeConfigDeep(array $base, array $override, int $depth = 0): array
     {
+        if ($depth > 10) {
+            throw new \RuntimeException(
+                'Configuration merge depth exceeded maximum of 10 levels. Check for circular references.'
+            );
+        }
+
         foreach ($override as $key => $value) {
             if (is_array($value) && isset($base[$key]) && is_array($base[$key])) {
-                $base[$key] = $this->mergeConfigDeep($base[$key], $value);
+                $base[$key] = $this->mergeConfigDeep($base[$key], $value, $depth + 1);
             } else {
                 $base[$key] = $value;
             }
         }
+
         return $base;
     }
 

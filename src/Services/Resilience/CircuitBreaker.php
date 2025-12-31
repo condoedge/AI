@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Resilience;
 
 use Condoedge\Ai\Exceptions\CircuitBreakerOpenException;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * CircuitBreaker
@@ -59,6 +60,9 @@ class CircuitBreaker
      */
     public function call(callable $operation): mixed
     {
+        // Sync from cache to get the latest shared state
+        $this->syncFromCache();
+
         // Check if circuit should transition states
         $this->updateState();
 
@@ -91,18 +95,25 @@ class CircuitBreaker
      */
     private function recordSuccess(): void
     {
+        // Use atomic increment/decrement for thread safety
         if ($this->state === self::STATE_HALF_OPEN) {
             // In half-open state, track successes to potentially close circuit
-            $this->failureCount--;
+            $this->failureCount = Cache::decrement($this->cacheKey('failure_count'));
 
             if ($this->failureCount <= -$this->successThreshold) {
                 // Enough successes - close the circuit
                 $this->transitionTo(self::STATE_CLOSED);
                 $this->failureCount = 0;
+                $this->setCachedFailureCount(0);
             }
         } else if ($this->state === self::STATE_CLOSED) {
             // In closed state, reset failure count on success
-            $this->failureCount = max(0, $this->failureCount - 1);
+            $currentCount = $this->getCachedFailureCount();
+            if ($currentCount > 0) {
+                $this->failureCount = Cache::decrement($this->cacheKey('failure_count'));
+            } else {
+                $this->failureCount = 0;
+            }
         }
     }
 
@@ -111,8 +122,10 @@ class CircuitBreaker
      */
     private function recordFailure(): void
     {
-        $this->failureCount++;
+        // Use atomic increment for thread safety
+        $this->failureCount = Cache::increment($this->cacheKey('failure_count'));
         $this->lastFailureTime = time();
+        $this->setCachedLastFailureTime($this->lastFailureTime);
 
         // Check if we should open the circuit
         if ($this->state === self::STATE_CLOSED && $this->failureCount >= $this->failureThreshold) {
@@ -130,7 +143,9 @@ class CircuitBreaker
     {
         if ($this->state === self::STATE_OPEN) {
             $now = time();
-            $timeSinceOpened = $now - ($this->openedAt ?? $now);
+            // Use cached openedAt for cross-process consistency
+            $openedAt = $this->openedAt ?? $this->getCachedOpenedAt() ?? $now;
+            $timeSinceOpened = $now - $openedAt;
 
             // Check if recovery timeout has elapsed
             if ($timeSinceOpened >= $this->recoveryTimeoutSeconds) {
@@ -149,11 +164,17 @@ class CircuitBreaker
         $oldState = $this->state;
         $this->state = $newState;
 
+        // Update cached state immediately
+        $this->setCachedState($newState);
+
         if ($newState === self::STATE_OPEN) {
             $this->openedAt = time();
+            $this->setCachedOpenedAt($this->openedAt);
         } else if ($newState === self::STATE_CLOSED) {
             $this->openedAt = null;
             $this->failureCount = 0;
+            $this->setCachedOpenedAt(null);
+            $this->setCachedFailureCount(0);
         }
 
         // Log state transition
@@ -175,6 +196,7 @@ class CircuitBreaker
      */
     public function getState(): string
     {
+        $this->syncFromCache();
         $this->updateState();
         return $this->state;
     }
@@ -186,7 +208,7 @@ class CircuitBreaker
      */
     public function getFailureCount(): int
     {
-        return $this->failureCount;
+        return $this->getCachedFailureCount();
     }
 
     /**
@@ -196,6 +218,7 @@ class CircuitBreaker
      */
     public function isOpen(): bool
     {
+        $this->syncFromCache();
         $this->updateState();
         return $this->state === self::STATE_OPEN;
     }
@@ -209,5 +232,120 @@ class CircuitBreaker
         $this->failureCount = 0;
         $this->lastFailureTime = null;
         $this->openedAt = null;
+
+        // Clear all cached state
+        $this->setCachedState(self::STATE_CLOSED);
+        $this->setCachedFailureCount(0);
+        $this->setCachedLastFailureTime(null);
+        $this->setCachedOpenedAt(null);
+    }
+
+    /**
+     * Cache TTL in seconds (1 hour)
+     */
+    private const CACHE_TTL = 3600;
+
+    /**
+     * Get the cached circuit state
+     */
+    private function getCachedState(): string
+    {
+        return Cache::get($this->cacheKey('state'), self::STATE_CLOSED);
+    }
+
+    /**
+     * Set the cached circuit state
+     */
+    private function setCachedState(string $state): void
+    {
+        Cache::put($this->cacheKey('state'), $state, self::CACHE_TTL);
+    }
+
+    /**
+     * Get the cached failure count
+     */
+    private function getCachedFailureCount(): int
+    {
+        return (int) Cache::get($this->cacheKey('failure_count'), 0);
+    }
+
+    /**
+     * Set the cached failure count
+     */
+    private function setCachedFailureCount(int $count): void
+    {
+        Cache::put($this->cacheKey('failure_count'), $count, self::CACHE_TTL);
+    }
+
+    /**
+     * Get the cached last failure time
+     */
+    private function getCachedLastFailureTime(): ?int
+    {
+        return Cache::get($this->cacheKey('last_failure_time'));
+    }
+
+    /**
+     * Set the cached last failure time
+     */
+    private function setCachedLastFailureTime(?int $timestamp): void
+    {
+        if ($timestamp === null) {
+            Cache::forget($this->cacheKey('last_failure_time'));
+        } else {
+            Cache::put($this->cacheKey('last_failure_time'), $timestamp, self::CACHE_TTL);
+        }
+    }
+
+    /**
+     * Get the cached opened at timestamp
+     */
+    private function getCachedOpenedAt(): ?int
+    {
+        return Cache::get($this->cacheKey('opened_at'));
+    }
+
+    /**
+     * Set the cached opened at timestamp
+     */
+    private function setCachedOpenedAt(?int $timestamp): void
+    {
+        if ($timestamp === null) {
+            Cache::forget($this->cacheKey('opened_at'));
+        } else {
+            Cache::put($this->cacheKey('opened_at'), $timestamp, self::CACHE_TTL);
+        }
+    }
+
+    /**
+     * Generate a cache key for this circuit breaker
+     */
+    private function cacheKey(string $suffix): string
+    {
+        return "circuit_breaker.{$this->name}.{$suffix}";
+    }
+
+    /**
+     * Sync local state from cache
+     * Call this to ensure local properties reflect cached state
+     */
+    private function syncFromCache(): void
+    {
+        $this->state = $this->getCachedState();
+        $this->failureCount = $this->getCachedFailureCount();
+        $this->lastFailureTime = $this->getCachedLastFailureTime();
+        $this->openedAt = $this->getCachedOpenedAt();
+    }
+
+    /**
+     * Sync local state to cache
+     * Call this after modifying local properties
+     */
+    private function syncToCache(): void
+    {
+        $this->setCachedState($this->state);
+        $this->setCachedFailureCount($this->failureCount);
+        $this->setCachedLastFailureTime($this->lastFailureTime);
+        $this->setCachedOpenedAt($this->openedAt);
     }
 }

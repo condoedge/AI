@@ -225,9 +225,10 @@ class DataIngestionService implements DataIngestionServiceInterface
         }
 
         // Filtering the ones that are already ingested in graphs
-        $entityIds = implode(',', array_map(fn($e) => $e->getId(), $entities));
+        $entityIds = array_map(fn($e) => $e->getId(), $entities);
         $alreadyIngestedIntoGraphsIds = $this->graphStore->query(
-            "MATCH (n) WHERE n.id IN ($entityIds) RETURN n.id AS id"
+            "MATCH (n) WHERE n.id IN \$ids RETURN n.id AS id",
+            ['ids' => $entityIds]
         );
         $filteredGraphEntities = collect($entities)->reject(fn($e) => in_array($e->getId(), $alreadyIngestedIntoGraphsIds))->all();
 
@@ -1200,19 +1201,20 @@ class DataIngestionService implements DataIngestionServiceInterface
      * Ensure Qdrant collection exists, create if missing
      *
      * Creates collection lazily on first use with proper vector dimensions
-     * and distance metric. Subsequent calls are cached to avoid redundant checks.
+     * and distance metric. Uses Laravel Cache with a short TTL to avoid
+     * memory leaks in long-running processes (Octane, Swoole, queue workers)
+     * and handle external collection changes.
      *
      * @param VectorConfig $config Vector configuration with collection name
      * @return void
      */
     private function ensureCollectionExists(VectorConfig $config): void
     {
-        static $checkedCollections = [];
-
         $collectionName = $config->collection;
+        $cacheKey = "ai.vector_collection.exists.{$collectionName}";
 
-        // Skip if already checked in this request
-        if (isset($checkedCollections[$collectionName])) {
+        // Check cache first (short TTL to handle external changes)
+        if (\Illuminate\Support\Facades\Cache::has($cacheKey)) {
             return;
         }
 
@@ -1237,8 +1239,8 @@ class DataIngestionService implements DataIngestionServiceInterface
                 Log::info("Qdrant collection created successfully: {$collectionName}");
             }
 
-            // Mark as checked
-            $checkedCollections[$collectionName] = true;
+            // Cache the check result for 5 minutes
+            \Illuminate\Support\Facades\Cache::put($cacheKey, true, 300);
 
         } catch (\Throwable $e) {
             Log::error("Failed to ensure collection exists: {$collectionName}", [

@@ -152,4 +152,14 @@ interface GraphStoreInterface
      * @return bool Success status
      */
     public function rollback($transaction): bool;
+
+    /**
+     * Execute a query within a transaction
+     *
+     * @param mixed $transaction Transaction context from beginTransaction()
+     * @param string $cypher Cypher query
+     * @param array $parameters Query parameters
+     * @return array Query results
+     */
+    public function queryInTransaction(array $transaction, string $cypher, array $parameters = []): array;
 }
