@@ -174,75 +174,67 @@ class AiChatService implements AiChatServiceInterface
         AiConversation $conversation,
         array $options = []
     ): array {
-        $startTime = microtime(true);
         $options = array_merge($this->config, $options);
 
         try {
-            // Get schema for entity extraction
-            $schema = $this->getSchemaForContext($options);
+            // 1. Get schema for entity extraction
+            $schema = $this->getSchema();
+            $contextManager = $this->getContextManager();
 
-            // Process question through context manager
-            $contextResult = $this->getContextManager()->processQuestion(
-                $conversation,
-                $question,
-                $schema
-            );
+            // 2. Process question through context system
+            // This extracts entities, resolves references, updates context
+            $contextResult = $contextManager->processQuestion($conversation, $question, $schema);
 
-            // Use enriched question if this is a follow-up
-            $questionToAsk = $contextResult['enriched_question'];
+            // 3. Build conversation context for the prompt
+            $conversationContext = $contextManager->buildPromptContext($conversation);
 
-            // Build conversation context for the prompt
-            $conversationContext = $this->getContextManager()->buildPromptContext($conversation);
+            // 4. Use enriched question if references were resolved
+            $enrichedQuestion = $contextResult['enriched_question'] ?? $question;
 
             // Store the user message
             $conversation->addMessage('user', $question, [
                 'context_used' => $conversationContext,
+                'is_follow_up' => $contextResult['is_follow_up'] ?? false,
+                'resolved_entity' => $contextResult['resolved_entity'] ?? null,
             ]);
 
-            // Call AI with conversation context
-            $aiResponse = AI::answerQuestion($questionToAsk, [
+            // 5. Call AI with full context
+            $aiResponse = AI::answerQuestion($enrichedQuestion, [
                 'style' => $options['style'] ?? 'friendly',
+                'conversation_id' => $conversation->id,
                 'conversation_context' => $conversationContext,
+                'user' => $options['user'] ?? null,
             ]);
 
-            $executionTime = (int) ((microtime(true) - $startTime) * 1000);
+            // Extract response data
+            $answerText = $aiResponse['answer'] ?? '';
+            $cypherQuery = $aiResponse['cypher'] ?? null;
+            $queryData = $aiResponse['data'] ?? [];
 
-            // Extract the answer text from the response array
-            $answerText = $aiResponse['answer'] ?? 'I could not generate a response.';
-            $cypherQuery = $aiResponse['cypher'] ?? '';
-            $queryResult = $aiResponse['data'] ?? [];
+            // 6. Record response with enhanced context tracking
+            // Always record to update conversation context, even without cypher
+            $contextManager->recordResponse(
+                $conversation,
+                $answerText,
+                $cypherQuery ?? '',
+                ['data' => $queryData]
+            );
 
-            // Record response in context manager (updates conversation context)
-            if (!empty($cypherQuery)) {
-                $this->getContextManager()->recordResponse(
-                    $conversation,
-                    $answerText,
-                    $cypherQuery,
-                    ['data' => $queryResult]
-                );
-            }
-
-            // Build response data
-            $responseData = $this->buildResponseData($question, $answerText, $executionTime, $options);
-
-            // Add data from AI response if available
-            if (!empty($aiResponse['data'])) {
-                $responseData = $this->enrichResponseData($responseData, $aiResponse);
-            }
-
-            // Store the assistant message
+            // 7. Store message in conversation
             $conversation->addMessage('assistant', $answerText, [
-                'response_data' => $responseData->toArray(),
+                'response_data' => $queryData,
                 'cypher_query' => $cypherQuery,
-                'execution_time_ms' => $executionTime,
+                'suggestions' => $aiResponse['suggestions'] ?? [],
+                'sources' => $aiResponse['referenced_files'] ?? [],
             ]);
 
+            // 8. Return structured response
             return [
                 'answer' => $answerText,
-                'data' => $queryResult,
-                'suggestions' => $responseData->suggestions ?? [],
+                'data' => $queryData,
+                'suggestions' => $aiResponse['suggestions'] ?? [],
                 'sources' => $aiResponse['referenced_files'] ?? [],
-                'cypher_query' => $cypherQuery ?: null,
+                'cypher_query' => $cypherQuery,
             ];
 
         } catch (\Exception $e) {
@@ -253,11 +245,10 @@ class AiChatService implements AiChatServiceInterface
             ]);
 
             $errorMessage = $this->getUserFriendlyError($e);
-            $errorData = AiChatResponseData::error($errorMessage);
 
             // Store error response in conversation
             $conversation->addMessage('assistant', $errorMessage, [
-                'response_data' => $errorData->toArray(),
+                'error' => true,
             ]);
 
             return [
