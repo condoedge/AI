@@ -4,7 +4,6 @@
 namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\Models\AiConversation;
-use Condoedge\Ai\Services\AiManager;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
@@ -119,81 +118,25 @@ class ChatMessageForm extends Form
             return;
         }
 
-        // Add user message
-        $this->conversation->addMessage('user', $message);
-
-        try {
-            $aiManager = app(AiChatServiceInterface::class);
-
-            // Get conversation context for history
-            $recentMessages = $this->conversation->getRecentMessages(10);
-            $history = array_map(fn($m) => [
-                'role' => $m['role'],
-                'content' => $m['content'],
-            ], $recentMessages);
-
-            // Call AI service
-            // SECURITY: Pass authenticated user for file access control
-            $response = $aiManager->askWithHistory($message, $history, [
+        // Call AI service with conversation context
+        // Note: askWithConversation() handles:
+        // - Storing user message with context metadata
+        // - Processing through ConversationContextManager (entity extraction, reference resolution)
+        // - Storing assistant response with all metadata
+        // - Error handling and error message storage
+        $response = app(AiChatServiceInterface::class)->askWithConversation(
+            $message,
+            $this->conversation,
+            [
                 'style' => $style,
-                'conversation_id' => $this->conversation->id,
-                'user' => auth()->user(),
-            ]);
+                'user' => auth()->user(), // SECURITY: Pass authenticated user for file access control
+            ]
+        );
 
-            // Extract response data
-            $responseContent = $response['answer'] ?? $response['content'] ?? 'I could not generate a response.';
-            $responseData = [];
-            $metadata = [];
-
-            // Handle structured responses
-            if (isset($response['data'])) {
-                $responseData = $response['data'];
-            }
-
-            // Handle suggestions
-            if (isset($response['suggestions'])) {
-                $metadata['suggestions'] = $response['suggestions'];
-            }
-
-            // Handle file references
-            $referencedFiles = [];
-            if (isset($response['sources'])) {
-                $referencedFiles = array_map(fn($s) => [
-                    'id' => $s['id'] ?? null,
-                    'name' => $s['name'] ?? $s['title'] ?? 'Document',
-                    'type' => $s['type'] ?? 'file',
-                ], $response['sources']);
-            }
-
-            // Add assistant message
-            $this->conversation->addMessage('assistant', $responseContent, [
-                'response_data' => !empty($responseData) ? $responseData : null,
-                'referenced_files' => $referencedFiles,
-                'execution_time_ms' => $response['execution_time_ms'] ?? null,
-                'confidence_score' => $response['confidence'] ?? null,
-                'cypher_query' => $response['cypher_query'] ?? null,
-                'metadata' => !empty($metadata) ? $metadata : null,
-            ]);
-
-            // Update context snapshot if entities were mentioned
-            if (isset($response['entities'])) {
-                $this->conversation->updateContextSnapshot([
-                    'mentioned_entities' => $response['entities'],
-                    'last_query_type' => $response['query_type'] ?? null,
-                ]);
-            }
-
-        } catch (\Exception $e) {
-            \Log::error('Chat message error', [
-                'error' => $e->getMessage(),
-                'conversation_id' => $this->conversation->id,
-            ]);
-
-            $this->conversation->addMessage('assistant',
-                'I encountered an error processing your request. Please try again.',
-                ['metadata' => ['error' => true, 'error_message' => $e->getMessage()]]
-            );
-        }
+        // Response is already stored by askWithConversation()
+        // Response structure: answer, data, suggestions, sources, cypher_query
+        // No additional processing needed - the conversation will be refreshed
+        // via the panel refresh triggered by the button click
     }
 
     public function quickAction($action)
