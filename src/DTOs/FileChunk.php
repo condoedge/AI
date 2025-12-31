@@ -13,7 +13,7 @@ class FileChunk
     /**
      * Create a new FileChunk instance
      *
-     * @param int $fileId The ID of the source file
+     * @param string|int $fileId The ID of the source file
      * @param string $fileName The name of the source file
      * @param string $content The text content of this chunk
      * @param array $embedding The vector embedding of this chunk
@@ -24,7 +24,7 @@ class FileChunk
      * @param array $metadata Additional metadata (page numbers, section headers, etc.)
      */
     public function __construct(
-        public readonly int $fileId,
+        public readonly string|int $fileId,
         public readonly string $fileName,
         public readonly string $content,
         public readonly array $embedding,
