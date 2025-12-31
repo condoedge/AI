@@ -8,6 +8,8 @@ use Condoedge\Ai\Contracts\QueryGeneratorInterface;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
+use Condoedge\Ai\Services\Resilience\RateLimiter;
+use Condoedge\Ai\Services\Security\CypherSanitizer;
 
 /**
  * Query Generator Service
@@ -80,6 +82,11 @@ class QueryGenerator implements QueryGeneratorInterface
     private ?SemanticPromptBuilder $promptBuilder = null;
 
     /**
+     * Rate limiter for LLM API calls
+     */
+    private RateLimiter $rateLimiter;
+
+    /**
      * Constructor
      *
      * @param LlmProviderInterface $llm LLM provider for query generation
@@ -97,6 +104,9 @@ class QueryGenerator implements QueryGeneratorInterface
         $this->promptBuilder = $promptBuilder ?? new SemanticPromptBuilder(
             new PatternLibrary()
         );
+
+        // Initialize rate limiter for LLM API calls
+        $this->rateLimiter = RateLimiter::forLlm();
     }
 
     /**
@@ -120,7 +130,12 @@ class QueryGenerator implements QueryGeneratorInterface
         if ($this->config['enable_templates'] ?? true) {
             $template = $this->detectTemplate($question);
             if ($template) {
-                return $this->generateFromTemplate($question, $template, $context);
+                // generateFromTemplate returns null if schema is unavailable for validation
+                // In that case, fall through to LLM generation
+                $result = $this->generateFromTemplate($question, $template, $context);
+                if ($result !== null) {
+                    return $result;
+                }
             }
         }
 
@@ -132,6 +147,11 @@ class QueryGenerator implements QueryGeneratorInterface
             try {
                 // Build prompt
                 $prompt = $this->buildPrompt($question, $context, $allowWrite, $lastError);
+
+                // Check rate limit before calling LLM
+                if (!$this->rateLimiter->waitAndAttempt(10)) {
+                    throw new QueryGenerationException('Rate limit exceeded for LLM API');
+                }
 
                 // Call LLM
                 $response = $this->llm->complete($prompt, null, [
@@ -276,6 +296,25 @@ class QueryGenerator implements QueryGeneratorInterface
     }
 
     /**
+     * Check if a label exists in the graph schema.
+     *
+     * Used to validate labels extracted from user input before
+     * using them in template-generated queries.
+     *
+     * @param string $label The label to validate
+     * @param array $validLabels Array of valid labels from schema
+     * @return bool True if the label is valid
+     */
+    public function isValidLabel(string $label, array $validLabels): bool
+    {
+        if (empty($validLabels)) {
+            return false;
+        }
+
+        return in_array($label, $validLabels, true);
+    }
+
+    /**
      * Get available query templates
      *
      * @return array Array of template metadata
@@ -313,24 +352,47 @@ class QueryGenerator implements QueryGeneratorInterface
     /**
      * Generate query from template
      *
+     * Security: Template queries bypass LLM, so labels extracted from user input
+     * must be validated against schema and sanitized before interpolation.
+     *
      * @param string $question Original question
      * @param string $templateName Template name
      * @param array $context RAG context
-     * @return array Generation result
+     * @return array|null Generation result, or null to fall through to LLM
+     * @throws \InvalidArgumentException If label is not in schema
      */
-    private function generateFromTemplate(string $question, string $templateName, array $context): array
+    private function generateFromTemplate(string $question, string $templateName, array $context): ?array
     {
         $template = $this->templates[$templateName];
 
         // Extract parameters from question
         preg_match($template['pattern'], $question, $matches);
 
-        // Get label from schema
+        // Get schema labels for validation
         $schema = $context['graph_schema'] ?? [];
+        $validLabels = $schema['labels'] ?? [];
+
+        // Security: If schema is empty or missing, fall through to LLM generation
+        // We cannot validate user input without a schema, so template bypass is unsafe
+        if (empty($validLabels)) {
+            return null;
+        }
+
+        // Infer the label from user input
         $label = $this->inferLabel($matches, $schema);
 
-        // Generate query from template
-        $cypher = str_replace('{label}', $label, $template['cypher']);
+        // Security: Validate the label exists in schema
+        // This prevents injection of arbitrary labels from user input
+        if (!$this->isValidLabel($label, $validLabels)) {
+            throw new \InvalidArgumentException("Unknown label: {$label}");
+        }
+
+        // Security: Defense in depth - sanitize even after validation
+        // This ensures no special characters can slip through
+        $sanitizedLabel = CypherSanitizer::escapeLabel($label);
+
+        // Generate query from template with sanitized label
+        $cypher = str_replace('{label}', $sanitizedLabel, $template['cypher']);
 
         return [
             'cypher' => $cypher,
