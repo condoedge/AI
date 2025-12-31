@@ -25,6 +25,11 @@ class Neo4jStore implements GraphStoreInterface
     protected RetryPolicy $retryPolicy;
     protected CircuitBreaker $circuitBreaker;
 
+    /**
+     * Reusable cURL handle for connection pooling
+     */
+    private ?\CurlHandle $curlHandle = null;
+
     public function __construct(?array $config = null)
     {
         $config = $config ?? config('ai.neo4j');
@@ -47,16 +52,26 @@ class Neo4jStore implements GraphStoreInterface
         $this->circuitBreaker = new CircuitBreaker('neo4j', failureThreshold: 5, recoveryTimeoutSeconds: 30);
     }
 
+    /**
+     * Clean up cURL handle on object destruction
+     */
+    public function __destruct()
+    {
+        if ($this->curlHandle !== null) {
+            curl_close($this->curlHandle);
+            $this->curlHandle = null;
+        }
+    }
+
     public function createNode(string $label, array $properties): string|int
     {
         // Validate label to prevent injection
         $safeLabel = CypherSanitizer::escapeLabel($label);
 
-        $propsStr = $this->arrayToCypherProps($properties);
+        // Use parameter binding instead of string interpolation for security
+        $cypher = "CREATE (n:{$safeLabel}) SET n = \$properties RETURN id(n) as nodeId, n.id as appId";
 
-        $cypher = "CREATE (n:{$safeLabel} {$propsStr}) RETURN id(n) as nodeId, n.id as appId";
-
-        $result = $this->query($cypher, $properties);
+        $result = $this->query($cypher, ['properties' => $properties]);
 
         if (empty($result)) {
             throw new \RuntimeException("Failed to create node with label '{$label}'");
@@ -106,21 +121,20 @@ class Neo4jStore implements GraphStoreInterface
         $safeToLabel = CypherSanitizer::escapeLabel($toLabel);
         $safeType = CypherSanitizer::escapeRelationshipType($type);
 
-        $propsStr = !empty($properties) ? $this->arrayToCypherProps($properties) : '';
-
+        // Use parameter binding instead of string interpolation for security
         $cypher = "
             MATCH (from:{$safeFromLabel} {id: \$fromId})
             MATCH (to:{$safeToLabel} {id: \$toId})
-            MERGE (from)-[r:{$safeType} {$propsStr}]->(to)
+            MERGE (from)-[r:{$safeType}]->(to)
+            SET r = \$properties
             RETURN r
         ";
 
-        $params = array_merge([
+        $result = $this->query($cypher, [
             'fromId' => $fromId,
             'toId' => $toId,
-        ], $properties);
-
-        $result = $this->query($cypher, $params);
+            'properties' => $properties,
+        ]);
 
         return !empty($result);
     }
@@ -212,7 +226,7 @@ class Neo4jStore implements GraphStoreInterface
         // Validate labels and type to prevent injection
         $safeFromLabel = CypherSanitizer::escapeLabel($fromLabel);
         $safeToLabel = CypherSanitizer::escapeLabel($toLabel);
-        $safeType = CypherSanitizer::escapeLabel($type);
+        $safeType = CypherSanitizer::escapeRelationshipType($type);
 
         $cypher = "MATCH (from:{$safeFromLabel} {id: \$fromId})-[r:{$safeType}]->(to:{$safeToLabel} {id: \$toId}) " .
                   "RETURN count(r) as count";
@@ -240,23 +254,191 @@ class Neo4jStore implements GraphStoreInterface
         return $result[0]['n'] ?? null;
     }
 
-    public function beginTransaction()
+    /**
+     * Begin a new transaction
+     *
+     * @return array Transaction context with 'id', 'endpoint', and 'commit_endpoint'
+     * @throws \RuntimeException If transaction cannot be started
+     */
+    public function beginTransaction(): array
     {
-        // For HTTP API, transactions are handled per-request
-        // Return a transaction object that will be used in commit/rollback
-        return ['endpoint' => str_replace('/commit', '', $this->httpEndpoint)];
+        $txEndpoint = str_replace('/tx/commit', '/tx', $this->httpEndpoint);
+
+        $ch = curl_init($txEndpoint);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['statements' => []]));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'Accept: application/json',
+        ]);
+        curl_setopt($ch, CURLOPT_USERPWD, "{$this->username}:{$this->password}");
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($error) {
+            throw new \RuntimeException("Failed to begin Neo4j transaction: {$error}");
+        }
+
+        if ($httpCode >= 400) {
+            throw new \RuntimeException("Failed to begin Neo4j transaction: HTTP {$httpCode}");
+        }
+
+        $data = json_decode($response, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new \RuntimeException("Failed to decode Neo4j transaction response: " . json_last_error_msg());
+        }
+
+        // Extract transaction ID from commit URL
+        // Format: http://localhost:7474/db/neo4j/tx/123/commit
+        $commitUrl = $data['commit'] ?? '';
+        preg_match('/\/tx\/(\d+)\/commit/', $commitUrl, $matches);
+        $txId = $matches[1] ?? null;
+
+        if (!$txId) {
+            throw new \RuntimeException('Failed to parse transaction ID from Neo4j response');
+        }
+
+        $baseEndpoint = str_replace('/tx/commit', '', $this->httpEndpoint);
+
+        return [
+            'id' => $txId,
+            'endpoint' => "{$baseEndpoint}/tx/{$txId}",
+            'commit_endpoint' => $commitUrl,
+        ];
     }
 
+    /**
+     * Commit a transaction
+     *
+     * @param array $transaction Transaction context from beginTransaction()
+     * @return bool Success status
+     */
     public function commit($transaction): bool
     {
-        // HTTP API commits automatically with /tx/commit endpoint
+        // Legacy behavior for non-transaction calls
+        if (!is_array($transaction) || empty($transaction['commit_endpoint'])) {
+            return true;
+        }
+
+        $ch = curl_init($transaction['commit_endpoint']);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['statements' => []]));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'Accept: application/json',
+        ]);
+        curl_setopt($ch, CURLOPT_USERPWD, "{$this->username}:{$this->password}");
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($error) {
+            Log::error('Failed to commit Neo4j transaction', [
+                'error' => $error,
+                'transaction_id' => $transaction['id'] ?? 'unknown',
+            ]);
+            return false;
+        }
+
+        if ($httpCode >= 400) {
+            Log::error('Neo4j transaction commit failed', [
+                'http_code' => $httpCode,
+                'transaction_id' => $transaction['id'] ?? 'unknown',
+                'response' => $response,
+            ]);
+            return false;
+        }
+
         return true;
     }
 
+    /**
+     * Rollback a transaction
+     *
+     * @param array $transaction Transaction context from beginTransaction()
+     * @return bool Success status
+     */
     public function rollback($transaction): bool
     {
-        // HTTP API transactions are atomic per-request
+        // Legacy behavior for non-transaction calls
+        if (!is_array($transaction) || empty($transaction['endpoint'])) {
+            return true;
+        }
+
+        $ch = curl_init($transaction['endpoint']);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Accept: application/json',
+        ]);
+        curl_setopt($ch, CURLOPT_USERPWD, "{$this->username}:{$this->password}");
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($error) {
+            Log::error('Failed to rollback Neo4j transaction', [
+                'error' => $error,
+                'transaction_id' => $transaction['id'] ?? 'unknown',
+            ]);
+            return false;
+        }
+
+        if ($httpCode >= 400) {
+            Log::error('Neo4j transaction rollback failed', [
+                'http_code' => $httpCode,
+                'transaction_id' => $transaction['id'] ?? 'unknown',
+                'response' => $response,
+            ]);
+            return false;
+        }
+
         return true;
+    }
+
+    /**
+     * Execute a query within a transaction
+     *
+     * @param array $transaction Transaction context from beginTransaction()
+     * @param string $cypher Cypher query
+     * @param array $parameters Query parameters
+     * @return array Query results
+     * @throws \RuntimeException If query fails
+     */
+    public function queryInTransaction(array $transaction, string $cypher, array $parameters = []): array
+    {
+        if (empty($transaction['endpoint'])) {
+            throw new \RuntimeException('Invalid transaction context: missing endpoint');
+        }
+
+        $response = $this->performHttpRequestToEndpoint(
+            $transaction['endpoint'],
+            $cypher,
+            $parameters
+        );
+
+        if (!empty($response['errors'])) {
+            $error = $response['errors'][0];
+            throw new \RuntimeException("Neo4j query error in transaction: {$error['message']}");
+        }
+
+        return $this->extractResults($response);
     }
 
     /**
@@ -284,6 +466,54 @@ class Neo4jStore implements GraphStoreInterface
     }
 
     /**
+     * Get a reusable cURL handle for connection pooling
+     *
+     * @param string|null $endpoint Optional endpoint override
+     * @return \CurlHandle
+     */
+    private function getCurlHandle(?string $endpoint = null): \CurlHandle
+    {
+        $targetEndpoint = $endpoint ?? $this->httpEndpoint;
+
+        if ($this->curlHandle === null) {
+            $this->curlHandle = curl_init();
+        }
+
+        // Set/update the URL for this request
+        curl_setopt($this->curlHandle, CURLOPT_URL, $targetEndpoint);
+
+        // Configure for connection reuse
+        curl_setopt($this->curlHandle, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($this->curlHandle, CURLOPT_POST, true);
+        curl_setopt($this->curlHandle, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'Accept: application/json',
+            'Connection: keep-alive', // Enable HTTP keep-alive
+        ]);
+        curl_setopt($this->curlHandle, CURLOPT_USERPWD, "{$this->username}:{$this->password}");
+        curl_setopt($this->curlHandle, CURLOPT_TIMEOUT, 30);
+        curl_setopt($this->curlHandle, CURLOPT_CONNECTTIMEOUT, 5);
+
+        // Enable TCP keep-alive
+        curl_setopt($this->curlHandle, CURLOPT_TCP_KEEPALIVE, 1);
+        curl_setopt($this->curlHandle, CURLOPT_TCP_KEEPIDLE, 60);
+        curl_setopt($this->curlHandle, CURLOPT_TCP_KEEPINTVL, 30);
+
+        return $this->curlHandle;
+    }
+
+    /**
+     * Reset the cURL handle (useful after errors)
+     */
+    private function resetCurlHandle(): void
+    {
+        if ($this->curlHandle !== null) {
+            curl_close($this->curlHandle);
+            $this->curlHandle = null;
+        }
+    }
+
+    /**
      * Perform the actual HTTP request to Neo4j
      */
     private function performHttpRequest(string $cypher, array $parameters): array
@@ -299,24 +529,68 @@ class Neo4jStore implements GraphStoreInterface
 
         $jsonPayload = json_encode($payload);
 
-        $ch = curl_init($this->httpEndpoint);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_POST, true);
+        $ch = $this->getCurlHandle();
         curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonPayload);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'Content-Type: application/json',
-            'Accept: application/json',
-        ]);
-        curl_setopt($ch, CURLOPT_USERPWD, "{$this->username}:{$this->password}");
-        curl_setopt($ch, CURLOPT_TIMEOUT, 30); // 30 second timeout
-        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5); // 5 second connection timeout
 
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
-        curl_close($ch);
+
+        // DON'T close the handle - reuse it for connection pooling
 
         if ($error) {
+            // Reset handle on error for next request
+            $this->resetCurlHandle();
+            throw new \RuntimeException("Neo4j HTTP request failed: {$error}");
+        }
+
+        if ($httpCode >= 400) {
+            throw new \RuntimeException("Neo4j returned error {$httpCode}: {$response}");
+        }
+
+        $decoded = json_decode($response, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new \RuntimeException("Failed to decode Neo4j response: " . json_last_error_msg());
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * Perform HTTP request to a specific endpoint (used for transaction queries)
+     *
+     * @param string $endpoint The endpoint URL to send the request to
+     * @param string $cypher Cypher query
+     * @param array $parameters Query parameters
+     * @return array Decoded response
+     * @throws \RuntimeException If request fails
+     */
+    private function performHttpRequestToEndpoint(string $endpoint, string $cypher, array $parameters): array
+    {
+        $payload = [
+            'statements' => [
+                [
+                    'statement' => $cypher,
+                    'parameters' => (object) $parameters, // Force object instead of array
+                ]
+            ]
+        ];
+
+        $jsonPayload = json_encode($payload);
+
+        $ch = $this->getCurlHandle($endpoint);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonPayload);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+
+        // DON'T close the handle - reuse it for connection pooling
+
+        if ($error) {
+            // Reset handle on error for next request
+            $this->resetCurlHandle();
             throw new \RuntimeException("Neo4j HTTP request failed: {$error}");
         }
 
@@ -362,9 +636,19 @@ class Neo4jStore implements GraphStoreInterface
 
     /**
      * Convert array to Cypher properties syntax
+     *
+     * @deprecated Use parameter binding with SET n = $properties instead.
+     *             This method uses string interpolation which poses injection risks.
+     * @param array $properties The properties to convert
+     * @return string The Cypher properties syntax
      */
     protected function arrayToCypherProps(array $properties): string
     {
+        @trigger_error(
+            'arrayToCypherProps() is deprecated. Use parameter binding with SET n = $properties instead.',
+            E_USER_DEPRECATED
+        );
+
         $parts = [];
         foreach (array_keys($properties) as $key) {
             // Validate property key to prevent injection
