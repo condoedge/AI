@@ -124,6 +124,51 @@ class AiConversation extends Model
         return $lastAssistantMessage?->cypher_query;
     }
 
+    /**
+     * Update context with entity data from query results.
+     */
+    public function updateEntityContext(array $entityData): void
+    {
+        $snapshot = $this->context_snapshot ?? [];
+
+        $snapshot['focused_entity_data'] = $entityData;
+        $snapshot['updated_at'] = now()->toIso8601String();
+
+        $this->update(['context_snapshot' => $snapshot]);
+    }
+
+    /**
+     * Get the focused entity's identifying filter.
+     */
+    public function getFocusedEntityFilter(): ?string
+    {
+        return $this->context_snapshot['focused_entity_filter'] ?? null;
+    }
+
+    /**
+     * Get a sample of the last query results.
+     */
+    public function getLastResultSample(): array
+    {
+        return $this->context_snapshot['last_result_sample'] ?? [];
+    }
+
+    /**
+     * Get previous query for reference.
+     */
+    public function getPreviousCypherQuery(): ?string
+    {
+        return $this->context_snapshot['last_cypher_query'] ?? null;
+    }
+
+    /**
+     * Get the count of last query results.
+     */
+    public function getLastResultCount(): int
+    {
+        return $this->context_snapshot['last_result_count'] ?? 0;
+    }
+
     // ACTIONS
     public function addMessage(string $role, string $content, array $data = []): AiMessage
     {
@@ -157,22 +202,19 @@ class AiConversation extends Model
             $newFileIds = array_column($metadata['referenced_files'], 'id');
             $allFiles = array_unique(array_merge($existingFiles, $newFileIds));
 
-            $this->updateContextSnapshot([
-                'referenced_files' => array_values($allFiles),
-            ]);
+            $snapshot = $this->context_snapshot ?? [];
+            $snapshot['referenced_files'] = array_values($allFiles);
+            $this->update(['context_snapshot' => $snapshot]);
         }
 
         return $message;
     }
 
     /**
-     * Update the conversation's context snapshot
+     * Update the full context snapshot.
      */
-    public function updateContextSnapshot(array $context): void
+    public function updateContextSnapshot(array $snapshot): void
     {
-        $this->update(['context_snapshot' => array_merge(
-            $this->context_snapshot ?? [],
-            $context
-        )]);
+        $this->update(['context_snapshot' => $snapshot]);
     }
 }
