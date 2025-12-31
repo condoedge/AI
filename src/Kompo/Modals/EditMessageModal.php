@@ -3,6 +3,7 @@
 
 namespace Condoedge\Ai\Kompo\Modals;
 
+use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Kompo\AiChatPanel;
@@ -13,8 +14,12 @@ use Condoedge\Utils\Kompo\Common\Modal;
  */
 class EditMessageModal extends Modal
 {
+    use HasChatTheme;
+
     protected $_Title = 'Edit Message';
     public $class = 'overflow-hidden max-w-2xl rounded-2xl';
+
+    protected $noHeaderButtons = true;
 
     protected ?int $messageId = null;
     protected ?int $conversationId = null;
@@ -85,7 +90,7 @@ class EditMessageModal extends Modal
                     ->refresh(AiChatPanel::MESSAGES_PANEL_ID)
                     ->closeModal(),
                 _Button('Save & Regenerate')->icon('arrow-path')
-                    ->class('px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:from-indigo-700 hover:to-purple-700 shadow-lg transition-all')
+                    ->class('px-4 py-2 text-white rounded-xl shadow-lg transition-all ' . $this->theme()->primaryGradient())
                     ->selfPost('updateMessage')
                     ->refresh(AiChatPanel::MESSAGES_PANEL_ID)
                     ->closeModal(),

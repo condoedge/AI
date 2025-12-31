@@ -13,7 +13,7 @@ class ConversationListQuery extends Query
     use HasChatTheme;
     public const ID = 'conversation-list';
 
-    public $itemsWrapperClass = '[&>div>.vlNoItems]:px-6 [&>div>.vlNoItems]:pb-4 overflow-y-auto mini-scroll';
+    public $itemsWrapperClass = '[&>div>.vlNoItems]:px-6 [&>div>.vlNoItems]:pb-4 overflow-y-auto mini-scroll max-h-[55vh]';
 
     protected ?int $selectedId = null;
 
@@ -21,7 +21,7 @@ class ConversationListQuery extends Query
     {
         $this->id(self::ID);
         
-        $this->selectedId = $this->prop('selected_id');
+        $this->selectedId = session('selected_conversation_id');
     }
 
     public function top()
@@ -83,7 +83,7 @@ class ConversationListQuery extends Query
             ? $this->theme()->selectedBg() . ' ' . $this->theme()->selectedBorder()
             : 'hover:bg-gray-100 border-transparent'))
          ->selfPost('selectConversation', ['id' => $conversation->id])
-         ->inPanel(AiChatPanel::ID . '-wrapper');
+         ->refresh([self::ID, MessagesQuery::ID]);
     }
 
     protected function getPreviewText($message): string
@@ -117,6 +117,6 @@ class ConversationListQuery extends Query
 
     public function selectConversation($id)
     {
-        return new AiChatPanel(null, ['conversation_id' => $id]);
+        session(['selected_conversation_id' => $id]);
     }
 }

@@ -62,7 +62,11 @@
       "Bash(else echo \"Directory does not exist\")",
       "Bash(fi)",
       "Bash(if not exist \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\\\\docs\\\\audit\" mkdir \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\\\\docs\\\\audit\")",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(git show:*)",
+      "Bash(vendorbinphpunit testsUnitServicesPromptSectionsConversationContextSectionTest.php --colors=never)",
+      "Bash(for:*)",
+      "Bash(do echo \"=== Testing $dir ===\")"
     ],
     "deny": [],
     "ask": []
