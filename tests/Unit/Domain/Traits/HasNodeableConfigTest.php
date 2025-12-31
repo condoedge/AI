@@ -30,9 +30,6 @@ class HasNodeableConfigTest extends TestCase
     public function setUp(): void
     {
         parent::setUp();
-
-        // Enable runtime auto-discovery for tests
-        config(['ai.auto_discovery.runtime_enabled' => true]);
     }
 
     public function tearDown(): void
@@ -169,32 +166,10 @@ class HasNodeableConfigTest extends TestCase
     }
 
     /** @test */
-    public function it_uses_auto_discovery_as_fallback()
+    public function it_throws_runtime_exception_when_no_config_or_nodeableconfig_method()
     {
-        // Mock auto-discovery service
-        $discoveryMock = Mockery::mock(EntityAutoDiscovery::class);
-        $discoveryMock->shouldReceive('discover')
-            ->once()
-            ->andReturn([
-                'graph' => [
-                    'label' => 'DiscoveredNode',
-                    'properties' => ['id', 'name', 'email'],
-                    'relationships' => [],
-                ],
-                'vector' => [
-                    'collection' => 'discovered_collection',
-                    'embed_fields' => ['name'],
-                    'metadata' => ['id', 'email'],
-                ],
-            ]);
-
-        // Bind mock to container
-        $this->app->instance(EntityAutoDiscovery::class, $discoveryMock);
-
-        // Enable auto-discovery
-        Config::set('ai.auto_discovery.enabled', true);
-
-        // Create model without config
+        // Create model without config - runtime auto-discovery is no longer supported
+        // Models must either implement nodeableConfig() or be registered in config/entities.php
         $model = new class extends Model implements Nodeable {
             use HasNodeableConfig;
 
@@ -202,62 +177,15 @@ class HasNodeableConfigTest extends TestCase
             protected $fillable = ['name', 'email'];
         };
 
-        // Get graph config - should use auto-discovery
-        $graphConfig = $model->getGraphConfig();
-        $this->assertEquals('DiscoveredNode', $graphConfig->label);
-
-        // Get vector config
-        $vectorConfig = $model->getVectorConfig();
-        $this->assertEquals('discovered_collection', $vectorConfig->collection);
+        // Should throw RuntimeException since there's no config
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('No configuration found');
+        $model->getGraphConfig();
     }
 
     /** @test */
-    public function it_allows_customizing_discovery()
+    public function it_throws_exception_when_no_config_available()
     {
-        // Mock auto-discovery service
-        $discoveryMock = Mockery::mock(EntityAutoDiscovery::class);
-        $discoveryMock->shouldReceive('discover')
-            ->once()
-            ->andReturn([
-                'graph' => [
-                    'label' => 'DiscoveredNode',
-                    'properties' => ['id', 'name'],
-                    'relationships' => [],
-                ],
-                'metadata' => [
-                    'aliases' => ['test', 'model'],
-                ],
-            ]);
-
-        // Bind mock to container
-        $this->app->instance(EntityAutoDiscovery::class, $discoveryMock);
-
-        // Enable auto-discovery
-        Config::set('ai.auto_discovery.enabled', true);
-
-        // Create model with customizeDiscovery() method
-        $model = new class extends Model implements Nodeable {
-            use HasNodeableConfig;
-
-            protected $table = 'test_models';
-            protected $fillable = ['name'];
-
-            public function customizeDiscovery(NodeableConfig $config): NodeableConfig
-            {
-                return $config->addAlias('custom_alias');
-            }
-        };
-
-        // Get config - should use auto-discovery + customization
-        $graphConfig = $model->getGraphConfig();
-        $this->assertEquals('DiscoveredNode', $graphConfig->label);
-    }
-
-    /** @test */
-    public function it_returns_empty_config_when_auto_discovery_disabled()
-    {
-        // Disable auto-discovery
-        Config::set('ai.auto_discovery.enabled', false);
         Config::set('entities', []);
 
         // Create model without config
@@ -268,10 +196,10 @@ class HasNodeableConfigTest extends TestCase
             protected $fillable = ['name'];
         };
 
-        // Get graph config - should throw exception due to empty properties
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Graph properties cannot be empty');
-        $graphConfig = $model->getGraphConfig();
+        // Get graph config - should throw RuntimeException
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('No configuration found');
+        $model->getGraphConfig();
     }
 
     /** @test */
@@ -350,68 +278,38 @@ class HasNodeableConfigTest extends TestCase
     }
 
     /** @test */
-    public function it_caches_auto_discovery_results()
+    public function it_caches_resolved_config()
     {
-        // Mock auto-discovery service - should only be called once
-        $discoveryMock = Mockery::mock(EntityAutoDiscovery::class);
-        $discoveryMock->shouldReceive('discover')
-            ->once() // Only once due to caching
-            ->andReturn([
-                'graph' => [
-                    'label' => 'CachedNode',
-                    'properties' => ['id', 'name'],
-                    'relationships' => [],
-                ],
-            ]);
-
-        // Bind mock to container
-        $this->app->instance(EntityAutoDiscovery::class, $discoveryMock);
-
-        // Enable auto-discovery
-        Config::set('ai.auto_discovery.enabled', true);
-
-        // Create model without config
+        // Create model with nodeableConfig() - test that config is cached
+        $callCount = 0;
         $model = new class extends Model implements Nodeable {
             use HasNodeableConfig;
 
             protected $table = 'test_models';
             protected $fillable = ['name'];
+            public static int $nodeableConfigCallCount = 0;
+
+            public function nodeableConfig(): array
+            {
+                self::$nodeableConfigCallCount++;
+                return [
+                    'graph' => [
+                        'label' => 'CachedNode',
+                        'properties' => ['id', 'name'],
+                        'relationships' => [],
+                    ],
+                ];
+            }
         };
 
         // Call getGraphConfig() multiple times
         $graphConfig1 = $model->getGraphConfig();
         $graphConfig2 = $model->getGraphConfig();
 
-        // Both should return same result (from cache)
+        // Both should return same result
         $this->assertEquals('CachedNode', $graphConfig1->label);
         $this->assertEquals('CachedNode', $graphConfig2->label);
-    }
-
-    /** @test */
-    public function it_handles_missing_auto_discovery_service_gracefully()
-    {
-        // Mock auto-discovery to return empty array (simulating service failure)
-        $discoveryMock = Mockery::mock(EntityAutoDiscovery::class);
-        $discoveryMock->shouldReceive('discover')
-            ->once()
-            ->andReturn([]);
-
-        $this->app->instance(EntityAutoDiscovery::class, $discoveryMock);
-
-        Config::set('ai.auto_discovery.enabled', true);
-        Config::set('entities', []);
-
-        // Create model without config
-        $model = new class extends Model implements Nodeable {
-            use HasNodeableConfig;
-
-            protected $table = 'test_models';
-            protected $fillable = ['name'];
-        };
-
-        // Should throw exception due to empty properties when auto-discovery returns empty array
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Graph properties cannot be empty');
-        $graphConfig = $model->getGraphConfig();
+        // nodeableConfig should be called only once due to caching
+        $this->assertEquals(1, $model::$nodeableConfigCallCount);
     }
 }

@@ -13,9 +13,6 @@ class HasNodeableConfigPropertiesTest extends TestCase
     {
         parent::setUp();
 
-        // Enable runtime discovery for these tests
-        config(['ai.auto_discovery.runtime_enabled' => true]);
-        config(['ai.auto_discovery.enabled' => true]);
     }
 
     /** @test */
@@ -26,6 +23,21 @@ class HasNodeableConfigPropertiesTest extends TestCase
             protected $table = 'persons';
             protected $fillable = ['name', 'bio', 'email'];
             protected array $embedFields = ['name', 'bio'];
+
+            // Base config required - model properties merge on top
+            public function nodeableConfig(): array
+            {
+                return [
+                    'graph' => [
+                        'label' => 'Person',
+                        'properties' => ['id', 'name', 'bio', 'email'],
+                    ],
+                    'vector' => [
+                        'collection' => 'persons',
+                        'embed_fields' => ['name'],  // Will be overridden by $embedFields
+                    ],
+                ];
+            }
         };
 
         $vectorConfig = $model->getVectorConfig();
@@ -39,8 +51,18 @@ class HasNodeableConfigPropertiesTest extends TestCase
         $model = new class extends Model implements Nodeable {
             use HasNodeableConfig;
             protected $table = 'people';
-            protected $fillable = ['name'];  // Need at least one property
-            protected string $graphLabel = 'Person';
+            protected $fillable = ['name'];
+            protected string $graphLabel = 'Person';  // This overrides the nodeableConfig label
+
+            public function nodeableConfig(): array
+            {
+                return [
+                    'graph' => [
+                        'label' => 'DefaultLabel',  // Will be overridden by $graphLabel
+                        'properties' => ['id', 'name'],
+                    ],
+                ];
+            }
         };
 
         $graphConfig = $model->getGraphConfig();
@@ -56,7 +78,16 @@ class HasNodeableConfigPropertiesTest extends TestCase
             protected $table = 'persons';
             protected array $sensibleColumns = ['ssn', 'salary'];
 
-            // Need this for the test to work with resolveConfig
+            public function nodeableConfig(): array
+            {
+                return [
+                    'graph' => [
+                        'label' => 'Person',
+                        'properties' => ['id', 'name', 'ssn', 'salary'],
+                    ],
+                ];
+            }
+
             public function getResolvedConfig(): array
             {
                 return $this->resolveConfig();
@@ -121,6 +152,16 @@ class HasNodeableConfigPropertiesTest extends TestCase
                 ],
             ];
 
+            public function nodeableConfig(): array
+            {
+                return [
+                    'graph' => [
+                        'label' => 'Order',
+                        'properties' => ['id', 'customer_id', 'total'],
+                    ],
+                ];
+            }
+
             public function getResolvedConfig(): array
             {
                 return $this->resolveConfig();
@@ -137,14 +178,21 @@ class HasNodeableConfigPropertiesTest extends TestCase
     /** @test */
     public function it_reads_nodeable_aliases_from_model_property(): void
     {
-        // Disable runtime discovery so we only get model properties
-        config(['ai.auto_discovery.runtime_enabled' => false]);
-
         $model = new class extends Model implements Nodeable {
             use HasNodeableConfig;
             protected $table = 'persons';
             protected $fillable = ['name'];
             protected array $nodeableAliases = ['person', 'people', 'individual'];
+
+            public function nodeableConfig(): array
+            {
+                return [
+                    'graph' => [
+                        'label' => 'Person',
+                        'properties' => ['id', 'name'],
+                    ],
+                ];
+            }
 
             public function getResolvedConfig(): array
             {
@@ -159,6 +207,20 @@ class HasNodeableConfigPropertiesTest extends TestCase
             $config['metadata']['aliases'] ?? []
         );
     }
+
+    /** @test */
+    public function it_throws_exception_when_no_config_available(): void
+    {
+        $model = new class extends Model implements Nodeable {
+            use HasNodeableConfig;
+            protected $table = 'test_models';
+            protected $fillable = ['name'];
+        };
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('No configuration found');
+        $model->getGraphConfig();
+    }
 }
 
 // Test fixture for class name detection
@@ -167,4 +229,15 @@ class ModelWithoutLabel extends Model implements Nodeable
     use HasNodeableConfig;
     protected $table = 'test_models';
     protected $fillable = ['name'];
+
+    // Must provide base config
+    public function nodeableConfig(): array
+    {
+        return [
+            'graph' => [
+                // Label intentionally omitted - will default to class name
+                'properties' => ['id', 'name'],
+            ],
+        ];
+    }
 }
