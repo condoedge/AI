@@ -133,14 +133,15 @@ class QueryExecutor implements QueryExecutorInterface
 
             // Log successful query execution (non-blocking)
             $this->logQuerySuccess(
-                question: $options['original_question'] ?? null,
+                question: $options['original_question'] ?? 'N/A',
                 cypherQuery: $cypherQuery,
                 executionTimeMs: $executionTime,
                 resultCount: count($formattedData),
                 templateUsed: $options['template'] ?? null,
                 confidenceScore: $options['confidence_score'] ?? null,
                 contextStats: $options['context_stats'] ?? null,
-                metadata: $options['metadata'] ?? null
+                metadata: $options['metadata'] ?? null,
+                conversationId: $options['conversation_id'] ?? null
             );
 
             return [
@@ -161,11 +162,12 @@ class QueryExecutor implements QueryExecutorInterface
 
             // Log failed query execution (non-blocking)
             $this->logQueryFailure(
-                question: $options['original_question'] ?? null,
+                question: $options['original_question'] ?? 'N/A',
                 cypherQuery: $cypherQuery,
                 error: $e->getMessage(),
                 templateUsed: $options['template'] ?? null,
-                metadata: $options['metadata'] ?? null
+                metadata: $options['metadata'] ?? null,
+                conversationId: $options['conversation_id'] ?? null
             );
 
             if ($executionTime >= ($timeout * 1000)) {
@@ -473,7 +475,7 @@ class QueryExecutor implements QueryExecutorInterface
      * This method is non-blocking - any logging failures are caught and logged
      * to the application log without interrupting the main execution flow.
      *
-     * @param string|null $question Original natural language question
+     * @param string $question Original natural language question
      * @param string $cypherQuery The executed Cypher query
      * @param float $executionTimeMs Query execution time in milliseconds
      * @param int $resultCount Number of results returned
@@ -481,21 +483,24 @@ class QueryExecutor implements QueryExecutorInterface
      * @param float|null $confidenceScore AI confidence score if available
      * @param array|null $contextStats Context retrieval statistics
      * @param array|null $metadata Additional metadata
+     * @param int|null $conversationId Conversation ID if available
      */
     protected function logQuerySuccess(
-        ?string $question,
+        string $question,
         string $cypherQuery,
         float $executionTimeMs,
         int $resultCount,
         ?string $templateUsed = null,
         ?float $confidenceScore = null,
         ?array $contextStats = null,
-        ?array $metadata = null
+        ?array $metadata = null,
+        ?int $conversationId = null
     ): void {
         try {
             AiQueryLog::logSuccess([
                 'user_id' => auth()->id(),
                 'team_id' => $this->getCurrentTeamId(),
+                'conversation_id' => $conversationId,
                 'question' => $question,
                 'cypher_query' => $cypherQuery,
                 'execution_time_ms' => $executionTimeMs,
@@ -520,23 +525,26 @@ class QueryExecutor implements QueryExecutorInterface
      * This method is non-blocking - any logging failures are caught and logged
      * to the application log without interrupting the main execution flow.
      *
-     * @param string|null $question Original natural language question
+     * @param string $question Original natural language question
      * @param string $cypherQuery The attempted Cypher query
      * @param string $error Error message from the failure
      * @param string|null $templateUsed Template identifier if applicable
      * @param array|null $metadata Additional metadata
+     * @param int|null $conversationId Conversation ID if available
      */
     protected function logQueryFailure(
-        ?string $question,
+        string $question,
         string $cypherQuery,
         string $error,
         ?string $templateUsed = null,
-        ?array $metadata = null
+        ?array $metadata = null,
+        ?int $conversationId = null
     ): void {
         try {
             AiQueryLog::logFailure([
                 'user_id' => auth()->id(),
                 'team_id' => $this->getCurrentTeamId(),
+                'conversation_id' => $conversationId,
                 'question' => $question,
                 'cypher_query' => $cypherQuery,
                 'template_used' => $templateUsed,
