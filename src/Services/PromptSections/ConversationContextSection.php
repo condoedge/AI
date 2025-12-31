@@ -25,21 +25,32 @@ class ConversationContextSection extends BasePromptSection
     {
         $conversationContext = $context['conversation_context'] ?? [];
 
-        // Need at least a focused entity or recent exchanges
+        // Need at least one of these context elements to be useful
         return !empty($conversationContext['focused_entity'])
-            || !empty($conversationContext['recent_exchanges']);
+            || !empty($conversationContext['recent_exchanges'])
+            || !empty($conversationContext['last_cypher_query'])
+            || !empty($conversationContext['last_result_sample']);
     }
 
     /**
      * Format the conversation context for the prompt
+     *
+     * Provides rich context to enable the AI to:
+     * - Understand follow-up questions and references
+     * - Build upon previous queries
+     * - Resolve pronouns like "those", "them", "the same"
      */
     public function format(string $question, array $context, array $options = []): string
     {
         $conversationContext = $context['conversation_context'] ?? [];
 
-        $output = $this->header('CONVERSATION CONTEXT');
+        if (empty($conversationContext)) {
+            return '';
+        }
 
-        // Current focus
+        $output = "## Conversation Context\n\n";
+
+        // Focused entity with filter
         if (!empty($conversationContext['focused_entity'])) {
             $output .= "**Current Focus:** {$conversationContext['focused_entity']}";
 
@@ -47,54 +58,52 @@ class ConversationContextSection extends BasePromptSection
                 $output .= " ({$conversationContext['last_query_type']} query)";
             }
 
-            $output .= "\n\n";
+            $output .= "\n";
+
+            if (!empty($conversationContext['focused_entity_filter'])) {
+                $output .= "**Active Filter:** `{$conversationContext['focused_entity_filter']}`\n";
+            }
+        }
+
+        // Previous query reference
+        if (!empty($conversationContext['last_cypher_query'])) {
+            $output .= "\n**Previous Query:**\n```cypher\n{$conversationContext['last_cypher_query']}\n```\n";
+            $resultCount = $conversationContext['last_result_count'] ?? 0;
+            $output .= "Returned {$resultCount} results.\n";
+        }
+
+        // Result sample for reference
+        if (!empty($conversationContext['last_result_sample'])) {
+            $output .= "\n**Sample of Previous Results:**\n```json\n";
+            $output .= json_encode($conversationContext['last_result_sample'], JSON_PRETTY_PRINT);
+            $output .= "\n```\n";
         }
 
         // Recent exchanges
         if (!empty($conversationContext['recent_exchanges'])) {
-            $output .= "**Recent Conversation:**\n";
+            $output .= "\n**Recent Conversation:**\n";
 
-            foreach ($conversationContext['recent_exchanges'] as $i => $exchange) {
-                $num = $i + 1;
-
-                if (!empty($exchange['user']['content'])) {
-                    $userContent = $this->truncate($exchange['user']['content'], 100);
-                    $output .= "  [{$num}] User: {$userContent}\n";
+            foreach ($conversationContext['recent_exchanges'] as $exchange) {
+                if (!empty($exchange['question'])) {
+                    $userContent = $this->truncate($exchange['question'], 100);
+                    $output .= "- User: {$userContent}\n";
                 }
-
-                if (!empty($exchange['assistant']['content'])) {
-                    $assistantContent = $this->truncate($exchange['assistant']['content'], 150);
-                    $output .= "      Assistant: {$assistantContent}\n";
-
-                    if (!empty($exchange['assistant']['cypher_query'])) {
-                        $output .= "      Query: {$exchange['assistant']['cypher_query']}\n";
-                    }
+                if (!empty($exchange['answer_summary'])) {
+                    $assistantContent = $this->truncate($exchange['answer_summary'], 150);
+                    $output .= "  Assistant: {$assistantContent}\n";
                 }
             }
-
-            $output .= "\n";
-        }
-
-        // Last Cypher query (if not already shown in exchanges)
-        if (!empty($conversationContext['last_cypher_query'])
-            && empty($conversationContext['recent_exchanges'])) {
-            $output .= "**Previous Query:**\n";
-            $output .= "```cypher\n{$conversationContext['last_cypher_query']}\n```\n\n";
-        }
-
-        // Follow-up hint
-        if (!empty($conversationContext['is_follow_up'])) {
-            $output .= "**Note:** This is a continuation of the previous conversation. ";
-            $output .= "Consider building upon or modifying the previous query. ";
-            $output .= "Pronouns like 'those', 'them', 'it' refer to the ";
-            $output .= "{$conversationContext['focused_entity']} entity.\n\n";
         }
 
         // Mentioned entities for reference
         if (!empty($conversationContext['mentioned_entities'])) {
             $entities = implode(', ', $conversationContext['mentioned_entities']);
-            $output .= "**Entities discussed:** {$entities}\n\n";
+            $output .= "\n**Entities discussed:** {$entities}\n";
         }
+
+        // Follow-up hint (enhanced instructions)
+        $output .= "\n**Instructions:** Use the above context to understand follow-up questions. ";
+        $output .= "If user references 'those', 'them', 'the same', etc., use the previous results/filter.\n";
 
         return $output;
     }
