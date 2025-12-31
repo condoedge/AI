@@ -25,11 +25,6 @@ use Condoedge\Ai\Services\FileSearchService;
 class FileContextProvider
 {
     /**
-     * Prefix used to identify physical file IDs
-     */
-    private const PHYSICAL_PREFIX = 'physical:';
-
-    /**
      * Create a new FileContextProvider instance
      *
      * @param FileSearchService $searchService Service for searching file content
@@ -110,7 +105,7 @@ class FileContextProvider
         return array_map(function ($result) use ($snippetLength) {
             $chunk = $result['best_chunk'];
             $fileId = $result['file_id'];
-            $source = $this->isPhysicalFile($fileId) ? 'physical' : 'database';
+            $source = $this->accessResolver->isPhysicalFile($fileId) ? 'physical' : 'database';
 
             // Get content and truncate if needed
             $content = $chunk->content;
@@ -200,21 +195,6 @@ class FileContextProvider
             'has_physical' => $hasPhysical,
             'has_database' => $hasDatabase,
         ];
-    }
-
-    /**
-     * Check if a file ID represents a physical file
-     *
-     * @param int|string $fileId The file ID to check
-     * @return bool True if this is a physical file ID
-     */
-    private function isPhysicalFile(int|string $fileId): bool
-    {
-        if (!is_string($fileId)) {
-            return false;
-        }
-
-        return str_starts_with($fileId, self::PHYSICAL_PREFIX);
     }
 
     /**
