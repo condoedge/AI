@@ -3,6 +3,7 @@
 namespace Condoedge\Ai\Models\Plugins;
 
 use Condoedge\Utils\Models\Plugins\ModelPlugin;
+use Illuminate\Database\Eloquent\Builder;
 
 /**
  * File Access Scope Plugin
@@ -16,63 +17,37 @@ use Condoedge\Utils\Models\Plugins\ModelPlugin;
 class FileAccessScopePlugin extends ModelPlugin
 {
     /**
-     * Boot the plugin and register the accessibleBy scope
+     * Boot the plugin and register the accessibleBy scope via Builder macro
      *
      * @return void
      */
     public function onBoot(): void
     {
-        // The scope is added via model method, not event listener
-    }
-
-    /**
-     * Define model methods that the plugin adds
-     *
-     * @return array
-     */
-    public function managableMethods(): array
-    {
-        return [
-            'scopeAccessibleBy' => function ($query, $user) {
-                return $this->applyAccessibleByScope($query, $user);
-            },
-        ];
-    }
-
-    /**
-     * Apply the accessibleBy scope logic
-     *
-     * @param \Illuminate\Database\Eloquent\Builder $query
-     * @param mixed $user
-     * @return \Illuminate\Database\Eloquent\Builder
-     */
-    protected function applyAccessibleByScope($query, $user)
-    {
-        if (!$user) {
-            // No user - return impossible condition
-            return $query->whereRaw('1 = 0');
-        }
-
-        $useUserFilter = config('ai.file_context.fallback_filters.use_user_filter', true);
-        $useTeamFilter = config('ai.file_context.fallback_filters.use_team_filter', true);
-
-        // If both filters are disabled, return impossible condition for security
-        if (!$useUserFilter && !$useTeamFilter) {
-            return $query->whereRaw('1 = 0');
-        }
-
-        // Apply filters with AND logic (both must match when both enabled)
-        if ($useUserFilter) {
-            $query->where('user_id', $user->id ?? $user->getKey());
-        }
-
-        if ($useTeamFilter) {
-            $teamId = safeCurrentTeamId();
-            if ($teamId) {
-                $query->where('team_id', $teamId);
+        Builder::macro('accessibleBy', function ($user) {
+            /** @var Builder $this */
+            if (!$user) {
+                return $this->whereRaw('1 = 0');
             }
-        }
 
-        return $query;
+            $useUserFilter = config('ai.file_context.fallback_filters.use_user_filter', true);
+            $useTeamFilter = config('ai.file_context.fallback_filters.use_team_filter', true);
+            $userId = $user->id ?? $user->getKey();
+            $teamId = $useTeamFilter ? safeCurrentTeamId() : null;
+
+            if (!$useUserFilter && !$useTeamFilter) {
+                return $this->whereRaw('1 = 0');
+            }
+
+            // Use OR logic: user_id matches OR team_id matches
+            return $this->where(function ($q) use ($userId, $teamId, $useUserFilter, $useTeamFilter) {
+                if ($useUserFilter) {
+                    $q->where('user_id', $userId);
+                }
+
+                if ($useTeamFilter && $teamId) {
+                    $q->orWhere('team_id', $teamId);
+                }
+            });
+        });
     }
 }

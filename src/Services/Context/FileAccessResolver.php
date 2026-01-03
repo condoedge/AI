@@ -19,8 +19,7 @@ use Condoedge\Utils\Facades\FileModel;
  * Configuration options (in config/ai.php):
  * - ai.file_context.security_enabled: Enable/disable security enforcement
  * - ai.file_context.access_resolver: Closure that returns accessible file IDs
- * - ai.file_context.file_model: Eloquent model class for database files
- * - ai.file_context.access_scope: Scope method name to call on the model
+ * - ai.file_context.fallback_filters: user_id/team_id filter config for fallback
  *
  * @package Condoedge\Ai\Services\Context
  */
@@ -65,13 +64,11 @@ class FileAccessResolver implements FileAccessResolverInterface
             return $resolver($user);
         }
 
-        // Try configured accessibleBy scope
-        $accessScope = config('ai.file_context.access_scope', 'accessibleBy');
-
+        // Try accessibleBy macro (registered via FileAccessScopePlugin)
         try {
-            return FileModel::$accessScope($user)->pluck('id')->toArray();
+            return FileModel::query()->accessibleBy($user)->pluck('id')->toArray();
         } catch (\Throwable $e) {
-            \Log::debug("FileAccessResolver: accessibleBy scope failed, using fallback", [
+            \Log::debug("FileAccessResolver: accessibleBy macro failed, using fallback", [
                 'error' => $e->getMessage(),
                 'user_id' => $user->id ?? null,
             ]);
@@ -90,28 +87,27 @@ class FileAccessResolver implements FileAccessResolverInterface
     protected function getFallbackAccessibleFileIds(mixed $user): array
     {
         $query = FileModel::query();
-        $hasFilters = false;
+        $userId = $user->id ?? $user->getKey();
+        $useUserFilter = config('ai.file_context.fallback_filters.use_user_filter', true);
+        $useTeamFilter = config('ai.file_context.fallback_filters.use_team_filter', true);
+        $teamId = $useTeamFilter ? safeCurrentTeamId() : null;
 
-        // Filter by user_id if enabled
-        if (config('ai.file_context.fallback_filters.use_user_filter', true)) {
-            $query->where('user_id', $user->id ?? $user->getKey());
-            $hasFilters = true;
-        }
-
-        // Filter by team_id if enabled
-        if (config('ai.file_context.fallback_filters.use_team_filter', true)) {
-            $teamId = safeCurrentTeamId();
-            if ($teamId) {
-                $query->where('team_id', $teamId);
-                $hasFilters = true;
-            }
-        }
-
-        // If no filters applied (both disabled), return empty for security
-        if (!$hasFilters) {
+        // If no filters enabled, return empty for security
+        if (!$useUserFilter && !$useTeamFilter) {
             \Log::warning('FileAccessResolver: No fallback filters enabled, returning empty');
             return [];
         }
+
+        // Use OR logic: user_id matches OR team_id matches
+        $query->where(function ($q) use ($userId, $teamId, $useUserFilter, $useTeamFilter) {
+            if ($useUserFilter) {
+                $q->where('user_id', $userId);
+            }
+
+            if ($useTeamFilter && $teamId) {
+                $q->orWhere('team_id', $teamId);
+            }
+        });
 
         return $query->pluck('id')->toArray();
     }
