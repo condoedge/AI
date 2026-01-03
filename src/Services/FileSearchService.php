@@ -4,7 +4,7 @@ namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\ChunkStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
-use Condoedge\Utils\Models\Files\File;
+use Condoedge\Utils\Facades\FileModel;
 
 /**
  * File Search Service
@@ -87,7 +87,7 @@ class FileSearchService
 
         // Load File models
         $fileIds = array_column($results, 'file_id');
-        $files = File::whereIn('id', $fileIds)->get()->keyBy('id');
+        $files = FileModel::whereIn('id', $fileIds)->get()->keyBy('id');
 
         // Enhance results with File models
         foreach ($results as &$result) {
@@ -133,7 +133,7 @@ class FileSearchService
         }
 
         // Load File models
-        $files = File::whereIn('id', $fileIds)->get();
+        $files = FileModel::whereIn('id', $fileIds)->get();
 
         return $files->map(function ($file) {
             return [
@@ -210,7 +210,7 @@ class FileSearchService
         }
 
         $fileIds = array_column($results, 'id');
-        $files = File::whereIn('id', $fileIds)->get()->keyBy('id');
+        $files = FileModel::whereIn('id', $fileIds)->get()->keyBy('id');
 
         return collect($results)->map(function ($result) use ($files) {
             return [
@@ -243,7 +243,7 @@ class FileSearchService
 
         $fileIds = array_column($results, 'id');
 
-        return File::whereIn('id', $fileIds)
+        return FileModel::whereIn('id', $fileIds)
             ->orderByDesc('created_at')
             ->get()
             ->toArray();
@@ -272,7 +272,7 @@ class FileSearchService
 
         $fileIds = array_column($results, 'id');
 
-        return File::whereIn('id', $fileIds)
+        return FileModel::whereIn('id', $fileIds)
             ->orderByDesc('created_at')
             ->get()
             ->toArray();
