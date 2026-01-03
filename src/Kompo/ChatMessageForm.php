@@ -7,7 +7,7 @@ use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Models\AiMessage;
-use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
+use Condoedge\Ai\Services\Chat\SendMessageService;
 use Condoedge\Utils\Kompo\Common\Form;
 
 /**
@@ -135,34 +135,46 @@ class ChatMessageForm extends Form
         );
     }
 
-    public function sendMessage()
+    public function sendMessage(?string $message = null)
     {
-        $message = trim(request('message') ?? '');
+        $message = trim($message ?? request('message') ?? '');
         $style = request('style') ?? $this->responseStyle;
 
         if (empty($message) || !$this->conversation) {
             return;
         }
 
-        // Call AI service with conversation context
-        // Note: askWithConversation() handles:
-        // - Storing user message with context metadata
-        // - Processing through ConversationContextManager (entity extraction, reference resolution)
-        // - Storing assistant response with all metadata
-        // - Error handling and error message storage
-        $response = app(AiChatServiceInterface::class)->askWithConversation(
-            $message,
-            $this->conversation,
-            [
-                'style' => $style,
-                'user' => auth()->user(), // SECURITY: Pass authenticated user for file access control
-            ]
-        );
+        $service = app(SendMessageService::class);
 
-        // Response is already stored by askWithConversation()
-        // Response structure: answer, data, suggestions, sources, cypher_query
-        // No additional processing needed - the conversation will be refreshed
-        // via the panel refresh triggered by the button click
+        try {
+            // SendMessageService handles:
+            // - Message validation
+            // - Delegating to AiChatService which manages:
+            //   - Storing user message with context metadata
+            //   - Processing through ConversationContextManager
+            //   - Storing assistant response with all metadata
+            //   - Error handling and error message storage
+            $service->sendMessage(
+                conversation: $this->conversation,
+                message: $message,
+                options: [
+                    'style' => $style,
+                    'user' => auth()->user(), // SECURITY: Pass authenticated user for file access control
+                ]
+            );
+
+            // Response is already stored by the service
+            // The conversation will be refreshed via the panel refresh triggered by the button click
+        } catch (\InvalidArgumentException $e) {
+            // Empty message - silently ignore as UI should prevent this
+            \Log::debug('Chat message validation failed: ' . $e->getMessage());
+        } catch (\Throwable $e) {
+            // Log unexpected errors - the service stores error messages in conversation
+            \Log::error('Chat message failed: ' . $e->getMessage(), [
+                'conversation_id' => $this->conversation->id,
+                'exception' => $e,
+            ]);
+        }
     }
 
     public function quickAction($action)
@@ -175,9 +187,9 @@ class ChatMessageForm extends Form
         ];
 
         $message = $actions[$action] ?? $action;
-        request()->merge(['message' => $message]);
 
-        return $this->sendMessage();
+        // Pass message directly to sendMessage instead of using request()->merge()
+        return $this->sendMessage($message);
     }
 
     public function rules()
