@@ -74,14 +74,14 @@ class ChatMessageForm extends Form
 
         return _Select()->name('style')
             ->options([
-                'friendly' => 'Friendly',
-                'professional' => 'Professional',
-                'concise' => 'Concise',
-                'detailed' => 'Detailed',
+                'friendly' => __('ai.form.style-friendly'),
+                'professional' => __('ai.form.style-professional'),
+                'concise' => __('ai.form.style-concise'),
+                'detailed' => __('ai.form.style-detailed'),
             ])
             ->default($this->responseStyle)
             ->class('w-32 text-sm border-0 bg-gray-100/50 rounded-lg focus:ring-1 focus:ring-indigo-200')
-            ->balloon('Response style', 'up');
+            ->balloon(__('ai.form.response-style-tooltip'), 'up');
     }
 
     protected function quickActions()
@@ -168,10 +168,10 @@ class ChatMessageForm extends Form
     public function quickAction($action)
     {
         $actions = [
-            'summarize' => 'Summarize our conversation so far',
-            'clarify' => 'Can you clarify your last response?',
-            'examples' => 'Can you provide some examples?',
-            'alternatives' => 'What are some alternative approaches?',
+            'summarize' => __('ai.form.quick-summarize'),
+            'clarify' => __('ai.form.quick-clarify'),
+            'examples' => __('ai.form.quick-examples'),
+            'alternatives' => __('ai.form.quick-alternatives'),
         ];
 
         $message = $actions[$action] ?? $action;
@@ -190,8 +190,8 @@ class ChatMessageForm extends Form
     public function validationMessages()
     {
         return [
-            'message.required' => 'Please enter a message',
-            'message.max' => 'Message is too long (max 10,000 characters)',
+            'message.required' => __('ai.form.validation-required'),
+            'message.max' => __('ai.form.validation-max'),
         ];
     }
 }
