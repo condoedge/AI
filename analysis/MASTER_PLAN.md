@@ -68,18 +68,18 @@
 - [ ] User confirmation to proceed
 
 ### PHASE 6 - Consolidation: Cleanup & Improvement Plan
-- [ ] Document each issue with:
-  - [ ] Description
-  - [ ] Evidence
-  - [ ] Severity
-  - [ ] Root cause
-  - [ ] Fix proposal
-  - [ ] Impact analysis
-  - [ ] Migration steps
-  - [ ] Test plan
-- [ ] Produce prioritized roadmap
-- [ ] Define minimum safe changeset
-- [ ] Update STATUS.md
+- [x] Document each issue with:
+  - [x] Description
+  - [x] Evidence
+  - [x] Severity
+  - [x] Root cause
+  - [x] Fix proposal
+  - [x] Impact analysis
+  - [x] Migration steps
+  - [x] Test plan
+- [x] Produce prioritized roadmap (4 sprints defined)
+- [x] Define minimum safe changeset (2 hours critical fixes)
+- [x] Update STATUS.md
 - [ ] User confirmation to proceed
 
 ### PHASE 7 - Final Synthesis & Resumability
