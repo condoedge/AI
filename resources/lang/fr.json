@@ -41,11 +41,16 @@
     "ai.settings.reset-defaults": "Reinitialiser par defaut",
     "ai.settings.save-settings": "Enregistrer les parametres",
 
+    "ai.themes.green": "Theme vert",
+    "ai.themes.indigo": "Theme indigo",
+
     "ai.chat.new-conversation": "Nouvelle conversation",
     "ai.chat.search-placeholder": "Rechercher des conversations...",
     "ai.chat.filter-all": "Toutes",
     "ai.chat.filter-pinned": "Epinglees",
     "ai.chat.filter-archived": "Archivees",
+    "ai.chat.help": "Aide",
+    "ai.chat.input-placeholder": "Posez une question...",
     "ai.chat.no-messages": "Aucun message",
     "ai.chat.you-prefix": "Vous: ",
     "ai.chat.yesterday": "Hier",

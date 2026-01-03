@@ -99,7 +99,7 @@ class ChatSettingsModal extends Modal
         $themeOptions = [];
 
         foreach ($availableThemes as $theme) {
-            $themeOptions[$theme] = __('translate.ai.themes.' . $theme);
+            $themeOptions[$theme] = __('ai.themes.' . $theme);
         }
 
         return _Select()->name('ui_theme')

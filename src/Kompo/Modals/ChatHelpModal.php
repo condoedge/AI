@@ -4,6 +4,7 @@
 namespace Condoedge\Ai\Kompo\Modals;
 
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
+use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
 use Condoedge\Utils\Kompo\Common\Modal;
 
 /**
@@ -11,7 +12,7 @@ use Condoedge\Utils\Kompo\Common\Modal;
  */
 class ChatHelpModal extends Modal
 {
-    use HasChatTheme;
+    use HasChatTheme, HasMethodsAsProperties;
     
     protected $_Title = 'ai.help.title';
     public $class = 'overflow-hidden max-w-2xl rounded-2xl';

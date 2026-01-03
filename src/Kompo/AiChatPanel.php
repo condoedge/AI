@@ -124,7 +124,7 @@ class AiChatPanel extends Form
             _Link(__('ai.chat.settings'))->icon('cog-6-tooth')
                 ->class('text-sm text-gray-500 ' . $this->theme()->linkHover() . ' p-2 rounded-lg transition-all')
                 ->selfGet('openSettings')->inModal(),
-            _Link('Help')->icon('question-mark-circle')
+            _Link(__('ai.chat.help'))->icon('question-mark-circle')
                 ->class('text-sm text-gray-500 ' . $this->theme()->linkHover() . ' p-2 rounded-lg transition-all')
                 ->selfGet('openHelp')->inModal(),
         )->class('p-3 border-t border-gray-200/70 bg-white/80 backdrop-blur-sm');
