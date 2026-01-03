@@ -34,7 +34,7 @@ class ChatHelpModal extends Modal
             ->noInputWrapper()
             ->containerClass('px-3 gap-2 flex border-none')
             ->commonClass('px-4 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap !border-none focus:!shadow-none !rounded-lg text-center')
-            ->selectedClass($this->active_badge, 'text-gray-500 hover:bg-gray-100')
+            ->selectedClass($this->theme_active_badge, 'text-gray-500 hover:bg-gray-100')
             ->options([
                 'getting_started' => __('ai.help.tab-getting-started'),
                 'tips' => __('ai.help.tab-tips'),
