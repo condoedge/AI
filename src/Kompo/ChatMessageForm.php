@@ -56,11 +56,23 @@ class ChatMessageForm extends Form
                 $this->responseStyleSelector(),
                 _Button()->icon(_Sax('send-1', 20))->id('chat-send-btn')
                     ->class('p-3 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all flex-shrink-0')
-                    ->resetAfterChange()
-                    ->selfPost('setLoadingMessage')->withAllFormValues()->inPanel('temp-message-loading')
-                    ->run($this->scrollScript())
-                    ->selfPost('sendMessage')->withAllFormValues()
-                    ->refresh(MessagesQuery::ID),
+                    ->onClick(fn($e) => $e->selfPost('setLoadingMessage')->withAllFormValues()->inPanel('temp-message-loading')
+                        ->run($this->scrollScript())
+                        ->run('() => {
+                            const input = document.getElementById("chat-message-input");
+                            if (input) {
+                                input.value = "";
+                                input.style.height = "auto";
+                            }
+
+                            // dispatch event to ensure vue catches the change
+                            const event = new Event("input", { bubbles: true });
+                            input.dispatchEvent(event);
+                        }')
+                    )
+                    ->onClick(fn($e) => $e->selfPost('sendMessage')->withAllFormValues()
+                        ->onSuccess->refresh(MessagesQuery::ID)
+                    ),
             )->class('flex items-end gap-3 px-4 py-3 bg-white/90 border border-gray-200/70 rounded-2xl shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 backdrop-blur-sm transition-all'),
             $this->quickActions(),
         )->class('p-4 border-t border-gray-100/70 bg-gradient-to-t from-white via-white to-transparent');

@@ -70,7 +70,12 @@
       "Bash(grep:*)",
       "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" show 37d440a:src/Models/Plugins/FileAccessScopePlugin.php)",
       "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" log --oneline -20)",
-      "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" diff 37d440a..b1afad7 -- src/Models/Plugins/FileAccessScopePlugin.php)"
+      "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" diff 37d440a..b1afad7 -- src/Models/Plugins/FileAccessScopePlugin.php)",
+      "Bash(do echo \"=== $dir ===\" ls \"C:/Users/jkend/Documents/Projects/kompo/ai/src/$dir\")",
+      "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" rev-parse HEAD)",
+      "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline -3)",
+      "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline 1a337ca..HEAD)",
+      "Bash(xargs:*)"
     ],
     "deny": [],
     "ask": []
