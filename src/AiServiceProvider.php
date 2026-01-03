@@ -68,6 +68,7 @@ use Condoedge\Ai\Services\Files\PhysicalFileIndexer;
 use Condoedge\Ai\Services\Response\ResponseFileEnricher;
 use Condoedge\Utils\Models\Files\File;
 use Condoedge\Ai\Models\Plugins\FileProcessingPlugin;
+use Condoedge\Ai\Models\Plugins\FileAccessScopePlugin;
 use Condoedge\Ai\Services\UI\ChatThemeFactoryInterface;
 use Condoedge\Ai\Services\UI\ChatThemeInterface;
 use Condoedge\Ai\Services\UI\ConfigChatThemeFactory;
@@ -630,6 +631,7 @@ class AiServiceProvider extends ServiceProvider
 
         FileModel::setPlugins([
             FileProcessingPlugin::class,
+            FileAccessScopePlugin::class,
         ]);
     }
 
