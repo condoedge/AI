@@ -34,7 +34,7 @@ class ConversationListQuery extends Query
         return _Rows(
             _Rows(
                 _Input()->name('search', false)
-                    ->placeholder('Search conversations...')
+                    ->placeholder(__('ai.chat.search-placeholder'))
                     ->class('bg-white/80 border-gray-200/50 rounded-xl shadow-sm ' . $this->theme()->primaryRing() . ' ' . $this->theme()->primaryBorder() . ' transition-all')
                     ->filter(),
             )->class('px-3 pb-1 pt-4 border-b border-gray-100/70'),
@@ -45,9 +45,9 @@ class ConversationListQuery extends Query
                 ->commonClass('text-center px-3 py-1 text-xs font-medium rounded-full transition-all !rounded-2xl !border-none focus:!shadow-none')
                 ->selectedClass($this->theme()->activeBadge(), $this->theme()->inactiveBadge())
                 ->options([
-                    'active' => __('All'),
-                    'pinned' => __('Pinned'),
-                    'archived' => __('Archived'),
+                    'active' => __('ai.chat.filter-all'),
+                    'pinned' => __('ai.chat.filter-pinned'),
+                    'archived' => __('ai.chat.filter-archived'),
                 ])->default($default)
                 ->name('filter', false)->filter(),
         );
@@ -73,7 +73,7 @@ class ConversationListQuery extends Query
             _FlexBetween(
                 _Flex(
                     $isPinned ? _Sax('star', 12)->class('text-amber-500 mr-1') : null,
-                    _Html($conversation->title ?? 'New Conversation')
+                    _Html($conversation->title ?? __('ai.chat.new-conversation'))
                         ->class('font-medium text-gray-800 truncate'),
                 )->class('items-center flex-1 min-w-0'),
                 _Html($this->formatTime($conversation->last_message_at))
@@ -94,10 +94,10 @@ class ConversationListQuery extends Query
     protected function getPreviewText($message): string
     {
         if (!$message) {
-            return 'No messages yet';
+            return __('ai.chat.no-messages');
         }
 
-        $content = $message->role === 'user' ? 'You: ' : '';
+        $content = $message->role === 'user' ? __('ai.chat.you-prefix') : '';
         $content .= Str::limit($message->content, 50);
         return $content;
     }
@@ -112,7 +112,7 @@ class ConversationListQuery extends Query
             return $date->format('g:i A');
         }
         if ($date->isYesterday()) {
-            return 'Yesterday';
+            return __('ai.chat.yesterday');
         }
         if ($date->isCurrentWeek()) {
             return $date->format('l');
