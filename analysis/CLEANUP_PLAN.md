@@ -13,7 +13,7 @@ This document provides detailed remediation plans for all issues identified duri
 
 **Total Issues:** 45+
 - **CRITICAL:** ~~2~~ 0 (security vulnerabilities) - **ALL FIXED**
-- **HIGH:** 3 (architectural concerns)
+- **HIGH:** ~~3~~ 1 (architectural concerns) - 2 FIXED, 1 deferred (AiServiceProvider split)
 - **MEDIUM:** 14 (code quality)
 - **LOW:** 9 (minor improvements)
 
@@ -195,13 +195,14 @@ public function test_rejects_injection_in_field(): void
 
 ## HIGH Priority Issues
 
-### HIGH-001: AiServiceProvider Too Large
+### HIGH-001: AiServiceProvider Too Large - ⏸️ DEFERRED
 
 | Field | Details |
 |-------|---------|
 | **Issue ID** | INF-001 |
 | **Severity** | HIGH |
 | **Category** | Architecture - Maintainability |
+| **Status** | ⏸️ **DEFERRED** - Code already well-organized with 8 private methods grouping related bindings |
 
 #### Description
 
@@ -211,8 +212,26 @@ public function test_rejects_injection_in_field(): void
 
 - 770 lines of code
 - 50+ singleton bindings
-- 8 private helper methods for domain grouping
+- 8 private helper methods for domain grouping (already organized!)
 - Single file handling all domains: core, discovery, semantic, file, chat, UI, settings
+
+#### Current State (2026-01-03 Review)
+
+The file is already well-organized with private methods:
+- `registerSemanticServices()` - semantic matching services
+- `registerDiscoveryServices()` - auto-discovery services
+- `registerChatServices()` - chat services
+- `registerContextServices()` - context management
+- `registerFileContextServices()` - file context services
+- `registerUiServices()` - UI theming services
+- `registerSettingsServices()` - settings services
+
+The "8 private helper methods for domain grouping" in Evidence shows this is already structured. Splitting into sub-providers would require:
+1. Moving private methods to separate provider classes
+2. Managing provider dependencies
+3. Testing registration order
+
+**Recommendation:** Defer unless the file grows significantly beyond current size or causes actual maintenance issues.
 
 #### Root Cause
 
@@ -277,13 +296,14 @@ php artisan tinker
 
 ---
 
-### HIGH-002: QueryGenerator Uses Weaker Sanitizer
+### HIGH-002: QueryGenerator Uses Weaker Sanitizer - ✅ FIXED
 
 | Field | Details |
 |-------|---------|
 | **Issue ID** | GS-002 |
 | **Severity** | HIGH |
 | **Category** | Security - Configuration |
+| **Status** | ✅ **FIXED** on 2026-01-03 (resolved with CRIT-001) |
 
 #### Description
 
@@ -310,13 +330,14 @@ See CRIT-001.
 
 ---
 
-### HIGH-003: PrivacyAndSecurityGuidelinesSection Priority Mismatch
+### HIGH-003: PrivacyAndSecurityGuidelinesSection Priority Mismatch - ✅ VERIFIED OK
 
 | Field | Details |
 |-------|---------|
 | **Issue ID** | RSP-001 |
 | **Severity** | HIGH |
 | **Category** | Documentation - Code Mismatch |
+| **Status** | ✅ **VERIFIED** - Docstring and code both say 1000 (no mismatch exists) |
 
 #### Description
 
