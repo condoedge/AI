@@ -5,6 +5,7 @@ namespace Condoedge\Ai\Kompo\Modals;
 
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
+use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
 use Condoedge\Ai\Models\AiUserSetting;
 use Condoedge\Ai\Services\UI\ChatThemeFactoryInterface;
 use Condoedge\Utils\Kompo\Common\Modal;
@@ -14,7 +15,7 @@ use Condoedge\Utils\Kompo\Common\Modal;
  */
 class ChatSettingsModal extends Modal
 {
-    use HasChatSettings, HasChatTheme;
+    use HasChatSettings, HasChatTheme, HasMethodsAsProperties;
 
     protected $_Title = 'Chat Settings';
     public $class = 'overflow-hidden max-w-lg rounded-2xl';

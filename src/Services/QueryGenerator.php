@@ -547,30 +547,4 @@ class QueryGenerator implements QueryGeneratorInterface
         // Return as-is if not in schema
         return $label;
     }
-
-    /**
-     * Check if context contains semantic scopes (new format)
-     *
-     * Semantic scopes have specification_type field indicating they use
-     * the new declarative format with relationship_spec, pattern, etc.
-     *
-     * @param array $context Context array
-     * @return bool True if semantic scopes detected
-     */
-    private function hasSemanticScopes(array $context): bool
-    {
-        // Check if we have detected scopes
-        if (empty($context['entity_metadata']['detected_scopes'])) {
-            return false;
-        }
-
-        // Check if any scope has specification_type (indicates new format)
-        foreach ($context['entity_metadata']['detected_scopes'] as $scope) {
-            if (isset($scope['specification_type'])) {
-                return true;
-            }
-        }
-
-        return false;
-    }
 }

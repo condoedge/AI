@@ -49,7 +49,7 @@ class AiChatPanel extends Form
     public function created()
     {
         $this->id(self::ID);
-        $this->selectedConversationId = session('selected_ai_conversation_id');
+        $this->selectedConversationId = session('selected_conversation_id');
 
         // Check AI service availability
         try {
@@ -114,12 +114,7 @@ class AiChatPanel extends Form
                 ->class('p-2.5 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200')
                 ->balloon('New conversation', 'left')
                 ->selfPost('createConversation')
-                ->refresh()
-                ->run('() => {
-                    setTimeout(() => {
-                        $("#conversation-list .vlQueryWrapper>div:first-child>div:first-child").click();
-                    }, 1000);
-                }'),
+                ->refresh(),
         )->class('p-4 border-b border-gray-200/70 bg-white/80 backdrop-blur-sm');
     }
 
@@ -139,25 +134,9 @@ class AiChatPanel extends Form
     {
         return _Rows(
             new MessagesQuery(),
-            _Panel(
-                $this->inputArea()
-            )->id(self::INPUT_PANEL_ID),
         )->class('flex-1 flex flex-col bg-gradient-to-br from-white to-gray-50/50 h-full');
     }
 
-
-    protected function inputArea()
-    {
-        if (!$this->conversation) {
-            return null;
-        }
-
-        return new ChatMessageForm(null, [
-            'conversation_id' => $this->conversation->id,
-            'panel_id' => self::MESSAGES_PANEL_ID,
-            'response_style' => $this->settings()->responseStyle(),
-        ]);
-    }
 
     // ========== ACTION METHODS ==========
 
@@ -170,40 +149,7 @@ class AiChatPanel extends Form
             'title' => 'New Conversation',
         ]);
 
-        $this->selectedConversationId = $conversation->id;
-        $this->conversation = $conversation;
-
-        return $this->mainLayout();
-    }
-
-    public function selectConversation($id)
-    {
-        $this->selectedConversationId = $id;
-        $this->conversation = AiConversation::where('user_id', auth()->id())->find($id);
-
-        return $this->mainLayout();
-    }
-
-    public function deleteConversation($id)
-    {
-        AiConversation::where('user_id', auth()->id())->where('id', $id)->delete();
-
-        $this->selectedConversationId = null;
-        $this->conversation = null;
-
-        return $this->mainLayout();
-    }
-
-    public function archiveConversation($id)
-    {
-        AiConversation::where('user_id', auth()->id())
-            ->where('id', $id)
-            ->update(['status' => 'archived']);
-
-        $this->selectedConversationId = null;
-        $this->conversation = null;
-
-        return $this->mainLayout();
+        session(['selected_conversation_id' => $conversation->id]);
     }
 
     public function openSettings()

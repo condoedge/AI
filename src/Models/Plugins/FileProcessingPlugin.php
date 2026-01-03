@@ -5,6 +5,7 @@ namespace Condoedge\Ai\Models\Plugins;
 use Condoedge\Utils\Models\Plugins\ModelPlugin;
 use Condoedge\Ai\Contracts\FileProcessorInterface;
 use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Jobs\ProcessFileJob;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -277,22 +278,27 @@ class FileProcessingPlugin extends ModelPlugin
      */
     protected function queueFileProcessing($file, bool $reprocess = false): void
     {
-        // Note: Job implementation will be created in a future task
-        // For now, log that it should be queued
-        Log::info("File processing should be queued (not implemented yet)", [
+        $job = new ProcessFileJob($file, $reprocess);
+
+        // Configure queue connection and name from config
+        $queueConnection = config('ai.file_processing.queue_connection');
+        $queueName = config('ai.file_processing.queue_name', 'default');
+
+        if ($queueConnection) {
+            $job->onConnection($queueConnection);
+        }
+
+        if ($queueName !== 'default') {
+            $job->onQueue($queueName);
+        }
+
+        dispatch($job);
+
+        Log::debug("File processing queued", [
             'file_id' => $file->id,
-            'file_name' => $file->name,
+            'file_name' => $file->name ?? 'unknown',
             'reprocess' => $reprocess,
         ]);
-
-        // Fallback: process synchronously for now
-        $processor = app(FileProcessorInterface::class);
-
-        if ($reprocess) {
-            $processor->reprocessFile($file);
-        } else {
-            $processor->processFile($file);
-        }
     }
 
     /**

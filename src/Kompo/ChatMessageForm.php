@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Kompo;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
+use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Utils\Kompo\Common\Form;
 
@@ -29,26 +30,17 @@ class ChatMessageForm extends Form
 
     protected ?int $conversationId = null;
     protected ?AiConversation $conversation = null;
-    protected string $panelId;
     protected string $responseStyle = 'friendly';
 
     public function created()
     {
-
         $this->conversationId = $this->prop('conversation_id');
-        $this->panelId = $this->prop('panel_id') ?? AiChatPanel::MESSAGES_PANEL_ID;
         $this->responseStyle = $this->prop('response_style') ?? $this->settings()->responseStyle() ?? 'friendly';
 
         if ($this->conversationId) {
             $this->conversation = AiConversation::where('user_id', auth()->id())
                 ->find($this->conversationId);
         }
-
-        $this->store([
-            'conversation_id' => $this->conversationId,
-            'panel_id' => $this->panelId,
-            'response_style' => $this->responseStyle,
-        ]);
     }
 
     public function render()
@@ -64,9 +56,11 @@ class ChatMessageForm extends Form
                 $this->responseStyleSelector(),
                 _Button()->icon(_Sax('send-1', 20))->id('chat-send-btn')
                     ->class('p-3 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all flex-shrink-0')
+                    ->resetAfterChange()
+                    ->selfPost('setLoadingMessage')->withAllFormValues()->inPanel('temp-message-loading')
+                    ->run($this->scrollScript())
                     ->selfPost('sendMessage')->withAllFormValues()
-                    ->refresh($this->panelId)
-                    ->refresh('chat-message-form'),
+                    ->refresh(MessagesQuery::ID),
             )->class('flex items-end gap-3 px-4 py-3 bg-white/90 border border-gray-200/70 rounded-2xl shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 backdrop-blur-sm transition-all'),
             $this->quickActions(),
         )->class('p-4 border-t border-gray-100/70 bg-gradient-to-t from-white via-white to-transparent');
@@ -102,11 +96,43 @@ class ChatMessageForm extends Form
                 ->icon($action['icon'] ?? null)
                 ->class('px-3 py-1.5 text-xs font-medium text-gray-500 bg-gray-100/70 rounded-lg hover:bg-indigo-100 hover:text-indigo-700 transition-all')
                 ->selfPost('quickAction', ['action' => $action['value']])
-                ->refresh($this->panelId),
+                ->refresh(MessagesQuery::ID),
             array_slice($actions, 0, 4)
         );
 
         return _Flex(...$buttons)->class('mt-2 gap-2 flex-wrap');
+    }
+
+    protected function scrollScript($withTransition = true): string
+    {
+        return "() => {
+            const c = document.getElementById('" . MessagesQuery::ID . "').querySelector('.vlQueryWrapper');
+            if (c) {
+                setTimeout(() => c.scrollTo({ top: c.scrollHeight, behavior: '" . ($withTransition ? "smooth" : "auto") . "' }), 100);
+            }
+        }";
+    }
+
+    public function setLoadingMessage()
+    {
+        $message = trim(request('message') ?? '');
+        if (empty($message) || !$this->conversation) {
+            return;
+        }
+
+        $messageQueryForm = new MessagesQuery([
+            'conversation_id' => $this->conversation->id,
+        ]);
+
+        $tempMessage = new AiMessage();
+        $tempMessage->role = 'user';
+        $tempMessage->content = $message;
+
+        return _Rows(
+            $messageQueryForm->userBubble($tempMessage),
+
+            // Loading typing animation
+        );
     }
 
     public function sendMessage()

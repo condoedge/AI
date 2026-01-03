@@ -326,8 +326,9 @@ class QueryExecutor implements QueryExecutorInterface
     {
         try {
             // Neo4j specific: CALL dbms.listQueries() and dbms.killQuery()
-            $killQuery = "CALL dbms.killQuery('{$queryId}')";
-            $this->graphStore->query($killQuery);
+            // Use parameterized query to prevent injection
+            $killQuery = "CALL dbms.killQuery(\$queryId)";
+            $this->graphStore->query($killQuery, ['queryId' => $queryId]);
             return true;
         } catch (\Exception $e) {
             // Query might have already finished or ID invalid

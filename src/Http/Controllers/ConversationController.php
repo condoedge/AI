@@ -11,7 +11,7 @@ class ConversationController extends Controller
     {
         $conversation = AiConversation::where('user_id', auth()->id())->find($id);
         if (!$conversation) {
-            return;
+            abort(404, 'Conversation not found');
         }
 
         $markdown = "# " . ($conversation->title ?? 'Conversation') . "\n\n";

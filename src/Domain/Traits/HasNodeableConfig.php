@@ -524,7 +524,7 @@ trait HasNodeableConfig
     {
         // Try Laravel config path first
         if (function_exists('config_path')) {
-            return config_path('ai/entities.php');
+            return config_path('entities.php');
         }
 
         // Fallback: Relative to this package

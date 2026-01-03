@@ -21,15 +21,28 @@ class QdrantChunkStore implements ChunkStoreInterface
     private const DEFAULT_COLLECTION = 'file_chunks';
 
     /**
+     * Default embedding vector dimension (OpenAI ada-002)
+     */
+    private const DEFAULT_VECTOR_SIZE = 1536;
+
+    /**
+     * @var int Embedding vector dimension
+     */
+    private readonly int $vectorSize;
+
+    /**
      * @param VectorStoreInterface $vectorStore
      * @param EmbeddingProviderInterface $embeddingProvider
      * @param string $collection Collection name
+     * @param int|null $vectorSize Embedding dimension (defaults to config or 1536)
      */
     public function __construct(
         private readonly VectorStoreInterface $vectorStore,
         private readonly EmbeddingProviderInterface $embeddingProvider,
-        private readonly string $collection = self::DEFAULT_COLLECTION
+        private readonly string $collection = self::DEFAULT_COLLECTION,
+        ?int $vectorSize = null
     ) {
+        $this->vectorSize = $vectorSize ?? (int) config('ai.embedding.vector_size', self::DEFAULT_VECTOR_SIZE);
         $this->ensureCollectionExists();
     }
 
@@ -142,7 +155,7 @@ class QdrantChunkStore implements ChunkStoreInterface
         // Search with file_id filter and high limit
         $results = $this->vectorStore->search(
             $this->collection,
-            array_fill(0, 1536, 0.0), // Dummy vector for filter-only search
+            array_fill(0, $this->vectorSize, 0.0), // Dummy vector for filter-only search
             $totalCount,
             [
                 'must' => [
@@ -252,7 +265,7 @@ class QdrantChunkStore implements ChunkStoreInterface
         if (!$this->vectorStore->collectionExists($this->collection)) {
             $this->vectorStore->createCollection(
                 $this->collection,
-                1536, // OpenAI ada-002 embedding size
+                $this->vectorSize,
                 'cosine'
             );
         }

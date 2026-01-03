@@ -67,12 +67,12 @@ class SyncEntityJob implements ShouldQueue
 
             Log::info('AI entity synced successfully', [
                 'model' => get_class($this->entity),
-                'id' => $this->entity->getNodeId(),
+                'id' => $this->entity->getId(),
             ]);
         } catch (\Throwable $e) {
             Log::error('AI entity sync failed', [
                 'model' => get_class($this->entity),
-                'id' => $this->entity->getNodeId(),
+                'id' => $this->entity->getId(),
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
@@ -92,7 +92,7 @@ class SyncEntityJob implements ShouldQueue
     {
         Log::error('AI entity sync job failed permanently', [
             'model' => get_class($this->entity),
-            'id' => $this->entity->getNodeId(),
+            'id' => $this->entity->getId(),
             'attempts' => $this->attempts(),
             'error' => $exception->getMessage(),
         ]);
@@ -109,7 +109,7 @@ class SyncEntityJob implements ShouldQueue
             'ai-sync',
             'sync',
             get_class($this->entity),
-            'entity:' . $this->entity->getNodeId(),
+            'entity:' . $this->entity->getId(),
         ];
     }
 }

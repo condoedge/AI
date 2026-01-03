@@ -104,6 +104,16 @@ class ProcessingResult
     }
 
     /**
+     * Check if processing succeeded
+     *
+     * @return bool
+     */
+    public function succeeded(): bool
+    {
+        return $this->success;
+    }
+
+    /**
      * Check if processing failed
      *
      * @return bool

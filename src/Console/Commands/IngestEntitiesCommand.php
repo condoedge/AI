@@ -6,6 +6,8 @@ namespace Condoedge\Ai\Console\Commands;
 
 use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
 use Condoedge\Ai\Contracts\FileProcessorInterface;
+use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Services\Files\PhysicalFileIndexer;
 use Illuminate\Console\Command;
@@ -49,7 +51,9 @@ class IngestEntitiesCommand extends Command
      * Create a new command instance.
      */
     public function __construct(
-        private DataIngestionServiceInterface $ingestionService
+        private DataIngestionServiceInterface $ingestionService,
+        private GraphStoreInterface $graphStore,
+        private VectorStoreInterface $vectorStore
     ) {
         parent::__construct();
     }
@@ -86,9 +90,7 @@ class IngestEntitiesCommand extends Command
         // Fresh mode - clear stores
         if ($this->option('fresh') && !$this->option('dry-run')) {
             if ($this->confirm('⚠️  This will DELETE all data from Neo4j and Qdrant. Continue?', false)) {
-                $this->warn('Clearing stores...');
-                // TODO: Implement store clearing
-                $this->comment('  Note: Store clearing not yet implemented');
+                $this->clearStores($models);
             } else {
                 $this->warn('Ingestion cancelled.');
                 return self::SUCCESS;
@@ -247,6 +249,46 @@ class IngestEntitiesCommand extends Command
     private function findNodeableModels(): array
     {
         return array_keys(config('entities'));
+    }
+
+    /**
+     * Clear all data from Neo4j and Qdrant stores
+     *
+     * @param array $models Models being ingested (used to determine collections)
+     * @return void
+     */
+    private function clearStores(array $models): void
+    {
+        $this->warn('Clearing stores...');
+
+        // Clear Neo4j - delete all nodes and relationships
+        $this->line('  Clearing Neo4j...');
+        try {
+            // Delete all nodes (this also deletes relationships)
+            $this->graphStore->query('MATCH (n) DETACH DELETE n');
+            $this->line('    <fg=green>✓</> Neo4j cleared');
+        } catch (\Throwable $e) {
+            $this->error("    ✗ Failed to clear Neo4j: {$e->getMessage()}");
+        }
+
+        // Clear Qdrant collections for each model
+        $this->line('  Clearing Qdrant collections...');
+        try {
+            $collections = $this->vectorStore->listCollections();
+
+            foreach ($collections as $collection) {
+                try {
+                    $this->vectorStore->deleteAll($collection);
+                    $this->line("    <fg=green>✓</> Cleared: {$collection}");
+                } catch (\Throwable $e) {
+                    $this->error("    ✗ Failed to clear {$collection}: {$e->getMessage()}");
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->error("    ✗ Failed to list collections: {$e->getMessage()}");
+        }
+
+        $this->newLine();
     }
 
     /**

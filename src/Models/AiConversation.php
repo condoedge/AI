@@ -66,10 +66,12 @@ class AiConversation extends Model
 
     public function scopeSearch($query, $search)
     {
-        return $query->where(function ($q) use ($search) {
-            $q->where('title', 'like', wildcardSpace($search))
-                ->orWhereHas('messages', function ($mq) use ($search) {
-                    $mq->where('content', 'like', wildcardSpace($search));
+        $searchPattern = '%' . str_replace(' ', '%', trim($search)) . '%';
+
+        return $query->where(function ($q) use ($searchPattern) {
+            $q->where('title', 'like', $searchPattern)
+                ->orWhereHas('messages', function ($mq) use ($searchPattern) {
+                    $mq->where('content', 'like', $searchPattern);
                 });
         });
     }

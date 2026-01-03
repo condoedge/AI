@@ -15,17 +15,22 @@ class ConversationListQuery extends Query
 
     public $itemsWrapperClass = '[&>div>.vlNoItems]:px-6 [&>div>.vlNoItems]:pb-4 overflow-y-auto mini-scroll max-h-[55vh]';
 
-    protected ?int $selectedId = null;
+    protected $conversationId = null;
+    protected $conversation = null;
 
     public function created()
     {
         $this->id(self::ID);
         
-        $this->selectedId = session('selected_conversation_id');
+        $this->conversationId = (int) session('selected_conversation_id');
+        $this->conversation = AiConversation::where('user_id', auth()->id())
+            ->find($this->conversationId);
     }
 
     public function top()
     {
+        $default = $this->conversation ? ($this->conversation->status ?? 'active') : 'active';
+
         return _Rows(
             _Rows(
                 _Input()->name('search', false)
@@ -40,10 +45,10 @@ class ConversationListQuery extends Query
                 ->commonClass('text-center px-3 py-1 text-xs font-medium rounded-full transition-all !rounded-2xl !border-none focus:!shadow-none')
                 ->selectedClass($this->theme()->activeBadge(), $this->theme()->inactiveBadge())
                 ->options([
-                    'all' => __('All'),
+                    'active' => __('All'),
                     'pinned' => __('Pinned'),
                     'archived' => __('Archived'),
-                ])->default('all')
+                ])->default($default)
                 ->name('filter', false)->filter(),
         );
     }
@@ -51,7 +56,7 @@ class ConversationListQuery extends Query
     public function query()
     {
         return AiConversation::where('user_id', auth()->id())
-            ->forFilter(request('filter', 'all'))
+            ->forFilter(request('filter', $this->conversation->status ?? 'active'))
             ->when(request('search'), fn($q, $search) => $q->search($search))
             ->orderByRaw("JSON_EXTRACT(metadata, '$.pinned') DESC")
             ->orderByRaw('IFNULL(last_message_at, created_at) DESC');
@@ -59,7 +64,7 @@ class ConversationListQuery extends Query
 
     public function render($conversation)
     {
-        $isSelected = $this->selectedId === $conversation->id;
+        $isSelected = $this->conversationId === $conversation->id;
         $lastMessage = $conversation->messages()->latest()->first();
         $isPinned = $conversation->metadata['pinned'] ?? false;
         $messageCount = $conversation->messages()->count();

@@ -73,6 +73,8 @@ use Condoedge\Ai\Services\UI\ChatThemeInterface;
 use Condoedge\Ai\Services\UI\ConfigChatThemeFactory;
 use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
 use Condoedge\Ai\Services\Settings\UserChatSettings;
+use Condoedge\Ai\Services\Security\AccessLevelResolver;
+use Condoedge\Utils\Facades\FileModel;
 
 /**
  * AI System Service Provider
@@ -618,7 +620,7 @@ class AiServiceProvider extends ServiceProvider
         // Register sync observers for related models
         $this->registerSyncObservers();
 
-        File::setPlugins([
+        FileModel::setPlugins([
             FileProcessingPlugin::class,
         ]);
     }
@@ -627,14 +629,60 @@ class AiServiceProvider extends ServiceProvider
      * Register sync observers for related model changes
      *
      * This allows the AI system to stay in sync when related models change.
-     * Currently a stub - full implementation coming in future update.
+     * Observers are registered based on config/ai.php 'sync_triggers' configuration.
      *
      * @return void
      */
     protected function registerSyncObservers(): void
     {
-        // TODO: Register observers for related model synchronization
-        // This will be implemented when RelatedModelSyncObserver is complete
+        $syncTriggers = config('ai.sync_triggers', []);
+
+        if (empty($syncTriggers)) {
+            return;
+        }
+
+        // Collect all related models that need observers
+        $relatedModels = [];
+        foreach ($syncTriggers as $config) {
+            $relatedModels = array_merge($relatedModels, $config['on_related'] ?? []);
+        }
+
+        $relatedModels = array_unique($relatedModels);
+
+        // Register observer for each related model
+        $observer = $this->app->make(\Condoedge\Ai\Observers\RelatedModelSyncObserver::class);
+        $namespaces = config('ai.model_namespaces', ['App\\Models']);
+
+        foreach ($relatedModels as $modelName) {
+            $modelClass = $this->resolveModelClass($modelName, $namespaces);
+
+            if ($modelClass && class_exists($modelClass)) {
+                $modelClass::observe($observer);
+            }
+        }
+    }
+
+    /**
+     * Resolve a model class name from short name
+     *
+     * @param string $modelName Short model name
+     * @param array $namespaces Namespaces to search
+     * @return string|null Full class name or null
+     */
+    private function resolveModelClass(string $modelName, array $namespaces): ?string
+    {
+        if (class_exists($modelName)) {
+            return $modelName;
+        }
+
+        foreach ($namespaces as $namespace) {
+            $fullClass = "{$namespace}\\{$modelName}";
+            if (class_exists($fullClass)) {
+                return $fullClass;
+            }
+        }
+
+        return null;
     }
 
     /**

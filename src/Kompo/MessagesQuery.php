@@ -16,11 +16,18 @@ class MessagesQuery extends Query
     use HasChatTheme, HasAvatars, HasChatSettings;
 
     public const ID = 'chat-messages-panel';
-    protected $class = '!static flex-1 overflow-y-auto p-6 bg-gradient-to-b ';
+    public $class = '';
+    public $itemsWrapperClass = '[&>div]:gap-4 [&>div]:flex [&>div]:flex-col p-6 overflow-y-auto mini-scroll h-full';
+    public $style = 'max-height: 95vh;';
 
-    protected $noItemsText = '';
+    public $noItemsFound = '';
 
     protected $conversation;
+
+    public $paginationType = 'Scroll';
+    public $perPage = 200;
+
+    protected $latestMessageId;
 
     public function created()
     {
@@ -29,7 +36,9 @@ class MessagesQuery extends Query
         $this->conversation = AiConversation::where('user_id', auth()->id())
             ->find($this->prop('conversation_id') ?? session('selected_conversation_id'));
 
-        $this->class = '!static flex-1 overflow-y-auto p-6 bg-gradient-to-b ' . $this->theme()->heroBackground() . ' mini-scroll';
+        $this->class = '!static flex-1 bg-gradient-to-b ' . $this->theme()->heroBackground();
+
+        $this->latestMessageId = $this->query()?->reorder('created_at', 'desc')->first()?->id;
     }
 
     public function top()
@@ -109,6 +118,22 @@ class MessagesQuery extends Query
         )->class('gap-1 bg-gray-50/50 rounded-2xl p-1');
     }
 
+    public function bottom()
+    {
+        if (!$this->conversation) {
+            return null;
+        }
+
+        return _Rows(
+            new ChatMessageForm(null, [
+                'conversation_id' => $this->conversation->id,
+                'response_style' => $this->settings()->responseStyle(),
+            ]),
+
+            _Hidden()->onLoad->run($this->scrollScript(false))
+        );
+    }
+
     
     public function query()
     {
@@ -123,13 +148,17 @@ class MessagesQuery extends Query
             ? $this->userBubble($message)
             : $this->assistantBubble($message);
 
+        $isLatest = $message->id === $this->latestMessageId;
+
         return _Rows(
-            _Hidden()->onLoad->run($this->scrollScript()),
             $bubble,
+
+            // When we're loading the message response we push the message and the loading typing animation into this panel
+            !$isLatest ? null : _Panel()->id('temp-message-loading')->class('mt-4'),
         );
     }
 
-    protected function userBubble($message)
+    public function userBubble($message)
     {
         return _Rows(
             _FlexEnd(
@@ -152,7 +181,7 @@ class MessagesQuery extends Query
         )->class('group');
     }
 
-    protected function assistantBubble($message)
+    public function assistantBubble($message)
     {
         $content = [];
 
@@ -374,12 +403,7 @@ class MessagesQuery extends Query
             _Button('Start New Chat')->icon('plus')
                 ->class('px-6 py-3 bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white rounded-xl shadow-lg hover:shadow-xl transition-all')
                 ->selfPost('createConversation')
-                ->refresh()
-                ->run('() => {
-                    setTimeout(() => {
-                        $("#conversation-list .vlQueryWrapper>div:first-child>div:first-child").click();
-                    }, 500);
-                }'),
+                ->refresh(),
         )->class('flex flex-col items-center justify-center h-full py-16');
     }
 
@@ -495,13 +519,29 @@ class MessagesQuery extends Query
         return $renderer->render($text);
     }
 
-    protected function scrollScript(): string
+    protected function scrollScript($withTransition = true): string
     {
         return "() => {
-            const c = document.getElementById('" . self::ID . "');
+            const c = document.getElementById('" . self::ID . "').querySelector('.vlQueryWrapper');
             if (c) {
-                setTimeout(() => c.scrollTo({ top: c.scrollHeight, behavior: 'smooth' }), 100);
+                setTimeout(() => c.scrollTo({ top: c.scrollHeight, behavior: '" . ($withTransition ? "smooth" : "auto") . "' }), 100);
             }
         }";
+    }
+
+    public function deleteConversation($id)
+    {
+        AiConversation::where('user_id', auth()->id())->where('id', $id)->delete();
+
+        session(['selected_conversation_id' => null]);
+    }
+
+    public function archiveConversation($id)
+    {
+        AiConversation::where('user_id', auth()->id())
+            ->where('id', $id)
+            ->update(['status' => 'archived']);
+
+        session(['selected_conversation_id' => null]);
     }
 }

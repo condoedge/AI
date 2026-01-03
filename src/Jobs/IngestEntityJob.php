@@ -67,12 +67,12 @@ class IngestEntityJob implements ShouldQueue
 
             Log::info('AI entity ingested successfully', [
                 'model' => get_class($this->entity),
-                'id' => $this->entity->getNodeId(),
+                'id' => $this->entity->getId(),
             ]);
         } catch (\Throwable $e) {
             Log::error('AI entity ingestion failed', [
                 'model' => get_class($this->entity),
-                'id' => $this->entity->getNodeId(),
+                'id' => $this->entity->getId(),
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
@@ -92,7 +92,7 @@ class IngestEntityJob implements ShouldQueue
     {
         Log::error('AI entity ingestion job failed permanently', [
             'model' => get_class($this->entity),
-            'id' => $this->entity->getNodeId(),
+            'id' => $this->entity->getId(),
             'attempts' => $this->attempts(),
             'error' => $exception->getMessage(),
         ]);
@@ -109,7 +109,7 @@ class IngestEntityJob implements ShouldQueue
             'ai-sync',
             'ingest',
             get_class($this->entity),
-            'entity:' . $this->entity->getNodeId(),
+            'entity:' . $this->entity->getId(),
         ];
     }
 }
