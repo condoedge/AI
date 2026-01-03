@@ -435,6 +435,79 @@ public function openChat()
 
 ---
 
+## Configuration Reference
+
+### Environment Variables
+
+```env
+# Provider Configuration
+AI_PROVIDER=openai
+OPENAI_API_KEY=your-key
+# Or: ANTHROPIC_API_KEY=your-key
+
+# Neo4j Configuration
+NEO4J_HOST=localhost
+NEO4J_PORT=7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=password
+
+# Qdrant Configuration
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+
+# Project Context (optional but recommended)
+APP_NAME="My Application"
+AI_PROJECT_DESCRIPTION="Description of your project"
+AI_PROJECT_DOMAIN=your-domain
+```
+
+### Model Properties Reference
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `$embedFields` | `array` | Fields for semantic search embedding |
+| `$graphLabel` | `string` | Neo4j node label (defaults to class name) |
+| `$sensibleColumns` | `array` | Columns requiring special permission |
+| `$nodeableAliases` | `array` | Alternative names ("person", "people") |
+| `$graphRelationships` | `array` | Explicit relationship definitions |
+
+---
+
+## Access Control
+
+The system automatically controls what users can see:
+
+| User Type | Can See |
+|-----------|---------|
+| Guest | Total counts only |
+| Team Member | Team counts |
+| Has READ permission | Filtered counts, details |
+| Has sensibleColumns permission | Sensitive data (SSN, etc.) |
+
+---
+
+## Commands Reference
+
+| Command | Purpose |
+|---------|---------|
+| `ai:discover` | Analyze models, generate config cache |
+| `ai:ingest` | Create Neo4j nodes and Qdrant embeddings |
+| `ai:sync-relationships` | Create/reconcile Neo4j relationships |
+| `ai:index-scopes` | Convert Eloquent scopes to Cypher patterns |
+| `ai:index-semantic` | Generate/update Qdrant embeddings |
+
+**First-time setup (run in sequence):**
+
+```bash
+php artisan ai:discover       # Analyze models
+php artisan ai:ingest         # Create Neo4j nodes
+php artisan ai:sync-relationships  # Create relationships
+php artisan ai:index-scopes   # Index Eloquent scopes
+php artisan ai:index-semantic # Generate embeddings
+```
+
+---
+
 ## Next Steps
 
 | What you want | Documentation |
