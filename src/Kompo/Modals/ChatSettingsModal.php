@@ -18,7 +18,7 @@ class ChatSettingsModal extends Modal
 {
     use HasChatSettings, HasChatTheme, HasMethodsAsProperties;
 
-    protected $_Title = 'Chat Settings';
+    protected $_Title = 'ai.settings.title';
     public $class = 'overflow-hidden max-w-lg rounded-2xl';
 
     public $model = AiUserSetting::class;
@@ -53,36 +53,36 @@ class ChatSettingsModal extends Modal
         return _Rows(
             // Theme section
             !$themeAllowUserOverrides ? null : _Rows(
-                $this->sectionHeader('Theme', 'Choose your color theme'),
+                $this->sectionHeader(__('ai.settings.theme'), __('ai.settings.theme-description')),
                 $this->themeSelector(),
             ),
             
             // Appearance section
-            $this->sectionHeader('Appearance', 'How the chat looks'),
+            $this->sectionHeader(__('ai.settings.appearance'), __('ai.settings.appearance-description')),
             _Rows(
-                $this->toggleSetting('show_avatars', 'Show Avatars', 'Display user and AI avatars'),
-                $this->toggleSetting('show_timestamps', 'Show Timestamps', 'Display message times'),
-                $this->toggleSetting('show_metrics', 'Show Metrics', 'Display response time and confidence'),
+                $this->toggleSetting('show_avatars', __('ai.settings.show-avatars'), __('ai.settings.show-avatars-desc')),
+                $this->toggleSetting('show_timestamps', __('ai.settings.show-timestamps'), __('ai.settings.show-timestamps-desc')),
+                $this->toggleSetting('show_metrics', __('ai.settings.show-metrics'), __('ai.settings.show-metrics-desc')),
             )->class('space-y-3 mb-6'),
 
             // Features section
-            $this->sectionHeader('Features', 'Chat capabilities'),
+            $this->sectionHeader(__('ai.settings.features'), __('ai.settings.features-description')),
             _Rows(
-                $this->toggleSetting('show_suggestions', 'Follow-up Suggestions', 'Show suggested questions'),
-                $this->toggleSetting('enable_copy', 'Copy Button', 'Allow copying AI responses'),
-                $this->toggleSetting('enable_feedback', 'Feedback Buttons', 'Rate AI responses'),
-                $this->toggleSetting('enable_regenerate', 'Regenerate', 'Allow regenerating responses'),
-                $this->toggleSetting('enable_edit', 'Edit Messages', 'Allow editing your messages'),
+                $this->toggleSetting('show_suggestions', __('ai.settings.follow-up-suggestions'), __('ai.settings.follow-up-suggestions-desc')),
+                $this->toggleSetting('enable_copy', __('ai.settings.copy-button'), __('ai.settings.copy-button-desc')),
+                $this->toggleSetting('enable_feedback', __('ai.settings.feedback-buttons'), __('ai.settings.feedback-buttons-desc')),
+                $this->toggleSetting('enable_regenerate', __('ai.settings.regenerate'), __('ai.settings.regenerate-desc')),
+                $this->toggleSetting('enable_edit', __('ai.settings.edit-messages'), __('ai.settings.edit-messages-desc')),
             )->class('space-y-3 mb-6'),
 
             // Response style section
-            $this->sectionHeader('Response Style', 'How the AI responds'),
+            $this->sectionHeader(__('ai.settings.response-style'), __('ai.settings.response-style-description')),
             _Select()->name('response_style')
                 ->options([
-                    'friendly' => 'Friendly - Casual and approachable',
-                    'professional' => 'Professional - Formal and business-like',
-                    'concise' => 'Concise - Brief and to the point',
-                    'detailed' => 'Detailed - Thorough explanations',
+                    'friendly' => __('ai.settings.style-friendly'),
+                    'professional' => __('ai.settings.style-professional'),
+                    'concise' => __('ai.settings.style-concise'),
+                    'detailed' => __('ai.settings.style-detailed'),
                 ])
                 ->default('friendly')
                 ->class('w-full border border-gray-200 rounded-xl p-3 transition-all'),
@@ -142,14 +142,14 @@ class ChatSettingsModal extends Modal
     protected function modalActions()
     {
         return _FlexBetween(
-            _Link('Reset to Defaults')
+            _Link(__('ai.settings.reset-defaults'))
                 ->class('text-sm text-gray-500 transition-all !bg-none ' . $this->link_hover)
                 ->selfPost('resetSettings'),
             _Flex(
-                _Link('Cancel')
+                _Link(__('ai.common.cancel'))
                     ->class('px-4 py-2 text-gray-500 hover:text-gray-700 transition-all')
                     ->closeModal(),
-                _SubmitButton('Save Settings')->icon('check')
+                _SubmitButton(__('ai.settings.save-settings'))->icon('check')
                     ->class('px-4 py-2 text-white rounded-xl shadow-lg transition-all' . $this->theme_gradient)
                     ->closeModal()
                     ->refresh(AiChatPanel::ID),
