@@ -47,6 +47,13 @@ class FileContextProviderTest extends TestCase
             ->byDefault()
             ->andReturn(true);
 
+        // Default isPhysicalFile behavior (can be overridden in individual tests)
+        $this->accessResolver->shouldReceive('isPhysicalFile')
+            ->byDefault()
+            ->andReturnUsing(function ($fileId) {
+                return is_string($fileId) && str_starts_with($fileId, 'physical:');
+            });
+
         $this->provider = new FileContextProvider(
             $this->searchService,
             $this->accessResolver
@@ -127,9 +134,9 @@ class FileContextProviderTest extends TestCase
         $this->assertIsArray($result);
         $this->assertCount(1, $result);
         $this->assertArrayHasKey('file_id', $result[0]);
-        $this->assertArrayHasKey('file_name', $result[0]);
+        $this->assertArrayHasKey('filename', $result[0]);
         $this->assertArrayHasKey('snippet', $result[0]);
-        $this->assertArrayHasKey('relevance_score', $result[0]);
+        $this->assertArrayHasKey('relevance', $result[0]);
         $this->assertArrayHasKey('chunk_index', $result[0]);
         $this->assertArrayHasKey('source', $result[0]);
     }
@@ -196,7 +203,7 @@ class FileContextProviderTest extends TestCase
 
         $this->assertCount(1, $result);
         $this->assertEquals(1, $result[0]['file_id']);
-        $this->assertEquals('allowed.pdf', $result[0]['file_name']);
+        $this->assertEquals('allowed.pdf', $result[0]['filename']);
     }
 
     /** @test */
@@ -321,7 +328,7 @@ class FileContextProviderTest extends TestCase
         // Only the high-score result should be returned
         $this->assertCount(1, $result);
         $this->assertEquals(1, $result[0]['file_id']);
-        $this->assertEquals(0.85, $result[0]['relevance_score']);
+        $this->assertEquals(0.85, $result[0]['relevance']);
     }
 
     /** @test */
@@ -541,17 +548,17 @@ class FileContextProviderTest extends TestCase
 
         $this->assertArrayHasKey('ref_number', $reference);
         $this->assertArrayHasKey('file_id', $reference);
-        $this->assertArrayHasKey('file_name', $reference);
+        $this->assertArrayHasKey('filename', $reference);
         $this->assertArrayHasKey('snippet', $reference);
-        $this->assertArrayHasKey('relevance_score', $reference);
+        $this->assertArrayHasKey('relevance', $reference);
         $this->assertArrayHasKey('chunk_index', $reference);
         $this->assertArrayHasKey('source', $reference);
 
         $this->assertEquals(1, $reference['ref_number']);
         $this->assertEquals(123, $reference['file_id']);
-        $this->assertEquals('report.pdf', $reference['file_name']);
+        $this->assertEquals('report.pdf', $reference['filename']);
         $this->assertEquals('This is a snippet of content.', $reference['snippet']);
-        $this->assertEquals(0.89, $reference['relevance_score']);
+        $this->assertEquals(0.89, $reference['relevance']);
         $this->assertEquals(2, $reference['chunk_index']);
         $this->assertEquals('database', $reference['source']);
     }

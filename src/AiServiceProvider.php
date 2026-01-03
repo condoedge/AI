@@ -629,10 +629,18 @@ class AiServiceProvider extends ServiceProvider
         // Register sync observers for related models
         $this->registerSyncObservers();
 
-        FileModel::setPlugins([
-            FileProcessingPlugin::class,
-            FileAccessScopePlugin::class,
-        ]);
+        // Register FileModel plugins if the facade is available
+        // (may not be available in isolated package tests)
+        try {
+            if (class_exists(\Condoedge\Utils\Facades\FileModel::class)) {
+                FileModel::setPlugins([
+                    FileProcessingPlugin::class,
+                    FileAccessScopePlugin::class,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            // FileModel facade not available (e.g., in package tests)
+        }
     }
 
     /**
