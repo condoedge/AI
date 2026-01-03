@@ -154,6 +154,20 @@ return [
     |--------------------------------------------------------------------------
     | Graph Database Configuration
     |--------------------------------------------------------------------------
+    |
+    | For enhanced security, you can use encrypted passwords:
+    |
+    | 1. Generate encrypted password:
+    |    php artisan tinker
+    |    >>> encrypt('your_neo4j_password')
+    |
+    | 2. Set in .env:
+    |    NEO4J_PASSWORD_ENCRYPTED=eyJpdiI6Ii4uLg==
+    |
+    | 3. The system will automatically decrypt on-demand.
+    |    If both password and password_encrypted are set,
+    |    password_encrypted takes precedence.
+    |
     */
     'graph' => [
         'default' => env('AI_GRAPH_STORE', 'neo4j'),
@@ -163,7 +177,8 @@ return [
             'uri' => env('NEO4J_URI', 'bolt://localhost:7687'),
             'username' => env('NEO4J_USERNAME', 'neo4j'),
             'password' => env('NEO4J_PASSWORD', 'neo4j_password'),
-            'database' => env('NEO4J_DATABASE', 'neo4j'), // Default database
+            'password_encrypted' => env('NEO4J_PASSWORD_ENCRYPTED'), // Preferred: encrypted password
+            'database' => env('NEO4J_DATABASE', 'neo4j'),
         ],
     ],
 

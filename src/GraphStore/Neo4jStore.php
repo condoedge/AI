@@ -19,11 +19,20 @@ class Neo4jStore implements GraphStoreInterface
 {
     protected string $uri;
     protected string $username;
-    protected string $password;
     protected string $database;
     protected string $httpEndpoint;
     protected RetryPolicy $retryPolicy;
     protected CircuitBreaker $circuitBreaker;
+
+    /**
+     * Encrypted password from config (if using encryption)
+     */
+    private ?string $encryptedPassword = null;
+
+    /**
+     * Plain password from config (fallback for backwards compatibility)
+     */
+    private ?string $plainPassword = null;
 
     /**
      * Reusable cURL handle for connection pooling
@@ -36,8 +45,14 @@ class Neo4jStore implements GraphStoreInterface
 
         $this->uri = $config['uri'] ?? 'bolt://localhost:7687';
         $this->username = $config['username'] ?? 'neo4j';
-        $this->password = $config['password'] ?? 'password';
         $this->database = $config['database'] ?? 'neo4j';
+
+        // Support encrypted password (preferred) or plain password (backwards compatible)
+        if (!empty($config['password_encrypted'])) {
+            $this->encryptedPassword = $config['password_encrypted'];
+        } else {
+            $this->plainPassword = $config['password'] ?? 'password';
+        }
 
         // Convert bolt:// to http:// for HTTP API
         // bolt://localhost:7687 -> http://localhost:7474
@@ -50,6 +65,25 @@ class Neo4jStore implements GraphStoreInterface
         // Initialize retry policy and circuit breaker
         $this->retryPolicy = RetryPolicy::forDatabaseOperations();
         $this->circuitBreaker = new CircuitBreaker('neo4j', failureThreshold: 5, recoveryTimeoutSeconds: 30);
+    }
+
+    /**
+     * Get the password, decrypting if necessary.
+     *
+     * This method resolves credentials on-demand to minimize exposure:
+     * - If password_encrypted is set, decrypts using Laravel's decrypt()
+     * - Falls back to plain password for backwards compatibility
+     *
+     * @return string The Neo4j password
+     * @throws \Illuminate\Contracts\Encryption\DecryptException If decryption fails
+     */
+    protected function getPassword(): string
+    {
+        if ($this->encryptedPassword !== null) {
+            return decrypt($this->encryptedPassword);
+        }
+
+        return $this->plainPassword ?? '';
     }
 
     /**
@@ -272,7 +306,7 @@ class Neo4jStore implements GraphStoreInterface
             'Content-Type: application/json',
             'Accept: application/json',
         ]);
-        curl_setopt($ch, CURLOPT_USERPWD, "{$this->username}:{$this->password}");
+        curl_setopt($ch, CURLOPT_USERPWD, "{$this->username}:{$this->getPassword()}");
         curl_setopt($ch, CURLOPT_TIMEOUT, 10);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
 
@@ -335,7 +369,7 @@ class Neo4jStore implements GraphStoreInterface
             'Content-Type: application/json',
             'Accept: application/json',
         ]);
-        curl_setopt($ch, CURLOPT_USERPWD, "{$this->username}:{$this->password}");
+        curl_setopt($ch, CURLOPT_USERPWD, "{$this->username}:{$this->getPassword()}");
         curl_setopt($ch, CURLOPT_TIMEOUT, 10);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
 
@@ -383,7 +417,7 @@ class Neo4jStore implements GraphStoreInterface
         curl_setopt($ch, CURLOPT_HTTPHEADER, [
             'Accept: application/json',
         ]);
-        curl_setopt($ch, CURLOPT_USERPWD, "{$this->username}:{$this->password}");
+        curl_setopt($ch, CURLOPT_USERPWD, "{$this->username}:{$this->getPassword()}");
         curl_setopt($ch, CURLOPT_TIMEOUT, 10);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
 
@@ -490,7 +524,7 @@ class Neo4jStore implements GraphStoreInterface
             'Accept: application/json',
             'Connection: keep-alive', // Enable HTTP keep-alive
         ]);
-        curl_setopt($this->curlHandle, CURLOPT_USERPWD, "{$this->username}:{$this->password}");
+        curl_setopt($this->curlHandle, CURLOPT_USERPWD, "{$this->username}:{$this->getPassword()}");
         curl_setopt($this->curlHandle, CURLOPT_TIMEOUT, 30);
         curl_setopt($this->curlHandle, CURLOPT_CONNECTTIMEOUT, 5);
 

@@ -14,7 +14,7 @@ This document provides detailed remediation plans for all issues identified duri
 **Total Issues:** 45+
 - **CRITICAL:** ~~2~~ 0 (security vulnerabilities) - **ALL FIXED**
 - **HIGH:** ~~3~~ 1 (architectural concerns) - 2 FIXED, 1 deferred
-- **MEDIUM:** ~~14~~ 9 (code quality) - 5 FIXED (MED-001, MED-003, MED-006, MED-007, MED-008, MED-010)
+- **MEDIUM:** ~~14~~ 8 (code quality) - 6 FIXED (MED-001, MED-003, MED-004, MED-006, MED-007, MED-008, MED-010)
 - **LOW:** 9 (minor improvements)
 
 ---
@@ -482,7 +482,7 @@ All methods now return consistent error structures with `metadata.error = true`.
 
 | ID | Description | Fix |
 |----|-------------|-----|
-| MED-004 (GS-003) | HTTP basic auth as plain strings | Use Laravel's encrypted config |
+| MED-004 (GS-003) | HTTP basic auth as plain strings | ✅ **FIXED** - Added encrypted password support |
 | MED-005 (SEC-003) | Model instantiation without validation | Add namespace allowlist |
 | MED-006 (QG-001) | Outdated docblock priorities | ✅ **FIXED** - Updated SemanticPromptBuilder docblock |
 | MED-007 (QG-002) | GenericContextSection always included | ✅ **FIXED** - Added shouldInclude() with time keyword detection |
