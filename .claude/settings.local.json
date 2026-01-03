@@ -76,7 +76,14 @@
       "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline -3)",
       "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline 1a337ca..HEAD)",
       "Bash(xargs:*)",
-      "Bash(node --check:*)"
+      "Bash(node --check:*)",
+      "Bash(del \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\\\\docs\\\\architecture.md\")",
+      "Bash(del \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\\\\docs\\\\quick-start.md\")",
+      "Bash(del \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\\\\docs\\\\diagrams.md\")",
+      "Bash(git -C \"/c/Users/jkend/Documents/Projects/kompo/ai\" status)",
+      "Bash(git -C \"/c/Users/jkend/Documents/Projects/kompo/ai\" log --oneline -3)",
+      "Bash(git -C \"/c/Users/jkend/Documents/Projects/kompo/ai\" add docs/architecture.md docs/diagrams.md docs/quick-start.md)",
+      "Bash(git -C \"/c/Users/jkend/Documents/Projects/kompo/ai\" commit -m \"$\\(cat <<''EOF''\ndocs: remove redundant docs/ files after consolidation\n\nContent migrated to resources/docs/1.0/:\n- ASCII diagrams → internals/data-flows.md\n- Code structure → internals/architecture.md\n- Quick start → usage/quick-start.md\n\ndocs/plans/ retained for implementation plans.\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ],
     "deny": [],
     "ask": []

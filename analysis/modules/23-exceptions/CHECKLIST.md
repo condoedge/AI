@@ -1,13 +1,13 @@
 # Module 23: EXCEPTIONS - Checklist
 
-- [ ] Read `src/Exceptions/CircuitBreakerOpenException.php`
-- [ ] Read `src/Exceptions/CypherInjectionException.php`
-- [ ] Read `src/Exceptions/DataConsistencyException.php`
-- [ ] Read `src/Exceptions/QueryExecutionException.php`
-- [ ] Read `src/Exceptions/QueryGenerationException.php`
-- [ ] Read `src/Exceptions/QueryTimeoutException.php`
-- [ ] Read `src/Exceptions/QueryValidationException.php`
-- [ ] Read `src/Exceptions/ReadOnlyViolationException.php`
-- [ ] Read `src/Exceptions/UnsafeQueryException.php`
-- [ ] Trace all throw statements
-- [ ] Verify all are caught somewhere
+- [x] Read `src/Exceptions/CircuitBreakerOpenException.php`
+- [x] Read `src/Exceptions/CypherInjectionException.php`
+- [x] Read `src/Exceptions/DataConsistencyException.php`
+- [x] Read `src/Exceptions/QueryExecutionException.php`
+- [x] Read `src/Exceptions/QueryGenerationException.php`
+- [x] Read `src/Exceptions/QueryTimeoutException.php`
+- [x] Read `src/Exceptions/QueryValidationException.php`
+- [x] Read `src/Exceptions/ReadOnlyViolationException.php`
+- [x] Read `src/Exceptions/UnsafeQueryException.php`
+- [x] Trace all throw statements
+- [x] Verify all are caught somewhere

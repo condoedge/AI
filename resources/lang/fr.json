@@ -173,5 +173,6 @@
     "ai.form.validation-required": "Veuillez entrer un message",
     "ai.form.validation-max": "Le message est trop long (max 10 000 caracteres)",
 
-    "ai.chat.thinking": "En cours de reflexion..."
+    "ai.chat.thinking": "En cours de reflexion...",
+    "ai.chat.error-message": "Désolé, une erreur s'est produite. Veuillez réessayer."
 }

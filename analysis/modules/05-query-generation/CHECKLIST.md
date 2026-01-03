@@ -1,39 +1,39 @@
 # Module 05: QUERY_GENERATION - Checklist
 
 ## Core Files
-- [ ] Read `src/Services/HasInternalModules.php` (understand pattern)
-- [ ] Read `src/Services/QueryGenerator.php`
-- [ ] Read `src/Services/SemanticPromptBuilder.php`
-- [ ] Read `src/Services/PatternLibrary.php`
+- [x] Read `src/Services/HasInternalModules.php` (understand pattern)
+- [x] Read `src/Services/QueryGenerator.php`
+- [x] Read `src/Services/SemanticPromptBuilder.php`
+- [x] Read `src/Services/PatternLibrary.php`
 
 ## PromptSections
-- [ ] Read `BasePromptSection.php`
-- [ ] Read `ProjectContextSection.php`
-- [ ] Read `GenericContextSection.php`
-- [ ] Read `CurrentUserContextSection.php`
-- [ ] Read `SchemaSection.php`
-- [ ] Read `RelationshipsSection.php`
-- [ ] Read `ExampleEntitiesSection.php`
-- [ ] Read `FileContextSection.php`
-- [ ] Read `SimilarQueriesSection.php`
-- [ ] Read `ConversationContextSection.php`
-- [ ] Read `DetectedEntitiesSection.php`
-- [ ] Read `DetectedScopesSection.php`
-- [ ] Read `PatternLibrarySection.php`
-- [ ] Read `QueryRulesSection.php`
-- [ ] Read `QuestionSection.php`
-- [ ] Read `TaskInstructionsSection.php`
+- [x] Read `BasePromptSection.php`
+- [x] Read `ProjectContextSection.php`
+- [x] Read `GenericContextSection.php`
+- [x] Read `CurrentUserContextSection.php`
+- [x] Read `SchemaSection.php`
+- [x] Read `RelationshipsSection.php`
+- [x] Read `ExampleEntitiesSection.php`
+- [x] Read `FileContextSection.php`
+- [x] Read `SimilarQueriesSection.php`
+- [x] Read `ConversationContextSection.php`
+- [x] Read `DetectedEntitiesSection.php`
+- [x] Read `DetectedScopesSection.php`
+- [x] Read `PatternLibrarySection.php`
+- [x] Read `QueryRulesSection.php`
+- [x] Read `QuestionSection.php`
+- [x] Read `TaskInstructionsSection.php`
 
 ## Analysis
-- [ ] Document HasInternalModules pattern
-- [ ] Trace section registration
-- [ ] Verify section priorities
-- [ ] Check shouldInclude() for each section
-- [ ] Verify token limit handling
-- [ ] Check LLM integration
+- [x] Document HasInternalModules pattern
+- [x] Trace section registration
+- [x] Verify section priorities
+- [x] Check shouldInclude() for each section
+- [x] Verify token limit handling
+- [x] Check LLM integration
 
 ## Issues
-- [ ] Identify unused sections
-- [ ] Check for duplicate logic
-- [ ] Verify error handling
-- [ ] Check extension points
+- [x] Identify unused sections
+- [x] Check for duplicate logic
+- [x] Verify error handling
+- [x] Check extension points

@@ -1,8 +1,8 @@
 # Module 11: LLM_PROVIDERS - Checklist
 
-- [ ] Read `src/LlmProviders/OpenAiLlmProvider.php`
-- [ ] Read `src/LlmProviders/AnthropicLlmProvider.php`
-- [ ] Verify LlmProviderInterface compliance
-- [ ] Check error handling
-- [ ] Check rate limit handling
-- [ ] Verify response normalization
+- [x] Read `src/LlmProviders/OpenAiLlmProvider.php`
+- [x] Read `src/LlmProviders/AnthropicLlmProvider.php`
+- [x] Verify LlmProviderInterface compliance
+- [x] Check error handling
+- [x] Check rate limit handling
+- [x] Verify response normalization

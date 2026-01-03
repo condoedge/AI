@@ -1,7 +1,7 @@
 # Module 14: VECTOR_STORE - Checklist
 
-- [ ] Read `src/VectorStore/QdrantStore.php`
-- [ ] Verify interface compliance
-- [ ] Check connection handling
-- [ ] Verify search functionality
-- [ ] Check error handling
+- [x] Read `src/VectorStore/QdrantStore.php`
+- [x] Verify interface compliance
+- [x] Check connection handling
+- [x] Verify search functionality
+- [x] Check error handling

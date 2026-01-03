@@ -611,10 +611,11 @@ class AiServiceProvider extends ServiceProvider
             __DIR__ . '/../resources/lang' => $this->app->langPath('vendor/ai'),
         ], 'ai-lang');
 
-        // Register chat JavaScript assets
+        // Register chat assets (JS and CSS)
         $this->publishes([
             __DIR__.'/../resources/js/chat-scroll.js' => public_path('vendor/condoedge/ai/js/chat-scroll.js'),
             __DIR__.'/../resources/js/chat-message-injector.js' => public_path('vendor/condoedge/ai/js/chat-message-injector.js'),
+            __DIR__.'/../resources/css/ai-chat.css' => public_path('vendor/condoedge/ai/css/ai-chat.css'),
         ], 'ai-assets');
 
         // Register console commands

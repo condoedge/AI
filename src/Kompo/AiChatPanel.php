@@ -8,13 +8,11 @@ use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
-use Condoedge\Ai\Kompo\Modals\FilePreviewModal;
-use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
 use Condoedge\Ai\Kompo\Modals\ChatHelpModal;
 use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
-use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
 use Condoedge\Utils\Kompo\Common\Form;
+use Illuminate\Support\Facades\Log;
 
 /**
  * AI Chat Panel - Full-featured chat interface with conversation management.
@@ -137,6 +135,51 @@ class AiChatPanel extends Form
         )->class('flex-1 flex flex-col bg-gradient-to-br from-white to-gray-50/50 h-full');
     }
 
+
+    // ========== JAVASCRIPT ==========
+
+    /**
+     * Include JavaScript for chat scroll and message injection
+     * Must be on parent component so JS is available when child components need it
+     */
+    public function js()
+    {
+        $scrollJs = file_get_contents(__DIR__ . '/../../resources/js/chat-scroll.js');
+        $injectorJs = file_get_contents(__DIR__ . '/../../resources/js/chat-message-injector.js');
+
+        // Generate theme-aware HTML templates
+        $userBubbleTemplate = $this->userBubblePlaceholderHtml();
+        $typingIndicatorTemplate = $this->typingIndicatorHtml();
+        $userAvatarHtml = $this->settings()->showAvatars() ? $this->userAvatarHtml() : '';
+
+        // Replace placeholders in JS with actual templates (use json_encode to handle newlines/quotes)
+        $injectorJs = str_replace("'\$USER_BUBBLE_TEMPLATE'", json_encode($userBubbleTemplate), $injectorJs);
+        $injectorJs = str_replace("'\$TYPING_INDICATOR_TEMPLATE'", json_encode($typingIndicatorTemplate), $injectorJs);
+        $injectorJs = str_replace("'\$USER_AVATAR_HTML'", json_encode($userAvatarHtml), $injectorJs);
+
+        return $scrollJs . "\n\n" . $injectorJs;
+    }
+
+    /**
+     * Generate user bubble placeholder HTML matching the actual PHP component
+     * Uses animate-message-user class for entrance animation
+     */
+    protected function userBubblePlaceholderHtml(): string
+    {
+        return '<div class="group"><div class="flex justify-end items-end animate-message-user"><div class="group px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md animate-new-message-highlight"><div class="whitespace-pre-wrap">$MESSAGE</div><div class="text-xs opacity-60 mt-2">$TIMESTAMP</div></div>$AVATAR</div></div>';
+    }
+
+    /**
+     * Generate typing indicator HTML matching the actual AI assistant style
+     * Uses animate-typing-dot-X classes for bouncing dots animation
+     */
+    protected function typingIndicatorHtml(): string
+    {
+        $avatarHtml = $this->assistantAvatarHtml();
+        $dotColor = $this->theme()->primarySolid(); // Single solid color for small dots
+
+        return '<div class="flex items-start mt-4 animate-message-assistant"><div class="mr-3 flex-shrink-0 self-start">' . $avatarHtml . '</div><div class="group px-5 py-4 rounded-2xl rounded-tl-md bg-white border border-gray-100 shadow-sm"><div class="flex items-center gap-1.5 h-6"><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-1"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-2"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-3"></span></div><div class="text-xs text-gray-400 mt-2">' . __('ai.chat.thinking') . '</div></div></div>';
+    }
 
     // ========== ACTION METHODS ==========
 

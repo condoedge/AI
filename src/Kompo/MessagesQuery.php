@@ -26,23 +26,9 @@ class MessagesQuery extends Query
 
     protected $conversation;
 
-    public $paginationType = 'Scroll';
     public $perPage = 200;
 
     protected $latestMessageId;
-
-    /**
-     * Check if message is newly added (for animation purposes)
-     * Messages created within the last 5 seconds are considered "new"
-     */
-    protected function isNewMessage($message): bool
-    {
-        if (!$message->created_at) {
-            return true; // Temp messages are always "new"
-        }
-
-        return $message->created_at->diffInSeconds(now()) < 5;
-    }
 
     public function created()
     {
@@ -56,7 +42,9 @@ class MessagesQuery extends Query
 
         $this->class = '!static flex-1 bg-gradient-to-b ' . $this->theme()->heroBackground() . ' ' . $speedClass;
 
-        $this->latestMessageId = $this->query()?->reorder('created_at', 'desc')->first()?->id;
+        $this->latestMessageId = $this->conversation?->messages()
+            ->orderBy('created_at', 'desc')
+            ->first()?->id;
     }
 
     public function top()
@@ -149,21 +137,26 @@ class MessagesQuery extends Query
             ]),
 
             _Hidden()->onLoad->run($this->scrollScript(false)),
-
-            // Initialize scroll manager
-            _Hidden()->onLoad->run("() => {
-                if (typeof initChatScroll === 'function') {
-                    initChatScroll();
-                }
-            }"),
         );
     }
 
     
     public function query()
     {
-        return $this->conversation?->messages()
-            ->orderBy('created_at');
+        if (!$this->conversation) {
+            return null;
+        }
+
+        // Get the most recent messages, but display in ASC order (oldest first, newest at bottom)
+        // We use a subquery to get the last N message IDs, then order by ASC for display
+        $recentMessageIds = $this->conversation->messages()
+            ->orderBy('created_at', 'desc')
+            ->limit($this->perPage)
+            ->pluck('id');
+
+        return $this->conversation->messages()
+            ->whereIn('id', $recentMessageIds)
+            ->orderBy('created_at', 'asc');
     }
 
     /**
@@ -601,18 +594,6 @@ class MessagesQuery extends Query
 
     // ========== HELPERS ==========
 
-    /**
-     * Include JavaScript for chat scroll and message injection
-     * This is the Kompo pattern for including JS with components
-     */
-    public function js()
-    {
-        $scrollJs = file_get_contents(__DIR__ . '/../../resources/js/chat-scroll.js');
-        $injectorJs = file_get_contents(__DIR__ . '/../../resources/js/chat-message-injector.js');
-
-        return $scrollJs . "\n\n" . $injectorJs;
-    }
-
     protected function renderMarkdown(string $text): string
     {
         $renderer = new SafeMarkdownRenderer([
@@ -648,4 +629,18 @@ class MessagesQuery extends Query
 
         session(['selected_conversation_id' => null]);
     }
+
+    /**
+     * Check if message is newly added (for animation purposes)
+     * Messages created within the last 5 seconds are considered "new"
+     */
+    protected function isNewMessage($message): bool
+    {
+        if (!$message->created_at) {
+            return true; // Temp messages are always "new"
+        }
+
+        return $message->created_at->diffInSeconds(now()) < 5;
+    }
+
 }
