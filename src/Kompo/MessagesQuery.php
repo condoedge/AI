@@ -72,7 +72,7 @@ class MessagesQuery extends Query
         return _FlexBetween(
             _Rows(
                 _Flex(
-                    _Html($this->conversation->title ?? 'New Conversation')
+                    _Html($this->conversation->title ?? __('ai.chat.new-conversation'))
                         ->class('font-semibold text-gray-800 text-lg'),
                     $isPinned
                         ? _Html('<span class="ml-2 px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-full font-medium flex items-center gap-1"><svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg> Pinned</span>')
@@ -81,7 +81,7 @@ class MessagesQuery extends Query
                 _Flex(
                     _Html('<span class="inline-flex items-center px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">' . $messageCount . ' messages</span>'),
                     _Html('•')->class('mx-2 text-gray-300'),
-                    _Html($this->conversation->last_message_at?->diffForHumans() ?? 'Just now')
+                    _Html($this->conversation->last_message_at?->diffForHumans() ?? __('ai.chat.just-now'))
                         ->class('text-xs text-gray-400'),
                 )->class('items-center mt-1'),
             ),
@@ -98,22 +98,22 @@ class MessagesQuery extends Query
                 ->class('p-2.5 rounded-xl transition-all duration-200 ' . ($isPinned
                     ? 'bg-amber-100 text-amber-600 shadow-sm'
                     : 'text-gray-400 hover:text-amber-500 hover:bg-amber-50'))
-                ->balloon($isPinned ? 'Unpin' : 'Pin conversation', 'down')
+                ->balloon($isPinned ? __('ai.messages.unpin') : __('ai.messages.pin'), 'down')
                 ->selfPost('togglePin', ['id' => $this->conversation->id])
                 ->refresh(self::ID),
             _Link()->icon(_Sax('export-2', 18))
                 ->class('p-2.5 rounded-xl text-gray-400 ' . $this->theme()->linkHover() . ' transition-all duration-200')
-                ->balloon('Export', 'down')
+                ->balloon(__('ai.messages.export'), 'down')
                 ->href('ai.export-chat', ['id' => $this->conversation->id])
                 ->attr(['download' => 'conversation-' . $this->conversation->id . '.md']),
             _Link()->icon(_Sax('archive', 18))
                 ->class('p-2.5 rounded-xl text-gray-400 ' . $this->theme()->linkHover() . ' transition-all duration-200')
-                ->balloon('Archive', 'down')
+                ->balloon(__('ai.messages.archive'), 'down')
                 ->selfPost('archiveConversation', ['id' => $this->conversation->id])
                 ->refresh(self::ID),
             _DeleteLink()->icon(_Sax('trash', 18))
                 ->class('p-2.5 rounded-xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all duration-200')
-                ->balloon('Delete', 'down')
+                ->balloon(__('ai.common.delete'), 'down')
                 ->selfPost('deleteConversation', ['id' => $this->conversation->id])
                 ->refresh(self::ID),
         )->class('gap-1 bg-gray-50/50 rounded-2xl p-1');
@@ -175,7 +175,7 @@ class MessagesQuery extends Query
             )->class('items-end'),
             // Edit button on hover
             $this->settings()->enableEdit() ? _FlexEnd(
-                _Link('Edit')->icon('pencil')
+                _Link(__('ai.common.edit'))->icon('pencil')
                     ->class('opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-gray-600 mt-1 transition-opacity')
                     ->selfGet('editMessage', ['id' => $message->id])->inModal(),
             ) : null,
@@ -232,7 +232,7 @@ class MessagesQuery extends Query
         if ($this->settings()->enableCopy()) {
             $actions[] = _Link()->icon(_Sax('copy', 16))
                 ->class('p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all')
-                ->balloon('Copy', 'up')
+                ->balloon(__('ai.messages.copy'), 'up')
                 ->copyToClipboard($message->content, 'translate.copied-to-clipboard');
         }
 
@@ -243,7 +243,7 @@ class MessagesQuery extends Query
                 ->class('p-1.5 rounded-lg transition-all ' . ($feedback === 'positive'
                     ? 'bg-emerald-100 text-emerald-600'
                     : 'hover:bg-emerald-50 text-gray-400 hover:text-emerald-600'))
-                ->balloon('Helpful', 'up')
+                ->balloon(__('ai.messages.helpful'), 'up')
                 ->selfPost('feedback', ['id' => $message->id, 'type' => 'positive'])
                 ->alert('translate.feedback-received-successfully')
                 ->refresh();
@@ -252,7 +252,7 @@ class MessagesQuery extends Query
                 ->class('p-1.5 rounded-lg transition-all ' . ($feedback === 'negative'
                     ? 'bg-red-100 text-red-600'
                     : 'hover:bg-red-50 text-gray-400 hover:text-red-600'))
-                ->balloon('Not helpful', 'up')
+                ->balloon(__('ai.messages.not-helpful'), 'up')
                 ->selfPost('feedback', ['id' => $message->id, 'type' => 'negative'])
                 ->alert('translate.feedback-received-successfully')
                 ->refresh();
@@ -262,7 +262,7 @@ class MessagesQuery extends Query
         if ($this->settings()->enableRegenerate()) {
             $actions[] = _Link()->icon(_Sax('refresh', 16))
                 ->class('p-1.5 rounded-lg text-gray-400 ' . $this->theme()->linkHover() . ' transition-all')
-                ->balloon('Regenerate', 'up')
+                ->balloon(__('ai.messages.regenerate'), 'up')
                 ->selfPost('regenerate', ['id' => $message->id])
                 ->refresh();
         }
@@ -281,7 +281,7 @@ class MessagesQuery extends Query
         );
 
         return _Rows(
-            _Html('Follow-up questions:')->class('text-xs font-medium text-gray-400 mb-2'),
+            _Html(__('ai.messages.follow-up'))->class('text-xs font-medium text-gray-400 mb-2'),
             _Flex(...$chips)->class('flex-wrap gap-2'),
         )->class('mt-4 pt-3 border-t border-gray-100');
     }
@@ -329,7 +329,7 @@ class MessagesQuery extends Query
         return _Flex(
             _Html($data['icon'] ?? '📊')->class('text-3xl'),
             _Rows(
-                _Html($data['label'] ?? 'Value')->class('text-sm text-gray-500'),
+                _Html($data['label'] ?? __('ai.common.value'))->class('text-sm text-gray-500'),
                 _Flex(
                     _Html($data['value'] ?? '-')->class('text-2xl font-bold text-gray-800'),
                     isset($data['trend']) ? _Badge($data['trend'])
@@ -392,7 +392,7 @@ class MessagesQuery extends Query
             _Sax($icon, 16)->class($this->theme()->primaryText()),
             _Html($file['name'])->class('text-sm text-gray-700 font-medium'),
         )->class('inline-flex items-center gap-2 px-3 py-2 rounded-lg ' . $this->theme()->primaryLightBg() . ' ' . $this->theme()->primaryLightBgHover() . ' cursor-pointer transition-all')
-         ->balloon('Click to view', 'up')
+         ->balloon(__('ai.messages.click-to-view'), 'up')
          ->selfGet('viewFile', ['id' => $file['id']])->inModal();
     }
 
@@ -400,10 +400,10 @@ class MessagesQuery extends Query
     {
         return _Rows(
             _Html($this->welcomeAvatarHtml())->class('mb-6'),
-            _Html('Select a conversation')->class('text-2xl font-bold text-gray-800 mb-3'),
-            _Html('Choose an existing conversation from the sidebar or start a new one.')
+            _Html(__('ai.chat.select-conversation'))->class('text-2xl font-bold text-gray-800 mb-3'),
+            _Html(__('ai.chat.select-conversation-desc'))
                 ->class('text-gray-500 text-center max-w-md mb-8'),
-            _Button('Start New Chat')->icon('plus')
+            _Button(__('ai.chat.start-new'))->icon('plus')
                 ->class('px-6 py-3 bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white rounded-xl shadow-lg hover:shadow-xl transition-all')
                 ->selfPost('createConversation')
                 ->refresh(),
@@ -429,7 +429,7 @@ class MessagesQuery extends Query
             );
 
             $elements[] = _Rows(
-                _Html('Try asking:')->class('text-sm font-medium text-gray-400 mb-4'),
+                _Html(__('ai.chat.try-asking'))->class('text-sm font-medium text-gray-400 mb-4'),
                 _Rows(...$questionButtons)->class('space-y-3 w-full max-w-md'),
             )->class('w-full flex flex-col items-center');
         }
