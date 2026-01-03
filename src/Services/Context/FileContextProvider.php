@@ -113,9 +113,9 @@ class FileContextProvider
 
             return [
                 'file_id' => $fileId,
-                'file_name' => $chunk->fileName,
+                'filename' => $chunk->fileName,
                 'snippet' => $snippet,
-                'relevance_score' => $result['score'],
+                'relevance' => $result['score'],
                 'chunk_index' => $chunk->chunkIndex,
                 'source' => $source,
             ];
@@ -146,9 +146,9 @@ class FileContextProvider
         return [
             'ref_number' => $refNumber,
             'file_id' => $fileId,
-            'file_name' => $fileName,
+            'filename' => $fileName,
             'snippet' => $snippet,
-            'relevance_score' => $relevanceScore,
+            'relevance' => $relevanceScore,
             'chunk_index' => $chunkIndex,
             'source' => $source,
         ];
