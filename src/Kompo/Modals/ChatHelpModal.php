@@ -13,7 +13,7 @@ class ChatHelpModal extends Modal
 {
     use HasChatTheme;
     
-    protected $_Title = 'Help & Tips';
+    protected $_Title = 'ai.help.title';
     public $class = 'overflow-hidden max-w-2xl rounded-2xl';
     protected $noHeaderButtons = true;
 
@@ -35,10 +35,10 @@ class ChatHelpModal extends Modal
             ->commonClass('px-4 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap !border-none focus:!shadow-none !rounded-lg text-center')
             ->selectedClass($this->active_badge, 'text-gray-500 hover:bg-gray-100')
             ->options([
-                'getting_started' => __('Getting Started'),
-                'tips' => __('Tips & Tricks'),
-                'shortcuts' => __('Shortcuts'),
-                'faq' => __('FAQ'),
+                'getting_started' => __('ai.help.tab-getting-started'),
+                'tips' => __('ai.help.tab-tips'),
+                'shortcuts' => __('ai.help.tab-shortcuts'),
+                'faq' => __('ai.help.tab-faq'),
             ])->name('help_tab')
             ->selfGet('showTab')->inPanel('help-tab-content')
             ->default('getting_started');
@@ -59,25 +59,25 @@ class ChatHelpModal extends Modal
     {
         return _Rows(
             $this->helpSection(
-                'Welcome to AI Assistant',
-                'Your intelligent companion for data exploration and analysis.',
+                __('ai.help.welcome-title'),
+                __('ai.help.welcome-desc'),
                 $this->iconHtml('sparkles')
             ),
             _Rows(
-                $this->featureCard('chat-bubble-left-right', 'Natural Conversations', 'Ask questions in plain English. No need for complex queries.'),
-                $this->featureCard('document-magnifying-glass', 'Smart Search', 'Search across your data, documents, and history.'),
-                $this->featureCard('light-bulb', 'Suggestions', 'Get follow-up questions to dive deeper into topics.'),
-                $this->featureCard('clipboard-document', 'Easy Export', 'Export conversations to Markdown for documentation.'),
+                $this->featureCard('chat-bubble-left-right', __('ai.help.feature-conversations'), __('ai.help.feature-conversations-desc')),
+                $this->featureCard('document-magnifying-glass', __('ai.help.feature-search'), __('ai.help.feature-search-desc')),
+                $this->featureCard('light-bulb', __('ai.help.feature-suggestions'), __('ai.help.feature-suggestions-desc')),
+                $this->featureCard('clipboard-document', __('ai.help.feature-export'), __('ai.help.feature-export-desc')),
             )->class('grid grid-cols-2 gap-4 mb-6'),
             $this->helpSection(
-                'Getting Started',
-                'Try asking questions like:',
+                __('ai.help.getting-started-title'),
+                __('ai.help.getting-started-desc'),
                 $this->iconHtml('question-mark-circle')
             ),
             _Rows(
-                $this->exampleQuery('How many customers do we have?'),
-                $this->exampleQuery('Show me last month\'s sales'),
-                $this->exampleQuery('What are the top products?'),
+                $this->exampleQuery(__('ai.help.example-customers')),
+                $this->exampleQuery(__('ai.help.example-sales')),
+                $this->exampleQuery(__('ai.help.example-products')),
             )->class('space-y-2'),
         )->class('p-6');
     }
@@ -85,26 +85,26 @@ class ChatHelpModal extends Modal
     protected function tipsTab()
     {
         return _Rows(
-            $this->tipCard('Be Specific', 'The more specific your question, the better the answer. "Show sales for Q4 2024" is better than "show sales".', 'target'),
-            $this->tipCard('Use Context', 'Reference previous answers. Say "break that down by region" to get more detail.', 'arrows-pointing-out'),
-            $this->tipCard('Try Different Styles', 'Use the style selector for different response formats - concise for quick answers, detailed for explanations.', 'adjustments-horizontal'),
-            $this->tipCard('Pin Important Chats', 'Pin conversations you want to keep handy. They\'ll appear at the top of your list.', 'star'),
-            $this->tipCard('Use Feedback', 'Rate responses with thumbs up/down to help improve future answers.', 'hand-thumb-up'),
-            $this->tipCard('Edit & Retry', 'Made a typo? Edit your message and the AI will regenerate its response.', 'pencil-square'),
+            $this->tipCard(__('ai.help.tip-specific'), __('ai.help.tip-specific-desc'), 'target'),
+            $this->tipCard(__('ai.help.tip-context'), __('ai.help.tip-context-desc'), 'arrows-pointing-out'),
+            $this->tipCard(__('ai.help.tip-styles'), __('ai.help.tip-styles-desc'), 'adjustments-horizontal'),
+            $this->tipCard(__('ai.help.tip-pin'), __('ai.help.tip-pin-desc'), 'star'),
+            $this->tipCard(__('ai.help.tip-feedback'), __('ai.help.tip-feedback-desc'), 'hand-thumb-up'),
+            $this->tipCard(__('ai.help.tip-edit'), __('ai.help.tip-edit-desc'), 'pencil-square'),
         )->class('p-6 space-y-4');
     }
 
     protected function shortcutsTab()
     {
         return _Rows(
-            _Html('Keyboard Shortcuts')->class('font-semibold text-gray-800 mb-4'),
+            _Html(__('ai.help.shortcuts-title'))->class('font-semibold text-gray-800 mb-4'),
             _Rows(
-                $this->shortcutRow('Enter', 'Send message'),
-                $this->shortcutRow('Shift + Enter', 'New line'),
-                $this->shortcutRow('Esc', 'Close modal'),
-                $this->shortcutRow('Ctrl + N', 'New conversation'),
-                $this->shortcutRow('Ctrl + K', 'Search conversations'),
-                $this->shortcutRow('Ctrl + C', 'Copy last response'),
+                $this->shortcutRow('Enter', __('ai.help.shortcut-send')),
+                $this->shortcutRow('Shift + Enter', __('ai.help.shortcut-newline')),
+                $this->shortcutRow('Esc', __('ai.help.shortcut-close')),
+                $this->shortcutRow('Ctrl + N', __('ai.help.shortcut-new')),
+                $this->shortcutRow('Ctrl + K', __('ai.help.shortcut-search')),
+                $this->shortcutRow('Ctrl + C', __('ai.help.shortcut-copy')),
             )->class('space-y-2'),
         )->class('p-6');
     }
@@ -112,11 +112,11 @@ class ChatHelpModal extends Modal
     protected function faqTab()
     {
         return _Rows(
-            $this->faqItem('How is my data protected?', 'Your conversations are stored securely and only accessible to you. We don\'t share your data with third parties.'),
-            $this->faqItem('Can I delete my chat history?', 'Yes! You can delete individual conversations or archive them for later reference.'),
-            $this->faqItem('What if the AI gives wrong information?', 'Use the feedback buttons to report incorrect answers. You can also regenerate responses or rephrase your question.'),
-            $this->faqItem('Are there usage limits?', 'Usage depends on your plan. Check your account settings for current limits.'),
-            $this->faqItem('Can I export my conversations?', 'Yes! Use the export button to download conversations as Markdown files.'),
+            $this->faqItem(__('ai.help.faq-data-q'), __('ai.help.faq-data-a')),
+            $this->faqItem(__('ai.help.faq-delete-q'), __('ai.help.faq-delete-a')),
+            $this->faqItem(__('ai.help.faq-wrong-q'), __('ai.help.faq-wrong-a')),
+            $this->faqItem(__('ai.help.faq-limits-q'), __('ai.help.faq-limits-a')),
+            $this->faqItem(__('ai.help.faq-export-q'), __('ai.help.faq-export-a')),
         )->class('p-6 space-y-4');
     }
 
@@ -176,7 +176,7 @@ class ChatHelpModal extends Modal
     protected function modalActions()
     {
         return _FlexEnd(
-            _Link('Got it!')
+            _Link(__('ai.help.got-it'))
                 ->class('px-6 py-2 text-white rounded-xl shadow-lg transition-all' . $this->theme_gradient)
                 ->closeModal(),
         )->class('px-6 py-4 border-t border-gray-200 bg-gray-50');
