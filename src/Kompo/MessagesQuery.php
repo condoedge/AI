@@ -190,10 +190,10 @@ class MessagesQuery extends Query
 
         return _Rows(
             $bubble,
-
-            // When we're loading the message response we push the message and the loading typing animation into this panel
-            !$isLatest ? null : _Panel()->id('temp-message-loading')->class('mt-4'),
-        )->attr(['data-message-id' => $message->id]);
+        )->attr([
+            'data-message-id' => $message->id,
+            'data-latest' => $isLatest ? 'true' : null,
+        ]);
     }
 
     public function userBubble($message)

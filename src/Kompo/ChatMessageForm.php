@@ -69,10 +69,15 @@ class ChatMessageForm extends Form
                                 input.dispatchEvent(new Event("input", { bubbles: true }));
                             }
                         }')
-                        // 2. Send to server, inject response into temp panel (no full refresh)
+                        // 2. Send to server, response goes to hidden staging panel
+                        // 3. JS processes staging content and moves to display area
                         && $e->selfPost('sendMessageAndGetResponse')->withAllFormValues()
-                            ->inPanel('temp-message-loading')
-                            ->run('scrollChatToBottom')
+                            ->inPanel('temp-message-staging')
+                            ->run('() => {
+                                setTimeout(() => {
+                                    processServerResponse();
+                                }, 100);
+                            }')
                             ->onError->run('clearMessagePlaceholders')
                     ),
             )->class('flex items-end gap-3 px-4 py-3 bg-white/90 border border-gray-200/70 rounded-2xl shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 backdrop-blur-sm transition-all'),
@@ -159,9 +164,6 @@ class ChatMessageForm extends Form
         $service = app(SendMessageService::class);
 
         try {
-            // Get message count before sending
-            $beforeCount = $this->conversation->messages()->count();
-
             $service->sendMessage(
                 conversation: $this->conversation,
                 message: $message,
@@ -171,21 +173,19 @@ class ChatMessageForm extends Form
                 ]
             );
 
-            // Get the new messages (user + assistant)
-            $newMessages = $this->conversation->messages()
+            // Get only the assistant response (user bubble is already shown as placeholder)
+            $assistantMessage = $this->conversation->messages()
+                ->where('role', 'assistant')
                 ->orderBy('created_at', 'desc')
-                ->take(2) // User message + assistant response
-                ->get()
-                ->reverse(); // Put in chronological order
+                ->first();
 
-            // Render the new messages using MessagesQuery
-            $messagesQuery = new MessagesQuery(null, [
-                'conversation_id' => $this->conversation->id,
-            ]);
+            if (!$assistantMessage) {
+                return _Html('')->class('hidden');
+            }
 
-            return _Rows(
-                ...$newMessages->map(fn($msg) => $messagesQuery->render($msg))->toArray()
-            )->class('animate-fade-in');
+            // Return just the rendered content - JS will put it into the typing indicator bubble
+            $renderer = new \Condoedge\Ai\Services\UI\SafeMarkdownRenderer();
+            return _Html($renderer->render($assistantMessage->content))->class('prose prose-sm max-w-none');
 
         } catch (\Throwable $e) {
             \Log::error('Chat message failed: ' . $e->getMessage(), [

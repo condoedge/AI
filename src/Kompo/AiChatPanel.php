@@ -73,6 +73,16 @@ class AiChatPanel extends Form
     protected function mainLayout()
     {
         return _Flex(
+            _Rows(
+                // Hidden staging panel for server response - stable location outside Query
+                _Panel(
+                    // We need this temp hidden because if not it won't exist the panel itself
+                    _Hidden(),
+                )->id('temp-message-staging')->class('opacity-0 absolute top-0'),
+
+                _Hidden()->onLoad->run('() => {' . $this->js() . '}'),
+            ),
+
             $this->sidebar(),
             $this->chatArea(),
         )->class('!items-start h-full min-h-[700px] bg-gradient-to-br from-white via-gray-50/50 to-gray-50/30 rounded-2xl shadow-2xl overflow-hidden ring-1 ring-gray-200/50')
@@ -152,12 +162,26 @@ class AiChatPanel extends Form
         $typingIndicatorTemplate = $this->typingIndicatorHtml();
         $userAvatarHtml = $this->settings()->showAvatars() ? $this->userAvatarHtml() : '';
 
-        // Replace placeholders in JS with actual templates (use json_encode to handle newlines/quotes)
-        $injectorJs = str_replace("'\$USER_BUBBLE_TEMPLATE'", json_encode($userBubbleTemplate), $injectorJs);
-        $injectorJs = str_replace("'\$TYPING_INDICATOR_TEMPLATE'", json_encode($typingIndicatorTemplate), $injectorJs);
-        $injectorJs = str_replace("'\$USER_AVATAR_HTML'", json_encode($userAvatarHtml), $injectorJs);
+        // Replace placeholders in JS with actual templates
+        // Using backtick strings in JS, so only escape backticks and ${
+        $injectorJs = str_replace('$USER_BUBBLE_TEMPLATE', $this->escapeForBackticks($userBubbleTemplate), $injectorJs);
+        $injectorJs = str_replace('$TYPING_INDICATOR_TEMPLATE', $this->escapeForBackticks($typingIndicatorTemplate), $injectorJs);
+        $injectorJs = str_replace('$USER_AVATAR_HTML', $this->escapeForBackticks($userAvatarHtml), $injectorJs);
 
         return $scrollJs . "\n\n" . $injectorJs;
+    }
+
+    /**
+     * Escape string for use inside JavaScript backtick template literals
+     */
+    protected function escapeForBackticks(string $str): string
+    {
+        // Escape backticks and template literal sequences
+        return str_replace(
+            ['\\', '`', '${'],
+            ['\\\\', '\\`', '\\${'],
+            $str
+        );
     }
 
     /**
@@ -178,7 +202,7 @@ class AiChatPanel extends Form
         $avatarHtml = $this->assistantAvatarHtml();
         $dotColor = $this->theme()->primarySolid(); // Single solid color for small dots
 
-        return '<div class="flex items-start mt-4 animate-message-assistant"><div class="mr-3 flex-shrink-0 self-start">' . $avatarHtml . '</div><div class="group px-5 py-4 rounded-2xl rounded-tl-md bg-white border border-gray-100 shadow-sm"><div class="flex items-center gap-1.5 h-6"><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-1"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-2"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-3"></span></div><div class="text-xs text-gray-400 mt-2">' . __('ai.chat.thinking') . '</div></div></div>';
+        return '<div class="flex items-start mt-4 animate-message-assistant"><div class="mr-3 flex-shrink-0 self-start">' . $avatarHtml . '</div><div id="typing-indicator-content" class="group px-5 py-4 rounded-2xl rounded-tl-md bg-white border border-gray-100 shadow-sm"><div class="flex items-center gap-1.5 h-6"><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-1"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-2"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-3"></span></div><div class="text-xs text-gray-400 mt-2">' . __('ai.chat.thinking') . '</div></div></div>';
     }
 
     // ========== ACTION METHODS ==========
