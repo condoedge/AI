@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Services\Security;
 
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\GraphStore\CypherSanitizer;
 
 /**
  * TeamFilteredQuery
@@ -83,6 +84,9 @@ class TeamFilteredQuery
      */
     public function toCypherWhereClause(string $nodeAlias): string
     {
+        // Sanitize node alias to prevent injection
+        $safeAlias = CypherSanitizer::validatePropertyKey($nodeAlias);
+
         if (empty($this->teamIds) && !$this->ownerId) {
             return ''; // No restrictions
         }
@@ -90,11 +94,11 @@ class TeamFilteredQuery
         $clauses = [];
 
         if (!empty($this->teamIds)) {
-            $clauses[] = "({$nodeAlias})-[:BELONGS_TO_TEAM]->(t:Team) WHERE t.id IN \$teamIds";
+            $clauses[] = "({$safeAlias})-[:BELONGS_TO_TEAM]->(t:Team) WHERE t.id IN \$teamIds";
         }
 
         if ($this->ownerId) {
-            $clauses[] = "{$nodeAlias}._owner_id = \$ownerId";
+            $clauses[] = "{$safeAlias}._owner_id = \$ownerId";
         }
 
         return implode(' OR ', $clauses);
@@ -109,7 +113,11 @@ class TeamFilteredQuery
      */
     public function toCypherMatchClause(string $label, string $nodeAlias = 'n'): string
     {
-        $match = "MATCH ({$nodeAlias}:{$label})";
+        // Sanitize inputs to prevent injection
+        $safeLabel = CypherSanitizer::validateLabel($label);
+        $safeAlias = CypherSanitizer::validatePropertyKey($nodeAlias);
+
+        $match = "MATCH ({$safeAlias}:{$safeLabel})";
 
         if (!empty($this->teamIds)) {
             $match .= "-[:BELONGS_TO_TEAM]->(t:Team)";
@@ -129,19 +137,26 @@ class TeamFilteredQuery
      */
     public function countInNeo4j(GraphStoreInterface $graph, string $label, array $filters = []): int
     {
-        $cypher = "MATCH (n:{$label})";
+        // Sanitize label to prevent injection
+        $safeLabel = CypherSanitizer::validateLabel($label);
+
+        $cypher = "MATCH (n:{$safeLabel})";
 
         if (!empty($this->teamIds)) {
             $cypher .= "-[:BELONGS_TO_TEAM]->(t:Team) WHERE t.id IN \$teamIds";
         }
 
-        // Add additional filters
+        // Add additional filters with sanitized field names
         if (!empty($filters)) {
             $filterClauses = [];
+            $safeFilters = [];
             foreach ($filters as $field => $value) {
-                $filterClauses[] = "n.{$field} = \${$field}";
+                $safeField = CypherSanitizer::validatePropertyKey($field);
+                $filterClauses[] = "n.{$safeField} = \${$safeField}";
+                $safeFilters[$safeField] = $value;
             }
             $cypher .= (empty($this->teamIds) ? ' WHERE ' : ' AND ') . implode(' AND ', $filterClauses);
+            $filters = $safeFilters;
         }
 
         $cypher .= " RETURN count(DISTINCT n) as count";
@@ -188,7 +203,10 @@ class TeamFilteredQuery
      */
     public static function globalCount(GraphStoreInterface $graph, string $label): int
     {
-        $cypher = "MATCH (n:{$label}) RETURN count(n) as count";
+        // Sanitize label to prevent injection
+        $safeLabel = CypherSanitizer::validateLabel($label);
+
+        $cypher = "MATCH (n:{$safeLabel}) RETURN count(n) as count";
         $result = $graph->query($cypher, []);
         return $result[0]['count'] ?? 0;
     }

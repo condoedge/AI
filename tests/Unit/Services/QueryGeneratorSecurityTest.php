@@ -7,7 +7,8 @@ namespace Condoedge\Ai\Tests\Unit\Services;
 use Condoedge\Ai\Tests\TestCase;
 use Mockery;
 use Condoedge\Ai\Services\QueryGenerator;
-use Condoedge\Ai\Services\Security\CypherSanitizer;
+use Condoedge\Ai\GraphStore\CypherSanitizer;
+use Condoedge\Ai\Exceptions\CypherInjectionException;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 
@@ -60,75 +61,72 @@ class QueryGeneratorSecurityTest extends TestCase
     /**
      * @test
      */
-    public function it_sanitizes_labels_by_removing_special_characters(): void
+    public function it_sanitizes_labels_with_backtick_defense(): void
     {
-        // Labels should only contain alphanumeric characters and underscores
-        $this->assertEquals('Customer', CypherSanitizer::escapeLabel('Customer'));
-        $this->assertEquals('Customer123', CypherSanitizer::escapeLabel('Customer123'));
-        $this->assertEquals('My_Label', CypherSanitizer::escapeLabel('My_Label'));
+        // Labels are validated and wrapped in backticks for defense-in-depth
+        $this->assertEquals('`Customer`', CypherSanitizer::escapeLabel('Customer'));
+        $this->assertEquals('`Customer123`', CypherSanitizer::escapeLabel('Customer123'));
+        $this->assertEquals('`My_Label`', CypherSanitizer::escapeLabel('My_Label'));
     }
 
     /**
      * @test
      */
-    public function it_removes_injection_attempts_from_labels(): void
+    public function it_rejects_injection_attempts_in_labels(): void
     {
-        // Cypher injection attempts should have dangerous characters removed
-        // Note: escapeLabel removes non-alphanumeric chars but keeps alphanumeric content
-        // The key security property is that structural injection characters are stripped
+        // Cypher injection attempts throw exceptions (strict validation, fail-fast)
+        // Structural characters like })-[:]->(  are NOT allowed
 
-        // Structural characters like })-[:]->(  are removed, leaving only alphanumeric
-        $result = CypherSanitizer::escapeLabel('Customer})-[:HACKED]->(');
-        $this->assertStringNotContainsString('}', $result);
-        $this->assertStringNotContainsString(')', $result);
-        $this->assertStringNotContainsString('-', $result);
-        $this->assertStringNotContainsString('[', $result);
-        $this->assertStringNotContainsString(':', $result);
-        $this->assertStringNotContainsString('>', $result);
-        $this->assertStringNotContainsString('(', $result);
-
-        // Backticks and slashes are removed
-        $result = CypherSanitizer::escapeLabel('Customer` DETACH DELETE n //');
-        $this->assertStringNotContainsString('`', $result);
-        $this->assertStringNotContainsString(' ', $result);
-        $this->assertStringNotContainsString('/', $result);
-
-        // Semicolons are removed (prevents statement chaining)
-        $result = CypherSanitizer::escapeLabel('Node; DROP DATABASE');
-        $this->assertStringNotContainsString(';', $result);
-        $this->assertStringNotContainsString(' ', $result);
+        $this->expectException(CypherInjectionException::class);
+        CypherSanitizer::escapeLabel('Customer})-[:HACKED]->(');
     }
 
     /**
      * @test
      */
-    public function it_handles_labels_starting_with_numbers(): void
+    public function it_rejects_labels_with_special_characters(): void
     {
-        // Labels must start with a letter or underscore
-        $sanitized = CypherSanitizer::escapeLabel('123Customer');
-        $this->assertMatchesRegularExpression('/^[a-zA-Z_]/', $sanitized);
+        $this->expectException(CypherInjectionException::class);
+        CypherSanitizer::escapeLabel('Customer` DETACH DELETE n //');
     }
 
     /**
      * @test
      */
-    public function it_handles_empty_labels(): void
+    public function it_rejects_labels_with_semicolons(): void
     {
-        // Empty or invalid labels should return a safe default
-        $sanitized = CypherSanitizer::escapeLabel('');
-        $this->assertMatchesRegularExpression('/^[a-zA-Z_]/', $sanitized);
-        $this->assertNotEmpty($sanitized);
+        $this->expectException(CypherInjectionException::class);
+        CypherSanitizer::escapeLabel('Node; DROP DATABASE');
     }
 
     /**
      * @test
      */
-    public function it_handles_labels_with_only_special_characters(): void
+    public function it_rejects_labels_starting_with_numbers(): void
     {
-        // Labels with only special characters should return a safe default
-        $sanitized = CypherSanitizer::escapeLabel('{}[]()-;:');
-        $this->assertMatchesRegularExpression('/^[a-zA-Z_]/', $sanitized);
-        $this->assertNotEmpty($sanitized);
+        // Labels must start with a letter or underscore - strict validation throws
+        $this->expectException(CypherInjectionException::class);
+        CypherSanitizer::escapeLabel('123Customer');
+    }
+
+    /**
+     * @test
+     */
+    public function it_rejects_empty_labels(): void
+    {
+        // Empty labels throw exception - strict validation, fail-fast
+        $this->expectException(CypherInjectionException::class);
+        CypherSanitizer::escapeLabel('');
+    }
+
+    /**
+     * @test
+     */
+    public function it_rejects_labels_with_only_special_characters(): void
+    {
+        // Labels with only special characters throw exception - fail-fast validation
+        $this->expectException(CypherInjectionException::class);
+        CypherSanitizer::escapeLabel('{}[]()-;:');
     }
 
     // =========================================================================
@@ -305,7 +303,7 @@ class QueryGeneratorSecurityTest extends TestCase
 
         $result = $this->generator->generate($question, $context);
 
-        // Query should be clean and valid
-        $this->assertMatchesRegularExpression('/MATCH \(n:[A-Za-z_][A-Za-z0-9_]*\)/', $result['cypher']);
+        // Query should be clean and valid - labels are wrapped in backticks for defense-in-depth
+        $this->assertMatchesRegularExpression('/MATCH \(n:`?[A-Za-z_][A-Za-z0-9_]*`?\)/', $result['cypher']);
     }
 }

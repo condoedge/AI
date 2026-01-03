@@ -4,6 +4,7 @@ namespace Condoedge\Ai\Tests\Unit\Services\Security;
 
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\Exceptions\CypherInjectionException;
 use Condoedge\Ai\Services\Security\TeamFilteredQuery;
 use Condoedge\Ai\Tests\TestCase;
 use Mockery;
@@ -167,6 +168,74 @@ class TeamFilteredQueryTest extends TestCase
         $count = TeamFilteredQuery::globalCount($graph, 'Person');
 
         $this->assertEquals(100, $count);
+    }
+
+    /** @test */
+    public function it_rejects_injection_in_label_for_count(): void
+    {
+        $this->expectException(CypherInjectionException::class);
+
+        $graph = Mockery::mock(GraphStoreInterface::class);
+        $filter = new TeamFilteredQuery([1, 2]);
+
+        // Attempt injection via label
+        $filter->countInNeo4j($graph, 'Person} MATCH (x) DELETE x //');
+    }
+
+    /** @test */
+    public function it_rejects_injection_in_label_for_match_clause(): void
+    {
+        $this->expectException(CypherInjectionException::class);
+
+        $filter = new TeamFilteredQuery([1, 2]);
+
+        // Attempt injection via label
+        $filter->toCypherMatchClause('Person} MATCH (x) DELETE x //');
+    }
+
+    /** @test */
+    public function it_rejects_injection_in_label_for_global_count(): void
+    {
+        $this->expectException(CypherInjectionException::class);
+
+        $graph = Mockery::mock(GraphStoreInterface::class);
+
+        // Attempt injection via label
+        TeamFilteredQuery::globalCount($graph, 'Person}) DETACH DELETE n //');
+    }
+
+    /** @test */
+    public function it_rejects_injection_in_filter_field(): void
+    {
+        $this->expectException(CypherInjectionException::class);
+
+        $graph = Mockery::mock(GraphStoreInterface::class);
+        $filter = new TeamFilteredQuery([1, 2]);
+
+        // Attempt injection via filter field name
+        $filter->countInNeo4j($graph, 'Person', ['status} RETURN n //' => 'active']);
+    }
+
+    /** @test */
+    public function it_rejects_injection_in_node_alias(): void
+    {
+        $this->expectException(CypherInjectionException::class);
+
+        $filter = new TeamFilteredQuery([1, 2]);
+
+        // Attempt injection via node alias
+        $filter->toCypherWhereClause('n) DELETE n //');
+    }
+
+    /** @test */
+    public function it_rejects_reserved_cypher_keywords_as_labels(): void
+    {
+        $this->expectException(CypherInjectionException::class);
+
+        $filter = new TeamFilteredQuery([1, 2]);
+
+        // Reserved keyword as label
+        $filter->toCypherMatchClause('MATCH');
     }
 
     public function tearDown(): void

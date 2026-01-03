@@ -9,7 +9,7 @@ use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
-use Condoedge\Ai\Services\Security\CypherSanitizer;
+use Condoedge\Ai\GraphStore\CypherSanitizer;
 
 /**
  * Query Generator Service
