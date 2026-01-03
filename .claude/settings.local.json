@@ -66,7 +66,11 @@
       "Bash(git show:*)",
       "Bash(vendorbinphpunit testsUnitServicesPromptSectionsConversationContextSectionTest.php --colors=never)",
       "Bash(for:*)",
-      "Bash(do echo \"=== Testing $dir ===\")"
+      "Bash(do echo \"=== Testing $dir ===\")",
+      "Bash(grep:*)",
+      "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" show 37d440a:src/Models/Plugins/FileAccessScopePlugin.php)",
+      "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" log --oneline -20)",
+      "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" diff 37d440a..b1afad7 -- src/Models/Plugins/FileAccessScopePlugin.php)"
     ],
     "deny": [],
     "ask": []

@@ -36,11 +36,11 @@ class AiChatPanel extends Form
 {
     use HasChatSettings, HasChatTheme, HasAvatars, HasMethodsAsProperties;
 
-    public $style = 'max-height: 95vh;';
+    public $style = 'max-height: 95vh; width: 100vw;';
+
+    public $class = 'max-w-5xl';
 
     public const ID = 'chat-panel';
-    public const MESSAGES_PANEL_ID = 'chat-messages-panel';
-    public const INPUT_PANEL_ID = 'chat-input-panel';
 
     protected ?int $selectedConversationId = null;
     protected ?AiConversation $conversation = null;

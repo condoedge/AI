@@ -87,12 +87,10 @@ class EditMessageModal extends Modal
                 _Link(__('ai.edit.delete-message'))->icon('trash')
                     ->class('px-4 py-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all')
                     ->selfPost('deleteMessage')
-                    ->refresh(AiChatPanel::MESSAGES_PANEL_ID)
                     ->closeModal(),
                 _Button(__('ai.edit.save-regenerate'))->icon('arrow-path')
                     ->class('px-4 py-2 text-white rounded-xl shadow-lg transition-all ' . $this->theme()->primaryGradient())
                     ->selfPost('updateMessage')
-                    ->refresh(AiChatPanel::MESSAGES_PANEL_ID)
                     ->closeModal(),
             )->class('gap-3'),
         )->class('px-6 py-4 border-t border-gray-200 bg-gray-50');

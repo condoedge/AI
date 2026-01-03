@@ -105,7 +105,7 @@ class UserChatSettings extends AbstractChatSettings
      */
     public function inputPlaceholder(): string
     {
-        return $this->get('input_placeholder', 'Ask a question...');
+        return $this->get('input_placeholder', __('ai.chat.input-placeholder'));
     }
 
     /**

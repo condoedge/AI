@@ -37,6 +37,20 @@ trait HasChatTheme
         return $this->chatTheme;
     }
 
+    // Shorthand methods for common theme accesses
+    protected function themeGradient(): string { return 'bg-gradient-to-r ' . $this->theme()->primaryGradient(); }
+    protected function themeLightGradient(): string { return 'bg-gradient-to-r ' . $this->theme()->primaryLightGradient(); }
+    protected function themeSolid(): string { return $this->theme()->primarySolid(); }
+    protected function themeText(): string { return $this->theme()->primaryText(); }
+    protected function themeLightBg(): string { return $this->theme()->primaryLightBg(); }
+    protected function themeRing(): string { return $this->theme()->primaryRing(); }
+    protected function themeBorder(): string { return $this->theme()->primaryBorder(); }
+    protected function themeShadow(): string { return $this->theme()->primaryShadow(); }
+    protected function themeAccentGradient(): string { return 'bg-gradient-to-br ' . $this->theme()->accentGradient(); }
+    protected function themeSelected(): string { return $this->theme()->selectedBg() . ' ' . $this->theme()->selectedBorder(); }
+    protected function themeActiveBadge(): string { return $this->theme()->activeBadge(); }
+
+
     /**
      * Get the main hex color for UI elements like toggles.
      */
