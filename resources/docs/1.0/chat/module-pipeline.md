@@ -59,18 +59,20 @@ Builds LLM prompts for Neo4j Cypher query generation.
 | Priority | Name | Description |
 |----------|------|-------------|
 | 10 | project_context | Project name, description, business rules |
-| 15 | generic_context | Additional context information |
+| 15 | generic_context | Current date/time |
+| 17 | current_user | Current user and team context |
 | 20 | schema | Database schema and node types |
 | 30 | relationships | Relationship types between nodes |
 | 40 | example_entities | Sample data for reference |
+| 45 | file_context | Relevant file content |
 | 50 | similar_queries | Previously successful similar queries |
+| 55 | conversation_context | Conversation history |
 | 60 | detected_entities | Entities detected in the question |
-| 70 | detected_scopes | Scopes/filters detected in the question |
-| 80 | pattern_library | Query patterns from the pattern library |
-| 90 | query_rules | Rules for query generation |
-| 95 | current_user | Current user context |
-| 100 | question | The user's actual question |
-| 110 | task_instructions | Final instructions for the LLM |
+| 65 | detected_scopes | Scopes/filters detected in the question |
+| 70 | pattern_library | Query patterns from the pattern library |
+| 75 | query_rules | Rules for query generation |
+| 80 | question | The user's actual question |
+| 90 | task_instructions | Final instructions for the LLM |
 
 ### Configuration
 
@@ -142,10 +144,12 @@ Transforms query results into natural language explanations.
 | 20 | project_context | Project name and description |
 | 30 | question | The user's original question |
 | 40 | query_info | The Cypher query that was executed |
+| 45 | file_context | Relevant file content with citations |
 | 50 | data | The actual results data |
 | 60 | statistics | Statistics about the results |
 | 70 | guidelines | Guidelines for response formatting |
 | 80 | task | Final task instructions for the LLM |
+| 1000 | privacy_security | Privacy and security guidelines |
 
 ### Configuration
 
@@ -217,7 +221,7 @@ class CustomAnalyticsSection implements PromptSectionInterface
 
     public function getPriority(): int
     {
-        return 55; // After similar_queries (50), before detected_entities (60)
+        return 52; // After similar_queries (50), before conversation_context (55)
     }
 
     public function shouldInclude(string $question, array $context, array $options): bool
