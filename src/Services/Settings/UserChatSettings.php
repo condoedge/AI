@@ -24,10 +24,11 @@ class UserChatSettings extends AbstractChatSettings
      * Get a setting value using the priority chain.
      *
      * Resolution order:
-     * 1. User DB settings (if authenticated)
-     * 2. Session settings
-     * 3. Config file settings
-     * 4. Default value
+     * 1. Constructor overrides
+     * 2. User DB settings (direct columns, if authenticated)
+     * 3. Session settings
+     * 4. Config file settings
+     * 5. Default value
      *
      * @param string $key     The setting key to retrieve
      * @param mixed  $default The default value if no setting found
@@ -41,12 +42,13 @@ class UserChatSettings extends AbstractChatSettings
             return $this->settings[$key];
         }
 
-        // 1. Check user DB (if authenticated)
+        // 1. Check user DB direct columns (if authenticated)
         if (auth()->check()) {
             $userSetting = AiUserSetting::forUser(auth()->id());
-            $chatSettings = $userSetting->chat_settings ?? [];
-            if (isset($chatSettings[$key])) {
-                return $chatSettings[$key];
+
+            // Read from direct model property if it exists and is not null
+            if ($userSetting->getAttribute($key) !== null) {
+                return $userSetting->getAttribute($key);
             }
         }
 
