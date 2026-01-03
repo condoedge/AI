@@ -97,7 +97,7 @@ class AiChatPanel extends Form
         $statusClass = $this->isOnline
             ? 'text-emerald-500'
             : 'text-gray-400';
-        $statusText = $this->isOnline ? 'Online' : 'Offline';
+        $statusText = $this->isOnline ? __('ai.common.online') : __('ai.common.offline');
         $statusDot = $this->isOnline
             ? '<span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white animate-pulse"></span>'
             : '<span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-gray-400 rounded-full border-2 border-white"></span>';
@@ -112,7 +112,7 @@ class AiChatPanel extends Form
             )->class('items-center'),
             _Link()->icon('plus')
                 ->class('p-2.5 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200')
-                ->balloon('New conversation', 'left')
+                ->balloon(__('ai.chat.new-conversation-tooltip'), 'left')
                 ->selfPost('createConversation')
                 ->refresh(),
         )->class('p-4 border-b border-gray-200/70 bg-white/80 backdrop-blur-sm');
@@ -121,7 +121,7 @@ class AiChatPanel extends Form
     protected function sidebarFooter()
     {
         return _FlexBetween(
-            _Link('Settings')->icon('cog-6-tooth')
+            _Link(__('ai.chat.settings'))->icon('cog-6-tooth')
                 ->class('text-sm text-gray-500 ' . $this->theme()->linkHover() . ' p-2 rounded-lg transition-all')
                 ->selfGet('openSettings')->inModal(),
             _Link('Help')->icon('question-mark-circle')
