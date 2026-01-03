@@ -13,12 +13,28 @@ class AiUserSetting extends Model
         'user_id',
         'ui_theme',
         'ui_colors',
-        'chat_settings',
+        // Direct settings columns
+        'show_avatars',
+        'show_timestamps',
+        'show_metrics',
+        'show_suggestions',
+        'enable_copy',
+        'enable_feedback',
+        'enable_regenerate',
+        'enable_edit',
+        'response_style',
     ];
 
     protected $casts = [
         'ui_colors' => 'array',
-        'chat_settings' => 'array',
+        'show_avatars' => 'boolean',
+        'show_timestamps' => 'boolean',
+        'show_metrics' => 'boolean',
+        'show_suggestions' => 'boolean',
+        'enable_copy' => 'boolean',
+        'enable_feedback' => 'boolean',
+        'enable_regenerate' => 'boolean',
+        'enable_edit' => 'boolean',
     ];
 
     public function user(): BelongsTo
@@ -62,40 +78,4 @@ class AiUserSetting extends Model
         return $this;
     }
 
-    /**
-     * Get a specific chat setting.
-     */
-    public function getSetting(string $key, $default = null)
-    {
-        return $this->chat_settings[$key] ?? $default;
-    }
-
-    /**
-     * Get all chat settings.
-     */
-    public function getSettings(): array
-    {
-        return $this->chat_settings ?? [];
-    }
-
-    /**
-     * Set a specific chat setting.
-     */
-    public function setSetting(string $key, $value): self
-    {
-        $settings = $this->chat_settings ?? [];
-        $settings[$key] = $value;
-        $this->update(['chat_settings' => $settings]);
-        return $this;
-    }
-
-    /**
-     * Set multiple chat settings.
-     */
-    public function setSettings(array $settings): self
-    {
-        $current = $this->chat_settings ?? [];
-        $this->update(['chat_settings' => array_merge($current, $settings)]);
-        return $this;
-    }
 }
