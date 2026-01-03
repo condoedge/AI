@@ -442,29 +442,44 @@ class AiManager
      * @param array $context RAG context (use retrieveContext() to get this)
      * @param array $options Optional parameters (temperature, max_retries, allow_write, explain)
      * @return array Result with keys: cypher, explanation, confidence, warnings, metadata
-     * @throws \RuntimeException If generation fails after retries
      */
     public function generateQuery(string $question, array $context = [], array $options = []): array
     {
-        // If no context provided, retrieve it
-        if (empty($context)) {
-            $context = $this->retrieveContext($question);
-        }
-        
-        $generation =  $this->queryGenerator->generate($question, $context, $options);
+        try {
+            // If no context provided, retrieve it
+            if (empty($context)) {
+                $context = $this->retrieveContext($question);
+            }
 
-        if (isset($generation['cypher']) && $generation['cypher']) {
-            $this->storeQuery(
-                question: $question,
-                cypherQuery: $generation['cypher'],
-                metadata: [
-                    'confidence' => $generation['confidence'],
-                    'generated_at' => now()->toIso8601String(),
-                ]
-            );
-        }
+            $generation = $this->queryGenerator->generate($question, $context, $options);
 
-        return $generation;
+            if (isset($generation['cypher']) && $generation['cypher']) {
+                $this->storeQuery(
+                    question: $question,
+                    cypherQuery: $generation['cypher'],
+                    metadata: [
+                        'confidence' => $generation['confidence'],
+                        'generated_at' => now()->toIso8601String(),
+                    ]
+                );
+            }
+
+            return $generation;
+
+        } catch (\Throwable $e) {
+            \Log::error('Error generating query: ' . $e->getMessage(), [
+                'question' => $question,
+                'exception' => get_class($e),
+            ]);
+
+            return [
+                'cypher' => null,
+                'explanation' => null,
+                'confidence' => 0,
+                'warnings' => [$e->getMessage()],
+                'metadata' => ['error' => true, 'error_message' => $e->getMessage()],
+            ];
+        }
     }
 
     /**
@@ -521,16 +536,33 @@ class AiManager
      */
     public function askQuestion(string $question, array $options = []): array
     {
-        // Step 1: Retrieve context
-        $context = $this->retrieveContext($question);
+        try {
+            // Step 1: Retrieve context
+            $context = $this->retrieveContext($question);
 
-        // Step 2: Generate query
-        $result = $this->generateQuery($question, $context, $options);
+            // Step 2: Generate query
+            $result = $this->generateQuery($question, $context, $options);
 
-        // Add context to result for transparency
-        $result['context'] = $context;
+            // Add context to result for transparency
+            $result['context'] = $context;
 
-        return $result;
+            return $result;
+
+        } catch (\Throwable $e) {
+            \Log::error('Error in askQuestion: ' . $e->getMessage(), [
+                'question' => $question,
+                'exception' => get_class($e),
+            ]);
+
+            return [
+                'cypher' => null,
+                'explanation' => null,
+                'confidence' => 0,
+                'warnings' => [__('ai.error.encountered_issue', ['question' => $question])],
+                'metadata' => ['error' => true, 'error_message' => $e->getMessage()],
+                'context' => [],
+            ];
+        }
     }
 
     // =========================================================================
@@ -616,24 +648,42 @@ class AiManager
      */
     public function ask(string $question, array $options = []): array
     {
-        // Step 1: Retrieve context
-        $context = $this->retrieveContext($question);
+        try {
+            // Step 1: Retrieve context
+            $context = $this->retrieveContext($question);
 
-        // Step 2: Generate query
-        $queryResult = $this->generateQuery($question, $context, $options);
+            // Step 2: Generate query
+            $queryResult = $this->generateQuery($question, $context, $options);
 
-        // Step 3: Execute query
-        $executionResult = $this->executeQuery($queryResult['cypher'], [], $options);
+            // Step 3: Execute query
+            $executionResult = $this->executeQuery($queryResult['cypher'], [], $options);
 
-        return [
-            'question' => $question,
-            'cypher' => $queryResult['cypher'],
-            'explanation' => $queryResult['explanation'],
-            'data' => $executionResult['data'],
-            'stats' => $executionResult['stats'],
-            'context' => $context,
-            'metadata' => array_merge($queryResult['metadata'], $executionResult['metadata']),
-        ];
+            return [
+                'question' => $question,
+                'cypher' => $queryResult['cypher'],
+                'explanation' => $queryResult['explanation'],
+                'data' => $executionResult['data'],
+                'stats' => $executionResult['stats'],
+                'context' => $context,
+                'metadata' => array_merge($queryResult['metadata'], $executionResult['metadata']),
+            ];
+
+        } catch (\Throwable $e) {
+            \Log::error('Error in ask: ' . $e->getMessage(), [
+                'question' => $question,
+                'exception' => get_class($e),
+            ]);
+
+            return [
+                'question' => $question,
+                'cypher' => null,
+                'explanation' => null,
+                'data' => [],
+                'stats' => [],
+                'context' => [],
+                'metadata' => ['error' => true, 'error_message' => $e->getMessage()],
+            ];
+        }
     }
 
     // =========================================================================

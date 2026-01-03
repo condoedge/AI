@@ -333,11 +333,10 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $format = $options['format'] ?? 'text';
         $temperature = $options['temperature'] ?? 0.3;
 
-        $prompt = "The user asked: \"{$originalQuestion}\"\n\n";
-        $prompt .= "We executed this query:\n{$cypherQuery}\n\n";
-        $prompt .= "The query returned no results.\n\n";
-        $prompt .= "Please explain in a friendly way why there might be no results. ";
-        $prompt .= "Suggest what the user could try instead or how to rephrase their question.";
+        $prompt = __('ai.prompt.user_asked', ['question' => $originalQuestion]) . "\n\n";
+        $prompt .= __('ai.prompt.executed_query') . "\n{$cypherQuery}\n\n";
+        $prompt .= __('ai.prompt.no_results') . "\n\n";
+        $prompt .= __('ai.prompt.explain_no_results');
 
         try {
             $answer = $this->llm->complete($prompt, null, [
@@ -347,7 +346,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
 
             return [
                 'answer' => trim($answer),
-                'insights' => ['No results found'],
+                'insights' => [__('ai.insight.no_results')],
                 'visualizations' => [],
                 'format' => $format,
                 'metadata' => [
@@ -359,8 +358,8 @@ class ResponseGenerator implements ResponseGeneratorInterface
         } catch (\Exception $e) {
             // Fallback response
             return [
-                'answer' => "No results were found for your question: \"{$originalQuestion}\". You might want to try rephrasing or checking if the data you're looking for exists.",
-                'insights' => ['No results found'],
+                'answer' => __('ai.response.no_results_fallback', ['question' => $originalQuestion]),
+                'insights' => [__('ai.insight.no_results')],
                 'visualizations' => [],
                 'format' => $format,
                 'metadata' => [
@@ -389,15 +388,15 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $includeDetails = $options['include_details'] ?? false;
 
         // User-friendly error message
-        $answer = "I encountered an issue while trying to answer your question: \"{$originalQuestion}\". ";
+        $answer = __('ai.error.encountered_issue', ['question' => $originalQuestion]) . ' ';
 
         // Add specific guidance based on error type
         if (str_contains($error->getMessage(), 'timeout')) {
-            $answer .= "The query took too long to execute. Try asking a more specific question or limiting the scope.";
+            $answer .= __('ai.error.timeout_guidance');
         } elseif (str_contains($error->getMessage(), 'syntax')) {
-            $answer .= "There was an issue with the generated query. Please try rephrasing your question.";
+            $answer .= __('ai.error.syntax_guidance');
         } else {
-            $answer .= "Please try rephrasing your question or contact support if the issue persists.";
+            $answer .= __('ai.error.generic_guidance');
         }
 
         $metadata = [
@@ -411,7 +410,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
 
         return [
             'answer' => $answer,
-            'insights' => ['Error occurred during query execution'],
+            'insights' => [__('ai.insight.error_occurred')],
             'visualizations' => [],
             'format' => $format,
             'metadata' => $metadata,
@@ -446,21 +445,21 @@ class ResponseGenerator implements ResponseGeneratorInterface
 
         // Basic count insight
         $count = count($queryResult);
-        $insights[] = "Found {$count} result" . ($count !== 1 ? 's' : '');
+        $insights[] = trans_choice('ai.insight.found_results', $count, ['count' => $count]);
 
         // Detect if numeric data
         if ($this->isNumericData($queryResult)) {
             $stats = $this->calculateStatistics($queryResult);
 
             if ($stats) {
-                $insights[] = "Average value: " . round($stats['avg'], 2);
+                $insights[] = __('ai.insight.average_value', ['value' => round($stats['avg'], 2)]);
 
                 if ($stats['max'] > $stats['avg'] * 2) {
-                    $insights[] = "Contains some notably high values";
+                    $insights[] = __('ai.insight.high_values');
                 }
 
                 if ($stats['min'] < $stats['avg'] * 0.5 && $stats['min'] > 0) {
-                    $insights[] = "Contains some notably low values";
+                    $insights[] = __('ai.insight.low_values');
                 }
             }
         }
@@ -471,7 +470,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
             $keys = array_keys($firstItem);
 
             if (count($keys) > 1) {
-                $insights[] = "Results contain " . count($keys) . " properties: " . implode(', ', $keys);
+                $insights[] = __('ai.insight.properties_count', ['count' => count($keys), 'properties' => implode(', ', $keys)]);
             }
         }
 

@@ -33,17 +33,19 @@ use Condoedge\Ai\Services\PromptSections\CurrentUserContextSection;
  * Default sections (in priority order):
  * - project_context (10): Project name, description, business rules
  * - generic_context (15): Additional context information
+ * - current_user (17): Current user context for authorization
  * - schema (20): Database schema and node types
  * - relationships (30): Relationship types between nodes
  * - example_entities (40): Sample data for reference
+ * - file_context (45): Relevant file content for RAG
  * - similar_queries (50): Previously successful similar queries
+ * - conversation_context (55): Recent conversation history
  * - detected_entities (60): Entities detected in the user's question
- * - detected_scopes (70): Scopes/filters detected in the question
- * - pattern_library (80): Query patterns from the pattern library
- * - query_rules (90): Rules for query generation
- * - current_user (95): Current user context
- * - question (100): The user's actual question
- * - task_instructions (110): Final instructions for the LLM
+ * - detected_scopes (65): Scopes/filters detected in the question
+ * - pattern_library (70): Query patterns from the pattern library
+ * - query_rules (75): Rules for query generation
+ * - question (80): The user's actual question
+ * - task_instructions (90): Final instructions for the LLM
  *
  * ## Configuration
  *

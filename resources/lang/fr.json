@@ -174,5 +174,25 @@
     "ai.form.validation-max": "Le message est trop long (max 10 000 caracteres)",
 
     "ai.chat.thinking": "En cours de reflexion...",
-    "ai.chat.error-message": "Désolé, une erreur s'est produite. Veuillez réessayer."
+    "ai.chat.error-message": "Désolé, une erreur s'est produite. Veuillez réessayer.",
+
+    "ai.prompt.user_asked": "L'utilisateur a demandé: \":question\"",
+    "ai.prompt.executed_query": "Nous avons exécuté cette requête:",
+    "ai.prompt.no_results": "La requête n'a retourné aucun résultat.",
+    "ai.prompt.explain_no_results": "Veuillez expliquer de manière amicale pourquoi il pourrait n'y avoir aucun résultat. Suggérez ce que l'utilisateur pourrait essayer à la place ou comment reformuler sa question.",
+
+    "ai.response.no_results_fallback": "Aucun résultat n'a été trouvé pour votre question: \":question\". Vous pourriez essayer de reformuler ou de vérifier si les données que vous recherchez existent.",
+
+    "ai.error.encountered_issue": "J'ai rencontré un problème en essayant de répondre à votre question: \":question\".",
+    "ai.error.timeout_guidance": "La requête a pris trop de temps à s'exécuter. Essayez de poser une question plus précise ou de limiter la portée.",
+    "ai.error.syntax_guidance": "Il y a eu un problème avec la requête générée. Veuillez essayer de reformuler votre question.",
+    "ai.error.generic_guidance": "Veuillez essayer de reformuler votre question ou contacter le support si le problème persiste.",
+
+    "ai.insight.no_results": "Aucun résultat trouvé",
+    "ai.insight.error_occurred": "Une erreur s'est produite lors de l'exécution de la requête",
+    "ai.insight.found_results": "{1} :count résultat trouvé|[2,*] :count résultats trouvés",
+    "ai.insight.average_value": "Valeur moyenne: :value",
+    "ai.insight.high_values": "Contient des valeurs notablement élevées",
+    "ai.insight.low_values": "Contient des valeurs notablement basses",
+    "ai.insight.properties_count": "Les résultats contiennent :count propriétés: :properties"
 }

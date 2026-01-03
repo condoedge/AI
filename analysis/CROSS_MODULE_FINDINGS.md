@@ -19,7 +19,7 @@
 | Total Issues Found | 45+ |
 | Critical Issues | ~~2~~ 0 (**ALL FIXED**) |
 | High Issues | ~~3~~ 1 (2 FIXED, 1 DEFERRED) |
-| Medium Issues | ~~20+~~ 18+ (2 FIXED) |
+| Medium Issues | ~~20+~~ 15+ (5 FIXED: MED-001, MED-003, MED-006, MED-007, MED-008, MED-010) |
 | Low/Info Issues | 20+ |
 
 > **Note:** AiManager is intentionally a facade providing a single entry point. Methods like `ask()`, `stream()`, etc. are designed for external project use, not internal package use. This is correct architectural design, not dead code.
@@ -126,9 +126,9 @@ $safeField = CypherSanitizer::validatePropertyKey($field);
 | ID | Module | Description |
 |----|--------|-------------|
 | UI-001 | ui-chat-interface | Direct model mutations in UI components (AiChatPanel, MessagesQuery) |
-| CO-012 | chat-orchestration | Only 1 of 35 methods (3%) has error handling |
-| CO-013 | chat-orchestration | Service locator pattern in retrieveFileContext() |
-| CO-014 | chat-orchestration | Service locator pattern in enrichResponseWithFiles() |
+| CO-012 | chat-orchestration | ~~Only 1 of 35 methods (3%) has error handling~~ ✅ FIXED - Key methods now have try-catch |
+| CO-013 | chat-orchestration | ~~Service locator pattern in retrieveFileContext()~~ ✅ FIXED with MED-001 |
+| CO-014 | chat-orchestration | ~~Service locator pattern in enrichResponseWithFiles()~~ ✅ FIXED with MED-001 |
 | GS-003 | graph-store | HTTP basic auth credentials stored as plain strings |
 | SEC-003 | security | AccessLevelResolver instantiates models without class validation |
 
@@ -136,11 +136,11 @@ $safeField = CypherSanitizer::validatePropertyKey($field);
 
 | ID | Module | Description |
 |----|--------|-------------|
-| QG-001 | query-generation | SemanticPromptBuilder docblock shows outdated priorities |
-| QG-002 | query-generation | GenericContextSection always included (no conditional) |
-| RSP-002 | response-generation | Hardcoded English text in error responses |
+| QG-001 | query-generation | ~~SemanticPromptBuilder docblock shows outdated priorities~~ ✅ FIXED |
+| QG-002 | query-generation | ~~GenericContextSection always included (no conditional)~~ ✅ FIXED |
+| RSP-002 | response-generation | ~~Hardcoded English text in error responses~~ ✅ FIXED |
 | UI-002 | ui-chat-interface | Duplicate JS loading in AiChatPanel and MessagesQuery |
-| INF-003 | infrastructure | Duplicate FileAccessResolver binding |
+| INF-003 | infrastructure | ~~Duplicate FileAccessResolver binding~~ ✅ FIXED |
 
 ### Documentation Issues
 

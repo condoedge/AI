@@ -14,7 +14,7 @@ This document provides detailed remediation plans for all issues identified duri
 **Total Issues:** 45+
 - **CRITICAL:** ~~2~~ 0 (security vulnerabilities) - **ALL FIXED**
 - **HIGH:** ~~3~~ 1 (architectural concerns) - 2 FIXED, 1 deferred
-- **MEDIUM:** ~~14~~ 12 (code quality) - 2 FIXED (MED-001, MED-010)
+- **MEDIUM:** ~~14~~ 9 (code quality) - 5 FIXED (MED-001, MED-003, MED-006, MED-007, MED-008, MED-010)
 - **LOW:** 9 (minor improvements)
 
 ---
@@ -453,21 +453,28 @@ Create `ConversationService` and `MessageService` to encapsulate business logic.
 
 ---
 
-### MED-003: Inconsistent Error Handling
+### MED-003: Inconsistent Error Handling - ✅ FIXED
 
 | Field | Details |
 |-------|---------|
 | **Issue ID** | CO-012 |
 | **Severity** | MEDIUM |
 | **Category** | Reliability |
+| **Status** | ✅ **FIXED** on 2026-01-03 |
 
 #### Description
 
-Only `answerQuestion()` (1 of 35 methods) has try/catch in AiManager.
+Only `answerQuestion()` (1 of 35 methods) had try/catch in AiManager.
 
-#### Fix Proposal
+#### Fix Applied
 
-Add consistent error handling with logging across all public methods.
+Added try-catch with logging to key public methods:
+- `generateQuery()` - now catches exceptions, logs errors, returns error response
+- `askQuestion()` - now catches exceptions, logs errors, returns error response
+- `ask()` - now catches exceptions, logs errors, returns error response
+- `answerQuestion()` - already had error handling
+
+All methods now return consistent error structures with `metadata.error = true`.
 
 ---
 
@@ -477,9 +484,9 @@ Add consistent error handling with logging across all public methods.
 |----|-------------|-----|
 | MED-004 (GS-003) | HTTP basic auth as plain strings | Use Laravel's encrypted config |
 | MED-005 (SEC-003) | Model instantiation without validation | Add namespace allowlist |
-| MED-006 (QG-001) | Outdated docblock priorities | Update docstrings (DONE in Phase 5) |
-| MED-007 (QG-002) | GenericContextSection always included | Add shouldInclude() condition |
-| MED-008 (RSP-002) | Hardcoded English error text | Move to lang files |
+| MED-006 (QG-001) | Outdated docblock priorities | ✅ **FIXED** - Updated SemanticPromptBuilder docblock |
+| MED-007 (QG-002) | GenericContextSection always included | ✅ **FIXED** - Added shouldInclude() with time keyword detection |
+| MED-008 (RSP-002) | Hardcoded English error text | ✅ **FIXED** - Moved to lang files (en.json, fr.json) |
 | MED-009 (UI-002) | Duplicate JS loading | Deduplicate asset registration |
 | MED-010 (INF-003) | Duplicate FileAccessResolver binding | ✅ **FIXED** - Removed redundant binding |
 | MED-011 (QG-003) | Undocumented user/team ID exposure | Document in security docs |

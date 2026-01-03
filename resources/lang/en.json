@@ -174,5 +174,25 @@
     "ai.form.validation-max": "Message is too long (max 10,000 characters)",
 
     "ai.chat.thinking": "Thinking...",
-    "ai.chat.error-message": "Sorry, something went wrong. Please try again."
+    "ai.chat.error-message": "Sorry, something went wrong. Please try again.",
+
+    "ai.prompt.user_asked": "The user asked: \":question\"",
+    "ai.prompt.executed_query": "We executed this query:",
+    "ai.prompt.no_results": "The query returned no results.",
+    "ai.prompt.explain_no_results": "Please explain in a friendly way why there might be no results. Suggest what the user could try instead or how to rephrase their question.",
+
+    "ai.response.no_results_fallback": "No results were found for your question: \":question\". You might want to try rephrasing or checking if the data you're looking for exists.",
+
+    "ai.error.encountered_issue": "I encountered an issue while trying to answer your question: \":question\".",
+    "ai.error.timeout_guidance": "The query took too long to execute. Try asking a more specific question or limiting the scope.",
+    "ai.error.syntax_guidance": "There was an issue with the generated query. Please try rephrasing your question.",
+    "ai.error.generic_guidance": "Please try rephrasing your question or contact support if the issue persists.",
+
+    "ai.insight.no_results": "No results found",
+    "ai.insight.error_occurred": "Error occurred during query execution",
+    "ai.insight.found_results": "{1} Found :count result|[2,*] Found :count results",
+    "ai.insight.average_value": "Average value: :value",
+    "ai.insight.high_values": "Contains some notably high values",
+    "ai.insight.low_values": "Contains some notably low values",
+    "ai.insight.properties_count": "Results contain :count properties: :properties"
 }
