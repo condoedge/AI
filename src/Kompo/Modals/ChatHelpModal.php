@@ -38,7 +38,7 @@ class ChatHelpModal extends Modal
             ->options([
                 'getting_started' => __('ai.help.tab-getting-started'),
                 'tips' => __('ai.help.tab-tips'),
-                'shortcuts' => __('ai.help.tab-shortcuts'),
+                // 'shortcuts' => __('ai.help.tab-shortcuts'),
                 'faq' => __('ai.help.tab-faq'),
             ])->name('help_tab')
             ->selfGet('showTab')->inPanel('help-tab-content')

@@ -1,4 +1,0 @@
-database/migrations/2025_01_01_000001_create_ai_conversations_table.php
-database/migrations/2025_01_01_000002_create_ai_query_logs_table.php
-database/migrations/2025_01_02_000001_add_context_snapshot_to_ai_conversations.php
-database/migrations/2025_01_03_000001_create_ai_user_settings_table.php

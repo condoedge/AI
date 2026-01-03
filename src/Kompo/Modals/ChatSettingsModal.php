@@ -75,6 +75,30 @@ class ChatSettingsModal extends Modal
                 $this->toggleSetting('enable_edit', __('ai.settings.edit-messages'), __('ai.settings.edit-messages-desc')),
             )->class('space-y-3 mb-6'),
 
+            // Animation settings section
+            $this->sectionHeader(__('ai.settings.animations'), __('ai.settings.animations-description')),
+            _Rows(
+                $this->toggleSetting('enable_animations', __('ai.settings.enable-animations'), __('ai.settings.enable-animations-desc')),
+            )->class('space-y-3 mb-3'),
+            _Select(__('ai.settings.animation-speed'))->name('animation_speed')
+                ->options([
+                    'slow' => __('ai.settings.speed-slow'),
+                    'normal' => __('ai.settings.speed-normal'),
+                    'fast' => __('ai.settings.speed-fast'),
+                    'none' => __('ai.settings.speed-none'),
+                ])
+                ->default('normal')
+                ->class('w-full border border-gray-200 rounded-xl p-3 transition-all mb-3'),
+            _Select(__('ai.settings.typing-style'))->name('typing_animation_style')
+                ->options([
+                    'dots' => __('ai.settings.typing-dots'),
+                    'wave' => __('ai.settings.typing-wave'),
+                    'pulse' => __('ai.settings.typing-pulse'),
+                    'brain' => __('ai.settings.typing-brain'),
+                ])
+                ->default('dots')
+                ->class('w-full border border-gray-200 rounded-xl p-3 transition-all mb-6'),
+
             // Response style section
             $this->sectionHeader(__('ai.settings.response-style'), __('ai.settings.response-style-description')),
             _Select()->name('response_style')
@@ -174,6 +198,9 @@ class ChatSettingsModal extends Modal
                 'enable_edit' => $this->model->enable_edit,
                 'response_style' => $this->model->response_style,
                 'ui_theme' => $this->model->ui_theme,
+                'enable_animations' => $this->model->enable_animations,
+                'animation_speed' => $this->model->animation_speed,
+                'typing_animation_style' => $this->model->typing_animation_style,
             ]);
         }
     }

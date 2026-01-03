@@ -49,12 +49,12 @@ abstract class AbstractChatSettings implements ChatSettingsInterface
     /**
      * Convert all settings to an array for serialization.
      *
-     * Includes all 15 configurable settings:
+     * Includes all 16 configurable settings:
      * - Content: welcome_title, welcome_message, example_questions, input_placeholder
      * - Display: show_timestamps, show_avatars, show_typing, show_suggestions, show_metrics
      * - Features: enable_copy, enable_feedback, enable_edit, enable_regenerate
      * - Limits: max_suggestions
-     * - Behavior: response_style
+     * - Behavior: response_style, typing_animation_style
      *
      * @return array<string, mixed>
      */
@@ -76,6 +76,35 @@ abstract class AbstractChatSettings implements ChatSettingsInterface
             'enable_regenerate' => $this->enableRegenerate(),
             'max_suggestions' => $this->maxSuggestions(),
             'response_style' => $this->responseStyle(),
+            'typing_animation_style' => $this->typingAnimationStyle(),
+            'enable_animations' => $this->enableAnimations(),
+            'animation_speed' => $this->animationSpeed(),
         ];
+    }
+
+    /**
+     * Get the typing animation style.
+     *
+     * Available styles: dots, wave, pulse, brain
+     */
+    public function typingAnimationStyle(): string
+    {
+        return $this->get('typing_animation_style', 'dots');
+    }
+
+    /**
+     * Whether to enable message animations.
+     */
+    public function enableAnimations(): bool
+    {
+        return $this->get('enable_animations', true);
+    }
+
+    /**
+     * Get animation speed: 'slow', 'normal', 'fast', 'none'.
+     */
+    public function animationSpeed(): string
+    {
+        return $this->get('animation_speed', 'normal');
     }
 }

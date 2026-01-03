@@ -20,7 +20,7 @@ class MessagesQuery extends Query
     public const ID = 'chat-messages-panel';
     public $class = '';
     public $itemsWrapperClass = '[&>div]:gap-4 [&>div]:flex [&>div]:flex-col p-6 overflow-y-auto mini-scroll h-full';
-    public $style = 'max-height: 95vh;';
+    public $style = 'max-height: 95vh; display: flex; flex-direction: column;';
 
     public $noItemsFound = '';
 
@@ -31,14 +31,30 @@ class MessagesQuery extends Query
 
     protected $latestMessageId;
 
+    /**
+     * Check if message is newly added (for animation purposes)
+     * Messages created within the last 5 seconds are considered "new"
+     */
+    protected function isNewMessage($message): bool
+    {
+        if (!$message->created_at) {
+            return true; // Temp messages are always "new"
+        }
+
+        return $message->created_at->diffInSeconds(now()) < 5;
+    }
+
     public function created()
     {
         $this->id(self::ID);
 
+        $animationSpeed = $this->settings()->animationSpeed();
+        $speedClass = 'animation-speed-' . $animationSpeed;
+
         $this->conversation = AiConversation::where('user_id', auth()->id())
             ->find($this->prop('conversation_id') ?? session('selected_conversation_id'));
 
-        $this->class = '!static flex-1 bg-gradient-to-b ' . $this->theme()->heroBackground();
+        $this->class = '!static flex-1 bg-gradient-to-b ' . $this->theme()->heroBackground() . ' ' . $speedClass;
 
         $this->latestMessageId = $this->query()?->reorder('created_at', 'desc')->first()?->id;
     }
@@ -132,7 +148,14 @@ class MessagesQuery extends Query
                 'response_style' => $this->settings()->responseStyle(),
             ]),
 
-            _Hidden()->onLoad->run($this->scrollScript(false))
+            _Hidden()->onLoad->run($this->scrollScript(false)),
+
+            // Initialize scroll manager
+            _Hidden()->onLoad->run("() => {
+                if (typeof initChatScroll === 'function') {
+                    initChatScroll();
+                }
+            }"),
         );
     }
 
@@ -142,7 +165,27 @@ class MessagesQuery extends Query
         return $this->conversation?->messages()
             ->orderBy('created_at');
     }
-    
+
+    /**
+     * Get only the latest messages (for partial refresh)
+     */
+    public function getLatestMessages()
+    {
+        $lastKnownId = request('last_message_id');
+
+        $newMessages = $this->conversation?->messages()
+            ->when($lastKnownId, fn($q) => $q->where('id', '>', $lastKnownId))
+            ->orderBy('created_at')
+            ->get();
+
+        if ($newMessages->isEmpty()) {
+            return null;
+        }
+
+        return _Rows(
+            ...$newMessages->map(fn($msg) => $this->render($msg))->toArray()
+        );
+    }
 
     public function render($message)
     {
@@ -157,11 +200,15 @@ class MessagesQuery extends Query
 
             // When we're loading the message response we push the message and the loading typing animation into this panel
             !$isLatest ? null : _Panel()->id('temp-message-loading')->class('mt-4'),
-        );
+        )->attr(['data-message-id' => $message->id]);
     }
 
     public function userBubble($message)
     {
+        $isNew = $this->isNewMessage($message);
+        $animationClass = $isNew ? ' animate-message-user' : '';
+        $highlightClass = $isNew ? ' animate-new-message-highlight' : '';
+
         return _Rows(
             _FlexEnd(
                 _Rows(
@@ -169,11 +216,11 @@ class MessagesQuery extends Query
                     $this->settings()->showTimestamps()
                         ? _Html($message->created_at->format('g:i A'))->class('text-xs opacity-60 mt-2')
                         : null,
-                )->class('group px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md'),
+                )->class('group px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md' . $highlightClass),
                 $this->settings()->showAvatars()
                     ? _Html($this->userAvatarHtml())->class('ml-3 flex-shrink-0')
                     : null,
-            )->class('items-end'),
+            )->class('items-end' . $animationClass),
             // Edit button on hover
             $this->settings()->enableEdit() ? _FlexEnd(
                 _Link(__('ai.common.edit'))->icon('pencil')
@@ -185,14 +232,23 @@ class MessagesQuery extends Query
 
     public function assistantBubble($message)
     {
+        $isNew = $this->isNewMessage($message);
+        $animationClass = $isNew ? ' animate-message-assistant' : '';
+        $contentRevealClass = $isNew ? ' animate-content-reveal' : '';
+        $staggerClass = $isNew ? ' animate-stagger-content' : '';
+
         $content = [];
 
         // Main content
-        $content[] = _Html($this->renderMarkdown($message->content))->class('prose prose-sm max-w-none');
+        $content[] = _Html($this->renderMarkdown($message->content))->class('prose prose-sm max-w-none' . $contentRevealClass);
 
         // Rich data display (tables, metrics, lists)
         if ($responseData = $message->response_data) {
-            $content[] = $this->renderRichData($responseData);
+            $richData = $this->renderRichData($responseData);
+            if ($richData && $isNew) {
+                $richData->class($staggerClass);
+            }
+            $content[] = $richData;
         }
 
         // File references
@@ -221,7 +277,7 @@ class MessagesQuery extends Query
                     : null,
                 _Rows(...$content)
                     ->class('group px-5 py-4 rounded-2xl rounded-tl-md max-w-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md transition-shadow'),
-            )->class('items-start'),
+            )->class('items-start' . $animationClass),
         );
     }
 
@@ -544,6 +600,18 @@ class MessagesQuery extends Query
     }
 
     // ========== HELPERS ==========
+
+    /**
+     * Include JavaScript for chat scroll and message injection
+     * This is the Kompo pattern for including JS with components
+     */
+    public function js()
+    {
+        $scrollJs = file_get_contents(__DIR__ . '/../../resources/js/chat-scroll.js');
+        $injectorJs = file_get_contents(__DIR__ . '/../../resources/js/chat-message-injector.js');
+
+        return $scrollJs . "\n\n" . $injectorJs;
+    }
 
     protected function renderMarkdown(string $text): string
     {

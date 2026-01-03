@@ -40,6 +40,20 @@
     "ai.settings.style-detailed": "Detaille - Explications approfondies",
     "ai.settings.reset-defaults": "Reinitialiser par defaut",
     "ai.settings.save-settings": "Enregistrer les parametres",
+    "ai.settings.animations": "Animations",
+    "ai.settings.animations-description": "Controler les mouvements et transitions",
+    "ai.settings.enable-animations": "Activer les animations",
+    "ai.settings.enable-animations-desc": "Afficher les transitions et effets animes",
+    "ai.settings.animation-speed": "Vitesse d'animation",
+    "ai.settings.speed-slow": "Lent",
+    "ai.settings.speed-normal": "Normal",
+    "ai.settings.speed-fast": "Rapide",
+    "ai.settings.speed-none": "Aucune",
+    "ai.settings.typing-style": "Style de l'indicateur de frappe",
+    "ai.settings.typing-dots": "Points rebondissants",
+    "ai.settings.typing-wave": "Onde sonore",
+    "ai.settings.typing-pulse": "Pulsation",
+    "ai.settings.typing-brain": "Cerveau pensant",
 
     "ai.themes.green": "Theme vert",
     "ai.themes.indigo": "Theme indigo",
@@ -157,5 +171,7 @@
     "ai.form.quick-examples": "Pouvez-vous fournir quelques exemples?",
     "ai.form.quick-alternatives": "Quelles sont les approches alternatives?",
     "ai.form.validation-required": "Veuillez entrer un message",
-    "ai.form.validation-max": "Le message est trop long (max 10 000 caracteres)"
+    "ai.form.validation-max": "Le message est trop long (max 10 000 caracteres)",
+
+    "ai.chat.thinking": "En cours de reflexion..."
 }

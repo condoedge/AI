@@ -4,6 +4,7 @@
 namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\Models\AiConversation;
+use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Models\AiMessage;
@@ -23,7 +24,7 @@ use Condoedge\Utils\Kompo\Common\Form;
  */
 class ChatMessageForm extends Form
 {
-    use HasChatSettings, HasChatTheme;
+    use HasAvatars, HasChatSettings, HasChatTheme;
 
     public $id = 'chat-message-form';
     public $class = 'w-full';
@@ -56,22 +57,23 @@ class ChatMessageForm extends Form
                 $this->responseStyleSelector(),
                 _Button()->icon(_Sax('send-1', 20))->id('chat-send-btn')
                     ->class('p-3 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all flex-shrink-0')
-                    ->onClick(fn($e) => $e->selfPost('setLoadingMessage')->withAllFormValues()->inPanel('temp-message-loading')
-                        ->run($this->scrollScript())
+                    ->onClick(fn($e) => $e
+                        // 1. Show placeholder immediately (client-side)
                         ->run('() => {
                             const input = document.getElementById("chat-message-input");
-                            if (input) {
+                            const message = input ? input.value : "";
+                            if (message.trim()) {
+                                precreateMessagePlaceholder(message, "' . addslashes($this->settings()->showAvatars() ? $this->userAvatarHtml() : '') . '");
                                 input.value = "";
                                 input.style.height = "auto";
+                                input.dispatchEvent(new Event("input", { bubbles: true }));
                             }
-
-                            // dispatch event to ensure vue catches the change
-                            const event = new Event("input", { bubbles: true });
-                            input.dispatchEvent(event);
                         }')
-                    )
-                    ->onClick(fn($e) => $e->selfPost('sendMessage')->withAllFormValues()
-                        ->onSuccess->refresh(MessagesQuery::ID)
+                        // 2. Send to server, inject response into temp panel (no full refresh)
+                        && $e->selfPost('sendMessageAndGetResponse')->withAllFormValues()
+                            ->inPanel('temp-message-loading')
+                            ->run('scrollChatToBottom')
+                            ->onError->run('clearMessagePlaceholders')
                     ),
             )->class('flex items-end gap-3 px-4 py-3 bg-white/90 border border-gray-200/70 rounded-2xl shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 backdrop-blur-sm transition-all'),
             $this->quickActions(),
@@ -125,26 +127,77 @@ class ChatMessageForm extends Form
         }";
     }
 
+    /**
+     * Set loading message placeholder.
+     *
+     * Now handled by client-side ChatMessageInjector for instant visual feedback.
+     * This method is kept for backwards compatibility.
+     *
+     * @deprecated Use client-side precreateMessagePlaceholder() instead
+     * @return null
+     */
     public function setLoadingMessage()
     {
+        // Now handled by client-side ChatMessageInjector
+        // This method is kept for backwards compatibility
+        return null;
+    }
+
+    /**
+     * Send message and return rendered messages for injection (no full refresh)
+     * This follows the auth package's placeholder injection pattern
+     */
+    public function sendMessageAndGetResponse()
+    {
         $message = trim(request('message') ?? '');
+        $style = request('style') ?? $this->responseStyle;
+
         if (empty($message) || !$this->conversation) {
-            return;
+            return _Html('')->class('hidden'); // Return empty if invalid
         }
 
-        $messageQueryForm = new MessagesQuery([
-            'conversation_id' => $this->conversation->id,
-        ]);
+        $service = app(SendMessageService::class);
 
-        $tempMessage = new AiMessage();
-        $tempMessage->role = 'user';
-        $tempMessage->content = $message;
+        try {
+            // Get message count before sending
+            $beforeCount = $this->conversation->messages()->count();
 
-        return _Rows(
-            $messageQueryForm->userBubble($tempMessage),
+            $service->sendMessage(
+                conversation: $this->conversation,
+                message: $message,
+                options: [
+                    'style' => $style,
+                    'user' => auth()->user(),
+                ]
+            );
 
-            // Loading typing animation
-        );
+            // Get the new messages (user + assistant)
+            $newMessages = $this->conversation->messages()
+                ->orderBy('created_at', 'desc')
+                ->take(2) // User message + assistant response
+                ->get()
+                ->reverse(); // Put in chronological order
+
+            // Render the new messages using MessagesQuery
+            $messagesQuery = new MessagesQuery(null, [
+                'conversation_id' => $this->conversation->id,
+            ]);
+
+            return _Rows(
+                ...$newMessages->map(fn($msg) => $messagesQuery->render($msg))->toArray()
+            )->class('animate-fade-in');
+
+        } catch (\Throwable $e) {
+            \Log::error('Chat message failed: ' . $e->getMessage(), [
+                'conversation_id' => $this->conversation->id,
+                'exception' => $e,
+            ]);
+
+            // Return error message bubble
+            return _Rows(
+                _Html(__('ai.chat.error-message'))->class('text-red-500 text-sm p-4 bg-red-50 rounded-lg')
+            );
+        }
     }
 
     public function sendMessage(?string $message = null)

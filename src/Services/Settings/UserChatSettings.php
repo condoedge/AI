@@ -219,4 +219,38 @@ class UserChatSettings extends AbstractChatSettings
     {
         return $this->get('response_style', 'friendly');
     }
+
+    /**
+     * Whether animations are enabled in the chat interface.
+     *
+     * @return bool True if animations are enabled
+     */
+    public function enableAnimations(): bool
+    {
+        return $this->get('enable_animations', true);
+    }
+
+    /**
+     * Get the animation speed preference.
+     *
+     * Common values: 'slow', 'normal', 'fast'
+     *
+     * @return string The animation speed
+     */
+    public function animationSpeed(): string
+    {
+        return $this->get('animation_speed', 'normal');
+    }
+
+    /**
+     * Get the typing animation style preference.
+     *
+     * Common values: 'dots', 'pulse', 'wave', 'none'
+     *
+     * @return string The typing animation style
+     */
+    public function typingAnimationStyle(): string
+    {
+        return $this->get('typing_animation_style', 'dots');
+    }
 }

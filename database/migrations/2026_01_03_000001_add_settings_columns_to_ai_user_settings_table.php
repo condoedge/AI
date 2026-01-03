@@ -19,6 +19,11 @@ return new class extends Migration
             $table->boolean('enable_regenerate')->default(true);
             $table->boolean('enable_edit')->default(true);
 
+            // Animation settings
+            $table->boolean('enable_animations')->default(true);
+            $table->string('animation_speed')->default('normal');
+            $table->string('typing_animation_style')->default('dots');
+
             // String setting
             $table->string('response_style')->default('friendly');
 
@@ -43,6 +48,9 @@ return new class extends Migration
                 'enable_feedback',
                 'enable_regenerate',
                 'enable_edit',
+                'enable_animations',
+                'animation_speed',
+                'typing_animation_style',
                 'response_style',
             ]);
         });

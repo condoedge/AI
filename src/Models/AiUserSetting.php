@@ -41,6 +41,9 @@ class AiUserSetting extends Model
             'enable_edit' => config('ai.chat.enable_edit', true),
             'response_style' => config('ai.chat.response_style', 'friendly'),
             'ui_theme' => config('ai.ui.theme', 'indigo'),
+            'enable_animations' => config('ai.chat.enable_animations', true),
+            'animation_speed' => config('ai.chat.animation_speed', 'normal'),
+            'typing_animation_style' => config('ai.chat.typing_animation_style', 'dots'),
         ];
     }
 
@@ -58,6 +61,9 @@ class AiUserSetting extends Model
         'enable_regenerate',
         'enable_edit',
         'response_style',
+        'enable_animations',
+        'animation_speed',
+        'typing_animation_style',
     ];
 
     protected $casts = [
@@ -70,6 +76,7 @@ class AiUserSetting extends Model
         'enable_feedback' => 'boolean',
         'enable_regenerate' => 'boolean',
         'enable_edit' => 'boolean',
+        'enable_animations' => 'boolean',
     ];
 
     public function user(): BelongsTo

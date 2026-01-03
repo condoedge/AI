@@ -91,6 +91,21 @@ interface ChatSettingsInterface
     public function responseStyle(): string;
 
     /**
+     * The typing animation style (e.g., 'dots', 'wave', 'pulse', 'brain').
+     */
+    public function typingAnimationStyle(): string;
+
+    /**
+     * Whether to enable message animations.
+     */
+    public function enableAnimations(): bool;
+
+    /**
+     * Get animation speed: 'slow', 'normal', 'fast', 'none'.
+     */
+    public function animationSpeed(): string;
+
+    /**
      * Convert all settings to an array for serialization.
      *
      * @return array<string, mixed>

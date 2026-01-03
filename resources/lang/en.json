@@ -40,6 +40,20 @@
     "ai.settings.style-detailed": "Detailed - Thorough explanations",
     "ai.settings.reset-defaults": "Reset to Defaults",
     "ai.settings.save-settings": "Save Settings",
+    "ai.settings.animations": "Animations",
+    "ai.settings.animations-description": "Control motion and transitions",
+    "ai.settings.enable-animations": "Enable animations",
+    "ai.settings.enable-animations-desc": "Show animated transitions and effects",
+    "ai.settings.animation-speed": "Animation speed",
+    "ai.settings.speed-slow": "Slow",
+    "ai.settings.speed-normal": "Normal",
+    "ai.settings.speed-fast": "Fast",
+    "ai.settings.speed-none": "None",
+    "ai.settings.typing-style": "Typing indicator style",
+    "ai.settings.typing-dots": "Bouncing dots",
+    "ai.settings.typing-wave": "Sound wave",
+    "ai.settings.typing-pulse": "Pulse",
+    "ai.settings.typing-brain": "Thinking brain",
 
     "ai.themes.green": "Green theme",
     "ai.themes.indigo": "Indigo theme",
@@ -157,5 +171,7 @@
     "ai.form.quick-examples": "Can you provide some examples?",
     "ai.form.quick-alternatives": "What are some alternative approaches?",
     "ai.form.validation-required": "Please enter a message",
-    "ai.form.validation-max": "Message is too long (max 10,000 characters)"
+    "ai.form.validation-max": "Message is too long (max 10,000 characters)",
+
+    "ai.chat.thinking": "Thinking..."
 }
