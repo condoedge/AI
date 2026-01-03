@@ -712,7 +712,9 @@ class AiManager
                 $question,
                 $executionResult,
                 $queryResult['cypher'],
-                $options
+                array_merge($options, [
+                    'file_context' => $context['file_context'] ?? [],
+                ])
             );
 
             // Enrich response with file references

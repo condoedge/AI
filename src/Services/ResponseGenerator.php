@@ -241,6 +241,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
             'cypher' => $cypherQuery,
             'data' => $queryResult['data'],
             'stats' => $queryResult['stats'] ?? [],
+            'file_context' => $options['file_context'] ?? [],
         ];
 
         $sectionOptions = [
