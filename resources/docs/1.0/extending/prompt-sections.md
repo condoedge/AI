@@ -35,7 +35,7 @@ interface PromptSectionInterface
     public function getName(): string;
 
     /**
-     * Get the section priority (higher = earlier in prompt).
+     * Get the section priority (lower = earlier in prompt).
      */
     public function getPriority(): int;
 
@@ -266,30 +266,35 @@ class InsightsSection extends BaseResponseSection
 
 ## Section Priority
 
-Sections are ordered by priority (higher = earlier):
+Sections are ordered by priority (lower = earlier in prompt):
 
 | Priority | Section | Purpose |
 |----------|---------|---------|
-| 100 | System | AI role and capabilities |
-| 80 | Schema | Database structure |
-| 75 | Scopes | Available filters |
-| 70 | Examples | Example queries |
-| 65 | Business Rules | Domain logic |
-| 60 | Guidelines | Response format |
-| 50 | Insights | Additional instructions |
-| 10 | Query | User's question |
+| 10 | project_context | Project context and business rules |
+| 15 | generic_context | Date/time context |
+| 17 | current_user | User and team context |
+| 20 | schema | Database structure |
+| 30 | relationships | Entity relationships |
+| 40 | example_entities | Sample entities |
+| 50 | similar_queries | Similar past queries |
+| 60 | detected_entities | Detected entities |
+| 65 | detected_scopes | Detected scopes |
+| 70 | pattern_library | Query patterns |
+| 75 | query_rules | Query rules |
+| 80 | question | User's question |
+| 90 | task_instructions | Final LLM instructions |
 
 ### Custom Priority
 
 ```php
-class HighPrioritySection extends BasePromptSection
+class EarlySection extends BasePromptSection
 {
-    protected int $priority = 90; // After system, before schema
+    protected int $priority = 5; // Near the start of prompt
 }
 
-class LowPrioritySection extends BasePromptSection
+class LateSection extends BasePromptSection
 {
-    protected int $priority = 20; // Near the end
+    protected int $priority = 85; // Near the end, before task instructions
 }
 ```
 
