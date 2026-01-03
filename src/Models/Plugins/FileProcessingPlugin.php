@@ -6,6 +6,7 @@ use Condoedge\Utils\Models\Plugins\ModelPlugin;
 use Condoedge\Ai\Contracts\FileProcessorInterface;
 use Condoedge\Ai\Facades\AI;
 use Condoedge\Ai\Jobs\ProcessFileJob;
+use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -110,12 +111,25 @@ class FileProcessingPlugin extends ModelPlugin
     /**
      * Sync file metadata to Neo4j
      *
+     * Only syncs if file implements Nodeable interface.
+     * Files from external packages that don't implement Nodeable
+     * will skip Neo4j and still get Qdrant content storage.
+     *
      * @param object $file
      * @param string $operation 'create' or 'update'
      * @return void
      */
     protected function syncToNeo4j($file, string $operation): void
     {
+        // Skip Neo4j for non-Nodeable files (they still get Qdrant storage)
+        if (!$this->isNodeable($file)) {
+            Log::debug('Skipping Neo4j for non-Nodeable file (Qdrant content storage still works)', [
+                'file_id' => $file->id,
+                'file_class' => get_class($file),
+            ]);
+            return;
+        }
+
         if ($operation === 'create') {
             AI::ingest($file);
         } else {
@@ -126,11 +140,20 @@ class FileProcessingPlugin extends ModelPlugin
     /**
      * Remove file from Neo4j
      *
+     * Only removes if file implements Nodeable interface.
+     *
      * @param object $file
      * @return void
      */
     protected function removeFromNeo4j($file): void
     {
+        if (!$this->isNodeable($file)) {
+            Log::debug('Skipping Neo4j removal for non-Nodeable file', [
+                'file_id' => $file->id,
+            ]);
+            return;
+        }
+
         AI::remove($file);
     }
 
@@ -329,6 +352,17 @@ class FileProcessingPlugin extends ModelPlugin
         }
     }
 
+    /**
+     * Check if file implements Nodeable interface
+     *
+     * @param object $file
+     * @return bool
+     */
+    protected function isNodeable($file): bool
+    {
+        return $file instanceof Nodeable;
+    }
+
     // Model methods
-    
+
 }
