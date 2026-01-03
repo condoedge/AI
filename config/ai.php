@@ -637,8 +637,11 @@ return [
         // Features
         'enable_copy' => env('AI_CHAT_ENABLE_COPY', true),
         'enable_feedback' => env('AI_CHAT_ENABLE_FEEDBACK', false),
+        'enable_regenerate' => env('AI_CHAT_ENABLE_REGENERATE', true),
+        'enable_edit' => env('AI_CHAT_ENABLE_EDIT', true),
         'enable_markdown' => env('AI_CHAT_ENABLE_MARKDOWN', true),
         'enable_code_highlight' => env('AI_CHAT_ENABLE_CODE_HIGHLIGHT', true),
+        'response_style' => env('AI_CHAT_RESPONSE_STYLE', 'friendly'),
 
         // Floating button defaults
         'floating' => [

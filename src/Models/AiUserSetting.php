@@ -9,6 +9,41 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class AiUserSetting extends Model
 {
+    /**
+     * Boot the model.
+     */
+    protected static function booted(): void
+    {
+        static::creating(function (self $model) {
+            // Set defaults from config when creating new records
+            $defaults = $model->getConfigDefaults();
+            foreach ($defaults as $key => $value) {
+                if ($model->getAttribute($key) === null) {
+                    $model->setAttribute($key, $value);
+                }
+            }
+        });
+    }
+
+    /**
+     * Get default values from config.
+     */
+    public function getConfigDefaults(): array
+    {
+        return [
+            'show_avatars' => config('ai.chat.show_avatars', true),
+            'show_timestamps' => config('ai.chat.show_timestamps', false),
+            'show_metrics' => config('ai.chat.show_metrics', false),
+            'show_suggestions' => config('ai.chat.show_suggestions', true),
+            'enable_copy' => config('ai.chat.enable_copy', true),
+            'enable_feedback' => config('ai.chat.enable_feedback', false),
+            'enable_regenerate' => config('ai.chat.enable_regenerate', true),
+            'enable_edit' => config('ai.chat.enable_edit', true),
+            'response_style' => config('ai.chat.response_style', 'friendly'),
+            'ui_theme' => config('ai.ui.theme', 'indigo'),
+        ];
+    }
+
     protected $fillable = [
         'user_id',
         'ui_theme',
