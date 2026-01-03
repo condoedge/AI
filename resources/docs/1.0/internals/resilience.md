@@ -15,6 +15,37 @@ This chapter documents the defensive tooling baked into the package so you can r
 
 When auto-discovery hits SQLite/MySQL schema tables it parameterizes identifiers and maintains a denylist of suspicious patterns. This prevents malicious PRAGMA statements from being executed when user input leaks into discovery routines.
 
+## Cypher Injection Prevention
+
+The package uses `Condoedge\Ai\GraphStore\CypherSanitizer` for all Cypher injection prevention.
+
+### Key Features
+
+- **Fail-fast validation**: Invalid input throws `CypherInjectionException`
+- **Reserved keyword blocking**: Blocks MATCH, DELETE, CREATE, DROP, etc. as labels
+- **Length limits**: 255 character maximum (DoS protection)
+- **Backtick quoting**: Defense-in-depth for all identifiers
+- **Unicode/null byte protection**: Blocks encoding-based attacks
+
+### Usage
+
+```php
+use Condoedge\Ai\GraphStore\CypherSanitizer;
+
+// Validate label (throws on invalid)
+$safeLabel = CypherSanitizer::escapeLabel($userInput);
+
+// Validate property key
+$safeKey = CypherSanitizer::validatePropertyKey($field);
+
+// Escape string value for queries
+$safeValue = CypherSanitizer::escapeValue($value);
+```
+
+### Important
+
+Always use parameterized queries for values. CypherSanitizer is for structural elements (labels, property keys, relationship types) that cannot be parameterized.
+
 ## Data Consistency Guarantees
 
 ### Compensating Transactions
