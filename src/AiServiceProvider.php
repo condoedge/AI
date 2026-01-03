@@ -586,6 +586,9 @@ class AiServiceProvider extends ServiceProvider
         // Load migrations
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
 
+        // Load translations
+        $this->loadJsonTranslationsFrom(__DIR__ . '/../resources/lang');
+
         // Publish configuration
         $this->publishes([
             __DIR__ . '/../config/ai.php' => config_path('ai.php'),
@@ -601,6 +604,11 @@ class AiServiceProvider extends ServiceProvider
             __DIR__ . '/../resources/views' => resource_path('views'),
             __DIR__ . '/../public' => base_path('public'),
         ], 'ai-docs');
+
+        // Publish translations
+        $this->publishes([
+            __DIR__ . '/../resources/lang' => $this->app->langPath('vendor/ai'),
+        ], 'ai-lang');
 
         // Register console commands
         if ($this->app->runningInConsole()) {
