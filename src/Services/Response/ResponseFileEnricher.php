@@ -105,14 +105,14 @@ class ResponseFileEnricher
      *
      * Adds 'referenced_files' and 'has_file_references' keys to the response array.
      *
-     * @param array $response The original response array (must contain 'content' key)
+     * @param array $response The original response array (must contain 'answer' or 'content' key)
      * @param array $fileContext The file context from FileContextProvider
      * @param array $options Options for URL resolution (see buildReferencedFiles)
      * @return array The enriched response array
      */
     public function enrichResponse(array $response, array $fileContext, array $options = []): array
     {
-        $content = $response['content'] ?? '';
+        $content = $response['answer'] ?? $response['content'] ?? '';
         $referencedFiles = $this->buildReferencedFiles($content, $fileContext, $options);
 
         return array_merge($response, [

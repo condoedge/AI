@@ -634,6 +634,91 @@ class ResponseFileEnricherTest extends TestCase
         $this->assertCount(2, $result['referenced_files']);
     }
 
+    /** @test */
+    public function it_enrich_response_uses_answer_key(): void
+    {
+        $response = [
+            'answer' => 'Based on the document [1], the policy states...',
+            'insights' => [],
+        ];
+
+        $fileContext = [
+            'relevant_files' => [
+                [
+                    'file_id' => 1,
+                    'filename' => 'policy.pdf',
+                    'snippet' => 'The policy states that...',
+                    'relevance' => 0.95,
+                    'source' => 'database',
+                    'chunk_index' => 0,
+                ],
+            ],
+        ];
+
+        $result = $this->enricher->enrichResponse($response, $fileContext);
+
+        // Should find the [1] citation
+        $this->assertTrue($result['has_file_references']);
+        $this->assertCount(1, $result['referenced_files']);
+        $this->assertEquals(1, $result['referenced_files'][0]['ref']);
+    }
+
+    /** @test */
+    public function it_enrich_response_falls_back_to_content_key(): void
+    {
+        // Test backwards compatibility with 'content' key
+        $response = [
+            'content' => 'See file [1] for details.',
+        ];
+
+        $fileContext = [
+            'relevant_files' => [
+                [
+                    'file_id' => 2,
+                    'filename' => 'details.txt',
+                    'snippet' => 'Details here...',
+                    'relevance' => 0.9,
+                    'source' => 'database',
+                    'chunk_index' => 1,
+                ],
+            ],
+        ];
+
+        $result = $this->enricher->enrichResponse($response, $fileContext);
+
+        $this->assertTrue($result['has_file_references']);
+    }
+
+    /** @test */
+    public function it_enrich_response_prefers_answer_over_content(): void
+    {
+        // When both 'answer' and 'content' are present, 'answer' should be used
+        $response = [
+            'answer' => 'The answer cites [1] from the file.',
+            'content' => 'The content does not cite anything.',
+        ];
+
+        $fileContext = [
+            'relevant_files' => [
+                [
+                    'file_id' => 1,
+                    'filename' => 'document.pdf',
+                    'snippet' => 'Document content.',
+                    'relevance' => 0.85,
+                    'source' => 'database',
+                    'chunk_index' => 0,
+                ],
+            ],
+        ];
+
+        $result = $this->enricher->enrichResponse($response, $fileContext);
+
+        // Should find [1] from 'answer' key, not miss it because 'content' was checked
+        $this->assertTrue($result['has_file_references']);
+        $this->assertCount(1, $result['referenced_files']);
+        $this->assertEquals(1, $result['referenced_files'][0]['ref']);
+    }
+
     // =========================================================================
     // Mixed source tests
     // =========================================================================
