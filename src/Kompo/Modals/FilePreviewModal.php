@@ -10,7 +10,7 @@ use Condoedge\Utils\Kompo\Common\Modal;
  */
 class FilePreviewModal extends Modal
 {
-    protected $_Title = 'File Preview';
+    protected $_Title = 'ai.file.title';
     public $class = 'overflow-hidden max-w-4xl rounded-2xl';
     public $style = 'max-height: 85vh;';
 
@@ -24,13 +24,13 @@ class FilePreviewModal extends Modal
         // In a real implementation, you would fetch the file details here
         // For now, we'll show a placeholder or use the file_data prop
         $this->file = $this->prop('file_data') ?? [
-            'name' => 'Document',
+            'name' => __('ai.file.document'),
             'type' => 'file',
             'content' => null,
             'url' => null,
         ];
 
-        $this->_Title = $this->file['name'] ?? 'File Preview';
+        $this->_Title = $this->file['name'] ?? __('ai.file.title');
     }
 
     public function body()
@@ -52,7 +52,7 @@ class FilePreviewModal extends Modal
             _Flex(
                 _Html($icon)->class('w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-100 to-purple-100 flex items-center justify-center text-indigo-600 mr-4'),
                 _Rows(
-                    _Html($this->file['name'] ?? 'Document')->class('font-semibold text-gray-800 text-lg'),
+                    _Html($this->file['name'] ?? __('ai.file.document'))->class('font-semibold text-gray-800 text-lg'),
                     _Flex(
                         _Html($this->getFileTypeLabel())->class('text-sm text-gray-500'),
                         isset($this->file['size']) ? _Html('• ' . $this->formatSize($this->file['size']))->class('text-sm text-gray-400 ml-2') : null,
@@ -89,20 +89,21 @@ class FilePreviewModal extends Modal
 
         // Text/code preview
         if (in_array($type, ['text', 'txt', 'md', 'json', 'xml', 'csv']) || $content) {
-            return _Html('<pre class="bg-gray-900 text-gray-100 p-4 rounded-xl overflow-x-auto text-sm font-mono whitespace-pre-wrap">' . e($content ?? 'No content available') . '</pre>');
+            return _Html('<pre class="bg-gray-900 text-gray-100 p-4 rounded-xl overflow-x-auto text-sm font-mono whitespace-pre-wrap">' . e($content ?? __('ai.file.no-content')) . '</pre>');
         }
 
         // Default - no preview
         return $this->noPreviewAvailable();
     }
 
-    protected function noPreviewAvailable($message = 'Preview not available for this file type')
+    protected function noPreviewAvailable($message = null)
     {
+        $message = $message ?? __('ai.file.preview-unavailable');
         return _Rows(
             _Html($this->getFileIcon())->class('w-20 h-20 text-gray-300 mb-4'),
             _Html($message)->class('text-gray-500 text-center'),
             isset($this->file['url'])
-                ? _Link('Download File')->icon('arrow-down-tray')
+                ? _Link(__('ai.file.download'))->icon('arrow-down-tray')
                     ->class('mt-4 px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all')
                     ->href($this->file['url'])
                     ->attr(['download' => $this->file['name'] ?? 'file'])
@@ -115,18 +116,18 @@ class FilePreviewModal extends Modal
         $actions = [];
 
         if (isset($this->file['url'])) {
-            $actions[] = _Link('Download')->icon('arrow-down-tray')
+            $actions[] = _Link(__('ai.common.download'))->icon('arrow-down-tray')
                 ->class('px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:from-indigo-700 hover:to-purple-700 shadow-lg transition-all')
                 ->href($this->file['url'])
                 ->attr(['download' => $this->file['name'] ?? 'file']);
 
-            $actions[] = _Link('Open in New Tab')->icon('arrow-top-right-on-square')
+            $actions[] = _Link(__('ai.file.open-new-tab'))->icon('arrow-top-right-on-square')
                 ->class('px-4 py-2 border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-all')
                 ->href($this->file['url'])
                 ->attr(['target' => '_blank']);
         }
 
-        $actions[] = _Link('Close')->class('px-4 py-2 text-gray-500 hover:text-gray-700 transition-all')->closeModal();
+        $actions[] = _Link(__('ai.common.close'))->class('px-4 py-2 text-gray-500 hover:text-gray-700 transition-all')->closeModal();
 
         return _FlexEnd(...$actions)->class('px-6 py-4 border-t border-gray-200 bg-white gap-3');
     }
@@ -147,18 +148,16 @@ class FilePreviewModal extends Modal
     protected function getFileTypeLabel(): string
     {
         $types = [
-            'pdf' => 'PDF Document',
-            'image' => 'Image',
-            'png' => 'PNG Image',
-            'jpg' => 'JPEG Image',
-            'spreadsheet' => 'Spreadsheet',
-            'xlsx' => 'Excel Spreadsheet',
-            'csv' => 'CSV File',
-            'text' => 'Text File',
-            'md' => 'Markdown',
+            'image' => __('ai.file.type-image'),
+            'pdf' => __('ai.file.type-pdf'),
+            'spreadsheet' => __('ai.file.type-spreadsheet'),
+            'xlsx' => __('ai.file.type-excel'),
+            'code' => __('ai.file.type-code'),
+            'text' => __('ai.file.type-text'),
+            'md' => __('ai.file.type-markdown'),
         ];
 
-        return $types[$this->file['type'] ?? 'file'] ?? 'Document';
+        return $types[$this->file['type'] ?? 'file'] ?? __('ai.file.document');
     }
 
     protected function formatSize(int $bytes): string
