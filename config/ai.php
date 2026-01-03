@@ -155,7 +155,21 @@ return [
     | Graph Database Configuration
     |--------------------------------------------------------------------------
     |
-    | For enhanced security, you can use encrypted passwords:
+    | Neo4j connection with automatic driver selection based on URI scheme:
+    |
+    | Bolt Protocol (recommended for production):
+    |   - bolt://localhost:7687      - Unencrypted Bolt
+    |   - neo4j://localhost:7687     - Bolt with auto-routing
+    |   - neo4j+s://host:7687        - Bolt with TLS
+    |   - neo4j+ssc://host:7687      - Bolt with self-signed cert
+    |
+    | HTTP Protocol (legacy, development only):
+    |   - http://localhost:7474      - HTTP API
+    |   - https://host:7474          - HTTPS API
+    |
+    | Security: Encrypted Passwords
+    |
+    | For enhanced security, use encrypted passwords:
     |
     | 1. Generate encrypted password:
     |    php artisan tinker
@@ -174,6 +188,7 @@ return [
 
         'neo4j' => [
             'enabled' => env('NEO4J_ENABLED', true),
+            // URI determines driver: bolt/neo4j schemes use Bolt, http/https use HTTP API
             'uri' => env('NEO4J_URI', 'bolt://localhost:7687'),
             'username' => env('NEO4J_USERNAME', 'neo4j'),
             'password' => env('NEO4J_PASSWORD', 'neo4j_password'),

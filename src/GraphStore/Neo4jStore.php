@@ -10,13 +10,18 @@ use Condoedge\Ai\Services\Security\SensitiveDataSanitizer;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Neo4j Graph Store Implementation
+ * Neo4j Graph Store Implementation (HTTP API)
  *
  * Connects to Neo4j via HTTP API for graph operations with retry logic and circuit breaker.
- * For production, consider using official neo4j-php-client for Bolt protocol.
+ * Use this for http:// or https:// URIs. For bolt:// URIs, use BoltNeo4jStore instead.
+ *
+ * @see BoltNeo4jStore For Bolt protocol support (faster, recommended for production)
+ * @see Neo4jStoreFactory For automatic driver selection based on URI scheme
  */
 class Neo4jStore implements GraphStoreInterface
 {
+    use Neo4jCredentialsTrait;
+
     protected string $uri;
     protected string $username;
     protected string $database;
@@ -25,65 +30,32 @@ class Neo4jStore implements GraphStoreInterface
     protected CircuitBreaker $circuitBreaker;
 
     /**
-     * Encrypted password from config (if using encryption)
-     */
-    private ?string $encryptedPassword = null;
-
-    /**
-     * Plain password from config (fallback for backwards compatibility)
-     */
-    private ?string $plainPassword = null;
-
-    /**
      * Reusable cURL handle for connection pooling
      */
     private ?\CurlHandle $curlHandle = null;
 
     public function __construct(?array $config = null)
     {
-        $config = $config ?? config('ai.neo4j');
+        $config = $config ?? config('ai.graph.neo4j');
 
-        $this->uri = $config['uri'] ?? 'bolt://localhost:7687';
+        $this->uri = $config['uri'] ?? 'http://localhost:7474';
         $this->username = $config['username'] ?? 'neo4j';
         $this->database = $config['database'] ?? 'neo4j';
 
-        // Support encrypted password (preferred) or plain password (backwards compatible)
-        if (!empty($config['password_encrypted'])) {
-            $this->encryptedPassword = $config['password_encrypted'];
-        } else {
-            $this->plainPassword = $config['password'] ?? 'password';
-        }
+        // Initialize credentials using trait
+        $this->initializeCredentials($config);
 
-        // Convert bolt:// to http:// for HTTP API
-        // bolt://localhost:7687 -> http://localhost:7474
+        // Parse URI for HTTP endpoint
         $parsedUri = parse_url($this->uri);
+        $scheme = $parsedUri['scheme'] ?? 'http';
         $host = $parsedUri['host'] ?? 'localhost';
-        $httpPort = 7474; // Neo4j HTTP port
+        $port = $parsedUri['port'] ?? ($scheme === 'https' ? 7473 : 7474);
 
-        $this->httpEndpoint = "http://{$host}:{$httpPort}/db/{$this->database}/tx/commit";
+        $this->httpEndpoint = "{$scheme}://{$host}:{$port}/db/{$this->database}/tx/commit";
 
         // Initialize retry policy and circuit breaker
         $this->retryPolicy = RetryPolicy::forDatabaseOperations();
         $this->circuitBreaker = new CircuitBreaker('neo4j', failureThreshold: 5, recoveryTimeoutSeconds: 30);
-    }
-
-    /**
-     * Get the password, decrypting if necessary.
-     *
-     * This method resolves credentials on-demand to minimize exposure:
-     * - If password_encrypted is set, decrypts using Laravel's decrypt()
-     * - Falls back to plain password for backwards compatibility
-     *
-     * @return string The Neo4j password
-     * @throws \Illuminate\Contracts\Encryption\DecryptException If decryption fails
-     */
-    protected function getPassword(): string
-    {
-        if ($this->encryptedPassword !== null) {
-            return decrypt($this->encryptedPassword);
-        }
-
-        return $this->plainPassword ?? '';
     }
 
     /**

@@ -12,7 +12,7 @@ use Condoedge\Ai\Services\QueryGenerator;
 use Condoedge\Ai\Services\QueryExecutor;
 use Condoedge\Ai\Services\ResponseGenerator;
 use Condoedge\Ai\VectorStore\QdrantStore;
-use Condoedge\Ai\GraphStore\Neo4jStore;
+use Condoedge\Ai\GraphStore\Neo4jStoreFactory;
 use Condoedge\Ai\EmbeddingProviders\OpenAiEmbeddingProvider;
 use Condoedge\Ai\EmbeddingProviders\AnthropicEmbeddingProvider;
 use Condoedge\Ai\LlmProviders\OpenAiLlmProvider;
@@ -163,11 +163,12 @@ class AiServiceProvider extends ServiceProvider
         });
 
         // Register Graph Store
+        // Uses factory to auto-select Bolt or HTTP driver based on URI scheme
         $this->app->singleton(GraphStoreInterface::class, function ($app) {
             $defaultStore = config('ai.graph.default', 'neo4j');
 
             return match ($defaultStore) {
-                'neo4j' => new Neo4jStore(config('ai.graph.neo4j')),
+                'neo4j' => Neo4jStoreFactory::create(config('ai.graph.neo4j')),
                 default => throw new \RuntimeException("Unsupported graph store: {$defaultStore}")
             };
         });
