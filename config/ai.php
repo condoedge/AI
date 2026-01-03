@@ -754,6 +754,7 @@ return [
         \Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection::class,
         \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
         \Condoedge\Ai\Services\ResponseSections\QueryInfoSection::class,
+        \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
         \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,
         \Condoedge\Ai\Services\ResponseSections\StatisticsSection::class,
         \Condoedge\Ai\Services\ResponseSections\GuidelinesSection::class,
