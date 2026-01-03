@@ -452,6 +452,86 @@ class CustomerController extends Controller
 
 ---
 
+## Code Structure Map
+
+The following shows the complete source code organization:
+
+```
+src/
+├── Domain/
+│   ├── Contracts/
+│   │   └── Nodeable.php                 # Interface for AI-enabled models
+│   │
+│   ├── Traits/
+│   │   └── HasNodeableConfig.php        # Main trait
+│   │       ├── resolveConfig()          # 4-step resolution
+│   │       ├── readFromEntitiesConfig() # Read from warm cache
+│   │       ├── readModelProperties()    # Read model properties
+│   │       ├── getGraphConfig()         # Returns GraphConfig VO
+│   │       └── getVectorConfig()        # Returns VectorConfig VO
+│   │
+│   └── ValueObjects/
+│       ├── GraphConfig.php              # Neo4j config VO
+│       ├── VectorConfig.php             # Qdrant config VO
+│       └── NodeableConfig.php           # Fluent builder
+│
+├── Services/
+│   ├── Discovery/
+│   │   ├── EntityAutoDiscovery.php      # Main discovery orchestrator
+│   │   ├── PropertyDiscoverer.php       # Discovers model properties
+│   │   ├── RelationshipDiscoverer.php   # Discovers relationships
+│   │   ├── CypherScopeAdapter.php       # Converts scopes to Cypher
+│   │   ├── CypherQueryBuilderSpy.php    # Records QB calls
+│   │   │   └── __call()                 # Handles nested scope resolution
+│   │   └── CypherPatternGenerator.php   # Generates Cypher
+│   │
+│   ├── Security/
+│   │   ├── AccessLevelResolver.php      # Determines access tags
+│   │   └── PromptContextBuilder.php     # Builds access-aware prompts
+│   │
+│   ├── Ingestion/
+│   │   └── DataIngestionService.php     # Orchestrates ingestion
+│   │
+│   ├── Context/
+│   │   └── ContextRetriever.php         # Retrieves relevant context
+│   │
+│   ├── Query/
+│   │   ├── QueryGenerator.php           # LLM generates queries
+│   │   └── QueryExecutor.php            # Executes & filters
+│   │
+│   └── Response/
+│       └── ResponseGenerator.php        # Formats final response
+│
+├── Stores/
+│   ├── Neo4j/
+│   │   └── Neo4jStore.php               # Neo4j operations
+│   └── Qdrant/
+│       └── QdrantStore.php              # Qdrant operations
+│
+└── Console/Commands/
+    ├── DiscoverEntitiesCommand.php      # ai:discover → entities.php
+    ├── IngestEntitiesCommand.php        # ai:ingest
+    ├── SyncRelationshipsCommand.php     # ai:sync-rels
+    ├── IndexScopesCommand.php           # ai:index-scopes
+    └── IndexSemanticCommand.php         # ai:index-semantic
+```
+
+**Layer Responsibilities:**
+
+| Layer | Purpose | Key Classes |
+|-------|---------|-------------|
+| **Domain** | Business contracts and value objects | `Nodeable`, `GraphConfig`, `VectorConfig` |
+| **Services/Discovery** | Auto-discover models and relationships | `EntityAutoDiscovery`, `PropertyDiscoverer` |
+| **Services/Security** | Access control and permissions | `AccessLevelResolver`, `PromptContextBuilder` |
+| **Services/Ingestion** | Data sync to graph/vector stores | `DataIngestionService` |
+| **Services/Context** | RAG context retrieval | `ContextRetriever` |
+| **Services/Query** | LLM query generation and execution | `QueryGenerator`, `QueryExecutor` |
+| **Services/Response** | Format and generate responses | `ResponseGenerator` |
+| **Stores** | Database adapters | `Neo4jStore`, `QdrantStore` |
+| **Console** | Artisan commands | Discovery, ingestion, sync commands |
+
+---
+
 ## Design Principles
 
 ### 1. Interface-Based Design
