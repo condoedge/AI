@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Context;
 
 use Condoedge\Ai\Contracts\FileAccessResolverInterface;
+use Condoedge\Utils\Facades\FileModel;
 
 /**
  * File Access Resolver
@@ -45,7 +46,8 @@ class FileAccessResolver implements FileAccessResolverInterface
      *
      * Priority:
      * 1. Config closure resolver (ai.file_context.access_resolver)
-     * 2. File model with scope (ai.file_context.file_model + access_scope)
+     * 2. File model with accessibleBy scope
+     * 3. Fallback: user_id + optional team_id filtering
      *
      * @param mixed $user
      * @return array<int|string>
@@ -63,20 +65,55 @@ class FileAccessResolver implements FileAccessResolverInterface
             return $resolver($user);
         }
 
-        // Fall back to file model with scope
-        $fileModel = config('ai.file_context.file_model');
+        // Try configured accessibleBy scope
         $accessScope = config('ai.file_context.access_scope', 'accessibleBy');
 
-        if ($fileModel && class_exists($fileModel)) {
-            try {
-                return $fileModel::$accessScope($user)->pluck('id')->toArray();
-            } catch (\Throwable) {
-                // If scope fails, return empty array
-                return [];
+        try {
+            return FileModel::$accessScope($user)->pluck('id')->toArray();
+        } catch (\Throwable $e) {
+            \Log::debug("FileAccessResolver: accessibleBy scope failed, using fallback", [
+                'error' => $e->getMessage(),
+                'user_id' => $user->id ?? null,
+            ]);
+        }
+
+        // Fallback: use user_id and optional team_id filtering
+        return $this->getFallbackAccessibleFileIds($user);
+    }
+
+    /**
+     * Fallback method when accessibleBy scope is not available
+     *
+     * @param mixed $user
+     * @return array<int|string>
+     */
+    protected function getFallbackAccessibleFileIds(mixed $user): array
+    {
+        $query = FileModel::query();
+        $hasFilters = false;
+
+        // Filter by user_id if enabled
+        if (config('ai.file_context.fallback_filters.use_user_filter', true)) {
+            $query->where('user_id', $user->id ?? $user->getKey());
+            $hasFilters = true;
+        }
+
+        // Filter by team_id if enabled
+        if (config('ai.file_context.fallback_filters.use_team_filter', true)) {
+            $teamId = safeCurrentTeamId();
+            if ($teamId) {
+                $query->where('team_id', $teamId);
+                $hasFilters = true;
             }
         }
 
-        return [];
+        // If no filters applied (both disabled), return empty for security
+        if (!$hasFilters) {
+            \Log::warning('FileAccessResolver: No fallback filters enabled, returning empty');
+            return [];
+        }
+
+        return $query->pluck('id')->toArray();
     }
 
     /**
