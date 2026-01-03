@@ -140,9 +140,9 @@ class ResponseFileEnricher
             return [
                 'ref' => $refNumber,
                 'id' => $fileId,
-                'name' => $file['file_name'],
+                'name' => $file['filename'],
                 'snippet' => $file['snippet'],
-                'relevance_score' => $file['relevance_score'],
+                'relevance_score' => $file['relevance'],
                 'source' => $source,
                 'chunk_index' => $file['chunk_index'],
                 'download_url' => null,
@@ -163,9 +163,9 @@ class ResponseFileEnricher
         return [
             'ref' => $refNumber,
             'id' => $fileId,
-            'name' => $file['file_name'],
+            'name' => $file['filename'],
             'snippet' => $file['snippet'],
-            'relevance_score' => $file['relevance_score'],
+            'relevance_score' => $file['relevance'],
             'source' => $source,
             'chunk_index' => $file['chunk_index'],
             'download_url' => $downloadUrl,
