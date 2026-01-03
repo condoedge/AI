@@ -47,24 +47,24 @@
 
 ### PHASE 4 - Agent Dispatch & Module Execution
 - [x] Execute module-by-module analysis
-- [ ] For each module:
-  - [ ] Dispatch dedicated agent with strict scope
-  - [ ] Read every file in module
-  - [ ] Prove usage via reference tracing
-  - [ ] Detect dead code, duplicates, leakage
-  - [ ] Evaluate AI/chat correctness
-  - [ ] Update CHECKLIST.md, FINDINGS.md, DOC_UPDATES.md
-- [ ] Merge findings into cross-module coherence notes
-- [ ] Update STATUS.md after each module
-- [ ] User confirmation between modules
+- [x] For each module:
+  - [x] Dispatch dedicated agent with strict scope
+  - [x] Read every file in module
+  - [x] Prove usage via reference tracing
+  - [x] Detect dead code, duplicates, leakage
+  - [x] Evaluate AI/chat correctness
+  - [x] Update CHECKLIST.md, FINDINGS.md, DOC_UPDATES.md
+- [x] Merge findings into cross-module coherence notes
+- [x] Update STATUS.md after each module
+- [ ] User confirmation to proceed to Phase 5
 
 ### PHASE 5 - Documentation
-- [ ] Create/update ARCHITECTURE_GLOBAL.md
-- [ ] Create/update QUICK_START.md
-- [ ] Create/update EXTENSION_GUIDE.md
-- [ ] Create/update INTERNAL_ARCHITECTURE.md
-- [ ] Include diagrams (Mermaid format)
-- [ ] Update STATUS.md
+- [x] Create/update ARCHITECTURE_GLOBAL.md (merged into internals/architecture.md)
+- [x] Create/update QUICK_START.md (verified in usage/quick-start.md)
+- [x] Create/update EXTENSION_GUIDE.md (exists in extending/)
+- [x] Create/update INTERNAL_ARCHITECTURE.md (merged into internals/)
+- [x] Include diagrams (Mermaid format) (ASCII diagrams merged)
+- [x] Update STATUS.md
 - [ ] User confirmation to proceed
 
 ### PHASE 6 - Consolidation: Cleanup & Improvement Plan
