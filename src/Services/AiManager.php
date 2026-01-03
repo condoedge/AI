@@ -13,6 +13,8 @@ use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Services\Context\FileContextProvider;
+use Condoedge\Ai\Services\Response\ResponseFileEnricher;
 
 /**
  * AI Manager - Convenient wrapper around AI services
@@ -76,6 +78,8 @@ class AiManager
      * @param QueryExecutorInterface $queryExecutor Query execution service
      * @param ResponseGeneratorInterface $responseGenerator Response generation service
      * @param VectorStoreInterface $vectorStore Vector store for query storage
+     * @param FileContextProvider|null $fileContextProvider File context provider for file-based RAG
+     * @param ResponseFileEnricher|null $responseFileEnricher Response enricher for file references
      */
     public function __construct(
         private readonly DataIngestionServiceInterface $ingestion,
@@ -85,7 +89,9 @@ class AiManager
         private readonly QueryGeneratorInterface $queryGenerator,
         private readonly QueryExecutorInterface $queryExecutor,
         private readonly ResponseGeneratorInterface $responseGenerator,
-        private readonly VectorStoreInterface $vectorStore
+        private readonly VectorStoreInterface $vectorStore,
+        private readonly ?FileContextProvider $fileContextProvider = null,
+        private readonly ?ResponseFileEnricher $responseFileEnricher = null
     ) {
     }
 
@@ -771,9 +777,12 @@ class AiManager
      */
     protected function retrieveFileContext(string $question, mixed $user): array
     {
+        if ($this->fileContextProvider === null) {
+            return [];
+        }
+
         try {
-            $provider = app(\Condoedge\Ai\Services\Context\FileContextProvider::class);
-            return $provider->getFileContext($question, $user);
+            return $this->fileContextProvider->getFileContext($question, $user);
         } catch (\Throwable $e) {
             \Log::warning('Failed to retrieve file context: ' . $e->getMessage());
             return [];
@@ -790,7 +799,10 @@ class AiManager
      */
     protected function enrichResponseWithFiles(array $response, array $fileContext, array $options): array
     {
-        $enricher = app(\Condoedge\Ai\Services\Response\ResponseFileEnricher::class);
-        return $enricher->enrichResponse($response, $fileContext, $options);
+        if ($this->responseFileEnricher === null) {
+            return $response;
+        }
+
+        return $this->responseFileEnricher->enrichResponse($response, $fileContext, $options);
     }
 }

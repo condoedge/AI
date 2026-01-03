@@ -19,7 +19,7 @@
 | Total Issues Found | 45+ |
 | Critical Issues | ~~2~~ 0 (**ALL FIXED**) |
 | High Issues | ~~3~~ 1 (2 FIXED, 1 DEFERRED) |
-| Medium Issues | 20+ |
+| Medium Issues | ~~20+~~ 18+ (2 FIXED) |
 | Low/Info Issues | 20+ |
 
 > **Note:** AiManager is intentionally a facade providing a single entry point. Methods like `ask()`, `stream()`, etc. are designed for external project use, not internal package use. This is correct architectural design, not dead code.

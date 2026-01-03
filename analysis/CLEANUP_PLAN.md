@@ -13,8 +13,8 @@ This document provides detailed remediation plans for all issues identified duri
 
 **Total Issues:** 45+
 - **CRITICAL:** ~~2~~ 0 (security vulnerabilities) - **ALL FIXED**
-- **HIGH:** ~~3~~ 1 (architectural concerns) - 2 FIXED, 1 deferred (AiServiceProvider split)
-- **MEDIUM:** 14 (code quality)
+- **HIGH:** ~~3~~ 1 (architectural concerns) - 2 FIXED, 1 deferred
+- **MEDIUM:** ~~14~~ 12 (code quality) - 2 FIXED (MED-001, MED-010)
 - **LOW:** 9 (minor improvements)
 
 ---
@@ -393,19 +393,20 @@ public function getPriority(): int
 
 ## MEDIUM Priority Issues
 
-### MED-001: Service Locator Pattern in AiManager
+### MED-001: Service Locator Pattern in AiManager - ✅ FIXED
 
 | Field | Details |
 |-------|---------|
 | **Issue IDs** | CO-013, CO-014 |
 | **Severity** | MEDIUM |
 | **Category** | Architecture - Dependency Injection |
+| **Status** | ✅ **FIXED** on 2026-01-03 |
 
 #### Description
 
 `retrieveFileContext()` and `enrichResponseWithFiles()` use `app()` instead of constructor injection.
 
-#### Evidence
+#### Evidence (BEFORE fix)
 
 ```php
 // Line 775
@@ -480,7 +481,7 @@ Add consistent error handling with logging across all public methods.
 | MED-007 (QG-002) | GenericContextSection always included | Add shouldInclude() condition |
 | MED-008 (RSP-002) | Hardcoded English error text | Move to lang files |
 | MED-009 (UI-002) | Duplicate JS loading | Deduplicate asset registration |
-| MED-010 (INF-003) | Duplicate FileAccessResolver binding | Remove redundant binding |
+| MED-010 (INF-003) | Duplicate FileAccessResolver binding | ✅ **FIXED** - Removed redundant binding |
 | MED-011 (QG-003) | Undocumented user/team ID exposure | Document in security docs |
 | MED-012 (CO-015) | Hardcoded 'questions' collection | Move to config |
 | MED-013 (CO-017) | Duplicate pipelines | Document intended differences |

@@ -338,7 +338,9 @@ class AiServiceProvider extends ServiceProvider
                 queryGenerator: $app->make(QueryGeneratorInterface::class),
                 queryExecutor: $app->make(QueryExecutorInterface::class),
                 responseGenerator: $app->make(ResponseGeneratorInterface::class),
-                vectorStore: $app->make(VectorStoreInterface::class)
+                vectorStore: $app->make(VectorStoreInterface::class),
+                fileContextProvider: $app->make(FileContextProvider::class),
+                responseFileEnricher: $app->make(ResponseFileEnricher::class)
             );
         });
 
@@ -526,7 +528,6 @@ class AiServiceProvider extends ServiceProvider
     {
         // File access resolver (singleton for consistent security checks)
         $this->app->singleton(FileAccessResolverInterface::class, FileAccessResolver::class);
-        $this->app->singleton(FileAccessResolver::class);
 
         // Physical file indexer
         $this->app->singleton(PhysicalFileIndexer::class);
