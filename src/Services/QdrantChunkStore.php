@@ -221,9 +221,7 @@ class QdrantChunkStore implements ChunkStoreInterface
     public function hasFileChunks(int $fileId): bool
     {
         $count = $this->vectorStore->count($this->collection, [
-            'must' => [
-                ['key' => 'file_id', 'match' => ['value' => $fileId]],
-            ],
+            'file_id' => $fileId
         ]);
 
         return $count > 0;

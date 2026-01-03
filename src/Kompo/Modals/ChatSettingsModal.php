@@ -3,6 +3,7 @@
 
 namespace Condoedge\Ai\Kompo\Modals;
 
+use Condoedge\Ai\Kompo\AiChatPanel;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
@@ -26,9 +27,14 @@ class ChatSettingsModal extends Modal
 
     public function created() 
     {
-        if (!$this->model) {
+        if (!$this->model->id) {
             $this->model(auth()->check() ? AiUserSetting::forUser(auth()->id()) : new AiUserSetting());
         }
+    }
+
+    public function beforeSave()
+    {
+        $this->model->user_id = auth()->id() ?? null;
     }
 
     public function body()
@@ -145,7 +151,8 @@ class ChatSettingsModal extends Modal
                     ->closeModal(),
                 _SubmitButton('Save Settings')->icon('check')
                     ->class('px-4 py-2 text-white rounded-xl shadow-lg transition-all' . $this->theme_gradient)
-                    ->closeModal(),
+                    ->closeModal()
+                    ->refresh(AiChatPanel::ID),
             )->class('gap-3'),
         )->class('px-6 py-4 border-t border-gray-200 bg-gray-50');
     }

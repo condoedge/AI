@@ -8,6 +8,7 @@ use Condoedge\Ai\Facades\AI;
 use Condoedge\Ai\Jobs\ProcessFileJob;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * File Processing Plugin
@@ -174,7 +175,7 @@ class FileProcessingPlugin extends ModelPlugin
         }
 
         // Process synchronously
-        $result = $processor->processFile($file);
+        $result = $processor->processFile((object) $file->getAttributes());
 
         if ($result->failed()) {
             Log::warning("File content processing failed", [
@@ -239,7 +240,7 @@ class FileProcessingPlugin extends ModelPlugin
         }
 
         // Check if file exists on disk
-        if (!method_exists($file, 'existsOnDisk') || !$file->existsOnDisk()) {
+        if (!$file->link) {
             return false;
         }
 

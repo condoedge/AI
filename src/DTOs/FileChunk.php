@@ -2,6 +2,8 @@
 
 namespace Condoedge\Ai\DTOs;
 
+use Ramsey\Uuid\Uuid;
+
 /**
  * Data Transfer Object representing a chunk of a processed file
  *
@@ -83,7 +85,11 @@ class FileChunk
      */
     public function getVectorId(): string
     {
-        return "file_{$this->fileId}_chunk_{$this->chunkIndex}";
+        // Deterministic UUID so the same chunk gets the same point ID
+        return Uuid::uuid5(
+            Uuid::NAMESPACE_URL,
+            "file={$this->fileId};chunk={$this->chunkIndex}"
+        )->toString();
     }
 
     /**

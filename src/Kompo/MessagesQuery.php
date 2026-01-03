@@ -8,6 +8,7 @@ use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Models\AiConversation;
+use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
 use Condoedge\Utils\Kompo\Common\Query;
 
@@ -167,7 +168,7 @@ class MessagesQuery extends Query
                     $this->settings()->showTimestamps()
                         ? _Html($message->created_at->format('g:i A'))->class('text-xs opacity-60 mt-2')
                         : null,
-                )->class('group relative px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md'),
+                )->class('group px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md'),
                 $this->settings()->showAvatars()
                     ? _Html($this->userAvatarHtml())->class('ml-3 flex-shrink-0')
                     : null,
@@ -232,7 +233,7 @@ class MessagesQuery extends Query
             $actions[] = _Link()->icon(_Sax('copy', 16))
                 ->class('p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all')
                 ->balloon('Copy', 'up')
-                ->onClick->run("navigator.clipboard.writeText(" . json_encode($message->content) . "); \$vlNotify.success('Copied to clipboard');");
+                ->copyToClipboard($message->content, 'translate.copied-to-clipboard');
         }
 
         // Feedback buttons
@@ -244,6 +245,7 @@ class MessagesQuery extends Query
                     : 'hover:bg-emerald-50 text-gray-400 hover:text-emerald-600'))
                 ->balloon('Helpful', 'up')
                 ->selfPost('feedback', ['id' => $message->id, 'type' => 'positive'])
+                ->alert('translate.feedback-received-successfully')
                 ->refresh();
 
             $actions[] = _Link()->icon(_Sax('dislike', 16))
@@ -252,6 +254,7 @@ class MessagesQuery extends Query
                     : 'hover:bg-red-50 text-gray-400 hover:text-red-600'))
                 ->balloon('Not helpful', 'up')
                 ->selfPost('feedback', ['id' => $message->id, 'type' => 'negative'])
+                ->alert('translate.feedback-received-successfully')
                 ->refresh();
         }
 
@@ -434,7 +437,7 @@ class MessagesQuery extends Query
         return _Rows(...$elements)->class('flex flex-col items-center justify-center py-16 px-4');
     }
 
-        public function togglePin($id)
+    public function togglePin($id)
     {
         $conversation = AiConversation::where('user_id', auth()->id())->find($id);
         if ($conversation) {
@@ -442,8 +445,6 @@ class MessagesQuery extends Query
             $metadata['pinned'] = !($metadata['pinned'] ?? false);
             $conversation->update(['metadata' => $metadata]);
         }
-
-        return $this->mainLayout();
     }
 
     public function feedback($id, $type)
@@ -454,8 +455,6 @@ class MessagesQuery extends Query
             $metadata['feedback'] = $type;
             $message->update(['metadata' => $metadata]);
         }
-
-        return $this->renderMessages();
     }
 
     public function regenerate($id)
@@ -480,10 +479,24 @@ class MessagesQuery extends Query
             // Delete the old assistant message
             $message->delete();
 
-            // Re-ask the question
-            $form = new ChatMessageForm(null, ['conversation_id' => $this->conversation->id]);
-            request()->merge(['message' => $userMessage->content]);
-            return $form->sendMessage();
+            app(AiChatServiceInterface::class)->askWithConversation(
+                $userMessage->content,
+                $this->conversation,
+                [
+                    'style' => $this->settings()->responseStyle(),
+                    'user' => auth()->user(), // SECURITY: Pass authenticated user for file access control
+                ]
+            );
+
+            // It will duplicate the user question so we need to remove it
+            $latestUserMessage = $this->conversation->messages()
+                ->where('role', 'user')
+                ->orderByDesc('created_at')
+                ->first();
+
+            if ($latestUserMessage && $latestUserMessage->id !== $userMessage->id) {
+                $latestUserMessage->delete();
+            }
         }
     }
 
