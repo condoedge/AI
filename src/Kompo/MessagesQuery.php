@@ -9,6 +9,7 @@ use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
+use Condoedge\Ai\Services\Chat\SendMessageService;
 use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
 use Condoedge\Utils\Kompo\Common\Query;
 
@@ -502,9 +503,31 @@ class MessagesQuery extends Query
 
     public function askSuggestion($question)
     {
-        request()->merge(['message' => $question]);
-        $form = new ChatMessageForm(null, ['conversation_id' => $this->conversation->id]);
-        $form->sendMessage();
+        if (empty(trim($question))) {
+            return;
+        }
+
+        if (!$this->conversation) {
+            \Log::warning('askSuggestion called without conversation context');
+            return;
+        }
+
+        $service = app(SendMessageService::class);
+
+        try {
+            $service->sendMessage(
+                conversation: $this->conversation,
+                message: $question,
+                options: [
+                    'user' => auth()->user(),
+                    'style' => $this->settings()->responseStyle(),
+                ]
+            );
+        } catch (\Throwable $e) {
+            \Log::error('Suggestion question failed: ' . $e->getMessage());
+            // The Kompo ->refresh() will still happen on the frontend,
+            // so the user will see the current state even if sending failed
+        }
     }
 
     public function viewFile($id)
