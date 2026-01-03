@@ -549,7 +549,7 @@ return [
         'max_references' => 5,
 
         // Minimum relevance score for file inclusion
-        'min_relevance_score' => 0.7,
+        'min_relevance_score' => 0.5,
 
         // Include file snippets in response metadata
         'include_snippets' => true,
@@ -574,6 +574,16 @@ return [
         // Will be called as: File::accessibleBy($user)->pluck('id')
         // Set to null to allow all files (when security_enabled is true but no scope)
         'access_scope' => 'accessibleBy',
+
+        // Fallback filtering when accessibleBy scope is not available
+        // These are used when the configured scope fails or doesn't exist
+        'fallback_filters' => [
+            // Always filter by user_id when security is enabled
+            'use_user_filter' => env('AI_FILE_USE_USER_FILTER', true),
+
+            // Also filter by team_id using safeCurrentTeamId()
+            'use_team_filter' => env('AI_FILE_USE_TEAM_FILTER', true),
+        ],
 
         // Alternative: closure-based resolver (takes precedence over scope)
         // Set in boot method: config(['ai.file_context.access_resolver' => fn($user) => [...]])
@@ -631,7 +641,7 @@ return [
         'show_metrics' => env('AI_CHAT_SHOW_METRICS', false),
 
         // Input configuration
-        'input_placeholder' => env('AI_CHAT_INPUT_PLACEHOLDER', 'Ask a question...'),
+        'input_placeholder' => env('AI_CHAT_INPUT_PLACEHOLDER', 'ai.chat.input-placeholder'),
         'auto_focus' => env('AI_CHAT_AUTO_FOCUS', true),
 
         // Features
