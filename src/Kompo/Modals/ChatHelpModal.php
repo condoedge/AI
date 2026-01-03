@@ -86,12 +86,12 @@ class ChatHelpModal extends Modal
     protected function tipsTab()
     {
         return _Rows(
-            $this->tipCard(__('ai.help.tip-specific'), __('ai.help.tip-specific-desc'), 'target'),
-            $this->tipCard(__('ai.help.tip-context'), __('ai.help.tip-context-desc'), 'arrows-pointing-out'),
-            $this->tipCard(__('ai.help.tip-styles'), __('ai.help.tip-styles-desc'), 'adjustments-horizontal'),
-            $this->tipCard(__('ai.help.tip-pin'), __('ai.help.tip-pin-desc'), 'star'),
-            $this->tipCard(__('ai.help.tip-feedback'), __('ai.help.tip-feedback-desc'), 'hand-thumb-up'),
-            $this->tipCard(__('ai.help.tip-edit'), __('ai.help.tip-edit-desc'), 'pencil-square'),
+            $this->tipCard(__('ai.help.tip-specific-title'), __('ai.help.tip-specific-desc'), 'target'),
+            $this->tipCard(__('ai.help.tip-context-title'), __('ai.help.tip-context-desc'), 'arrows-pointing-out'),
+            $this->tipCard(__('ai.help.tip-styles-title'), __('ai.help.tip-styles-desc'), 'adjustments-horizontal'),
+            $this->tipCard(__('ai.help.tip-pin-title'), __('ai.help.tip-pin-desc'), 'star'),
+            $this->tipCard(__('ai.help.tip-feedback-title'), __('ai.help.tip-feedback-desc'), 'hand-thumb-up'),
+            $this->tipCard(__('ai.help.tip-edit-title'), __('ai.help.tip-edit-desc'), 'pencil-square'),
         )->class('p-6 space-y-4');
     }
 
@@ -103,7 +103,7 @@ class ChatHelpModal extends Modal
                 $this->shortcutRow('Enter', __('ai.help.shortcut-send')),
                 $this->shortcutRow('Shift + Enter', __('ai.help.shortcut-newline')),
                 $this->shortcutRow('Esc', __('ai.help.shortcut-close')),
-                $this->shortcutRow('Ctrl + N', __('ai.help.shortcut-new')),
+                $this->shortcutRow('Ctrl + N', __('ai.help.shortcut-new-conv')),
                 $this->shortcutRow('Ctrl + K', __('ai.help.shortcut-search')),
                 $this->shortcutRow('Ctrl + C', __('ai.help.shortcut-copy')),
             )->class('space-y-2'),
@@ -113,11 +113,11 @@ class ChatHelpModal extends Modal
     protected function faqTab()
     {
         return _Rows(
-            $this->faqItem(__('ai.help.faq-data-q'), __('ai.help.faq-data-a')),
-            $this->faqItem(__('ai.help.faq-delete-q'), __('ai.help.faq-delete-a')),
-            $this->faqItem(__('ai.help.faq-wrong-q'), __('ai.help.faq-wrong-a')),
-            $this->faqItem(__('ai.help.faq-limits-q'), __('ai.help.faq-limits-a')),
-            $this->faqItem(__('ai.help.faq-export-q'), __('ai.help.faq-export-a')),
+            $this->faqItem(__('ai.help.faq-data-title'), __('ai.help.faq-data-desc')),
+            $this->faqItem(__('ai.help.faq-delete-title'), __('ai.help.faq-delete-desc')),
+            $this->faqItem(__('ai.help.faq-wrong-title'), __('ai.help.faq-wrong-desc')),
+            $this->faqItem(__('ai.help.faq-limits-title'), __('ai.help.faq-limits-desc')),
+            $this->faqItem(__('ai.help.faq-export-title'), __('ai.help.faq-export-desc')),
         )->class('p-6 space-y-4');
     }
 
