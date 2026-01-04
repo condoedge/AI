@@ -221,6 +221,231 @@ const ChatMessageInjector = {
     },
 
     /**
+     * Update the content of a user message in place with pulse animation
+     * @param {string|number} messageId - The message ID to update
+     * @param {string} newContent - The new message content
+     */
+    updateMessageContent(messageId, newContent) {
+        const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (!messageEl) {
+            console.warn('Message not found for update:', messageId);
+            return;
+        }
+
+        // Find the content area (whitespace-pre-wrap element)
+        const contentEl = messageEl.querySelector('.whitespace-pre-wrap');
+        if (!contentEl) {
+            console.warn('Content element not found in message:', messageId);
+            return;
+        }
+
+        // Update the content
+        contentEl.textContent = newContent;
+
+        // Add pulse animation
+        messageEl.style.transition = 'transform 0.15s ease-out, box-shadow 0.15s ease-out';
+        messageEl.style.transform = 'scale(1.02)';
+        messageEl.style.boxShadow = '0 0 0 2px rgba(59, 130, 246, 0.5)';
+
+        setTimeout(() => {
+            messageEl.style.transform = 'scale(1)';
+            messageEl.style.boxShadow = 'none';
+        }, 150);
+
+        setTimeout(() => {
+            messageEl.style.transition = '';
+            messageEl.style.transform = '';
+            messageEl.style.boxShadow = '';
+        }, 300);
+    },
+
+    /**
+     * Remove all messages AFTER the given message ID with fade-out animation
+     * Due to flex-col-reverse, messages BEFORE in DOM are AFTER chronologically
+     * @param {string|number} messageId - The message ID to remove messages after
+     * @returns {Promise} - Resolves when all animations are complete
+     */
+    removeMessagesAfter(messageId) {
+        return new Promise((resolve) => {
+            const targetId = parseInt(messageId);
+            if (isNaN(targetId)) {
+                console.warn('Invalid message ID:', messageId);
+                resolve();
+                return;
+            }
+
+            const messagesToRemove = [];
+
+            // 1. Clear the display panel entirely (any JS-injected placeholders)
+            const displayPanel = document.getElementById(this.displayPanelId);
+            if (displayPanel) {
+                displayPanel.innerHTML = '';
+            }
+
+            // 2. Find all messages with ID > targetId (chronologically after)
+            const allMessages = document.querySelectorAll('[data-message-id]');
+            allMessages.forEach(el => {
+                const elId = parseInt(el.getAttribute('data-message-id'));
+                if (!isNaN(elId) && elId > targetId) {
+                    messagesToRemove.push(el);
+                }
+            });
+
+            // 3. Also remove any remaining placeholders (typing indicators, etc.)
+            document.querySelectorAll('[data-placeholder]').forEach(el => {
+                if (!messagesToRemove.includes(el)) {
+                    messagesToRemove.push(el);
+                }
+            });
+
+            // 4. Remove any JS-injected assistant bubbles (siblings BEFORE target in DOM = AFTER visually)
+            const targetMessage = document.querySelector(`[data-message-id="${messageId}"]`);
+            if (targetMessage) {
+                let sibling = targetMessage.previousElementSibling;
+                while (sibling) {
+                    // Skip display panel, but remove anything else without data-message-id
+                    if (sibling.id !== this.displayPanelId && !messagesToRemove.includes(sibling)) {
+                        messagesToRemove.push(sibling);
+                    }
+                    sibling = sibling.previousElementSibling;
+                }
+            }
+
+            if (messagesToRemove.length === 0) {
+                resolve();
+                return;
+            }
+
+            // Apply staggered fade-out animation
+            messagesToRemove.forEach((msg, index) => {
+                msg.style.transition = `opacity 0.3s ease-out ${index * 0.05}s, transform 0.3s ease-out ${index * 0.05}s`;
+                msg.style.opacity = '0';
+                msg.style.transform = 'translateY(-10px)';
+            });
+
+            // Remove elements after animation completes
+            const totalDuration = 300 + (messagesToRemove.length - 1) * 50;
+            setTimeout(() => {
+                messagesToRemove.forEach(msg => msg.remove());
+                resolve();
+            }, totalDuration);
+        });
+    },
+
+    /**
+     * Show typing indicator after a specific message
+     * Due to flex-col-reverse, we insert BEFORE in DOM to appear AFTER visually
+     * @param {string|number} messageId - The message ID to show typing after
+     */
+    showTypingAfterMessage(messageId) {
+        const targetMessage = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (!targetMessage) {
+            console.warn('Target message not found for typing indicator:', messageId);
+            return;
+        }
+
+        // Remove any existing typing indicator
+        const existingTyping = document.querySelector('[data-placeholder="typing-indicator"]');
+        if (existingTyping) {
+            existingTyping.remove();
+        }
+
+        // Create typing indicator from template
+        const typingIndicator = document.createElement('div');
+        typingIndicator.setAttribute('data-placeholder', 'typing-indicator');
+        typingIndicator.setAttribute('data-void', 'true');
+        typingIndicator.innerHTML = this.typingIndicatorTemplate;
+
+        // In flex-col-reverse, insert BEFORE in DOM to appear AFTER visually
+        targetMessage.parentNode.insertBefore(typingIndicator, targetMessage);
+
+        // Add fade-in animation
+        typingIndicator.style.opacity = '0';
+        typingIndicator.style.transform = 'translateY(10px)';
+        typingIndicator.style.transition = 'opacity 0.2s ease-out, transform 0.2s ease-out';
+
+        // Trigger animation
+        requestAnimationFrame(() => {
+            typingIndicator.style.opacity = '1';
+            typingIndicator.style.transform = 'translateY(0)';
+        });
+
+        this.scrollToBottom();
+    },
+
+    /**
+     * Remove a message AND all messages after it with fade-out animation
+     * Used for delete operations
+     * @param {string|number} messageId - The message ID to remove (and all after)
+     * @returns {Promise} - Resolves when all animations are complete
+     */
+    removeMessageAndAfter(messageId) {
+        return new Promise((resolve) => {
+            const targetId = parseInt(messageId);
+            if (isNaN(targetId)) {
+                console.warn('Invalid message ID:', messageId);
+                resolve();
+                return;
+            }
+
+            const messagesToRemove = [];
+
+            // 1. Clear the display panel entirely (any JS-injected placeholders)
+            const displayPanel = document.getElementById(this.displayPanelId);
+            if (displayPanel) {
+                displayPanel.innerHTML = '';
+            }
+
+            // 2. Find all messages with ID >= targetId (this message and all after)
+            const allMessages = document.querySelectorAll('[data-message-id]');
+            allMessages.forEach(el => {
+                const elId = parseInt(el.getAttribute('data-message-id'));
+                if (!isNaN(elId) && elId >= targetId) {
+                    messagesToRemove.push(el);
+                }
+            });
+
+            // 3. Also remove any remaining placeholders (typing indicators, etc.)
+            document.querySelectorAll('[data-placeholder]').forEach(el => {
+                if (!messagesToRemove.includes(el)) {
+                    messagesToRemove.push(el);
+                }
+            });
+
+            // 4. Remove any JS-injected bubbles (siblings BEFORE target in DOM = AFTER visually)
+            const targetMessage = document.querySelector(`[data-message-id="${messageId}"]`);
+            if (targetMessage) {
+                let sibling = targetMessage.previousElementSibling;
+                while (sibling) {
+                    if (sibling.id !== this.displayPanelId && !messagesToRemove.includes(sibling)) {
+                        messagesToRemove.push(sibling);
+                    }
+                    sibling = sibling.previousElementSibling;
+                }
+            }
+
+            if (messagesToRemove.length === 0) {
+                resolve();
+                return;
+            }
+
+            // Apply staggered fade-out animation
+            messagesToRemove.forEach((msg, index) => {
+                msg.style.transition = `opacity 0.3s ease-out ${index * 0.05}s, transform 0.3s ease-out ${index * 0.05}s`;
+                msg.style.opacity = '0';
+                msg.style.transform = 'translateY(-10px)';
+            });
+
+            // Remove elements after animation completes
+            const totalDuration = 300 + (messagesToRemove.length - 1) * 50;
+            setTimeout(() => {
+                messagesToRemove.forEach(msg => msg.remove());
+                resolve();
+            }, totalDuration);
+        });
+    },
+
+    /**
      * Scroll to bottom of chat
      */
     scrollToBottom() {
@@ -287,3 +512,27 @@ window.processServerResponse = processServerResponse;
 window.injectAssistantMessage = injectAssistantMessage;
 window.clearMessagePlaceholders = clearMessagePlaceholders;
 window.scrollChatToBottom = scrollChatToBottom;
+
+/**
+ * Helper functions for edit/delete operations
+ */
+function updateMessageContent(messageId, newContent) {
+    ChatMessageInjector.updateMessageContent(messageId, newContent);
+}
+
+function removeMessagesAfter(messageId) {
+    return ChatMessageInjector.removeMessagesAfter(messageId);
+}
+
+function showTypingAfterMessage(messageId) {
+    ChatMessageInjector.showTypingAfterMessage(messageId);
+}
+
+function removeMessageAndAfter(messageId) {
+    return ChatMessageInjector.removeMessageAndAfter(messageId);
+}
+
+window.updateMessageContent = updateMessageContent;
+window.removeMessagesAfter = removeMessagesAfter;
+window.showTypingAfterMessage = showTypingAfterMessage;
+window.removeMessageAndAfter = removeMessageAndAfter;

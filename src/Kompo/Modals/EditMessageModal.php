@@ -89,19 +89,42 @@ class EditMessageModal extends Modal
             _Flex(
                 _Link(__('ai.edit.delete-message'))->icon('trash')
                     ->class('px-4 py-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all')
-                    ->selfPost('deleteMessage')
-                    ->refresh(MessagesQuery::ID)
-                    ->closeModal(),
+                    // 1. Close modal and animate removal immediately
+                    ->closeModal()
+                    ->run('() => {
+                        const messageId = ' . (int)$this->messageId . ';
+                        // Remove the message and all after it with animation
+                        removeMessageAndAfter(messageId);
+                    }')
+                    // 2. Tell server to delete (response goes to staging, we ignore it)
+                    ->selfPost('deleteMessageWithAnimation'),
                 _Button(__('ai.edit.save-regenerate'))->icon('arrow-path')
                     ->class('px-4 py-2 text-white rounded-xl shadow-lg transition-all ' . $this->theme()->primaryGradient())
-                    ->selfPost('updateMessage')
-                    ->run('() => {
-                        // Disable button and show loading
-                        event.target.disabled = true;
-                        event.target.innerHTML = "<svg class=\"animate-spin h-4 w-4 mr-2 inline\" xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\"><circle class=\"opacity-25\" cx=\"12\" cy=\"12\" r=\"10\" stroke=\"currentColor\" stroke-width=\"4\"></circle><path class=\"opacity-75\" fill=\"currentColor\" d=\"M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z\"></path></svg>' . __('ai.edit.regenerating') . '";
-                    }')
-                    ->refresh(MessagesQuery::ID)
-                    ->closeModal(),
+                    // 1. Close modal and start JS animations immediately
+                    ->onClick(fn($e) => $e
+                        ->closeModal()
+                        ->run('() => {
+                            const messageId = ' . (int)$this->messageId . ';
+                            const contentEl = document.querySelector("[name=content]");
+                            if (!contentEl) return;
+                            const newContent = contentEl.value.trim();
+                            if (!newContent) return;
+                            // Update the user message content in place
+                            updateMessageContent(messageId, newContent);
+                            // Remove all messages after this one, then show typing
+                            removeMessagesAfter(messageId).then(() => {
+                                showTypingAfterMessage(messageId);
+                            });
+                        }') && $e                    
+                        // 2. Send to server, response goes to staging panel
+                        ->selfPost('updateMessageAndGetResponse')->withAllFormValues()
+                            ->inPanel('temp-message-staging')
+                            ->run('() => {
+                                setTimeout(() => {
+                                    processServerResponse();
+                                }, 100);
+                            }')
+                    ),
             )->class('gap-3'),
         )->class('px-6 py-4 border-t border-gray-200 bg-gray-50');
     }
@@ -147,6 +170,75 @@ class EditMessageModal extends Modal
         } catch (\Throwable $e) {
             \Log::error('Edit message regeneration failed: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Update message and return rendered assistant response for JS injection
+     * Follows the ChatMessageForm pattern with staging panel
+     */
+    public function updateMessageAndGetResponse()
+    {
+        $content = trim(request('content') ?? '');
+
+        if (empty($content) || !$this->message) {
+            return _Html('')->class('hidden');
+        }
+
+        // Update the message content
+        $this->message->update(['content' => $content]);
+
+        // Delete all messages after this one
+        $conversation = $this->message->conversation;
+        $conversation->messages()
+            ->where('id', '>', $this->message->id)
+            ->delete();
+
+        // Regenerate AI response using the service
+        try {
+            $service = app(RegenerateMessageService::class);
+            $service->regenerateFromMessage(
+                $conversation,
+                $this->message->fresh(),
+                auth()->user(),
+                ['style' => $this->settings()->responseStyle()]
+            );
+
+            // Get the new assistant response
+            $assistantMessage = $conversation->messages()
+                ->where('role', 'assistant')
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            if (!$assistantMessage) {
+                return _Html('')->class('hidden');
+            }
+
+            // Return rendered content for JS to inject
+            $renderer = new \Condoedge\Ai\Services\UI\SafeMarkdownRenderer();
+            return _Html($renderer->render($assistantMessage->content))->class('prose prose-sm max-w-none');
+
+        } catch (\Throwable $e) {
+            \Log::error('Edit message regeneration failed: ' . $e->getMessage());
+            return _Html(__('ai.chat.error-message'))->class('text-red-500 text-sm');
+        }
+    }
+
+    /**
+     * Delete message - just performs the delete, JS handles animation
+     */
+    public function deleteMessageWithAnimation()
+    {
+        if (!$this->message) {
+            return _Html('')->class('hidden');
+        }
+
+        // Delete this message and all subsequent messages
+        $conversation = $this->message->conversation;
+        $conversation->messages()
+            ->where('id', '>=', $this->message->id)
+            ->delete();
+
+        return _Html('deleted')->class('hidden');
     }
 
     public function deleteMessage()
