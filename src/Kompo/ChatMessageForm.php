@@ -62,7 +62,7 @@ class ChatMessageForm extends Form
                     ->onClick($this->sendingMessageActions()),
             )->class('flex items-end gap-3 px-4 py-3 bg-white/90 border border-gray-200/70 rounded-2xl shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 backdrop-blur-sm transition-all'),
             $this->quickActions(),
-        )->class('p-4 border-t border-gray-100/70 bg-gradient-to-t from-white via-white to-transparent');
+        )->class('p-4 !pt-0 border-t border-gray-100/70');
     }
 
     protected function responseStyleSelector()
