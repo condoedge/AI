@@ -61,6 +61,7 @@ class BoltNeo4jStore implements GraphStoreInterface
                 $this->getPassword()
             ))
             ->withDefaultDriver('default')
+            ->withDefaultDatabase($this->database)
             ->build();
     }
 
@@ -159,7 +160,7 @@ class BoltNeo4jStore implements GraphStoreInterface
     public function query(string $cypher, array $parameters = []): array
     {
         try {
-            $result = $this->client->run($cypher, $parameters, $this->database);
+            $result = $this->client->run($cypher, $parameters);
 
             return $this->convertResultToArray($result);
 
@@ -248,7 +249,7 @@ class BoltNeo4jStore implements GraphStoreInterface
      */
     public function beginTransaction(): array
     {
-        $session = $this->client->beginTransaction(null, $this->database);
+        $session = $this->client->beginTransaction();
 
         // Store reference for later use
         $txId = spl_object_id($session);
