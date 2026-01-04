@@ -9,6 +9,7 @@ use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
+use Condoedge\Ai\Kompo\Traits\HasMessageActions;
 use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
 use Condoedge\Ai\Kompo\Modals\ChatHelpModal;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
@@ -34,7 +35,7 @@ use Illuminate\Support\Facades\Log;
  */
 class AiChatPanel extends Form
 {
-    use HasChatSettings, HasChatTheme, HasAvatars, HasMethodsAsProperties, HasConversationCreation;
+    use HasChatSettings, HasChatTheme, HasAvatars, HasMethodsAsProperties, HasConversationCreation, HasMessageActions;
 
     public $style = 'max-height: 95vh; width: 100vw;';
 
@@ -169,6 +170,7 @@ class AiChatPanel extends Form
         $injectorJs = str_replace('$USER_BUBBLE_TEMPLATE', $this->escapeForBackticks($userBubbleTemplate), $injectorJs);
         $injectorJs = str_replace('$TYPING_INDICATOR_TEMPLATE', $this->escapeForBackticks($typingIndicatorTemplate), $injectorJs);
         $injectorJs = str_replace('$USER_AVATAR_HTML', $this->escapeForBackticks($userAvatarHtml), $injectorJs);
+        $injectorJs = str_replace('$DOT_COLOR', $this->escapeForBackticks($this->theme()->primarySolid()), $injectorJs);
 
         return $scrollJs . "\n\n" . $injectorJs;
     }

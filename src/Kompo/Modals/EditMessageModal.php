@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Kompo\Modals;
 use Condoedge\Ai\Kompo\MessagesQuery;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
+use Condoedge\Ai\Kompo\Traits\HasMessageActions;
 use Condoedge\Ai\Kompo\Traits\HasStagedMessageRendering;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
@@ -18,7 +19,7 @@ use Condoedge\Utils\Kompo\Common\Modal;
  */
 class EditMessageModal extends Modal
 {
-    use HasChatTheme, HasChatSettings, HasStagedMessageRendering;
+    use HasChatTheme, HasChatSettings, HasMessageActions, HasStagedMessageRendering;
 
     protected $_Title = 'ai.edit.title';
     public $class = 'overflow-hidden max-w-2xl rounded-2xl';
@@ -83,47 +84,42 @@ class EditMessageModal extends Modal
 
     protected function modalActions()
     {
+        $messageId = (int) $this->messageId;
+
         return _FlexBetween(
             _Link(__('ai.common.cancel'))
                 ->class('px-4 py-2 text-gray-500 hover:text-gray-700 transition-all')
                 ->closeModal(),
             _Flex(
-                _Link(__('ai.edit.delete-message'))->icon('trash')
-                    ->class('px-4 py-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all')
-                    // 1. Close modal and animate removal immediately
-                    ->closeModal()
-                    ->run('() => {
-                        const messageId = ' . (int)$this->messageId . ';
-                        // Remove the message and all after it with animation
-                        removeMessageAndAfter(messageId);
-                    }')
-                    // 2. Tell server to delete (response goes to staging, we ignore it)
-                    ->selfPost('deleteMessageWithAnimation'),
                 _Button(__('ai.edit.save-regenerate'))->icon('arrow-path')
                     ->class('px-4 py-2 text-white rounded-xl shadow-lg transition-all ' . $this->theme()->primaryGradient())
-                    // 1. Close modal and start JS animations immediately
+                    // Follow ChatMessageForm pattern: run() before && executes immediately
                     ->onClick(fn($e) => $e
-                        ->closeModal()
+                        // 1. All immediate UI work BEFORE AJAX
                         ->run('() => {
-                            const messageId = ' . (int)$this->messageId . ';
-                            const contentEl = document.querySelector("[name=content]");
-                            if (!contentEl) return;
-                            const newContent = contentEl.value.trim();
+                            const messageId = ' . $messageId . ';
+                            const textarea = document.querySelector("[name=content]");
+                            const newContent = textarea ? textarea.value.trim() : "";
+
                             if (!newContent) return;
-                            // Update the user message content in place
+
+                            // Update message content immediately
                             updateMessageContent(messageId, newContent);
-                            // Remove all messages after this one, then show typing
-                            removeMessagesAfter(messageId).then(() => {
-                                showTypingAfterMessage(messageId);
-                            });
-                        }') && $e                    
-                        // 2. Send to server, response goes to staging panel
-                        ->selfPost('updateMessageAndGetResponse')->withAllFormValues()
+
+                            // Close modal via .vlModalClose
+                            const closeBtn = document.querySelector(".vlModalClose");
+                            if (closeBtn) closeBtn.click();
+
+                            // Remove old messages and show typing dots
+                            removeMessagesAfter(messageId);
+                            showTypingAfterMessage(messageId);
+                        }')
+                        // 2. Send to server (withAllFormValues captures form data at click time)
+                        && $e->selfPost('updateMessageAndGetResponse')->withAllFormValues()
                             ->inPanel('temp-message-staging')
+                            // 3. Process response AFTER AJAX completes
                             ->run('() => {
-                                setTimeout(() => {
-                                    processServerResponse();
-                                }, 100);
+                                setTimeout(() => processServerResponse(), 100);
                             }')
                     ),
             )->class('gap-3'),

@@ -24,6 +24,7 @@ const ChatMessageInjector = {
     userBubbleTemplate: `$USER_BUBBLE_TEMPLATE`,
     typingIndicatorTemplate: `$TYPING_INDICATOR_TEMPLATE`,
     userAvatarHtml: `$USER_AVATAR_HTML`,
+    dotColor: `$DOT_COLOR`,
 
     /**
      * Ensure display panel exists inside vlQueryWrapper
@@ -161,31 +162,41 @@ const ChatMessageInjector = {
             this.wireActionButtons(typingIndicator);
         }
 
-        // 5. Handle user message placeholder
+        // 5. Handle user message (placeholder OR existing message after edit)
+        let userMessage = null;
+
+        // First try to find a placeholder (new message flow)
         const userPlaceholders = document.querySelectorAll('[data-placeholder="user-message"]');
-        const userPlaceholder = userPlaceholders.length > 0 ? userPlaceholders[userPlaceholders.length - 1] : null;
-        if (userPlaceholder) {
-            userPlaceholder.removeAttribute('data-void');
-            userPlaceholder.removeAttribute('data-placeholder');
-
+        if (userPlaceholders.length > 0) {
+            userMessage = userPlaceholders[userPlaceholders.length - 1];
+            userMessage.removeAttribute('data-void');
+            userMessage.removeAttribute('data-placeholder');
             if (userMessageId) {
-                userPlaceholder.setAttribute('data-message-id', userMessageId);
+                userMessage.setAttribute('data-message-id', userMessageId);
             }
+        } else if (userMessageId) {
+            // Edit flow: user message already exists with data-message-id
+            userMessage = document.querySelector(`[data-message-id="${userMessageId}"]`);
+        }
 
+        if (userMessage) {
             // Move user edit proxy INTO user message element
             const editProxy = stagingPanel.querySelector('.js-action-edit-proxy');
             if (editProxy) {
-                let proxyContainer = userPlaceholder.querySelector('.js-proxy-container');
-                if (!proxyContainer) {
-                    proxyContainer = document.createElement('div');
-                    proxyContainer.className = 'js-proxy-container hidden';
-                    userPlaceholder.appendChild(proxyContainer);
+                // Remove any existing proxy container first (for re-edit scenarios)
+                const existingContainer = userMessage.querySelector('.js-proxy-container');
+                if (existingContainer) {
+                    existingContainer.remove();
                 }
+
+                const proxyContainer = document.createElement('div');
+                proxyContainer.className = 'js-proxy-container hidden';
                 proxyContainer.appendChild(editProxy);
+                userMessage.appendChild(proxyContainer);
             }
 
             // Wire edit button to proxy within same element
-            this.wireActionButtons(userPlaceholder);
+            this.wireActionButtons(userMessage);
         }
 
         // 6. Clear staging (proxies have been moved out)
@@ -217,6 +228,20 @@ const ChatMessageInjector = {
                 btn.onclick = (e) => {
                     e.preventDefault();
                     e.stopPropagation();
+
+                    // Handle feedback button color persistence
+                    if (actionClass === 'js-action-feedback-pos') {
+                        this.setFeedbackState(messageElement, 'positive');
+                    } else if (actionClass === 'js-action-feedback-neg') {
+                        this.setFeedbackState(messageElement, 'negative');
+                    }
+
+                    // Handle regenerate loading indicator
+                    if (actionClass === 'js-action-regenerate') {
+                        this.showRegeneratingIndicator(messageElement);
+                    }
+
+                    // Trigger the proxy click
                     proxy.click();
                 };
             }
@@ -233,6 +258,65 @@ const ChatMessageInjector = {
                 };
             }
         });
+    },
+
+    /**
+     * Show regenerating indicator on assistant message
+     * Uses the same typing dots as new message loading
+     */
+    showRegeneratingIndicator(messageElement) {
+        const content = messageElement.querySelector('.prose');
+        if (content) {
+            const dotColor = this.dotColor || 'bg-indigo-500';
+            content.innerHTML = `
+                <div class="flex items-center gap-1.5 h-6">
+                    <span class="inline-block w-2.5 h-2.5 rounded-full ${dotColor} animate-typing-dot-1"></span>
+                    <span class="inline-block w-2.5 h-2.5 rounded-full ${dotColor} animate-typing-dot-2"></span>
+                    <span class="inline-block w-2.5 h-2.5 rounded-full ${dotColor} animate-typing-dot-3"></span>
+                </div>
+                <div class="text-xs text-gray-400 mt-2">Regenerating...</div>
+            `;
+        }
+    },
+
+    /**
+     * Set feedback button visual state (positive/negative)
+     * Matches the PHP-rendered classes from MessagesQuery
+     */
+    setFeedbackState(messageElement, type) {
+        const posBtn = messageElement.querySelector('.js-action-feedback-pos');
+        const negBtn = messageElement.querySelector('.js-action-feedback-neg');
+
+        // Reset both buttons to inactive state
+        const inactiveClasses = ['hover:bg-emerald-50', 'hover:bg-red-50', 'text-gray-400', 'hover:text-emerald-600', 'hover:text-red-600'];
+        const activePositiveClasses = ['bg-emerald-100', 'text-emerald-600'];
+        const activeNegativeClasses = ['bg-red-100', 'text-red-600'];
+
+        if (posBtn) {
+            // Remove active classes
+            posBtn.classList.remove(...activePositiveClasses, ...activeNegativeClasses);
+            if (type === 'positive') {
+                // Apply active state
+                posBtn.classList.remove(...inactiveClasses);
+                posBtn.classList.add(...activePositiveClasses);
+            } else {
+                // Reset to inactive
+                posBtn.classList.add('text-gray-400', 'hover:bg-emerald-50', 'hover:text-emerald-600');
+            }
+        }
+
+        if (negBtn) {
+            // Remove active classes
+            negBtn.classList.remove(...activePositiveClasses, ...activeNegativeClasses);
+            if (type === 'negative') {
+                // Apply active state
+                negBtn.classList.remove(...inactiveClasses);
+                negBtn.classList.add(...activeNegativeClasses);
+            } else {
+                // Reset to inactive
+                negBtn.classList.add('text-gray-400', 'hover:bg-red-50', 'hover:text-red-600');
+            }
+        }
     },
 
     /**
@@ -355,13 +439,8 @@ const ChatMessageInjector = {
 
             const messagesToRemove = [];
 
-            // 1. Clear the display panel entirely (any JS-injected placeholders)
-            const displayPanel = document.getElementById(this.displayPanelId);
-            if (displayPanel) {
-                displayPanel.innerHTML = '';
-            }
-
-            // 2. Find all messages with ID > targetId (chronologically after)
+            // 1. Find all messages with ID > targetId (chronologically after)
+            // This works for both PHP-rendered AND JS-injected messages
             const allMessages = document.querySelectorAll('[data-message-id]');
             allMessages.forEach(el => {
                 const elId = parseInt(el.getAttribute('data-message-id'));
@@ -370,25 +449,19 @@ const ChatMessageInjector = {
                 }
             });
 
-            // 3. Also remove any remaining placeholders (typing indicators, etc.)
+            // 2. Remove any placeholders (typing indicators, void messages)
             document.querySelectorAll('[data-placeholder]').forEach(el => {
                 if (!messagesToRemove.includes(el)) {
                     messagesToRemove.push(el);
                 }
             });
 
-            // 4. Remove any JS-injected assistant bubbles (siblings BEFORE target in DOM = AFTER visually)
-            const targetMessage = document.querySelector(`[data-message-id="${messageId}"]`);
-            if (targetMessage) {
-                let sibling = targetMessage.previousElementSibling;
-                while (sibling) {
-                    // Skip display panel, but remove anything else without data-message-id
-                    if (sibling.id !== this.displayPanelId && !messagesToRemove.includes(sibling)) {
-                        messagesToRemove.push(sibling);
-                    }
-                    sibling = sibling.previousElementSibling;
+            // 3. Remove void markers (uncommitted messages without ID)
+            document.querySelectorAll('[data-void="true"]').forEach(el => {
+                if (!messagesToRemove.includes(el)) {
+                    messagesToRemove.push(el);
                 }
-            }
+            });
 
             if (messagesToRemove.length === 0) {
                 resolve();
@@ -413,7 +486,7 @@ const ChatMessageInjector = {
 
     /**
      * Show typing indicator after a specific message
-     * Due to flex-col-reverse, we insert BEFORE in DOM to appear AFTER visually
+     * Handles both flex-col-reverse (PHP) and regular flow (JS display panel)
      * @param {string|number} messageId - The message ID to show typing after
      */
     showTypingAfterMessage(messageId) {
@@ -435,8 +508,17 @@ const ChatMessageInjector = {
         typingIndicator.setAttribute('data-void', 'true');
         typingIndicator.innerHTML = this.typingIndicatorTemplate;
 
-        // In flex-col-reverse, insert BEFORE in DOM to appear AFTER visually
-        targetMessage.parentNode.insertBefore(typingIndicator, targetMessage);
+        // Check if target is in display panel (regular flow) vs main container (flex-col-reverse)
+        const displayPanel = document.getElementById(this.displayPanelId);
+        const isInDisplayPanel = displayPanel && displayPanel.contains(targetMessage);
+
+        if (isInDisplayPanel) {
+            // Display panel uses regular top-to-bottom flow: insert AFTER in DOM
+            targetMessage.parentNode.insertBefore(typingIndicator, targetMessage.nextSibling);
+        } else {
+            // Main container uses flex-col-reverse: insert BEFORE in DOM to appear AFTER visually
+            targetMessage.parentNode.insertBefore(typingIndicator, targetMessage);
+        }
 
         // Add fade-in animation
         typingIndicator.style.opacity = '0';
@@ -469,13 +551,8 @@ const ChatMessageInjector = {
 
             const messagesToRemove = [];
 
-            // 1. Clear the display panel entirely (any JS-injected placeholders)
-            const displayPanel = document.getElementById(this.displayPanelId);
-            if (displayPanel) {
-                displayPanel.innerHTML = '';
-            }
-
-            // 2. Find all messages with ID >= targetId (this message and all after)
+            // 1. Find all messages with ID >= targetId (this message and all after)
+            // This works for both PHP-rendered AND JS-injected messages
             const allMessages = document.querySelectorAll('[data-message-id]');
             allMessages.forEach(el => {
                 const elId = parseInt(el.getAttribute('data-message-id'));
@@ -484,24 +561,19 @@ const ChatMessageInjector = {
                 }
             });
 
-            // 3. Also remove any remaining placeholders (typing indicators, etc.)
+            // 2. Remove any placeholders (typing indicators, void messages)
             document.querySelectorAll('[data-placeholder]').forEach(el => {
                 if (!messagesToRemove.includes(el)) {
                     messagesToRemove.push(el);
                 }
             });
 
-            // 4. Remove any JS-injected bubbles (siblings BEFORE target in DOM = AFTER visually)
-            const targetMessage = document.querySelector(`[data-message-id="${messageId}"]`);
-            if (targetMessage) {
-                let sibling = targetMessage.previousElementSibling;
-                while (sibling) {
-                    if (sibling.id !== this.displayPanelId && !messagesToRemove.includes(sibling)) {
-                        messagesToRemove.push(sibling);
-                    }
-                    sibling = sibling.previousElementSibling;
+            // 3. Remove void markers (uncommitted messages without ID)
+            document.querySelectorAll('[data-void="true"]').forEach(el => {
+                if (!messagesToRemove.includes(el)) {
+                    messagesToRemove.push(el);
                 }
-            }
+            });
 
             if (messagesToRemove.length === 0) {
                 resolve();

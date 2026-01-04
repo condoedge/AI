@@ -313,21 +313,26 @@ class MessagesQuery extends Query
 
         // Regenerate button
         if ($this->settings()->enableRegenerate()) {
+            $dotColor = $this->theme()->primarySolid();
+            $regeneratingText = __('ai.messages.regenerating');
+            $messageId = $message->id;
             $actions[] = _Link()->icon(_Sax('refresh', 16))
                 ->class('p-1.5 rounded-lg text-gray-400 ' . $this->theme()->linkHover() . ' transition-all')
                 ->balloon(__('ai.messages.regenerate'), 'up')
-                ->selfPost('regenerate', ['id' => $message->id])
-                ->run('() => {
-                    // Show regenerating indicator on this message
-                    const bubble = event.target.closest("[data-message-id]");
-                    if (bubble) {
-                        const content = bubble.querySelector(".prose");
-                        if (content) {
-                            content.innerHTML = "<div class=\"flex items-center gap-2 text-gray-400\"><svg class=\"animate-spin h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\"><circle class=\"opacity-25\" cx=\"12\" cy=\"12\" r=\"10\" stroke=\"currentColor\" stroke-width=\"4\"></circle><path class=\"opacity-75\" fill=\"currentColor\" d=\"M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z\"></path></svg><span>' . __('ai.messages.regenerating') . '</span></div>";
+                ->onClick(fn($e) => $e
+                    ->run('() => {
+                        // Show typing dots indicator on this message (find by ID injected from PHP)
+                        const bubble = document.querySelector("[data-message-id=\"' . $messageId . '\"]");
+                        if (bubble) {
+                            const content = bubble.querySelector(".prose");
+                            if (content) {
+                                content.innerHTML = "<div class=\"flex items-center gap-1.5 h-6\"><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-1\"></span><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-2\"></span><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-3\"></span></div><div class=\"text-xs text-gray-400 mt-2\">' . $regeneratingText . '</div>";
+                            }
                         }
-                    }
-                }')
-                ->refresh();
+                    }')
+                    && $e->selfPost('regenerate', ['id' => $message->id])
+                        ->refresh()
+                );
         }
 
         return _Flex(...$actions)

@@ -9,6 +9,7 @@ use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
+use Condoedge\Ai\Kompo\Traits\HasMessageActions;
 use Condoedge\Ai\Kompo\Traits\HasStagedMessageRendering;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Chat\SendMessageService;
@@ -27,7 +28,7 @@ use Condoedge\Utils\Kompo\Common\Form;
  */
 class ChatMessageForm extends Form
 {
-    use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation, HasStagedMessageRendering;
+    use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation, HasMessageActions, HasStagedMessageRendering;
 
     public $id = 'chat-message-form';
     public $class = 'w-full';

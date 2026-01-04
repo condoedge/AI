@@ -120,6 +120,7 @@ trait HasStagedMessageRendering
         if ($this->settings()->enableRegenerate()) {
             $proxies[] = _Link()
                 ->selfPost('regenerate', ['id' => $assistantMessage->id])
+                ->refresh(\Condoedge\Ai\Kompo\MessagesQuery::ID)
                 ->class('hidden js-action-regenerate-proxy');
         }
 
@@ -148,72 +149,6 @@ trait HasStagedMessageRendering
             ->attr(['data-for-user-message-id' => $userMessage->id]);
     }
 
-    /**
-     * Handle feedback for assistant message.
-     * Called by staged proxy selfPost.
-     */
-    public function feedback($id, $type)
-    {
-        $conversation = $this->getConversationForAction();
-        if (!$conversation) {
-            return;
-        }
-
-        $message = $conversation->messages()->find($id);
-        if ($message && $message->role === 'assistant') {
-            $metadata = $message->metadata ?? [];
-            $metadata['feedback'] = $type;
-            $message->update(['metadata' => $metadata]);
-        }
-    }
-
-    /**
-     * Handle regenerate for assistant message.
-     * Called by staged proxy selfPost.
-     */
-    public function regenerate($id)
-    {
-        $conversation = $this->getConversationForAction();
-        if (!$conversation) {
-            return;
-        }
-
-        $message = $conversation->messages()->find($id);
-        if (!$message || $message->role !== 'assistant') {
-            return;
-        }
-
-        // Get the user message before this assistant message
-        $userMessage = $conversation->messages()
-            ->where('id', '<', $message->id)
-            ->where('role', 'user')
-            ->orderBy('id', 'desc')
-            ->first();
-
-        if (!$userMessage) {
-            return;
-        }
-
-        // Delete this assistant message
-        $message->delete();
-
-        // Regenerate using the service
-        $service = app(\Condoedge\Ai\Services\Chat\RegenerateMessageService::class);
-        $service->regenerateFromMessage(
-            $conversation,
-            $userMessage,
-            auth()->user(),
-            ['style' => $this->settings()->responseStyle()]
-        );
-    }
-
-    /**
-     * Get the conversation for action methods.
-     * Must be implemented by using class or override this method.
-     */
-    protected function getConversationForAction()
-    {
-        // Try common property names
-        return $this->conversation ?? null;
-    }
+    // Note: Action methods (feedback, regenerate) are provided by HasMessageActions trait
+    // Make sure to also use HasMessageActions in your component
 }
