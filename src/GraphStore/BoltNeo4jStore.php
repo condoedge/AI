@@ -55,13 +55,19 @@ class BoltNeo4jStore implements GraphStoreInterface
         $this->initializeCredentials($config);
 
         // Build the Neo4j client
+        // Database is specified in URI as query parameter
+        $uriWithDatabase = $this->uri;
+        if ($this->database && $this->database !== 'neo4j') {
+            $separator = str_contains($this->uri, '?') ? '&' : '?';
+            $uriWithDatabase = $this->uri . $separator . 'database=' . urlencode($this->database);
+        }
+
         $this->client = ClientBuilder::create()
-            ->withDriver('default', $this->uri, Authenticate::basic(
+            ->withDriver('default', $uriWithDatabase, Authenticate::basic(
                 $this->username,
                 $this->getPassword()
             ))
             ->withDefaultDriver('default')
-            ->withDefaultDatabase($this->database)
             ->build();
     }
 
