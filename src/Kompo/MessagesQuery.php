@@ -110,7 +110,7 @@ class MessagesQuery extends Query
                     : 'text-gray-400 hover:text-amber-500 hover:bg-amber-50'))
                 ->balloon($isPinned ? __('ai.messages.unpin') : __('ai.messages.pin'), 'down')
                 ->selfPost('togglePin', ['id' => $this->conversation->id])
-                ->refresh(self::ID),
+                ->refresh([self::ID, ConversationListQuery::ID]),
             _Link()->icon(_Sax('export-2', 18))
                 ->class('p-2.5 rounded-xl text-gray-400 ' . $this->theme()->linkHover() . ' transition-all duration-200')
                 ->balloon(__('ai.messages.export'), 'down')
@@ -120,12 +120,12 @@ class MessagesQuery extends Query
                 ->class('p-2.5 rounded-xl text-gray-400 ' . $this->theme()->linkHover() . ' transition-all duration-200')
                 ->balloon(__('ai.messages.archive'), 'down')
                 ->selfPost('archiveConversation', ['id' => $this->conversation->id])
-                ->refresh(self::ID),
+                ->refresh([self::ID, ConversationListQuery::ID]),
             _DeleteLink()->icon(_Sax('trash', 18))
                 ->class('p-2.5 rounded-xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all duration-200')
                 ->balloon(__('ai.common.delete'), 'down')
                 ->selfPost('deleteConversation', ['id' => $this->conversation->id])
-                ->refresh(self::ID),
+                ->refresh([self::ID, ConversationListQuery::ID]),
         )->class('gap-1 bg-gray-50/50 rounded-2xl p-1');
     }
 
