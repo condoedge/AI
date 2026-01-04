@@ -86,6 +86,7 @@
     "ai.messages.regenerate": "Regenerer",
     "ai.messages.follow-up": "Questions de suivi:",
     "ai.messages.click-to-view": "Cliquez pour voir",
+    "ai.messages.regenerating": "Regeneration en cours...",
 
     "ai.edit.title": "Modifier le message",
     "ai.edit.instruction": "Modifiez votre message ci-dessous. L'IA regenerera sa reponse en fonction de votre message mis a jour.",
@@ -95,6 +96,7 @@
     "ai.edit.save-regenerate": "Enregistrer et regenerer",
     "ai.edit.not-found": "Message introuvable",
     "ai.edit.not-found-desc": "Ce message a peut-etre ete supprime ou vous n'avez pas la permission de le modifier.",
+    "ai.edit.regenerating": "Regeneration en cours...",
 
     "ai.file.title": "Apercu du fichier",
     "ai.file.document": "Document",

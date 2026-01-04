@@ -14,6 +14,7 @@ class ConversationListQuery extends Query
     public const ID = 'conversation-list';
 
     public $itemsWrapperClass = '[&>div>.vlNoItems]:px-6 [&>div>.vlNoItems]:pb-4 overflow-y-auto mini-scroll max-h-[55vh]';
+    public $paginationType = 'Scroll';
 
     protected $conversationId = null;
     protected $conversation = null;

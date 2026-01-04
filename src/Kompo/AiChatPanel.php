@@ -8,6 +8,7 @@ use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
+use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
 use Condoedge\Ai\Kompo\Modals\ChatHelpModal;
 use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
@@ -32,7 +33,7 @@ use Illuminate\Support\Facades\Log;
  */
 class AiChatPanel extends Form
 {
-    use HasChatSettings, HasChatTheme, HasAvatars, HasMethodsAsProperties;
+    use HasChatSettings, HasChatTheme, HasAvatars, HasMethodsAsProperties, HasConversationCreation;
 
     public $style = 'max-height: 95vh; width: 100vw;';
 
@@ -202,22 +203,12 @@ class AiChatPanel extends Form
         $avatarHtml = $this->assistantAvatarHtml();
         $dotColor = $this->theme()->primarySolid(); // Single solid color for small dots
 
-        return '<div class="flex items-start mt-4 animate-message-assistant"><div class="mr-3 flex-shrink-0 self-start">' . $avatarHtml . '</div><div id="typing-indicator-content" class="group px-5 py-4 rounded-2xl rounded-tl-md bg-white border border-gray-100 shadow-sm"><div class="flex items-center gap-1.5 h-6"><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-1"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-2"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-3"></span></div><div class="text-xs text-gray-400 mt-2">' . __('ai.chat.thinking') . '</div></div></div>';
+        return '<div class="flex items-start mt-4 animate-message-assistant"><div class="mr-3 flex-shrink-0 self-start">' . $avatarHtml . '</div><div class="typing-indicator-content group px-5 py-4 rounded-2xl rounded-tl-md bg-white border border-gray-100 shadow-sm"><div class="flex items-center gap-1.5 h-6"><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-1"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-2"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-3"></span></div><div class="text-xs text-gray-400 mt-2">' . __('ai.chat.thinking') . '</div></div></div>';
     }
 
     // ========== ACTION METHODS ==========
 
-    public function createConversation()
-    {
-        $conversation = AiConversation::create([
-            'user_id' => auth()->id(),
-            'team_id' => currentTeamId(),
-            'status' => 'active',
-            'title' => 'New Conversation',
-        ]);
-
-        session(['selected_conversation_id' => $conversation->id]);
-    }
+    // createConversation() provided by HasConversationCreation trait
 
     public function openSettings()
     {

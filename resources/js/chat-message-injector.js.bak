@@ -53,7 +53,7 @@ const ChatMessageInjector = {
         // Create display panel at the end of items container
         displayPanel = document.createElement('div');
         displayPanel.id = this.displayPanelId;
-        displayPanel.className = 'mt-4 space-y-4'; // mt-4 from top, space-y-4 between messages
+        displayPanel.className = 'mt-4';
         itemsContainer.prepend(displayPanel);
 
         return displayPanel;
@@ -64,12 +64,6 @@ const ChatMessageInjector = {
      * Called immediately when user clicks send
      */
     precreateMessagePlaceholder(userMessage, avatarHtml) {
-        // Hide welcome/empty state content when sending first message
-        const welcomeState = document.getElementById('chat-welcome-state');
-        const emptyState = document.getElementById('chat-empty-state');
-        if (welcomeState) welcomeState.style.display = 'none';
-        if (emptyState) emptyState.style.display = 'none';
-
         const displayPanel = this.ensureDisplayPanel();
         if (!displayPanel) {
             console.warn('Could not create display panel');
@@ -96,13 +90,8 @@ const ChatMessageInjector = {
         typingIndicator.setAttribute('data-void', 'true');
         typingIndicator.innerHTML = this.typingIndicatorTemplate;
 
-        // Remove any existing typing indicator (but keep previous messages)
-        const existingTyping = displayPanel.querySelector('[data-placeholder="typing-indicator"]');
-        if (existingTyping) {
-            existingTyping.remove();
-        }
-
-        // Append new user bubble and typing indicator (preserve previous messages)
+        // Insert into display panel
+        displayPanel.innerHTML = '';
         displayPanel.appendChild(userBubble);
         displayPanel.appendChild(typingIndicator);
 
@@ -124,26 +113,21 @@ const ChatMessageInjector = {
         // Get the response HTML from staging
         const responseHtml = stagingPanel.innerHTML;
 
-        // Find the LATEST typing indicator content (use class, get last one)
-        const contentAreas = document.querySelectorAll('.typing-indicator-content');
-        const contentArea = contentAreas.length > 0 ? contentAreas[contentAreas.length - 1] : null;
+        // Find the typing indicator content by ID and replace it
+        const contentArea = document.getElementById('typing-indicator-content');
         if (contentArea) {
             contentArea.innerHTML = responseHtml;
-            // Remove the class so this bubble won't be targeted again
-            contentArea.classList.remove('typing-indicator-content');
         }
 
-        // Remove placeholder markers from the LATEST typing indicator
-        const typingIndicators = document.querySelectorAll('[data-placeholder="typing-indicator"]');
-        const typingIndicator = typingIndicators.length > 0 ? typingIndicators[typingIndicators.length - 1] : null;
+        // Remove placeholder markers
+        const typingIndicator = document.querySelector('[data-placeholder="typing-indicator"]');
         if (typingIndicator) {
             typingIndicator.removeAttribute('data-placeholder');
             typingIndicator.removeAttribute('data-void');
         }
 
-        // Remove void marker from the LATEST user message placeholder
-        const userPlaceholders = document.querySelectorAll('[data-placeholder="user-message"]');
-        const userPlaceholder = userPlaceholders.length > 0 ? userPlaceholders[userPlaceholders.length - 1] : null;
+        // Remove void marker from user message placeholder (it's now permanent)
+        const userPlaceholder = document.querySelector('[data-placeholder="user-message"]');
         if (userPlaceholder) {
             userPlaceholder.removeAttribute('data-void');
             userPlaceholder.removeAttribute('data-placeholder');

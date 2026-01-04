@@ -47,6 +47,7 @@ use Condoedge\Ai\Services\ScopeSemanticMatcher;
 use Condoedge\Ai\Services\SemanticContextSelector;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Ai\Services\Chat\AiChatService;
+use Condoedge\Ai\Services\Chat\RegenerateMessageService;
 use Condoedge\Ai\Services\Discovery\SchemaInspector;
 use Condoedge\Ai\Services\Discovery\CypherScopeAdapter;
 use Condoedge\Ai\Services\Discovery\CypherQueryBuilderSpy;
@@ -498,6 +499,13 @@ class AiServiceProvider extends ServiceProvider
 
         // Alias for easier access
         $this->app->alias(AiChatServiceInterface::class, AiChatService::class);
+
+        // Register Regenerate Message Service
+        $this->app->singleton(RegenerateMessageService::class, function ($app) {
+            return new RegenerateMessageService(
+                $app->make(AiChatService::class)
+            );
+        });
     }
 
     /**
@@ -768,6 +776,7 @@ class AiServiceProvider extends ServiceProvider
             ChatThemeFactoryInterface::class,
             ChatThemeInterface::class,
             ChatSettingsInterface::class,
+            RegenerateMessageService::class,
         ];
     }
 }

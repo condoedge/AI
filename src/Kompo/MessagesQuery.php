@@ -7,19 +7,21 @@ use Condoedge\Ai\Kompo\Modals\FilePreviewModal;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
+use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Models\AiConversation;
-use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
+use Condoedge\Ai\Models\AiMessage;
+use Condoedge\Ai\Services\Chat\RegenerateMessageService;
 use Condoedge\Ai\Services\Chat\SendMessageService;
 use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
 use Condoedge\Utils\Kompo\Common\Query;
 
 class MessagesQuery extends Query
 {
-    use HasChatTheme, HasAvatars, HasChatSettings;
+    use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation;
 
     public const ID = 'chat-messages-panel';
     public $class = '';
-    public $itemsWrapperClass = '[&>div]:gap-4 [&>div]:flex [&>div]:flex-col-reverse p-6 overflow-y-auto mini-scroll h-full';
+    public $itemsWrapperClass = '[&>div]:gap-4 [&>div]:flex [&>div]:flex-col-reverse p-6 overflow-y-auto mini-scroll flex-1 min-h-0 relative z-10';
     public $style = 'max-height: 95vh; display: flex; flex-direction: column;';
 
     public $noItemsFound = '';
@@ -129,25 +131,27 @@ class MessagesQuery extends Query
 
     public function bottom()
     {
-        if (!$this->conversation) {
-            return null;
-        }
-
+        // Always show the form - even without a conversation
+        // ChatMessageForm will auto-create conversation on first message
         return _Rows(
             new ChatMessageForm(null, [
-                'conversation_id' => $this->conversation->id,
+                'conversation_id' => $this->conversation?->id,
                 'response_style' => $this->settings()->responseStyle(),
             ]),
 
-            _Hidden()->onLoad->run($this->scrollScript(false)),
-        );
+            $this->conversation
+                ? _Hidden()->onLoad->run($this->scrollScript(false))
+                : null,
+        )->class('flex-shrink-0 relative z-0');
     }
 
     
     public function query()
     {
         if (!$this->conversation) {
-            return null;
+            // Return empty query to ensure vlQueryWrapper structure exists
+            // This allows JS message injection to work before first message
+            return AiMessage::where('id', 0);
         }
 
         // With topPagination=true, Kompo:
@@ -313,6 +317,16 @@ class MessagesQuery extends Query
                 ->class('p-1.5 rounded-lg text-gray-400 ' . $this->theme()->linkHover() . ' transition-all')
                 ->balloon(__('ai.messages.regenerate'), 'up')
                 ->selfPost('regenerate', ['id' => $message->id])
+                ->run('() => {
+                    // Show regenerating indicator on this message
+                    const bubble = event.target.closest("[data-message-id]");
+                    if (bubble) {
+                        const content = bubble.querySelector(".prose");
+                        if (content) {
+                            content.innerHTML = "<div class=\"flex items-center gap-2 text-gray-400\"><svg class=\"animate-spin h-4 w-4\" xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\"><circle class=\"opacity-25\" cx=\"12\" cy=\"12\" r=\"10\" stroke=\"currentColor\" stroke-width=\"4\"></circle><path class=\"opacity-75\" fill=\"currentColor\" d=\"M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z\"></path></svg><span>' . __('ai.messages.regenerating') . '</span></div>";
+                        }
+                    }
+                }')
                 ->refresh();
         }
 
@@ -456,15 +470,15 @@ class MessagesQuery extends Query
                 ->class('px-6 py-3 bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white rounded-xl shadow-lg hover:shadow-xl transition-all')
                 ->selfPost('createConversation')
                 ->refresh(),
-        )->class('flex flex-col items-center justify-center h-full py-16');
+        )->id('chat-empty-state')->class('flex flex-col items-center justify-center flex-1 py-8');
     }
 
     protected function welcomeState()
     {
         $elements = [
-            _Html($this->welcomeAvatarHtml())->class('mb-6'),
-            _Html($this->settings()->welcomeTitle())->class('text-2xl font-bold text-gray-800 mb-3'),
-            _Html($this->settings()->welcomeMessage())->class('text-gray-500 text-center max-w-md mb-8'),
+            _Html($this->welcomeAvatarHtml())->class('mb-4'),
+            _Html($this->settings()->welcomeTitle())->class('text-2xl font-bold text-gray-800 mb-2'),
+            _Html($this->settings()->welcomeMessage())->class('text-gray-500 text-center max-w-md mb-6'),
         ];
 
         // Example questions
@@ -472,18 +486,18 @@ class MessagesQuery extends Query
         if (!empty($examples)) {
             $questionButtons = array_map(fn($q) =>
                 _Link($q)->icon('chat-bubble-left-ellipsis')
-                    ->class('w-full p-4 text-left rounded-xl border border-gray-200 bg-white ' . $this->theme()->primaryLightBgHover() . ' transition-all flex items-center gap-3 group')
+                    ->class('w-full p-3 text-left rounded-xl border border-gray-200 bg-white ' . $this->theme()->primaryLightBgHover() . ' transition-all flex items-center gap-3 group text-sm')
                     ->selfPost('askSuggestion', ['question' => $q])->refresh(),
                 $examples
             );
 
             $elements[] = _Rows(
-                _Html(__('ai.chat.try-asking'))->class('text-sm font-medium text-gray-400 mb-4'),
-                _Rows(...$questionButtons)->class('space-y-3 w-full max-w-md'),
+                _Html(__('ai.chat.try-asking'))->class('text-sm font-medium text-gray-400 mb-3'),
+                _Rows(...$questionButtons)->class('space-y-2 w-full max-w-md'),
             )->class('w-full flex flex-col items-center');
         }
 
-        return _Rows(...$elements)->class('flex flex-col items-center justify-center py-16 px-4');
+        return _Rows(...$elements)->id('chat-welcome-state')->class('flex flex-col items-center justify-center flex-1 py-8 px-4');
     }
 
     public function togglePin($id)
@@ -509,43 +523,24 @@ class MessagesQuery extends Query
     public function regenerate($id)
     {
         if (!$this->conversation) {
-            return $this->renderMessages();
+            return;
         }
 
         $message = $this->conversation->messages()->find($id);
         if (!$message || $message->role !== 'assistant') {
-            return $this->renderMessages();
+            return;
         }
 
-        // Find the user message before this
-        $userMessage = $this->conversation->messages()
-            ->where('created_at', '<', $message->created_at)
-            ->where('role', 'user')
-            ->orderByDesc('created_at')
-            ->first();
-
-        if ($userMessage) {
-            // Delete the old assistant message
-            $message->delete();
-
-            app(AiChatServiceInterface::class)->askWithConversation(
-                $userMessage->content,
+        try {
+            $service = app(RegenerateMessageService::class);
+            $service->regenerateFromAssistantMessage(
                 $this->conversation,
-                [
-                    'style' => $this->settings()->responseStyle(),
-                    'user' => auth()->user(), // SECURITY: Pass authenticated user for file access control
-                ]
+                $message,
+                auth()->user(),
+                ['style' => $this->settings()->responseStyle()]
             );
-
-            // It will duplicate the user question so we need to remove it
-            $latestUserMessage = $this->conversation->messages()
-                ->where('role', 'user')
-                ->orderByDesc('created_at')
-                ->first();
-
-            if ($latestUserMessage && $latestUserMessage->id !== $userMessage->id) {
-                $latestUserMessage->delete();
-            }
+        } catch (\Throwable $e) {
+            \Log::error('Regenerate failed: ' . $e->getMessage());
         }
     }
 

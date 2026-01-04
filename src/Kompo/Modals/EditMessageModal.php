@@ -3,10 +3,13 @@
 
 namespace Condoedge\Ai\Kompo\Modals;
 
+use Condoedge\Ai\Kompo\MessagesQuery;
+use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Kompo\AiChatPanel;
+use Condoedge\Ai\Services\Chat\RegenerateMessageService;
 use Condoedge\Utils\Kompo\Common\Modal;
 
 /**
@@ -14,7 +17,7 @@ use Condoedge\Utils\Kompo\Common\Modal;
  */
 class EditMessageModal extends Modal
 {
-    use HasChatTheme;
+    use HasChatTheme, HasChatSettings;
 
     protected $_Title = 'ai.edit.title';
     public $class = 'overflow-hidden max-w-2xl rounded-2xl';
@@ -87,10 +90,17 @@ class EditMessageModal extends Modal
                 _Link(__('ai.edit.delete-message'))->icon('trash')
                     ->class('px-4 py-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all')
                     ->selfPost('deleteMessage')
+                    ->refresh(MessagesQuery::ID)
                     ->closeModal(),
                 _Button(__('ai.edit.save-regenerate'))->icon('arrow-path')
                     ->class('px-4 py-2 text-white rounded-xl shadow-lg transition-all ' . $this->theme()->primaryGradient())
                     ->selfPost('updateMessage')
+                    ->run('() => {
+                        // Disable button and show loading
+                        event.target.disabled = true;
+                        event.target.innerHTML = "<svg class=\"animate-spin h-4 w-4 mr-2 inline\" xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\"><circle class=\"opacity-25\" cx=\"12\" cy=\"12\" r=\"10\" stroke=\"currentColor\" stroke-width=\"4\"></circle><path class=\"opacity-75\" fill=\"currentColor\" d=\"M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z\"></path></svg>' . __('ai.edit.regenerating') . '";
+                    }')
+                    ->refresh(MessagesQuery::ID)
                     ->closeModal(),
             )->class('gap-3'),
         )->class('px-6 py-4 border-t border-gray-200 bg-gray-50');
@@ -115,17 +125,28 @@ class EditMessageModal extends Modal
             return;
         }
 
-        // Update the message
+        // Update the message content
         $this->message->update(['content' => $content]);
 
-        // Delete any assistant messages after this one (they'll be regenerated)
+        // Delete all messages after this one (will be regenerated)
+        // Using ID for reliable ordering (same as RegenerateMessageService)
         $conversation = $this->message->conversation;
         $conversation->messages()
-            ->where('created_at', '>', $this->message->created_at)
+            ->where('id', '>', $this->message->id)
             ->delete();
 
-        // Trigger regeneration by calling the chat form's sendMessage
-        // This is handled by the panel refresh
+        // Regenerate AI response using the service
+        try {
+            $service = app(RegenerateMessageService::class);
+            $service->regenerateFromMessage(
+                $conversation,
+                $this->message->fresh(), // Fresh to get updated content
+                auth()->user(),
+                ['style' => $this->settings()->responseStyle()]
+            );
+        } catch (\Throwable $e) {
+            \Log::error('Edit message regeneration failed: ' . $e->getMessage());
+        }
     }
 
     public function deleteMessage()
@@ -135,9 +156,10 @@ class EditMessageModal extends Modal
         }
 
         // Delete this message and all subsequent messages
+        // Using ID for reliable ordering (same as updateMessage)
         $conversation = $this->message->conversation;
         $conversation->messages()
-            ->where('created_at', '>=', $this->message->created_at)
+            ->where('id', '>=', $this->message->id)
             ->delete();
     }
 }

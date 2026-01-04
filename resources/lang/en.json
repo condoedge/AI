@@ -86,6 +86,7 @@
     "ai.messages.regenerate": "Regenerate",
     "ai.messages.follow-up": "Follow-up questions:",
     "ai.messages.click-to-view": "Click to view",
+    "ai.messages.regenerating": "Regenerating...",
 
     "ai.edit.title": "Edit Message",
     "ai.edit.instruction": "Edit your message below. The AI will regenerate its response based on your updated message.",
@@ -95,6 +96,7 @@
     "ai.edit.save-regenerate": "Save & Regenerate",
     "ai.edit.not-found": "Message not found",
     "ai.edit.not-found-desc": "This message may have been deleted or you don't have permission to edit it.",
+    "ai.edit.regenerating": "Regenerating...",
 
     "ai.file.title": "File Preview",
     "ai.file.document": "Document",

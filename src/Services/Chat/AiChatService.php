@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Services\Chat;
 
 use Condoedge\Ai\Facades\AI;
 use Condoedge\Ai\Models\AiConversation;
+use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Context\ConversationContextManager;
 use Condoedge\Ai\Services\Context\EntityExtractor;
 use Condoedge\Ai\Services\Context\ReferenceResolver;
@@ -155,6 +156,89 @@ class AiChatService implements AiChatServiceInterface
             // Store error response in conversation
             $conversation->addMessage('assistant', $errorMessage, [
                 'error' => true,
+            ]);
+
+            return [
+                'answer' => $errorMessage,
+                'data' => [],
+                'suggestions' => [],
+                'sources' => [],
+                'cypher_query' => null,
+            ];
+        }
+    }
+
+    /**
+     * Regenerate response for an existing user message.
+     *
+     * Unlike askWithConversation(), this does NOT store the user message again.
+     * It only generates and stores a new assistant response.
+     *
+     * @param AiConversation $conversation The conversation
+     * @param AiMessage $userMessage The existing user message to regenerate from
+     * @param array $options Additional options (user, style, etc.)
+     * @return array The AI response
+     */
+    public function regenerateResponse(
+        AiConversation $conversation,
+        AiMessage $userMessage,
+        array $options = []
+    ): array {
+        $options = array_merge($this->config, $options);
+        $question = $userMessage->content;
+
+        try {
+            $schema = $this->getSchema();
+            $contextManager = $this->getContextManager();
+
+            $conversationContext = $contextManager->buildPromptContext($conversation);
+
+            $aiResponse = AI::answerQuestion($question, [
+                'style' => $options['style'] ?? 'friendly',
+                'conversation_id' => $conversation->id,
+                'conversation_context' => $conversationContext,
+                'user' => $options['user'] ?? null,
+            ]);
+
+            $answerText = $aiResponse['answer'] ?? '';
+            $cypherQuery = $aiResponse['cypher'] ?? null;
+            $queryData = $aiResponse['data'] ?? [];
+
+            $contextManager->recordResponse(
+                $conversation,
+                $answerText,
+                $cypherQuery ?? '',
+                ['data' => $queryData]
+            );
+
+            $conversation->addMessage('assistant', $answerText, [
+                'response_data' => $queryData,
+                'cypher_query' => $cypherQuery,
+                'suggestions' => $aiResponse['suggestions'] ?? [],
+                'sources' => $aiResponse['referenced_files'] ?? [],
+                'regenerated' => true,
+            ]);
+
+            return [
+                'answer' => $answerText,
+                'data' => $queryData,
+                'suggestions' => $aiResponse['suggestions'] ?? [],
+                'sources' => $aiResponse['referenced_files'] ?? [],
+                'cypher_query' => $cypherQuery,
+            ];
+
+        } catch (\Exception $e) {
+            Log::error('AI regenerate response error', [
+                'user_message_id' => $userMessage->id,
+                'conversation_id' => $conversation->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            $errorMessage = $this->getUserFriendlyError($e);
+
+            $conversation->addMessage('assistant', $errorMessage, [
+                'error' => true,
+                'regenerated' => true,
             ]);
 
             return [

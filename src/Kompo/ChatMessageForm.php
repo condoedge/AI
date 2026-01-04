@@ -7,6 +7,7 @@ use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
+use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Chat\SendMessageService;
 use Condoedge\Utils\Kompo\Common\Form;
@@ -24,7 +25,7 @@ use Condoedge\Utils\Kompo\Common\Form;
  */
 class ChatMessageForm extends Form
 {
-    use HasAvatars, HasChatSettings, HasChatTheme;
+    use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation;
 
     public $id = 'chat-message-form';
     public $class = 'w-full';
@@ -128,6 +129,24 @@ class ChatMessageForm extends Form
     }
 
     /**
+     * Ensure a conversation exists, creating one if needed.
+     *
+     * This allows users to start typing immediately without clicking "New Conversation".
+     * The conversation is created on-the-fly when the first message is sent.
+     *
+     * @return AiConversation The existing or newly created conversation
+     */
+    protected function ensureConversation(): AiConversation
+    {
+        if (!$this->conversation) {
+            $this->conversation = $this->createNewConversation();
+            $this->conversationId = $this->conversation->id;
+        }
+
+        return $this->conversation;
+    }
+
+    /**
      * Send message and return rendered messages for injection (no full refresh)
      * This follows the auth package's placeholder injection pattern
      */
@@ -136,9 +155,12 @@ class ChatMessageForm extends Form
         $message = trim(request('message') ?? '');
         $style = request('style') ?? $this->responseStyle;
 
-        if (empty($message) || !$this->conversation) {
-            return _Html('')->class('hidden'); // Return empty if invalid
+        if (empty($message)) {
+            return _Html('')->class('hidden'); // Return empty if no message
         }
+
+        // Auto-create conversation if needed (allows typing without clicking "New")
+        $this->ensureConversation();
 
         $service = app(SendMessageService::class);
 
@@ -184,9 +206,12 @@ class ChatMessageForm extends Form
         $message = trim($message ?? request('message') ?? '');
         $style = request('style') ?? $this->responseStyle;
 
-        if (empty($message) || !$this->conversation) {
+        if (empty($message)) {
             return;
         }
+
+        // Auto-create conversation if needed (allows typing without clicking "New")
+        $this->ensureConversation();
 
         $service = app(SendMessageService::class);
 
@@ -255,6 +280,7 @@ class ChatMessageForm extends Form
     {
         return fn($e) => $e
             // 1. Show placeholder immediately (client-side)
+            // Note: precreateMessagePlaceholder() also hides welcome/empty state
             ->run('() => {
                 const input = document.getElementById("chat-message-input");
                 const message = input ? input.value : "";
