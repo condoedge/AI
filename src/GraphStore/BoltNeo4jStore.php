@@ -10,7 +10,9 @@ use Laudis\Neo4j\Contracts\ClientInterface;
 use Laudis\Neo4j\Contracts\TransactionInterface;
 use Laudis\Neo4j\Authentication\Authenticate;
 use Laudis\Neo4j\Types\CypherMap;
+use Laudis\Neo4j\Types\CypherList;
 use Laudis\Neo4j\Types\Node;
+use Laudis\Neo4j\Types\Relationship;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -389,24 +391,63 @@ class BoltNeo4jStore implements GraphStoreInterface
     /**
      * Convert a Neo4j value to a plain PHP value
      *
+     * Recursively converts Laudis types (CypherMap, CypherList, Node, Relationship)
+     * to plain PHP arrays and scalar values.
+     *
      * @param mixed $value The value to convert
      * @return mixed Plain PHP value
      */
     protected function convertValue(mixed $value): mixed
     {
+        // Handle Node - extract properties as array
         if ($value instanceof Node) {
-            // Convert Node to array of properties
-            return $value->getProperties()->toArray();
+            $props = $value->getProperties();
+            return $this->convertValue($props);
         }
 
+        // Handle Relationship - extract properties
+        if ($value instanceof Relationship) {
+            $props = $value->getProperties();
+            return $this->convertValue($props);
+        }
+
+        // Handle CypherMap - convert to associative array with recursive conversion
         if ($value instanceof CypherMap) {
-            return $value->toArray();
+            $result = [];
+            foreach ($value as $key => $val) {
+                $result[$key] = $this->convertValue($val);
+            }
+            return $result;
         }
 
-        if (is_iterable($value) && !is_array($value)) {
-            return iterator_to_array($value);
+        // Handle CypherList - convert to indexed array with recursive conversion
+        if ($value instanceof CypherList) {
+            $result = [];
+            foreach ($value as $val) {
+                $result[] = $this->convertValue($val);
+            }
+            return $result;
         }
 
+        // Handle other iterables (but not strings/arrays)
+        if (is_iterable($value) && !is_array($value) && !is_string($value)) {
+            $result = [];
+            foreach ($value as $key => $val) {
+                $result[$key] = $this->convertValue($val);
+            }
+            return $result;
+        }
+
+        // Handle plain arrays - recursively convert values
+        if (is_array($value)) {
+            $result = [];
+            foreach ($value as $key => $val) {
+                $result[$key] = $this->convertValue($val);
+            }
+            return $result;
+        }
+
+        // Scalar values pass through as-is
         return $value;
     }
 
