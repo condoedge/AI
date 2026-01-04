@@ -11,6 +11,7 @@ use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
 use Condoedge\Ai\Kompo\Modals\ChatHelpModal;
+use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
 use Condoedge\Utils\Kompo\Common\Form;
 use Illuminate\Support\Facades\Log;
@@ -188,10 +189,15 @@ class AiChatPanel extends Form
     /**
      * Generate user bubble placeholder HTML matching the actual PHP component
      * Uses animate-message-user class for entrance animation
+     * Includes edit button with js-edit-message class for event delegation
      */
     protected function userBubblePlaceholderHtml(): string
     {
-        return '<div class="group"><div class="flex justify-end items-end animate-message-user"><div class="group px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md animate-new-message-highlight"><div class="whitespace-pre-wrap">$MESSAGE</div><div class="text-xs opacity-60 mt-2">$TIMESTAMP</div></div>$AVATAR</div></div>';
+        $editButton = $this->settings()->enableEdit()
+            ? '<div class="flex justify-end"><button type="button" class="js-edit-message opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-gray-600 mt-1 transition-opacity flex items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>' . __('ai.common.edit') . '</button></div>'
+            : '';
+
+        return '<div class="group"><div class="flex justify-end items-end animate-message-user"><div class="group px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md animate-new-message-highlight"><div class="whitespace-pre-wrap">$MESSAGE</div><div class="text-xs opacity-60 mt-2">$TIMESTAMP</div></div>$AVATAR</div>' . $editButton . '</div>';
     }
 
     /**
@@ -218,6 +224,14 @@ class AiChatPanel extends Form
     public function openHelp()
     {
         return new ChatHelpModal();
+    }
+
+    public function editMessage($id)
+    {
+        return new EditMessageModal(null, [
+            'message_id' => $id,
+            'conversation_id' => $this->conversation?->id,
+        ]);
     }
 
 }

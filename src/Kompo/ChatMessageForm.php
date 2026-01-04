@@ -3,11 +3,13 @@
 
 namespace Condoedge\Ai\Kompo;
 
+use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
+use Condoedge\Ai\Kompo\Traits\HasStagedMessageRendering;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Chat\SendMessageService;
 use Condoedge\Utils\Kompo\Common\Form;
@@ -25,7 +27,7 @@ use Condoedge\Utils\Kompo\Common\Form;
  */
 class ChatMessageForm extends Form
 {
-    use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation;
+    use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation, HasStagedMessageRendering;
 
     public $id = 'chat-message-form';
     public $class = 'w-full';
@@ -174,7 +176,13 @@ class ChatMessageForm extends Form
                 ]
             );
 
-            // Get only the assistant response (user bubble is already shown as placeholder)
+            // Get the user message that was just created (for JS to set data-message-id)
+            $userMessage = $this->conversation->messages()
+                ->where('role', 'user')
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            // Get the assistant response (user bubble is already shown as placeholder)
             $assistantMessage = $this->conversation->messages()
                 ->where('role', 'assistant')
                 ->orderBy('created_at', 'desc')
@@ -184,10 +192,8 @@ class ChatMessageForm extends Form
                 return _Html('')->class('hidden');
             }
 
-            // Return just the rendered content - JS will put it into the typing indicator bubble
-            $renderer = new \Condoedge\Ai\Services\UI\SafeMarkdownRenderer();
-            return _Html($renderer->render($assistantMessage->content))->class('prose prose-sm max-w-none');
-
+            // Use shared staged rendering (content + action bar + proxies)
+            return $this->renderStagedAssistantResponse($assistantMessage, $userMessage);
         } catch (\Throwable $e) {
             \Log::error('Chat message failed: ' . $e->getMessage(), [
                 'conversation_id' => $this->conversation->id,
@@ -301,5 +307,13 @@ class ChatMessageForm extends Form
                     }, 100);
                 }')
                 ->onError->run('clearMessagePlaceholders');
+    }
+
+    public function editMessage($id)
+    {
+        return new EditMessageModal(null, [
+            'message_id' => $id,
+            'conversation_id' => $this->conversation?->id,
+        ]);
     }
 }

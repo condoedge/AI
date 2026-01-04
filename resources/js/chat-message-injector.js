@@ -112,7 +112,9 @@ const ChatMessageInjector = {
 
     /**
      * Process server response from staging panel
-     * Replaces typing indicator's inner content (dots) with assistant message
+     * - Moves content + action bar to typing indicator
+     * - Moves proxies into message elements for persistence
+     * - Wires visible buttons to proxy buttons
      */
     processServerResponse() {
         const stagingPanel = document.getElementById(this.stagingPanelId);
@@ -121,39 +123,116 @@ const ChatMessageInjector = {
             return;
         }
 
-        // Get the response HTML from staging
-        const responseHtml = stagingPanel.innerHTML;
+        // 1. Get content and action bar from staging
+        const content = stagingPanel.querySelector('.chat-staged-content')?.outerHTML || '';
+        const actionBar = stagingPanel.querySelector('.chat-staged-action-bar')?.outerHTML || '';
+        const combinedHtml = content + actionBar;
 
-        // Find the LATEST typing indicator content (use class, get last one)
+        // 2. Find the LATEST typing indicator and inject content
         const contentAreas = document.querySelectorAll('.typing-indicator-content');
         const contentArea = contentAreas.length > 0 ? contentAreas[contentAreas.length - 1] : null;
         if (contentArea) {
-            contentArea.innerHTML = responseHtml;
-            // Remove the class so this bubble won't be targeted again
+            contentArea.innerHTML = combinedHtml;
             contentArea.classList.remove('typing-indicator-content');
         }
 
-        // Remove placeholder markers from the LATEST typing indicator
+        // 3. Get message IDs from staging
+        const userMessageId = stagingPanel.querySelector('[data-user-message-id]')?.getAttribute('data-user-message-id');
+        const assistantMessageId = stagingPanel.querySelector('[data-assistant-message-id]')?.getAttribute('data-assistant-message-id');
+
+        // 4. Handle typing indicator element (becomes assistant message)
         const typingIndicators = document.querySelectorAll('[data-placeholder="typing-indicator"]');
         const typingIndicator = typingIndicators.length > 0 ? typingIndicators[typingIndicators.length - 1] : null;
         if (typingIndicator) {
             typingIndicator.removeAttribute('data-placeholder');
             typingIndicator.removeAttribute('data-void');
+
+            if (assistantMessageId) {
+                typingIndicator.setAttribute('data-message-id', assistantMessageId);
+            }
+
+            // Move assistant proxies INTO this element (preserves Kompo bindings)
+            const assistantProxies = stagingPanel.querySelector('.chat-staged-assistant-proxies');
+            if (assistantProxies) {
+                typingIndicator.appendChild(assistantProxies);
+            }
+
+            // Wire visible action buttons to proxies within same element
+            this.wireActionButtons(typingIndicator);
         }
 
-        // Remove void marker from the LATEST user message placeholder
+        // 5. Handle user message placeholder
         const userPlaceholders = document.querySelectorAll('[data-placeholder="user-message"]');
         const userPlaceholder = userPlaceholders.length > 0 ? userPlaceholders[userPlaceholders.length - 1] : null;
         if (userPlaceholder) {
             userPlaceholder.removeAttribute('data-void');
             userPlaceholder.removeAttribute('data-placeholder');
+
+            if (userMessageId) {
+                userPlaceholder.setAttribute('data-message-id', userMessageId);
+            }
+
+            // Move user edit proxy INTO user message element
+            const editProxy = stagingPanel.querySelector('.js-action-edit-proxy');
+            if (editProxy) {
+                let proxyContainer = userPlaceholder.querySelector('.js-proxy-container');
+                if (!proxyContainer) {
+                    proxyContainer = document.createElement('div');
+                    proxyContainer.className = 'js-proxy-container hidden';
+                    userPlaceholder.appendChild(proxyContainer);
+                }
+                proxyContainer.appendChild(editProxy);
+            }
+
+            // Wire edit button to proxy within same element
+            this.wireActionButtons(userPlaceholder);
         }
 
-        // Clear staging panel
+        // 6. Clear staging (proxies have been moved out)
         stagingPanel.innerHTML = '';
 
-        // Scroll to show new message
+        // 7. Scroll to show new message
         this.scrollToBottom();
+    },
+
+    /**
+     * Wire visible action buttons to their proxy counterparts within the same element.
+     * Uses class naming convention: js-action-X → js-action-X-proxy
+     */
+    wireActionButtons(messageElement) {
+        if (!messageElement) return;
+
+        // Find all visible action buttons (have js-action-* but not *-proxy)
+        const visibleButtons = messageElement.querySelectorAll('[class*="js-action-"]:not([class*="-proxy"])');
+
+        visibleButtons.forEach(btn => {
+            // Extract action class (e.g., "js-action-copy" → look for "js-action-copy-proxy")
+            const actionClass = [...btn.classList].find(c => /^js-action-[\w-]+$/.test(c) && !c.includes('-proxy'));
+            if (!actionClass) return;
+
+            const proxyClass = actionClass + '-proxy';
+            const proxy = messageElement.querySelector('.' + proxyClass);
+
+            if (proxy) {
+                btn.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    proxy.click();
+                };
+            }
+        });
+
+        // Also handle legacy .js-edit-message class (from user bubble template)
+        messageElement.querySelectorAll('.js-edit-message').forEach(btn => {
+            const proxy = messageElement.querySelector('.js-action-edit-proxy');
+            if (proxy) {
+                btn.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    proxy.click();
+                };
+            }
+        });
     },
 
     /**

@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Kompo\Modals;
 use Condoedge\Ai\Kompo\MessagesQuery;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
+use Condoedge\Ai\Kompo\Traits\HasStagedMessageRendering;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Kompo\AiChatPanel;
@@ -17,7 +18,7 @@ use Condoedge\Utils\Kompo\Common\Modal;
  */
 class EditMessageModal extends Modal
 {
-    use HasChatTheme, HasChatSettings;
+    use HasChatTheme, HasChatSettings, HasStagedMessageRendering;
 
     protected $_Title = 'ai.edit.title';
     public $class = 'overflow-hidden max-w-2xl rounded-2xl';
@@ -213,10 +214,8 @@ class EditMessageModal extends Modal
                 return _Html('')->class('hidden');
             }
 
-            // Return rendered content for JS to inject
-            $renderer = new \Condoedge\Ai\Services\UI\SafeMarkdownRenderer();
-            return _Html($renderer->render($assistantMessage->content))->class('prose prose-sm max-w-none');
-
+            // Use shared staged rendering (content + action bar + proxies)
+            return $this->renderStagedAssistantResponse($assistantMessage, $this->message);
         } catch (\Throwable $e) {
             \Log::error('Edit message regeneration failed: ' . $e->getMessage());
             return _Html(__('ai.chat.error-message'))->class('text-red-500 text-sm');
@@ -253,5 +252,13 @@ class EditMessageModal extends Modal
         $conversation->messages()
             ->where('id', '>=', $this->message->id)
             ->delete();
+    }
+
+    /**
+     * Get conversation for action methods (used by HasStagedMessageRendering trait).
+     */
+    protected function getConversationForAction()
+    {
+        return $this->message?->conversation;
     }
 }
