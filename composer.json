@@ -19,7 +19,7 @@
         "ext-json": "*",
         "binarytorch/larecipe": "^2.8",
         "condoedge/utils": "^0.2.100",
-        "laudis/neo4j-php-client": "^3.0",
+        "laudis/neo4j-php-client": "^3.4",
         "phpoffice/phpword": "^1.4",
         "smalot/pdfparser": "^2.12"
     },
@@ -44,7 +44,10 @@
     },
     "config": {
         "optimize-autoloader": true,
-        "sort-packages": true
+        "sort-packages": true,
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
     },
     "minimum-stability": "stable",
     "prefer-stable": true

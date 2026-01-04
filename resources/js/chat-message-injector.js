@@ -54,7 +54,7 @@ const ChatMessageInjector = {
         displayPanel = document.createElement('div');
         displayPanel.id = this.displayPanelId;
         displayPanel.className = 'mt-4';
-        itemsContainer.appendChild(displayPanel);
+        itemsContainer.prepend(displayPanel);
 
         return displayPanel;
     },

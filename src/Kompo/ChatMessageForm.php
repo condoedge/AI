@@ -50,6 +50,7 @@ class ChatMessageForm extends Form
             _Flex(
                 _Textarea()->name('message')
                     ->placeholder($this->settings()->inputPlaceholder())
+                    ->onEnter($this->sendingMessageActions())
                     ->id('chat-message-input')
                     ->class('flex-1 bg-transparent !mb-0 border-0 focus:ring-0 text-gray-800 placeholder-gray-400 resize-none min-h-[44px] max-h-[200px]')
                     ->rows(1)
@@ -57,29 +58,7 @@ class ChatMessageForm extends Form
                 $this->responseStyleSelector(),
                 _Button()->icon(_Sax('send-1', 20))->id('chat-send-btn')
                     ->class('p-3 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all flex-shrink-0')
-                    ->onClick(fn($e) => $e
-                        // 1. Show placeholder immediately (client-side)
-                        ->run('() => {
-                            const input = document.getElementById("chat-message-input");
-                            const message = input ? input.value : "";
-                            if (message.trim()) {
-                                precreateMessagePlaceholder(message, "' . addslashes($this->settings()->showAvatars() ? $this->userAvatarHtml() : '') . '");
-                                input.value = "";
-                                input.style.height = "auto";
-                                input.dispatchEvent(new Event("input", { bubbles: true }));
-                            }
-                        }')
-                        // 2. Send to server, response goes to hidden staging panel
-                        // 3. JS processes staging content and moves to display area
-                        && $e->selfPost('sendMessageAndGetResponse')->withAllFormValues()
-                            ->inPanel('temp-message-staging')
-                            ->run('() => {
-                                setTimeout(() => {
-                                    processServerResponse();
-                                }, 100);
-                            }')
-                            ->onError->run('clearMessagePlaceholders')
-                    ),
+                    ->onClick($this->sendingMessageActions()),
             )->class('flex items-end gap-3 px-4 py-3 bg-white/90 border border-gray-200/70 rounded-2xl shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 backdrop-blur-sm transition-all'),
             $this->quickActions(),
         )->class('p-4 border-t border-gray-100/70 bg-gradient-to-t from-white via-white to-transparent');
@@ -270,5 +249,31 @@ class ChatMessageForm extends Form
             'message.required' => __('ai.form.validation-required'),
             'message.max' => __('ai.form.validation-max'),
         ];
+    }
+
+    protected function sendingMessageActions()
+    {
+        return fn($e) => $e
+            // 1. Show placeholder immediately (client-side)
+            ->run('() => {
+                const input = document.getElementById("chat-message-input");
+                const message = input ? input.value : "";
+                if (message.trim()) {
+                    precreateMessagePlaceholder(message, "' . addslashes($this->settings()->showAvatars() ? $this->userAvatarHtml() : '') . '");
+                    input.value = "";
+                    input.style.height = "auto";
+                    input.dispatchEvent(new Event("input", { bubbles: true }));
+                }
+            }')
+            // 2. Send to server, response goes to hidden staging panel
+            // 3. JS processes staging content and moves to display area
+            && $e->selfPost('sendMessageAndGetResponse')->withAllFormValues()
+                ->inPanel('temp-message-staging')
+                ->run('() => {
+                    setTimeout(() => {
+                        processServerResponse();
+                    }, 100);
+                }')
+                ->onError->run('clearMessagePlaceholders');
     }
 }

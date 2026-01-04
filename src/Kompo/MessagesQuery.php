@@ -19,14 +19,17 @@ class MessagesQuery extends Query
 
     public const ID = 'chat-messages-panel';
     public $class = '';
-    public $itemsWrapperClass = '[&>div]:gap-4 [&>div]:flex [&>div]:flex-col p-6 overflow-y-auto mini-scroll h-full';
+    public $itemsWrapperClass = '[&>div]:gap-4 [&>div]:flex [&>div]:flex-col-reverse p-6 overflow-y-auto mini-scroll h-full';
     public $style = 'max-height: 95vh; display: flex; flex-direction: column;';
 
     public $noItemsFound = '';
 
     protected $conversation;
 
-    public $perPage = 200;
+    public $perPage = 30;
+    public $paginationType = 'Scroll';
+    public $topPagination = true;
+    public $bottomPagination = false;
 
     protected $latestMessageId;
 
@@ -147,16 +150,12 @@ class MessagesQuery extends Query
             return null;
         }
 
-        // Get the most recent messages, but display in ASC order (oldest first, newest at bottom)
-        // We use a subquery to get the last N message IDs, then order by ASC for display
-        $recentMessageIds = $this->conversation->messages()
-            ->orderBy('created_at', 'desc')
-            ->limit($this->perPage)
-            ->pluck('id');
-
+        // With topPagination=true, Kompo:
+        // 1. Paginates this query (page 1 = newest due to DESC order)
+        // 2. Uses flex-col-reverse to display oldest-first visually
+        // 3. Loads older pages when scrolling to top
         return $this->conversation->messages()
-            ->whereIn('id', $recentMessageIds)
-            ->orderBy('created_at', 'asc');
+            ->orderBy('created_at', 'desc');
     }
 
     /**
