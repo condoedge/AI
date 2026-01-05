@@ -186,10 +186,22 @@ class QdrantStore implements VectorStoreInterface
     }
 
     /**
-     * Build Qdrant filter from simple key-value array
+     * Build Qdrant filter from simple key-value array or return pre-built filter
+     *
+     * Accepts two formats:
+     * 1. Simple key-value: ['file_id' => 123] → converts to Qdrant format
+     * 2. Pre-built Qdrant format: ['must' => [...]] → returns as-is
+     *
+     * Pre-built filters are detected by presence of 'must', 'should', or 'must_not' keys.
      */
     protected function buildFilter(array $filter): array
     {
+        // Detect if already in Qdrant filter format
+        if (isset($filter['must']) || isset($filter['should']) || isset($filter['must_not'])) {
+            return $filter;
+        }
+
+        // Convert simple key-value pairs to Qdrant format
         $must = [];
 
         foreach ($filter as $key => $value) {
