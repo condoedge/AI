@@ -461,7 +461,7 @@ class QdrantChunkStoreTest extends TestCase
             ->with(
                 $this->testCollection,
                 Mockery::type('array'),
-                100, // Should be capped at min(max(5*3=15, 100), 10000) = 100
+                100, // Should be capped at min(max(5*3=15, 100), 10000, 500) = 100
                 Mockery::type('array'),
                 0.0
             )
@@ -486,6 +486,49 @@ class QdrantChunkStoreTest extends TestCase
         $results = $this->chunkStore->searchByFilename('report', 5);
 
         // Assert: should return results without memory issues
+        $this->assertCount(1, $results);
+    }
+
+    public function test_search_by_filename_caps_large_limit(): void
+    {
+        // With limit = 1000, should still cap at 500, not 3000
+        // Test that $requestLimit = min(max(1000*3, 100), totalCount, 500) = 500
+        $this->mockVectorStore
+            ->shouldReceive('count')
+            ->once()
+            ->andReturn(10000); // High count
+
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->once()
+            ->with(
+                $this->testCollection,
+                Mockery::type('array'),
+                500, // Should be capped at 500, not 3000 (1000*3)
+                Mockery::type('array'),
+                0.0
+            )
+            ->andReturn([
+                [
+                    'id' => 'file_1_chunk_0',
+                    'score' => 0.0,
+                    'payload' => [
+                        'file_id' => 1,
+                        'file_name' => 'report.pdf',
+                        'content' => 'Content',
+                        'chunk_index' => 0,
+                        'total_chunks' => 1,
+                        'start_position' => 0,
+                        'end_position' => 50,
+                        'metadata' => [],
+                    ],
+                ],
+            ]);
+
+        // Act: request 1000 results - without cap would request 3000
+        $results = $this->chunkStore->searchByFilename('report', 1000);
+
+        // Assert: should return results with request capped at 500
         $this->assertCount(1, $results);
     }
 

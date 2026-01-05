@@ -158,7 +158,8 @@ class QdrantChunkStore implements ChunkStoreInterface
         // Use search with filter and dummy vector (similar to getFileChunks approach)
         // We need a higher limit to account for multiple chunks per file
         // Cap the request limit to prevent memory issues when totalCount is very high
-        $requestLimit = min(max($limit * 3, 100), $totalCount);
+        // Absolute cap of 500 ensures large caller limits don't cause memory issues
+        $requestLimit = min(max($limit * 3, 100), $totalCount, 500);
         $results = $this->vectorStore->search(
             $this->collection,
             array_fill(0, $this->vectorSize, 0.0), // Dummy vector for filter-only search
