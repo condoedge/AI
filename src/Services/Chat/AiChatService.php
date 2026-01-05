@@ -120,11 +120,15 @@ class AiChatService implements AiChatServiceInterface
 
             // 6. Record response with enhanced context tracking
             // Always record to update conversation context, even without cypher
+            // Include file references for follow-up resolution
             $contextManager->recordResponse(
                 $conversation,
                 $answerText,
                 $cypherQuery ?? '',
-                ['data' => $queryData]
+                [
+                    'data' => $queryData,
+                    'referenced_files' => $aiResponse['referenced_files'] ?? [],
+                ]
             );
 
             // 7. Store message in conversation

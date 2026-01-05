@@ -29,7 +29,8 @@ class ConversationContextSection extends BasePromptSection
         return !empty($conversationContext['focused_entity'])
             || !empty($conversationContext['recent_exchanges'])
             || !empty($conversationContext['last_cypher_query'])
-            || !empty($conversationContext['last_result_sample']);
+            || !empty($conversationContext['last_result_sample'])
+            || !empty($conversationContext['last_referenced_files']);
     }
 
     /**
@@ -101,9 +102,21 @@ class ConversationContextSection extends BasePromptSection
             $output .= "\n**Entities discussed:** {$entities}\n";
         }
 
+        // Referenced files from previous response
+        if (!empty($conversationContext['last_referenced_files'])) {
+            $output .= "\n**Files Referenced in Previous Response:**\n";
+            foreach ($conversationContext['last_referenced_files'] as $file) {
+                $filename = $file['filename'] ?? 'Unknown file';
+                $fileId = $file['file_id'] ?? '';
+                $snippet = $this->truncate($file['snippet'] ?? '', 100);
+                $output .= "- [{$filename}] (ID: {$fileId}): {$snippet}\n";
+            }
+        }
+
         // Follow-up hint (enhanced instructions)
         $output .= "\n**Instructions:** Use the above context to understand follow-up questions. ";
-        $output .= "If user references 'those', 'them', 'the same', etc., use the previous results/filter.\n";
+        $output .= "If user references 'those', 'them', 'the same', etc., use the previous results/filter. ";
+        $output .= "If user asks about 'the file', 'that file', etc., refer to the files referenced above.\n";
 
         return $output;
     }

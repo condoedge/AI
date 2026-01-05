@@ -114,6 +114,9 @@ class ConversationContextManager
         // Store result sample (first 3 results for context)
         $resultSample = array_slice($queryResult['data'] ?? [], 0, 3);
 
+        // Extract referenced files for follow-up resolution
+        $referencedFiles = $queryResult['referenced_files'] ?? [];
+
         // Update snapshot with enhanced data
         $conversation->updateContextSnapshot([
             'focused_entity' => $focusedEntity,
@@ -124,6 +127,7 @@ class ConversationContextManager
             'last_result_sample' => $resultSample,
             'focused_entity_filter' => $entityFilter,
             'last_answer_summary' => Str::limit($response, 200),
+            'last_referenced_files' => $referencedFiles,
             'updated_at' => now()->toIso8601String(),
         ]);
     }
@@ -172,6 +176,7 @@ class ConversationContextManager
             'last_relationships' => $snapshot['last_relationships'] ?? [],
             'mentioned_entities' => $snapshot['mentioned_entities'] ?? [],
             'last_answer_summary' => $snapshot['last_answer_summary'] ?? null,
+            'last_referenced_files' => $snapshot['last_referenced_files'] ?? [],
             'recent_exchanges' => $this->formatRecentExchanges($recentMessages),
         ];
     }
