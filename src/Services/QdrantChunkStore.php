@@ -139,6 +139,119 @@ class QdrantChunkStore implements ChunkStoreInterface
     /**
      * {@inheritdoc}
      */
+    public function searchByFilename(string $filename, int $limit = 10, array $filters = []): array
+    {
+        // Build filter for filename matching
+        $qdrantFilter = $this->buildFilenameFilter($filename, $filters);
+
+        if (empty($qdrantFilter)) {
+            return [];
+        }
+
+        // Count matching points
+        $totalCount = $this->vectorStore->count($this->collection, $qdrantFilter);
+
+        if ($totalCount === 0) {
+            return [];
+        }
+
+        // Use search with filter and dummy vector (similar to getFileChunks approach)
+        // We need a higher limit to account for multiple chunks per file
+        // Cap the request limit to prevent memory issues when totalCount is very high
+        $requestLimit = min(max($limit * 3, 100), $totalCount);
+        $results = $this->vectorStore->search(
+            $this->collection,
+            array_fill(0, $this->vectorSize, 0.0), // Dummy vector for filter-only search
+            $requestLimit,
+            $qdrantFilter,
+            0.0 // No score threshold for filename search
+        );
+
+        // Group by file_id and return unique files
+        $seenFiles = [];
+        $output = [];
+
+        foreach ($results as $result) {
+            $payload = $result['payload'] ?? [];
+            $fileId = $payload['file_id'] ?? null;
+
+            if ($fileId === null || isset($seenFiles[$fileId])) {
+                continue;
+            }
+
+            $seenFiles[$fileId] = true;
+
+            $chunk = new FileChunk(
+                fileId: $payload['file_id'],
+                fileName: $payload['file_name'],
+                content: $payload['content'],
+                embedding: [],
+                chunkIndex: $payload['chunk_index'],
+                totalChunks: $payload['total_chunks'],
+                startPosition: $payload['start_position'],
+                endPosition: $payload['end_position'],
+                metadata: $payload['metadata'] ?? []
+            );
+
+            // Score based on match quality:
+            // - Exact match (case-insensitive): 1.0
+            // - Partial match (filename contains search term): 0.85
+            $storedFilename = $payload['file_name'];
+            $isExactMatch = strcasecmp($storedFilename, $filename) === 0;
+
+            $output[] = [
+                'chunk' => $chunk,
+                'score' => $isExactMatch ? 1.0 : 0.85,
+                'match_type' => $isExactMatch ? 'exact' : 'partial',
+            ];
+
+            if (count($output) >= $limit) {
+                break;
+            }
+        }
+
+        // Sort exact matches first
+        usort($output, fn($a, $b) => $b['score'] <=> $a['score']);
+
+        return $output;
+    }
+
+    /**
+     * Build filter for filename search
+     *
+     * @param string $filename
+     * @param array $filters
+     * @return array
+     */
+    private function buildFilenameFilter(string $filename, array $filters): array
+    {
+        // Return empty filter for empty filename to prevent matching all files
+        if (trim($filename) === '') {
+            return [];
+        }
+
+        $must = [];
+
+        // Qdrant text match searches within string values (substring match)
+        $must[] = [
+            'key' => 'file_name',
+            'match' => ['text' => $filename],
+        ];
+
+        // Apply additional filters
+        if (isset($filters['file_id'])) {
+            $must[] = [
+                'key' => 'file_id',
+                'match' => ['value' => $filters['file_id']],
+            ];
+        }
+
+        return empty($must) ? [] : ['must' => $must];
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     public function getFileChunks(int $fileId): array
     {
         // Use count to check if we need to paginate

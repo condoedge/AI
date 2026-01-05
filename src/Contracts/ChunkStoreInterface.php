@@ -80,4 +80,14 @@ interface ChunkStoreInterface
      * @return FileChunk|null
      */
     public function getChunk(string $vectorId): ?FileChunk;
+
+    /**
+     * Search for chunks by filename
+     *
+     * @param string $filename The filename to search for (exact or partial match)
+     * @param int $limit Maximum number of results
+     * @param array $filters Optional filters (same as searchByContent)
+     * @return array Array of search results with 'chunk' and 'score' keys
+     */
+    public function searchByFilename(string $filename, int $limit = 10, array $filters = []): array;
 }
