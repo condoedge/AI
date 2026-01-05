@@ -28,6 +28,7 @@ class ChatSettingsModal extends Modal
     public function created() 
     {
         if (!$this->model->id) {
+            // On boot we automatically set the columns with their default values based on config
             $this->model(auth()->check() ? AiUserSetting::forUser(auth()->id()) : new AiUserSetting());
         }
     }
