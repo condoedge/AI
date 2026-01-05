@@ -29,10 +29,8 @@ class FilenameExtractor
      */
     public function extract(string $query): array
     {
-        // Skip if query looks like a URL
-        if ($this->containsUrl($query)) {
-            return [];
-        }
+        // Remove URLs from query to prevent matching filenames within URLs
+        $query = $this->removeUrls($query);
 
         $filenames = [];
 
@@ -78,11 +76,13 @@ class FilenameExtractor
     }
 
     /**
-     * Check if query contains a URL.
+     * Remove URLs from query string.
+     * This allows extracting filenames from queries that also contain URLs,
+     * while preventing false positives from filenames within URLs.
      */
-    private function containsUrl(string $query): bool
+    private function removeUrls(string $query): string
     {
-        return (bool) preg_match('/https?:\/\/[^\s]+/i', $query);
+        return preg_replace('/https?:\/\/[^\s]+/i', '', $query);
     }
 
     /**

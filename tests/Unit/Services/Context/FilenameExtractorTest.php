@@ -54,7 +54,11 @@ class FilenameExtractorTest extends TestCase
 
     public function test_extracts_common_extensions(): void
     {
-        $extensions = ['txt', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'md', 'json', 'xml'];
+        $extensions = [
+            'txt', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv',
+            'md', 'json', 'xml', 'html', 'htm', 'rtf', 'odt',
+            'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg',
+        ];
 
         foreach ($extensions as $ext) {
             $result = $this->extractor->extract("Check file.{$ext}");
@@ -69,11 +73,18 @@ class FilenameExtractorTest extends TestCase
         $this->assertEquals(['FILE.PDF'], $result);
     }
 
-    public function test_ignores_urls(): void
+    public function test_ignores_filenames_within_urls(): void
     {
         $result = $this->extractor->extract('Check https://example.com/file.pdf');
 
         $this->assertEquals([], $result);
+    }
+
+    public function test_extracts_filename_alongside_url(): void
+    {
+        $result = $this->extractor->extract('Check file.txt at https://example.com/other.pdf');
+
+        $this->assertEquals(['file.txt'], $result);
     }
 
     public function test_extracts_filename_from_natural_language(): void
