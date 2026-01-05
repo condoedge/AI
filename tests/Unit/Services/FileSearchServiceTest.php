@@ -96,10 +96,10 @@ class FileSearchServiceTest extends TestCase
 
     public function test_search_by_filename_returns_matching_files(): void
     {
-        // Mock chunk store - only 2 args are passed (filename, limit*2)
+        // Mock chunk store - 3 args are passed (filename, limit*2, filters)
         $this->chunkStore->expects('searchByFilename')
             ->once()
-            ->with('report.pdf', 20) // limit (10) * 2
+            ->with('report.pdf', 20, []) // limit (10) * 2, empty filters
             ->andReturn([
                 [
                     'chunk' => new FileChunk(
@@ -131,7 +131,7 @@ class FileSearchServiceTest extends TestCase
         // Mock chunk store returning empty
         $this->chunkStore->expects('searchByFilename')
             ->once()
-            ->with('nonexistent.pdf', 20)
+            ->with('nonexistent.pdf', 20, [])
             ->andReturn([]);
 
         $results = $this->searchService->searchByFilename('nonexistent.pdf');
@@ -144,7 +144,7 @@ class FileSearchServiceTest extends TestCase
         // Return multiple chunks from same file
         $this->chunkStore->expects('searchByFilename')
             ->once()
-            ->with('report.pdf', 20)
+            ->with('report.pdf', 20, [])
             ->andReturn([
                 [
                     'chunk' => new FileChunk(
@@ -191,7 +191,7 @@ class FileSearchServiceTest extends TestCase
     {
         $this->chunkStore->expects('searchByFilename')
             ->once()
-            ->with('doc', 10) // limit (5) * 2
+            ->with('doc', 10, []) // limit (5) * 2, empty filters
             ->andReturn([
                 [
                     'chunk' => new FileChunk(
@@ -253,7 +253,7 @@ class FileSearchServiceTest extends TestCase
     {
         $this->chunkStore->expects('searchByFilename')
             ->once()
-            ->with('score', 20)
+            ->with('score', 20, [])
             ->andReturn([
                 [
                     'chunk' => new FileChunk(
@@ -303,7 +303,7 @@ class FileSearchServiceTest extends TestCase
     {
         $this->chunkStore->expects('searchByFilename')
             ->once()
-            ->with('report.pdf', 20)
+            ->with('report.pdf', 20, [])
             ->andReturn([
                 [
                     'chunk' => new FileChunk(
@@ -343,7 +343,7 @@ class FileSearchServiceTest extends TestCase
     {
         $this->chunkStore->expects('searchByFilename')
             ->once()
-            ->with('report.pdf', 20)
+            ->with('report.pdf', 20, [])
             ->andReturn([
                 [
                     'chunk' => new FileChunk(
@@ -373,7 +373,7 @@ class FileSearchServiceTest extends TestCase
     {
         $this->chunkStore->expects('searchByFilename')
             ->once()
-            ->with('report.pdf', 20)
+            ->with('report.pdf', 20, [])
             ->andReturn([
                 [
                     'chunk' => new FileChunk(
@@ -398,5 +398,136 @@ class FileSearchServiceTest extends TestCase
         $this->assertArrayHasKey('chunks', $results[0]);
         $this->assertCount(1, $results[0]['chunks']);
         $this->assertInstanceOf(FileChunk::class, $results[0]['chunks'][0]);
+    }
+
+    public function test_search_by_filename_aggregates_all_chunks_for_same_file(): void
+    {
+        // Return multiple chunks from same file - verify ALL chunks are collected
+        $this->chunkStore->expects('searchByFilename')
+            ->once()
+            ->with('report.pdf', 20, [])
+            ->andReturn([
+                [
+                    'chunk' => new FileChunk(
+                        fileId: 1,
+                        fileName: 'report.pdf',
+                        content: 'Content chunk 0',
+                        embedding: [],
+                        chunkIndex: 0,
+                        totalChunks: 3,
+                        startPosition: 0,
+                        endPosition: 100,
+                        metadata: []
+                    ),
+                    'score' => 0.8,
+                ],
+                [
+                    'chunk' => new FileChunk(
+                        fileId: 1,
+                        fileName: 'report.pdf',
+                        content: 'Content chunk 1',
+                        embedding: [],
+                        chunkIndex: 1,
+                        totalChunks: 3,
+                        startPosition: 100,
+                        endPosition: 200,
+                        metadata: []
+                    ),
+                    'score' => 1.0, // Best score
+                ],
+                [
+                    'chunk' => new FileChunk(
+                        fileId: 1,
+                        fileName: 'report.pdf',
+                        content: 'Content chunk 2',
+                        embedding: [],
+                        chunkIndex: 2,
+                        totalChunks: 3,
+                        startPosition: 200,
+                        endPosition: 300,
+                        metadata: []
+                    ),
+                    'score' => 0.7,
+                ],
+            ]);
+
+        $this->mockFileModel([1 => 'report.pdf']);
+
+        $results = $this->searchService->searchByFilename('report.pdf');
+
+        // Should have one result (grouped by file_id)
+        $this->assertCount(1, $results);
+        $this->assertEquals(1, $results[0]['file_id']);
+
+        // Verify ALL chunks are collected (not just first)
+        $this->assertEquals(3, $results[0]['chunk_count']);
+        $this->assertCount(3, $results[0]['chunks']);
+
+        // Best chunk should be the one with highest score (chunk 1)
+        $this->assertEquals(1, $results[0]['best_chunk']->chunkIndex);
+        $this->assertEquals(1.0, $results[0]['score']);
+    }
+
+    public function test_search_by_filename_passes_file_types_filter(): void
+    {
+        $this->chunkStore->expects('searchByFilename')
+            ->once()
+            ->with('report', 20, ['file_types' => ['pdf', 'docx']])
+            ->andReturn([
+                [
+                    'chunk' => new FileChunk(
+                        fileId: 1,
+                        fileName: 'report.pdf',
+                        content: 'Content',
+                        embedding: [],
+                        chunkIndex: 0,
+                        totalChunks: 1,
+                        startPosition: 0,
+                        endPosition: 100,
+                        metadata: []
+                    ),
+                    'score' => 1.0,
+                ],
+            ]);
+
+        $this->mockFileModel([1 => 'report.pdf']);
+
+        $results = $this->searchService->searchByFilename('report', [
+            'file_types' => ['pdf', 'docx'],
+        ]);
+
+        $this->assertCount(1, $results);
+    }
+
+    public function test_search_by_filename_passes_file_id_filter(): void
+    {
+        $this->chunkStore->expects('searchByFilename')
+            ->once()
+            ->with('report', 20, ['file_id' => 42])
+            ->andReturn([
+                [
+                    'chunk' => new FileChunk(
+                        fileId: 42,
+                        fileName: 'report.pdf',
+                        content: 'Content',
+                        embedding: [],
+                        chunkIndex: 0,
+                        totalChunks: 1,
+                        startPosition: 0,
+                        endPosition: 100,
+                        metadata: []
+                    ),
+                    'score' => 1.0,
+                ],
+            ]);
+
+        $this->mockFileModel([42 => 'report.pdf']);
+
+        $results = $this->searchService->searchByFilename('report', [
+            'file_id' => 42,
+        ]);
+
+        $this->assertCount(1, $results);
+        $this->assertEquals(42, $results[0]['file_id']);
     }
 }

@@ -112,6 +112,8 @@ class FileSearchService
      * @param string $filename The filename to search for
      * @param array $options Options:
      *   - limit: Maximum results (default: 10)
+     *   - file_types: Filter by extensions (e.g., ['pdf', 'docx'])
+     *   - file_id: Search within specific file
      *   - include_relationships: Load Neo4j relationships (default: false)
      * @return array
      */
@@ -120,30 +122,38 @@ class FileSearchService
         $limit = $options['limit'] ?? 10;
         $includeRelationships = $options['include_relationships'] ?? false;
 
+        // Build filters for chunk store
+        $filters = [];
+        if (isset($options['file_types'])) {
+            $filters['file_types'] = $options['file_types'];
+        }
+        if (isset($options['file_id'])) {
+            $filters['file_id'] = $options['file_id'];
+        }
+
         // Search chunk store by filename
-        $chunks = $this->chunkStore->searchByFilename($filename, $limit * 2);
+        $chunks = $this->chunkStore->searchByFilename($filename, $limit * 2, $filters);
 
         if (empty($chunks)) {
             return [];
         }
 
-        // Group by file ID (chunks already deduplicated, but ensure uniqueness)
-        $fileResults = [];
-        foreach ($chunks as $result) {
-            $fileId = $result['chunk']->fileId;
+        // Group chunks by file ID (match searchByContent pattern)
+        $fileGroups = collect($chunks)->groupBy(fn($result) => $result['chunk']->fileId);
 
-            if (!isset($fileResults[$fileId])) {
-                $fileResults[$fileId] = [
-                    'file_id' => $fileId,
-                    'score' => $result['score'],
-                    'best_chunk' => $result['chunk'],
-                    'chunk_count' => 1,
-                    'chunks' => [$result['chunk']],
-                ];
-            }
+        $results = [];
+        foreach ($fileGroups as $fileId => $fileChunks) {
+            // Get best matching chunk for preview (highest score)
+            $bestChunk = collect($fileChunks)->sortByDesc('score')->first();
+
+            $results[] = [
+                'file_id' => $fileId,
+                'score' => $bestChunk['score'], // Use best chunk's score for filename match
+                'best_chunk' => $bestChunk['chunk'],
+                'chunk_count' => count($fileChunks),
+                'chunks' => array_map(fn($r) => $r['chunk'], $fileChunks->toArray()),
+            ];
         }
-
-        $results = array_values($fileResults);
 
         // Sort by score descending and limit
         usort($results, fn($a, $b) => $b['score'] <=> $a['score']);
