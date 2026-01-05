@@ -89,6 +89,8 @@ class FileContextProvider
         $extractedFilenames = $this->filenameExtractor->extract($question);
 
         // Step 2: Search by filename (if references found)
+        // Note: Sequential searches are acceptable for typical use (1-2 filenames per query).
+        // For queries with many filenames, consider adding batch search to FileSearchService.
         $filenameResults = [];
         foreach ($extractedFilenames as $filename) {
             $results = $this->searchService->searchByFilename($filename, [
@@ -121,7 +123,7 @@ class FileContextProvider
             $fileId = $result['file_id'];
 
             // Check if file is accessible
-            if (!in_array($fileId, $accessibleFileIds, false)) {
+            if (!in_array($fileId, $accessibleFileIds, true)) {
                 continue;
             }
 

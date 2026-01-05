@@ -763,6 +763,19 @@ class FileContextProviderTest extends TestCase
     // =========================================================================
 
     /** @test */
+    public function test_throws_exception_when_security_enabled_and_user_null(): void
+    {
+        $this->accessResolver
+            ->shouldReceive('shouldEnforceSecurity')
+            ->andReturn(true);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('User required for file context retrieval');
+
+        $this->provider->searchRelevantFiles('search query', null);
+    }
+
+    /** @test */
     public function it_handles_null_user_gracefully_when_security_disabled(): void
     {
         // When security is disabled, null user should be allowed
