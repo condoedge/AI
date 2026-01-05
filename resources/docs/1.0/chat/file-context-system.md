@@ -382,6 +382,58 @@ $enrichedResponse = $enricher->enrichResponse($response, $fileContext, $options)
 
 ---
 
+## Search Strategies
+
+### Filename Search
+
+When users explicitly reference a file by name, the system detects and prioritizes that file:
+
+```
+User: "What's in the budget_2024.xlsx file?"
+→ Detects "budget_2024.xlsx" as explicit reference
+→ Searches by filename (exact/partial match)
+→ Returns file with match_type: "filename"
+```
+
+**Detected patterns:**
+- `filename.ext` - Direct filename reference
+- `"my document.pdf"` - Quoted filename (supports spaces)
+- `path/to/file.txt` - Path reference (extracts filename)
+
+**Supported extensions:** txt, pdf, doc, docx, xls, xlsx, csv, md, json, xml, html, rtf, ppt, pptx, png, jpg, gif, svg
+
+### Content Search
+
+Semantic similarity search using embeddings:
+
+```
+User: "What are the Q3 sales figures?"
+→ No explicit filename detected
+→ Searches by content similarity
+→ Returns files with relevant content
+```
+
+### Combined Search
+
+When a filename is mentioned along with a question, both strategies are used:
+
+```
+User: "Summarize the key points from report.pdf"
+→ Filename search finds "report.pdf" (score: 1.0)
+→ Content search may find additional relevant files
+→ Results deduplicated, filename match prioritized
+```
+
+### Scoring Strategy
+
+| Match Type | Score | Threshold |
+|------------|-------|-----------|
+| Exact filename match | 1.0 | None (always included) |
+| Partial filename match | 0.85 | 0.3 (low) |
+| Content/semantic match | 0.0-1.0 | 0.7 (standard) |
+
+---
+
 ## Response Format
 
 The AI response includes a `referenced_files` array with metadata for cited files:
