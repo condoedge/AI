@@ -21,7 +21,7 @@ class MessagesQuery extends Query
 
     public const ID = 'chat-messages-panel';
     public $class = '';
-    public $itemsWrapperClass = '[&>div]:gap-4 [&>div]:flex [&>div]:flex-col-reverse p-6 overflow-y-auto mini-scroll flex-1 min-h-0 relative z-10';
+    public $itemsWrapperClass = '[&>div]:gap-4 [&>div]:flex [&>div]:flex-col-reverse p-6 overflow-y-auto mini-scroll flex-1 min-h-0';
     public $style = 'max-height: 95vh; display: flex; flex-direction: column;';
 
     public $noItemsFound = '';

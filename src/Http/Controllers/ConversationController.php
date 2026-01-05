@@ -7,24 +7,22 @@ use Illuminate\Routing\Controller;
 
 class ConversationController extends Controller
 {
-    public function export($id)
+    public function export($id, $type = 'md')
     {
         $conversation = AiConversation::where('user_id', auth()->id())->find($id);
         if (!$conversation) {
             abort(404, 'Conversation not found');
         }
 
-        $markdown = "# " . ($conversation->title ?? 'Conversation') . "\n\n";
-        $markdown .= "Exported: " . now()->format('F j, Y g:i A') . "\n\n---\n\n";
+        $factory = app()->make(\Condoedge\Ai\Services\Chat\Exporter\ExporterConversationFactory::class);
+        $exporter = $factory->make($type);
+        $exportedContent = $exporter->export($conversation);
+        $extension = $exporter->getFileExtension();
 
-        foreach ($conversation->messages as $msg) {
-            $role = $msg->role === 'user' ? '**You**' : '**AI Assistant**';
-            $time = $msg->created_at->format('g:i A');
-            $markdown .= "{$role} ({$time}):\n\n{$msg->content}\n\n---\n\n";
-        }
+        $filename = "conversation_{$conversation->id}." . $extension;
 
-        return response($markdown)
+        return response($exportedContent)
             ->header('Content-Type', 'text/markdown')
-            ->header('Content-Disposition', 'attachment; filename="conversation-' . $conversation->id . '.md"');
+            ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
     }
 }
