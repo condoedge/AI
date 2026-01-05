@@ -364,7 +364,7 @@ class FileContextIntegrationTest extends TestCase
         $mockSearchService = Mockery::mock(FileSearchService::class);
 
         // searchByFilename should NOT be called (no filename detected)
-        // Note: We don't set any expectation on searchByFilename, so if it's called the test will fail
+        $mockSearchService->shouldNotReceive('searchByFilename');
 
         // Content search returns the file (semantic match)
         $mockSearchService->shouldReceive('searchByContent')
