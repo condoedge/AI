@@ -5,6 +5,7 @@ namespace Condoedge\Ai\Services;
 use Condoedge\Ai\Contracts\ChunkStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Utils\Facades\FileModel;
+use Illuminate\Database\Eloquent\Model;
 
 /**
  * File Search Service
@@ -106,6 +107,68 @@ class FileSearchService
     }
 
     /**
+     * Search files by filename
+     *
+     * @param string $filename The filename to search for
+     * @param array $options Options:
+     *   - limit: Maximum results (default: 10)
+     *   - include_relationships: Load Neo4j relationships (default: false)
+     * @return array
+     */
+    public function searchByFilename(string $filename, array $options = []): array
+    {
+        $limit = $options['limit'] ?? 10;
+        $includeRelationships = $options['include_relationships'] ?? false;
+
+        // Search chunk store by filename
+        $chunks = $this->chunkStore->searchByFilename($filename, $limit * 2);
+
+        if (empty($chunks)) {
+            return [];
+        }
+
+        // Group by file ID (chunks already deduplicated, but ensure uniqueness)
+        $fileResults = [];
+        foreach ($chunks as $result) {
+            $fileId = $result['chunk']->fileId;
+
+            if (!isset($fileResults[$fileId])) {
+                $fileResults[$fileId] = [
+                    'file_id' => $fileId,
+                    'score' => $result['score'],
+                    'best_chunk' => $result['chunk'],
+                    'chunk_count' => 1,
+                    'chunks' => [$result['chunk']],
+                ];
+            }
+        }
+
+        $results = array_values($fileResults);
+
+        // Sort by score descending and limit
+        usort($results, fn($a, $b) => $b['score'] <=> $a['score']);
+        $results = array_slice($results, 0, $limit);
+
+        // Load File models
+        $fileIds = array_column($results, 'file_id');
+        $files = FileModel::whereIn('id', $fileIds)->get()->keyBy('id');
+
+        // Enhance with File models
+        foreach ($results as &$result) {
+            $file = $files->get($result['file_id']);
+            if ($file) {
+                $result['file'] = $file;
+
+                if ($includeRelationships) {
+                    $result['relationships'] = $this->getFileRelationships($file);
+                }
+            }
+        }
+
+        return $results;
+    }
+
+    /**
      * Search files by metadata (Neo4j graph query)
      *
      * @param array $criteria Search criteria:
@@ -185,12 +248,12 @@ class FileSearchService
     /**
      * Get related files via graph traversal
      *
-     * @param File $file
+     * @param Model $file
      * @param string|null $relationshipType Optional relationship type filter
      * @param int $limit Maximum results
      * @return array
      */
-    public function getRelatedFiles(File $file, ?string $relationshipType = null, int $limit = 10): array
+    public function getRelatedFiles(Model $file, ?string $relationshipType = null, int $limit = 10): array
     {
         $relationshipFilter = $relationshipType ? ":{$relationshipType}" : '';
 
@@ -281,10 +344,10 @@ class FileSearchService
     /**
      * Get file relationships from Neo4j
      *
-     * @param File $file
+     * @param Model $file
      * @return array
      */
-    protected function getFileRelationships(File $file): array
+    protected function getFileRelationships(Model $file): array
     {
         $cypher = "
             MATCH (f:File {id: \$file_id})-[r]-(other)
