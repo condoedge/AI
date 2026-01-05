@@ -16,6 +16,8 @@ use Condoedge\Ai\Services\FileSearchService;
  *
  * Key features:
  * - Searches both physical (documentation) and database file collections
+ * - Detects explicit filename references in queries for targeted search
+ * - Combines filename and semantic content search results
  * - Applies access filtering (physical files always pass through)
  * - Truncates snippets to configured length
  * - Sorts by relevance score descending
@@ -25,21 +27,44 @@ use Condoedge\Ai\Services\FileSearchService;
 class FileContextProvider
 {
     /**
+     * Threshold for partial filename matches (0.3 is low to allow more results)
+     */
+    private const FILENAME_PARTIAL_THRESHOLD = 0.3;
+
+    /**
+     * The filename extractor instance
+     */
+    private readonly FilenameExtractor $filenameExtractor;
+
+    /**
      * Create a new FileContextProvider instance
      *
      * @param FileSearchService $searchService Service for searching file content
      * @param FileAccessResolverInterface $accessResolver Service for resolving file access
+     * @param FilenameExtractor|null $filenameExtractor Service for extracting filenames from queries
      */
     public function __construct(
         private readonly FileSearchService $searchService,
-        private readonly FileAccessResolverInterface $accessResolver
-    ) {}
+        private readonly FileAccessResolverInterface $accessResolver,
+        ?FilenameExtractor $filenameExtractor = null
+    ) {
+        $this->filenameExtractor = $filenameExtractor ?? new FilenameExtractor();
+    }
 
     /**
      * Search for relevant files based on a question
      *
-     * Searches across physical documentation and database file collections,
-     * filters by access control, and returns standardized file references.
+     * Searches across physical documentation and database file collections using
+     * both filename-based and semantic content-based search. Combines results with
+     * filename matches prioritized. Filters by access control and returns
+     * standardized file references.
+     *
+     * Search strategy:
+     * 1. Extract explicit filename references from query (e.g., "bariloche.txt")
+     * 2. If filenames found, search by filename (high priority)
+     * 3. Also search by content (semantic search)
+     * 4. Combine results with filename matches first
+     * 5. Apply different thresholds based on match type
      *
      * @param string $question The search query/question
      * @param mixed $user The user to check access for (typically Authenticatable)
@@ -60,26 +85,39 @@ class FileContextProvider
         $maxReferences = $options['limit'] ?? config('ai.file_context.max_references', 5);
         $snippetLength = config('ai.file_context.snippet_length', 200);
 
-        // Search for relevant content across collections
-        // Request more results than needed to allow for filtering
-        $searchResults = $this->searchService->searchByContent($question, [
+        // Step 1: Extract explicit filename references
+        $extractedFilenames = $this->filenameExtractor->extract($question);
+
+        // Step 2: Search by filename (if references found)
+        $filenameResults = [];
+        foreach ($extractedFilenames as $filename) {
+            $results = $this->searchService->searchByFilename($filename, [
+                'limit' => $maxReferences,
+                'include_relationships' => false,
+            ]);
+            $filenameResults = array_merge($filenameResults, $results);
+        }
+
+        // Step 3: Search by content (semantic search)
+        $contentResults = $this->searchService->searchByContent($question, [
             'limit' => $maxReferences * 3,
             'include_relationships' => false,
         ]);
 
-        if (empty($searchResults)) {
+        // Step 4: Combine results, filename matches first
+        $combinedResults = $this->combineSearchResults($filenameResults, $contentResults);
+
+        if (empty($combinedResults)) {
             return [];
         }
 
-        // Extract file IDs from search results
-        $fileIds = array_column($searchResults, 'file_id');
-
-        // Apply access control filtering
+        // Step 5: Apply access control
+        $fileIds = array_column($combinedResults, 'file_id');
         $accessibleFileIds = $this->accessResolver->filterAccessibleFileIds($fileIds, $user);
 
-        // Filter results to only accessible files and apply minimum score
+        // Step 6: Filter by access and apply score thresholds
         $filteredResults = [];
-        foreach ($searchResults as $result) {
+        foreach ($combinedResults as $result) {
             $fileId = $result['file_id'];
 
             // Check if file is accessible
@@ -87,15 +125,27 @@ class FileContextProvider
                 continue;
             }
 
-            // Check if score meets minimum threshold
-            if ($result['score'] < $minScore) {
-                continue;
+            $isFilenameMatch = $result['match_type'] === 'filename';
+            $score = $result['score'];
+
+            if ($isFilenameMatch) {
+                // Exact filename match (1.0) always included
+                // Partial filename match (0.85) uses lower threshold
+                $isExactMatch = $score >= 1.0;
+                if (!$isExactMatch && $score < self::FILENAME_PARTIAL_THRESHOLD) {
+                    continue;
+                }
+            } else {
+                // Content match uses standard threshold
+                if ($score < $minScore) {
+                    continue;
+                }
             }
 
             $filteredResults[] = $result;
         }
 
-        // Sort by relevance score descending
+        // Sort by score descending
         usort($filteredResults, fn($a, $b) => $b['score'] <=> $a['score']);
 
         // Limit results
@@ -118,6 +168,7 @@ class FileContextProvider
                 'relevance' => $result['score'],
                 'chunk_index' => $chunk->chunkIndex,
                 'source' => $source,
+                'match_type' => $result['match_type'] ?? 'content',
             ];
         }, $filteredResults);
     }
@@ -195,6 +246,37 @@ class FileContextProvider
             'has_physical' => $hasPhysical,
             'has_database' => $hasDatabase,
         ];
+    }
+
+    /**
+     * Combine filename and content search results.
+     *
+     * Deduplicates by file_id, keeping filename match if exists (higher priority).
+     * Filename matches are preserved with their match_type for threshold decisions.
+     *
+     * @param array $filenameResults Results from filename-based search
+     * @param array $contentResults Results from content-based search
+     * @return array Combined results with match_type annotations
+     */
+    private function combineSearchResults(array $filenameResults, array $contentResults): array
+    {
+        $combined = [];
+
+        // Add filename results first (they have priority)
+        foreach ($filenameResults as $result) {
+            $fileId = $result['file_id'];
+            $combined[$fileId] = array_merge($result, ['match_type' => 'filename']);
+        }
+
+        // Add content results, but don't override filename matches
+        foreach ($contentResults as $result) {
+            $fileId = $result['file_id'];
+            if (!isset($combined[$fileId])) {
+                $combined[$fileId] = array_merge($result, ['match_type' => 'content']);
+            }
+        }
+
+        return array_values($combined);
     }
 
     /**

@@ -7,6 +7,7 @@ namespace Condoedge\Ai\Tests\Unit\Services\Context;
 use Condoedge\Ai\Contracts\FileAccessResolverInterface;
 use Condoedge\Ai\DTOs\FileChunk;
 use Condoedge\Ai\Services\Context\FileContextProvider;
+use Condoedge\Ai\Services\Context\FilenameExtractor;
 use Condoedge\Ai\Services\FileSearchService;
 use Mockery;
 use Mockery\MockInterface;
@@ -17,6 +18,7 @@ class FileContextProviderTest extends TestCase
     private FileContextProvider $provider;
     private MockInterface $searchService;
     private MockInterface $accessResolver;
+    private MockInterface $filenameExtractor;
 
     protected function getPackageProviders($app): array
     {
@@ -40,6 +42,7 @@ class FileContextProviderTest extends TestCase
 
         $this->searchService = Mockery::mock(FileSearchService::class);
         $this->accessResolver = Mockery::mock(FileAccessResolverInterface::class);
+        $this->filenameExtractor = Mockery::mock(FilenameExtractor::class);
 
         // Default security behavior: allow pass-through (security check passes)
         // Individual tests can override this with specific expectations
@@ -54,9 +57,15 @@ class FileContextProviderTest extends TestCase
                 return is_string($fileId) && str_starts_with($fileId, 'physical:');
             });
 
+        // Default filename extractor behavior: no filenames detected
+        $this->filenameExtractor->shouldReceive('extract')
+            ->byDefault()
+            ->andReturn([]);
+
         $this->provider = new FileContextProvider(
             $this->searchService,
-            $this->accessResolver
+            $this->accessResolver,
+            $this->filenameExtractor
         );
     }
 
@@ -867,5 +876,501 @@ class FileContextProviderTest extends TestCase
         $result = $this->provider->searchRelevantFiles('test', $user);
 
         $this->assertEquals('database', $result[0]['source']);
+    }
+
+    // =========================================================================
+    // Combined search tests (filename + content)
+    // =========================================================================
+
+    /** @test */
+    public function test_search_finds_file_by_explicit_filename_reference(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $chunk = new FileChunk(
+            fileId: 1,
+            fileName: 'bariloche.txt',
+            content: 'Content about Bariloche region in Argentina.',
+            embedding: [],
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 44,
+            metadata: []
+        );
+
+        // Mock filename extractor to detect "bariloche.txt"
+        $this->filenameExtractor
+            ->shouldReceive('extract')
+            ->with('Check bariloche.txt')
+            ->once()
+            ->andReturn(['bariloche.txt']);
+
+        // Mock searchByFilename to return the file
+        $this->searchService
+            ->shouldReceive('searchByFilename')
+            ->with('bariloche.txt', Mockery::any())
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 1.0, // Exact match
+                    'chunk_count' => 1,
+                    'best_chunk' => $chunk,
+                    'chunks' => [$chunk],
+                ],
+            ]);
+
+        // Content search returns empty (no semantic matches)
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $result = $this->provider->searchRelevantFiles('Check bariloche.txt', $user);
+
+        $this->assertCount(1, $result);
+        $this->assertEquals(1, $result[0]['file_id']);
+        $this->assertEquals('bariloche.txt', $result[0]['filename']);
+        $this->assertEquals('filename', $result[0]['match_type']);
+        $this->assertEquals(1.0, $result[0]['relevance']);
+    }
+
+    /** @test */
+    public function test_search_combines_filename_and_content_results(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $filenameChunk = new FileChunk(
+            fileId: 1,
+            fileName: 'report.pdf',
+            content: 'Financial report content.',
+            embedding: [],
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 25,
+            metadata: []
+        );
+
+        $contentChunk = new FileChunk(
+            fileId: 2,
+            fileName: 'analysis.docx',
+            content: 'Financial analysis document.',
+            embedding: [],
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 28,
+            metadata: []
+        );
+
+        // Mock filename extractor to detect "report.pdf"
+        $this->filenameExtractor
+            ->shouldReceive('extract')
+            ->once()
+            ->andReturn(['report.pdf']);
+
+        // Mock searchByFilename
+        $this->searchService
+            ->shouldReceive('searchByFilename')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 0.85, // Partial filename match
+                    'chunk_count' => 1,
+                    'best_chunk' => $filenameChunk,
+                    'chunks' => [$filenameChunk],
+                ],
+            ]);
+
+        // Mock searchByContent returns different file
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 2,
+                    'score' => 0.9,
+                    'chunk_count' => 1,
+                    'best_chunk' => $contentChunk,
+                    'chunks' => [$contentChunk],
+                ],
+            ]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1, 2]);
+
+        $result = $this->provider->searchRelevantFiles('What is in report.pdf about finances?', $user);
+
+        // Both results should be present
+        $this->assertCount(2, $result);
+
+        // Content result has higher score so comes first
+        $this->assertEquals(2, $result[0]['file_id']);
+        $this->assertEquals('content', $result[0]['match_type']);
+
+        // Filename result comes second
+        $this->assertEquals(1, $result[1]['file_id']);
+        $this->assertEquals('filename', $result[1]['match_type']);
+    }
+
+    /** @test */
+    public function test_search_deduplicates_when_same_file_in_both_results(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $chunk = new FileChunk(
+            fileId: 1,
+            fileName: 'data.csv',
+            content: 'Sales data for Q4.',
+            embedding: [],
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 18,
+            metadata: []
+        );
+
+        // Mock filename extractor
+        $this->filenameExtractor
+            ->shouldReceive('extract')
+            ->once()
+            ->andReturn(['data.csv']);
+
+        // Both searches return the same file
+        $this->searchService
+            ->shouldReceive('searchByFilename')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 1.0, // Exact filename match
+                    'chunk_count' => 1,
+                    'best_chunk' => $chunk,
+                    'chunks' => [$chunk],
+                ],
+            ]);
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 0.8, // Content match score
+                    'chunk_count' => 1,
+                    'best_chunk' => $chunk,
+                    'chunks' => [$chunk],
+                ],
+            ]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $result = $this->provider->searchRelevantFiles('Show me data.csv', $user);
+
+        // Should only have one result (deduplicated)
+        $this->assertCount(1, $result);
+        $this->assertEquals(1, $result[0]['file_id']);
+        // Filename match should win (added first with higher priority)
+        $this->assertEquals('filename', $result[0]['match_type']);
+        // Should have the filename match score (1.0), not content score (0.8)
+        $this->assertEquals(1.0, $result[0]['relevance']);
+    }
+
+    /** @test */
+    public function test_partial_filename_match_uses_lower_threshold(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $chunk = new FileChunk(
+            fileId: 1,
+            fileName: 'quarterly_report.pdf',
+            content: 'Quarterly financial report.',
+            embedding: [],
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 27,
+            metadata: []
+        );
+
+        $this->filenameExtractor
+            ->shouldReceive('extract')
+            ->once()
+            ->andReturn(['report.pdf']);
+
+        // Partial match with score 0.85 (above 0.3 threshold)
+        $this->searchService
+            ->shouldReceive('searchByFilename')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 0.85, // Partial match, above 0.3 threshold
+                    'chunk_count' => 1,
+                    'best_chunk' => $chunk,
+                    'chunks' => [$chunk],
+                ],
+            ]);
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $result = $this->provider->searchRelevantFiles('Find report.pdf', $user);
+
+        // Should be included (0.85 > 0.3 partial threshold)
+        $this->assertCount(1, $result);
+        $this->assertEquals(1, $result[0]['file_id']);
+        $this->assertEquals('filename', $result[0]['match_type']);
+    }
+
+    /** @test */
+    public function test_exact_filename_match_always_included(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $chunk = new FileChunk(
+            fileId: 1,
+            fileName: 'exact_match.txt',
+            content: 'Exact match file content.',
+            embedding: [],
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 25,
+            metadata: []
+        );
+
+        $this->filenameExtractor
+            ->shouldReceive('extract')
+            ->once()
+            ->andReturn(['exact_match.txt']);
+
+        // Exact match with score 1.0
+        $this->searchService
+            ->shouldReceive('searchByFilename')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 1.0, // Exact match
+                    'chunk_count' => 1,
+                    'best_chunk' => $chunk,
+                    'chunks' => [$chunk],
+                ],
+            ]);
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $result = $this->provider->searchRelevantFiles('Show exact_match.txt', $user);
+
+        // Exact match (1.0) is always included regardless of any threshold
+        $this->assertCount(1, $result);
+        $this->assertEquals(1, $result[0]['file_id']);
+        $this->assertEquals(1.0, $result[0]['relevance']);
+        $this->assertEquals('filename', $result[0]['match_type']);
+    }
+
+    /** @test */
+    public function test_filename_match_below_partial_threshold_is_excluded(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $chunk = new FileChunk(
+            fileId: 1,
+            fileName: 'some_other_file.pdf',
+            content: 'Some unrelated content.',
+            embedding: [],
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 23,
+            metadata: []
+        );
+
+        $this->filenameExtractor
+            ->shouldReceive('extract')
+            ->once()
+            ->andReturn(['report.pdf']);
+
+        // Very low partial match score (below 0.3 threshold)
+        $this->searchService
+            ->shouldReceive('searchByFilename')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 0.2, // Below 0.3 partial threshold
+                    'chunk_count' => 1,
+                    'best_chunk' => $chunk,
+                    'chunks' => [$chunk],
+                ],
+            ]);
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([]);
+
+        // filterAccessibleFileIds is called but result is filtered out by threshold
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $result = $this->provider->searchRelevantFiles('Find report.pdf', $user);
+
+        // Should be excluded (0.2 < 0.3 partial threshold)
+        $this->assertEmpty($result);
+    }
+
+    /** @test */
+    public function test_content_match_uses_standard_threshold(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $highScoreChunk = new FileChunk(
+            fileId: 1,
+            fileName: 'relevant.pdf',
+            content: 'Highly relevant content.',
+            embedding: [],
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 24,
+            metadata: []
+        );
+
+        $lowScoreChunk = new FileChunk(
+            fileId: 2,
+            fileName: 'irrelevant.pdf',
+            content: 'Low relevance content.',
+            embedding: [],
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 22,
+            metadata: []
+        );
+
+        // No filename detected
+        $this->filenameExtractor
+            ->shouldReceive('extract')
+            ->once()
+            ->andReturn([]);
+
+        // Content search returns both high and low score results
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 0.85, // Above 0.7 standard threshold
+                    'chunk_count' => 1,
+                    'best_chunk' => $highScoreChunk,
+                    'chunks' => [$highScoreChunk],
+                ],
+                [
+                    'file_id' => 2,
+                    'score' => 0.5, // Below 0.7 standard threshold
+                    'chunk_count' => 1,
+                    'best_chunk' => $lowScoreChunk,
+                    'chunks' => [$lowScoreChunk],
+                ],
+            ]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1, 2]);
+
+        $result = $this->provider->searchRelevantFiles('search query', $user);
+
+        // Only high score result should be included
+        $this->assertCount(1, $result);
+        $this->assertEquals(1, $result[0]['file_id']);
+        $this->assertEquals('content', $result[0]['match_type']);
+    }
+
+    /** @test */
+    public function test_result_includes_match_type_in_output(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $chunk = new FileChunk(
+            fileId: 1,
+            fileName: 'document.pdf',
+            content: 'Document content.',
+            embedding: [],
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 17,
+            metadata: []
+        );
+
+        $this->filenameExtractor
+            ->shouldReceive('extract')
+            ->once()
+            ->andReturn([]);
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 0.9,
+                    'chunk_count' => 1,
+                    'best_chunk' => $chunk,
+                    'chunks' => [$chunk],
+                ],
+            ]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $result = $this->provider->searchRelevantFiles('search query', $user);
+
+        $this->assertArrayHasKey('match_type', $result[0]);
+        $this->assertEquals('content', $result[0]['match_type']);
     }
 }

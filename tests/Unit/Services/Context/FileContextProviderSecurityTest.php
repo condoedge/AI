@@ -7,6 +7,7 @@ namespace Condoedge\Ai\Tests\Unit\Services\Context;
 use Condoedge\Ai\Contracts\FileAccessResolverInterface;
 use Condoedge\Ai\DTOs\FileChunk;
 use Condoedge\Ai\Services\Context\FileContextProvider;
+use Condoedge\Ai\Services\Context\FilenameExtractor;
 use Condoedge\Ai\Services\FileSearchService;
 use Mockery;
 use Mockery\MockInterface;
@@ -24,6 +25,7 @@ class FileContextProviderSecurityTest extends TestCase
     private FileContextProvider $provider;
     private MockInterface $searchService;
     private MockInterface $accessResolver;
+    private MockInterface $filenameExtractor;
 
     protected function getPackageProviders($app): array
     {
@@ -45,10 +47,22 @@ class FileContextProviderSecurityTest extends TestCase
 
         $this->searchService = Mockery::mock(FileSearchService::class);
         $this->accessResolver = Mockery::mock(FileAccessResolverInterface::class);
+        $this->filenameExtractor = Mockery::mock(FilenameExtractor::class);
+
+        // Default: no filenames detected
+        $this->filenameExtractor->shouldReceive('extract')
+            ->byDefault()
+            ->andReturn([]);
+
+        // Default isPhysicalFile behavior
+        $this->accessResolver->shouldReceive('isPhysicalFile')
+            ->byDefault()
+            ->andReturn(false);
 
         $this->provider = new FileContextProvider(
             $this->searchService,
-            $this->accessResolver
+            $this->accessResolver,
+            $this->filenameExtractor
         );
     }
 
