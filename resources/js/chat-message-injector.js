@@ -26,6 +26,13 @@ const ChatMessageInjector = {
     userAvatarHtml: `$USER_AVATAR_HTML`,
     dotColor: `$DOT_COLOR`,
 
+    // Typing animation settings (injected by PHP from user settings)
+    typingStyle: `$TYPING_STYLE`,
+    dotsAnimationHtml: `$DOTS_ANIMATION_HTML`,
+    waveAnimationHtml: `$WAVE_ANIMATION_HTML`,
+    pulseAnimationHtml: `$PULSE_ANIMATION_HTML`,
+    brainAnimationHtml: `$BRAIN_ANIMATION_HTML`,
+
     /**
      * Ensure display panel exists inside vlQueryWrapper
      * Creates it at the end of the items container if not present
@@ -262,20 +269,32 @@ const ChatMessageInjector = {
 
     /**
      * Show regenerating indicator on assistant message
-     * Uses the same typing dots as new message loading
+     * Uses the configured typing animation style (dots, wave, pulse, brain)
      */
     showRegeneratingIndicator(messageElement) {
         const content = messageElement.querySelector('.prose');
         if (content) {
-            const dotColor = this.dotColor || 'bg-indigo-500';
+            const animationHtml = this.getTypingAnimationHtml();
             content.innerHTML = `
-                <div class="flex items-center gap-1.5 h-6">
-                    <span class="inline-block w-2.5 h-2.5 rounded-full ${dotColor} animate-typing-dot-1"></span>
-                    <span class="inline-block w-2.5 h-2.5 rounded-full ${dotColor} animate-typing-dot-2"></span>
-                    <span class="inline-block w-2.5 h-2.5 rounded-full ${dotColor} animate-typing-dot-3"></span>
-                </div>
+                ${animationHtml}
                 <div class="text-xs text-gray-400 mt-2">Regenerating...</div>
             `;
+        }
+    },
+
+    /**
+     * Get the appropriate typing animation HTML based on user's style preference
+     */
+    getTypingAnimationHtml() {
+        switch(this.typingStyle) {
+            case 'wave':
+                return this.waveAnimationHtml;
+            case 'pulse':
+                return this.pulseAnimationHtml;
+            case 'brain':
+                return this.brainAnimationHtml;
+            default:
+                return this.dotsAnimationHtml;
         }
     },
 

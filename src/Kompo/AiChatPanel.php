@@ -172,6 +172,13 @@ class AiChatPanel extends Form
         $injectorJs = str_replace('$USER_AVATAR_HTML', $this->escapeForBackticks($userAvatarHtml), $injectorJs);
         $injectorJs = str_replace('$DOT_COLOR', $this->escapeForBackticks($this->theme()->primarySolid()), $injectorJs);
 
+        // Pass typing animation style and all animation HTML templates for JS regenerate indicator
+        $injectorJs = str_replace('$TYPING_STYLE', $this->escapeForBackticks($this->settings()->typingAnimationStyle()), $injectorJs);
+        $injectorJs = str_replace('$DOTS_ANIMATION_HTML', $this->escapeForBackticks($this->dotsAnimationHtml()), $injectorJs);
+        $injectorJs = str_replace('$WAVE_ANIMATION_HTML', $this->escapeForBackticks($this->waveAnimationHtml()), $injectorJs);
+        $injectorJs = str_replace('$PULSE_ANIMATION_HTML', $this->escapeForBackticks($this->pulseAnimationHtml()), $injectorJs);
+        $injectorJs = str_replace('$BRAIN_ANIMATION_HTML', $this->escapeForBackticks($this->brainAnimationHtml()), $injectorJs);
+
         return $scrollJs . "\n\n" . $injectorJs;
     }
 
@@ -204,14 +211,64 @@ class AiChatPanel extends Form
 
     /**
      * Generate typing indicator HTML matching the actual AI assistant style
-     * Uses animate-typing-dot-X classes for bouncing dots animation
+     * Respects typingAnimationStyle setting: dots, wave, pulse, brain
      */
     protected function typingIndicatorHtml(): string
     {
         $avatarHtml = $this->assistantAvatarHtml();
-        $dotColor = $this->theme()->primarySolid(); // Single solid color for small dots
+        $style = $this->settings()->typingAnimationStyle();
+        $animationHtml = $this->getTypingAnimationHtml($style);
 
-        return '<div class="flex items-start mt-4 animate-message-assistant"><div class="mr-3 flex-shrink-0 self-start">' . $avatarHtml . '</div><div class="typing-indicator-content group px-5 py-4 rounded-2xl rounded-tl-md bg-white border border-gray-100 shadow-sm"><div class="flex items-center gap-1.5 h-6"><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-1"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-2"></span><span class="w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-3"></span></div><div class="text-xs text-gray-400 mt-2">' . __('ai.chat.thinking') . '</div></div></div>';
+        return '<div class="flex items-start mt-4 animate-message-assistant"><div class="mr-3 flex-shrink-0 self-start">' . $avatarHtml . '</div><div class="typing-indicator-content group px-5 py-4 rounded-2xl rounded-tl-md bg-white border border-gray-100 shadow-sm">' . $animationHtml . '<div class="text-xs text-gray-400 mt-2">' . __('ai.chat.thinking') . '</div></div></div>';
+    }
+
+    /**
+     * Get the animation HTML for the specified typing style
+     */
+    protected function getTypingAnimationHtml(string $style): string
+    {
+        return match($style) {
+            'wave' => $this->waveAnimationHtml(),
+            'pulse' => $this->pulseAnimationHtml(),
+            'brain' => $this->brainAnimationHtml(),
+            default => $this->dotsAnimationHtml(),
+        };
+    }
+
+    /**
+     * Dots animation - bouncing dots (default)
+     */
+    protected function dotsAnimationHtml(): string
+    {
+        $color = $this->theme()->primarySolid();
+        return '<div class="flex items-center gap-1.5 h-6"><span class="inline-block w-2.5 h-2.5 rounded-full ' . $color . ' animate-typing-dot-1"></span><span class="inline-block w-2.5 h-2.5 rounded-full ' . $color . ' animate-typing-dot-2"></span><span class="inline-block w-2.5 h-2.5 rounded-full ' . $color . ' animate-typing-dot-3"></span></div>';
+    }
+
+    /**
+     * Wave animation - vertical bars
+     */
+    protected function waveAnimationHtml(): string
+    {
+        $color = $this->theme()->primarySolid();
+        return '<div class="flex items-end gap-1 h-6"><span class="inline-block w-1 rounded-full ' . $color . ' animate-wave-bar-1"></span><span class="inline-block w-1 rounded-full ' . $color . ' animate-wave-bar-2"></span><span class="inline-block w-1 rounded-full ' . $color . ' animate-wave-bar-3"></span><span class="inline-block w-1 rounded-full ' . $color . ' animate-wave-bar-4"></span><span class="inline-block w-1 rounded-full ' . $color . ' animate-wave-bar-5"></span></div>';
+    }
+
+    /**
+     * Pulse animation - expanding circles
+     */
+    protected function pulseAnimationHtml(): string
+    {
+        $color = $this->theme()->primarySolid();
+        return '<div class="relative flex items-center justify-center w-10 h-6"><span class="absolute w-4 h-4 rounded-full ' . $color . ' animate-typing-pulse-inner"></span><span class="absolute w-6 h-6 rounded-full ' . $color . ' opacity-30 animate-typing-pulse-outer"></span><span class="absolute w-8 h-8 rounded-full ' . $color . ' opacity-10 animate-typing-pulse-glow"></span></div>';
+    }
+
+    /**
+     * Brain animation - thinking brain with sparkles
+     */
+    protected function brainAnimationHtml(): string
+    {
+        $textColor = $this->theme()->primaryText();
+        return '<div class="flex items-center gap-2 h-6"><svg class="w-5 h-5 ' . $textColor . ' animate-thinking-brain" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.5 2 5.5 4.5 5 8c-2 .5-3.5 2.3-3.5 4.5 0 2.5 2 4.5 4.5 4.5h12c2.5 0 4.5-2 4.5-4.5 0-2.2-1.5-4-3.5-4.5-.5-3.5-3.5-6-7-6z"/></svg><div class="flex gap-0.5"><span class="w-1 h-1 rounded-full bg-amber-400 animate-sparkle-1"></span><span class="w-1 h-1 rounded-full bg-amber-400 animate-sparkle-2"></span><span class="w-1 h-1 rounded-full bg-amber-400 animate-sparkle-3"></span></div></div>';
     }
 
     // ========== ACTION METHODS ==========

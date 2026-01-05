@@ -39,7 +39,10 @@ class MessagesQuery extends Query
     {
         $this->id(self::ID);
 
-        $animationSpeed = $this->settings()->animationSpeed();
+        // If animations disabled, force speed to 'none' which disables all animations via CSS
+        $animationSpeed = $this->settings()->enableAnimations()
+            ? $this->settings()->animationSpeed()
+            : 'none';
         $speedClass = 'animation-speed-' . $animationSpeed;
 
         $this->conversation = AiConversation::where('user_id', auth()->id())
