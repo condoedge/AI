@@ -118,6 +118,19 @@ class ConversationContextManager
         // Only include if there are new files - don't overwrite previous with empty
         $referencedFiles = $queryResult['referenced_files'] ?? [];
 
+        // Extract template detection info from query result
+        $detectedTemplate = $queryResult['detected_template'] ?? null;
+        $queryType = $queryResult['query_type'] ?? null;
+
+        // Extract insights from query result
+        $insights = $queryResult['insights'] ?? [];
+
+        // Extract execution stats if available
+        $executionStats = $queryResult['stats'] ?? [];
+
+        // Extract available actions for entity types
+        $availableActions = $queryResult['available_actions'] ?? [];
+
         // Build snapshot update - only include non-empty values to preserve previous context
         $snapshotUpdate = [
             'focused_entity' => $focusedEntity,
@@ -135,6 +148,32 @@ class ConversationContextManager
         // Otherwise preserve the previous reference for follow-up questions
         if (!empty($referencedFiles)) {
             $snapshotUpdate['last_referenced_files'] = $referencedFiles;
+        }
+
+        // Store template detection info if available
+        // This provides more specific info from QueryGenerator than entity extractor
+        if ($detectedTemplate) {
+            $snapshotUpdate['last_detected_template'] = $detectedTemplate;
+        }
+        if ($queryType) {
+            $snapshotUpdate['last_query_type'] = $queryType;
+        }
+
+        // Only update last_insights if there are new insights
+        // Otherwise preserve the previous insights for follow-up context
+        if (!empty($insights)) {
+            $snapshotUpdate['last_insights'] = $insights;
+        }
+
+        // Store execution stats if available
+        if (!empty($executionStats)) {
+            $snapshotUpdate['last_execution_stats'] = $executionStats;
+        }
+
+        // Only update last_available_actions if there are new actions
+        // Otherwise preserve the previous actions for follow-up context
+        if (!empty($availableActions)) {
+            $snapshotUpdate['last_available_actions'] = $availableActions;
         }
 
         $conversation->updateContextSnapshot($snapshotUpdate);
@@ -181,10 +220,15 @@ class ConversationContextManager
             'last_result_count' => $snapshot['last_result_count'] ?? 0,
             'last_cypher_query' => $snapshot['last_cypher_query'] ?? null,
             'last_query_type' => $snapshot['last_query_type'] ?? null,
+            'last_detected_template' => $snapshot['last_detected_template'] ?? null,
             'last_relationships' => $snapshot['last_relationships'] ?? [],
             'mentioned_entities' => $snapshot['mentioned_entities'] ?? [],
             'last_answer_summary' => $snapshot['last_answer_summary'] ?? null,
             'last_referenced_files' => $snapshot['last_referenced_files'] ?? [],
+            'last_insights' => $snapshot['last_insights'] ?? [],
+            'last_visualizations' => $snapshot['last_visualizations'] ?? [],
+            'last_execution_stats' => $snapshot['last_execution_stats'] ?? [],
+            'last_available_actions' => $snapshot['last_available_actions'] ?? [],
             'recent_exchanges' => $this->formatRecentExchanges($recentMessages),
         ];
     }
