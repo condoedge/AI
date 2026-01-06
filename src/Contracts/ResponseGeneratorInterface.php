@@ -36,7 +36,7 @@ interface ResponseGeneratorInterface
     public function generate(
         string $originalQuestion,
         array $queryResult,
-        string $cypherQuery,
+        ?string $cypherQuery,
         array $options = []
     ): array;
 
@@ -50,7 +50,7 @@ interface ResponseGeneratorInterface
      */
     public function generateEmptyResponse(
         string $originalQuestion,
-        string $cypherQuery,
+        ?string $cypherQuery,
         array $options = []
     ): array;
 

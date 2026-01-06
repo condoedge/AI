@@ -212,7 +212,10 @@ class AiChatService implements AiChatServiceInterface
                 $conversation,
                 $answerText,
                 $cypherQuery ?? '',
-                ['data' => $queryData]
+                [
+                    'data' => $queryData,
+                    'referenced_files' => $aiResponse['referenced_files'] ?? [],
+                ]
             );
 
             $conversation->addMessage('assistant', $answerText, [

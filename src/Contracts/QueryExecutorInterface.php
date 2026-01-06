@@ -32,7 +32,7 @@ interface QueryExecutorInterface
      * @throws \RuntimeException If query execution fails
      * @throws \Exception If query exceeds timeout
      */
-    public function execute(string $cypherQuery, array $parameters = [], array $options = []): array;
+    public function execute(?string $cypherQuery, array $parameters = [], array $options = []): array;
 
     /**
      * Execute query and return count only (optimization)
@@ -42,7 +42,7 @@ interface QueryExecutorInterface
      * @param array $options Execution options
      * @return int Count of results
      */
-    public function executeCount(string $cypherQuery, array $parameters = [], array $options = []): int;
+    public function executeCount(?string $cypherQuery, array $parameters = [], array $options = []): int;
 
     /**
      * Execute query with pagination
@@ -58,7 +58,7 @@ interface QueryExecutorInterface
      *               - stats: Execution statistics
      */
     public function executePaginated(
-        string $cypherQuery,
+        ?string $cypherQuery,
         int $page = 1,
         int $perPage = 20,
         array $parameters = [],
@@ -72,7 +72,7 @@ interface QueryExecutorInterface
      * @param array $parameters Query parameters
      * @return array Execution plan details
      */
-    public function explain(string $cypherQuery, array $parameters = []): array;
+    public function explain(?string $cypherQuery, array $parameters = []): array;
 
     /**
      * Test if a query is valid (dry run)
@@ -80,7 +80,7 @@ interface QueryExecutorInterface
      * @param string $cypherQuery Query to test
      * @return bool True if query is valid
      */
-    public function test(string $cypherQuery): bool;
+    public function test(?string $cypherQuery): bool;
 
     /**
      * Cancel a running query
@@ -88,5 +88,5 @@ interface QueryExecutorInterface
      * @param string $queryId Query identifier
      * @return bool True if cancelled successfully
      */
-    public function cancel(string $queryId): bool;
+    public function cancel(?string $queryId): bool;
 }

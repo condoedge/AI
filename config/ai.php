@@ -579,7 +579,7 @@ return [
         'max_references' => 5,
 
         // Minimum relevance score for file inclusion
-        'min_relevance_score' => 0.5,
+        'min_relevance_score' => 0.4,
 
         // Include file snippets in response metadata
         'include_snippets' => true,
@@ -785,6 +785,7 @@ return [
         \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
         \Condoedge\Ai\Services\ResponseSections\QueryInfoSection::class,
         \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
+        \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class, // For file reference follow-ups
         \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,
         \Condoedge\Ai\Services\ResponseSections\StatisticsSection::class,
         \Condoedge\Ai\Services\ResponseSections\GuidelinesSection::class,

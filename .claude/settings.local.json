@@ -116,7 +116,14 @@
       "WebSearch",
       "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" commit -m \"$\\(cat <<''EOF''\nfix\\(graph-store\\): specify database via URI query parameter\n\nThe withDefaultDatabase\\(\\) method doesn''t exist in the current version\nof laudis/neo4j-php-client. The correct approach is to append the\ndatabase as a query parameter to the connection URI.\n\nExample: bolt://localhost:7687?database=mydb\n\nThe default ''neo4j'' database is handled by Neo4j automatically,\nso we only append the parameter for non-default databases.\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" commit -m \"$\\(cat <<''EOF''\nfix\\(graph-store\\): recursively convert Laudis types to plain PHP arrays\n\nThe convertValue\\(\\) method was not properly handling CypherList and\nnested Laudis types, causing \"could not be converted to string\" errors.\n\nChanges:\n- Added CypherList and Relationship imports\n- Handle CypherList explicitly with recursive conversion\n- Handle Relationship type \\(extract properties\\)\n- Recursively convert all nested values in CypherMap, CypherList, arrays\n- Each Laudis type now properly converts nested values\n\nThis fixes errors when Neo4j returns complex nested structures like\nlists of nodes or maps containing lists.\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Skill(superpowers:systematic-debugging)"
+      "Skill(superpowers:systematic-debugging)",
+      "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline -5)",
+      "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline -4)",
+      "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" diff tests/Feature/FileContextIntegrationTest.php)",
+      "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" add tests/Feature/FileContextIntegrationTest.php)",
+      "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" commit -m \"$\\(cat <<''EOF''\nAdd explicit shouldNotReceive assertion for searchByFilename\n\nReplace incorrect comment with proper Mockery assertion to ensure\ntest_semantic_search_still_works_without_filename actually validates\nthat searchByFilename is not called when no filename is detected.\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline -15)",
+      "Bash(timeout 30 vendor/bin/phpunit:*)"
     ],
     "deny": [],
     "ask": []

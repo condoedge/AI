@@ -219,7 +219,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
     public function generate(
         string $originalQuestion,
         array $queryResult,
-        string $cypherQuery,
+        ?string $cypherQuery,
         array $options = []
     ): array {
         // Merge options with defaults
@@ -242,6 +242,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
             'data' => $queryResult['data'],
             'stats' => $queryResult['stats'] ?? [],
             'file_context' => $options['file_context'] ?? [],
+            'conversation_context' => $options['conversation_context'] ?? [],
         ];
 
         $sectionOptions = [
@@ -327,7 +328,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
      */
     public function generateEmptyResponse(
         string $originalQuestion,
-        string $cypherQuery,
+        ?string $cypherQuery,
         array $options = []
     ): array {
         $format = $options['format'] ?? 'text';
@@ -484,7 +485,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
      * @param string $cypherQuery Original query
      * @return array Suggested visualization types with rationale
      */
-    public function suggestVisualizations(array $queryResult, string $cypherQuery): array
+    public function suggestVisualizations(array $queryResult, ?string $cypherQuery): array
     {
         $suggestions = [];
 

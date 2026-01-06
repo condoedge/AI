@@ -50,7 +50,7 @@ interface QueryGeneratorInterface
      *               - is_read_only: Boolean indicating if query only reads data
      * @throws \InvalidArgumentException If query is empty
      */
-    public function validate(string $cypherQuery, array $options = []): array;
+    public function validate(?string $cypherQuery, array $options = []): array;
 
     /**
      * Sanitize a Cypher query by removing dangerous operations
@@ -58,7 +58,7 @@ interface QueryGeneratorInterface
      * @param string $cypherQuery Query to sanitize
      * @return string Sanitized query
      */
-    public function sanitize(string $cypherQuery): string;
+    public function sanitize(?string $cypherQuery): string;
 
     /**
      * Get available query templates

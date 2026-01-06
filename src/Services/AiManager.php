@@ -224,7 +224,7 @@ class AiManager
      */
     public function storeQuery(
         string $question,
-        string $cypherQuery,
+        ?string $cypherQuery,
         array $metadata = [],
         string $collection = 'questions'
     ): array {
@@ -490,7 +490,7 @@ class AiManager
      * @return array Validation result with keys: valid, errors, warnings, complexity, is_read_only
      * @throws \InvalidArgumentException If query is empty
      */
-    public function validateQuery(string $cypherQuery, array $options = []): array
+    public function validateQuery(?string $cypherQuery, array $options = []): array
     {
         return $this->queryGenerator->validate($cypherQuery, $options);
     }
@@ -501,7 +501,7 @@ class AiManager
      * @param string $cypherQuery Query to sanitize
      * @return string Sanitized query
      */
-    public function sanitizeQuery(string $cypherQuery): string
+    public function sanitizeQuery(?string $cypherQuery): string
     {
         return $this->queryGenerator->sanitize($cypherQuery);
     }
@@ -578,7 +578,7 @@ class AiManager
      * @return array Execution result with keys: success, data, stats, metadata, errors
      * @throws \RuntimeException If query execution fails
      */
-    public function executeQuery(string $cypherQuery, array $parameters = [], array $options = []): array
+    public function executeQuery(?string $cypherQuery, array $parameters = [], array $options = []): array
     {
         return $this->queryExecutor->execute($cypherQuery, $parameters, $options);
     }
@@ -591,7 +591,7 @@ class AiManager
      * @param array $options Execution options
      * @return int Count of results
      */
-    public function executeCount(string $cypherQuery, array $parameters = [], array $options = []): int
+    public function executeCount(?string $cypherQuery, array $parameters = [], array $options = []): int
     {
         return $this->queryExecutor->executeCount($cypherQuery, $parameters, $options);
     }
@@ -607,7 +607,7 @@ class AiManager
      * @return array Paginated results with data and pagination metadata
      */
     public function executePaginated(
-        string $cypherQuery,
+        ?string $cypherQuery,
         int $page = 1,
         int $perPage = 20,
         array $parameters = [],
@@ -623,7 +623,7 @@ class AiManager
      * @param array $parameters Query parameters
      * @return array Execution plan details
      */
-    public function explainQuery(string $cypherQuery, array $parameters = []): array
+    public function explainQuery(?string $cypherQuery, array $parameters = []): array
     {
         return $this->queryExecutor->explain($cypherQuery, $parameters);
     }
@@ -634,7 +634,7 @@ class AiManager
      * @param string $cypherQuery Query to test
      * @return bool True if query is valid
      */
-    public function testQuery(string $cypherQuery): bool
+    public function testQuery(?string $cypherQuery): bool
     {
         return $this->queryExecutor->test($cypherQuery);
     }
@@ -702,7 +702,7 @@ class AiManager
     public function generateResponse(
         string $originalQuestion,
         array $queryResult,
-        string $cypherQuery,
+        ?string $cypherQuery,
         array $options = []
     ): array {
         return $this->responseGenerator->generate($originalQuestion, $queryResult, $cypherQuery, $options);
@@ -726,7 +726,7 @@ class AiManager
      * @param string $cypherQuery Original query
      * @return array Suggested visualization types
      */
-    public function suggestVisualizations(array $queryResult, string $cypherQuery): array
+    public function suggestVisualizations(array $queryResult, ?string $cypherQuery): array
     {
         return $this->responseGenerator->suggestVisualizations($queryResult, $cypherQuery);
     }
@@ -764,12 +764,14 @@ class AiManager
             $executionResult = $this->executeQuery($queryResult['cypher'], [], $options);
 
             // Step 4: Generate natural language response
+            // Pass both file_context and conversation_context for follow-up awareness
             $responseResult = $this->generateResponse(
                 $question,
                 $executionResult,
                 $queryResult['cypher'],
                 array_merge($options, [
                     'file_context' => $context['file_context'] ?? [],
+                    'conversation_context' => $context['conversation_context'] ?? [],
                 ])
             );
 

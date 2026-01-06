@@ -81,7 +81,7 @@ class FileContextProvider
         $this->validateUserForSecurity($user);
 
         // Get configuration values
-        $minScore = $options['min_score'] ?? config('ai.file_context.min_relevance_score', 0.7);
+        $minScore = $options['min_score'] ?? config('ai.file_context.min_relevance_score', 0.4);
         $maxReferences = $options['limit'] ?? config('ai.file_context.max_references', 5);
         $snippetLength = config('ai.file_context.snippet_length', 200);
 

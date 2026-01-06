@@ -131,12 +131,10 @@ class AiConversation extends Model
      */
     public function updateEntityContext(array $entityData): void
     {
-        $snapshot = $this->context_snapshot ?? [];
-
-        $snapshot['focused_entity_data'] = $entityData;
-        $snapshot['updated_at'] = now()->toIso8601String();
-
-        $this->update(['context_snapshot' => $snapshot]);
+        $this->updateContextSnapshot([
+            'focused_entity_data' => $entityData,
+            'updated_at' => now()->toIso8601String(),
+        ]);
     }
 
     /**
@@ -198,25 +196,30 @@ class AiConversation extends Model
             $this->update(['title' => Str::limit($content, 50)]);
         }
 
-        // Track referenced files in context snapshot
+        // Track referenced files in context snapshot (merge, don't overwrite)
         if (!empty($metadata['referenced_files'])) {
+            // Refresh from DB to get latest context (recordResponse may have updated it)
+            $this->refresh();
             $existingFiles = $this->context_snapshot['referenced_files'] ?? [];
             $newFileIds = array_column($metadata['referenced_files'], 'id');
             $allFiles = array_unique(array_merge($existingFiles, $newFileIds));
 
-            $snapshot = $this->context_snapshot ?? [];
-            $snapshot['referenced_files'] = array_values($allFiles);
-            $this->update(['context_snapshot' => $snapshot]);
+            $this->updateContextSnapshot(['referenced_files' => array_values($allFiles)]);
         }
 
         return $message;
     }
 
     /**
-     * Update the full context snapshot.
+     * Update the context snapshot by merging new data with existing.
+     *
+     * This preserves existing context data (like last_referenced_files) while
+     * updating only the keys provided in the new snapshot.
      */
-    public function updateContextSnapshot(array $snapshot): void
+    public function updateContextSnapshot(array $newData): void
     {
-        $this->update(['context_snapshot' => $snapshot]);
+        $existingSnapshot = $this->context_snapshot ?? [];
+        $mergedSnapshot = array_merge($existingSnapshot, $newData);
+        $this->update(['context_snapshot' => $mergedSnapshot]);
     }
 }

@@ -115,10 +115,11 @@ class ConversationContextManager
         $resultSample = array_slice($queryResult['data'] ?? [], 0, 3);
 
         // Extract referenced files for follow-up resolution
+        // Only include if there are new files - don't overwrite previous with empty
         $referencedFiles = $queryResult['referenced_files'] ?? [];
 
-        // Update snapshot with enhanced data
-        $conversation->updateContextSnapshot([
+        // Build snapshot update - only include non-empty values to preserve previous context
+        $snapshotUpdate = [
             'focused_entity' => $focusedEntity,
             'mentioned_entities' => $newEntities,
             'last_relationships' => $cypherEntities['relationships'],
@@ -127,9 +128,16 @@ class ConversationContextManager
             'last_result_sample' => $resultSample,
             'focused_entity_filter' => $entityFilter,
             'last_answer_summary' => Str::limit($response, 200),
-            'last_referenced_files' => $referencedFiles,
             'updated_at' => now()->toIso8601String(),
-        ]);
+        ];
+
+        // Only update last_referenced_files if there are new files
+        // Otherwise preserve the previous reference for follow-up questions
+        if (!empty($referencedFiles)) {
+            $snapshotUpdate['last_referenced_files'] = $referencedFiles;
+        }
+
+        $conversation->updateContextSnapshot($snapshotUpdate);
     }
 
     /**

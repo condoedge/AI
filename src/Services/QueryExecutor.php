@@ -65,7 +65,7 @@ class QueryExecutor implements QueryExecutorInterface
      * @throws QueryTimeoutException If query exceeds timeout
      * @throws ReadOnlyViolationException If write operation in read-only mode
      */
-    public function execute(string $cypherQuery, array $parameters = [], array $options = []): array
+    public function execute(?string $cypherQuery, array $parameters = [], array $options = []): array
     {
         // Merge options with defaults
         $timeout = $options['timeout'] ?? $this->config['default_timeout'] ?? 30;
@@ -75,7 +75,7 @@ class QueryExecutor implements QueryExecutorInterface
         $includeStats = $options['include_stats'] ?? true;
 
         // Some cases we'll send an empty cypher query because there's nothing to run, just a direct answers, so we don't throw a direct error
-        if (empty(trim($cypherQuery))) {
+        if (empty(trim($cypherQuery ?? ''))) {
             return [
                 'success' => true,
                 'data' => [],
@@ -193,7 +193,7 @@ class QueryExecutor implements QueryExecutorInterface
      * @param array $options Execution options
      * @return int Count of results
      */
-    public function executeCount(string $cypherQuery, array $parameters = [], array $options = []): int
+    public function executeCount(?string $cypherQuery, array $parameters = [], array $options = []): int
     {
         // Wrap query in count
         $countQuery = "WITH * MATCH {$cypherQuery} RETURN count(*) as total";
@@ -226,7 +226,7 @@ class QueryExecutor implements QueryExecutorInterface
      * @return array Paginated results
      */
     public function executePaginated(
-        string $cypherQuery,
+        ?string $cypherQuery,
         int $page = 1,
         int $perPage = 20,
         array $parameters = [],
@@ -275,7 +275,7 @@ class QueryExecutor implements QueryExecutorInterface
      * @param array $parameters Query parameters
      * @return array Execution plan details
      */
-    public function explain(string $cypherQuery, array $parameters = []): array
+    public function explain(?string $cypherQuery, array $parameters = []): array
     {
         if (!($this->config['enable_explain'] ?? true)) {
             throw new QueryExecutionException('EXPLAIN is disabled in configuration');
@@ -305,7 +305,7 @@ class QueryExecutor implements QueryExecutorInterface
      * @param string $cypherQuery Query to test
      * @return bool True if query is valid
      */
-    public function test(string $cypherQuery): bool
+    public function test(?string $cypherQuery): bool
     {
         try {
             // Use EXPLAIN to validate without executing
@@ -322,7 +322,7 @@ class QueryExecutor implements QueryExecutorInterface
      * @param string $queryId Query identifier
      * @return bool True if cancelled successfully
      */
-    public function cancel(string $queryId): bool
+    public function cancel(?string $queryId): bool
     {
         try {
             // Neo4j specific: CALL dbms.listQueries() and dbms.killQuery()
@@ -535,7 +535,7 @@ class QueryExecutor implements QueryExecutorInterface
      */
     protected function logQueryFailure(
         string $question,
-        string $cypherQuery,
+        ?string $cypherQuery,
         string $error,
         ?string $templateUsed = null,
         ?array $metadata = null,

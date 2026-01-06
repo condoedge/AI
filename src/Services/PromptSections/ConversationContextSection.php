@@ -106,8 +106,9 @@ class ConversationContextSection extends BasePromptSection
         if (!empty($conversationContext['last_referenced_files'])) {
             $output .= "\n**Files Referenced in Previous Response:**\n";
             foreach ($conversationContext['last_referenced_files'] as $file) {
-                $filename = $file['filename'] ?? 'Unknown file';
-                $fileId = $file['file_id'] ?? '';
+                // Handle both structures: name/id (from ResponseFileEnricher) and filename/file_id
+                $filename = $file['name'] ?? $file['filename'] ?? 'Unknown file';
+                $fileId = $file['id'] ?? $file['file_id'] ?? '';
                 $snippet = $this->truncate($file['snippet'] ?? '', 100);
                 $output .= "- [{$filename}] (ID: {$fileId}): {$snippet}\n";
             }

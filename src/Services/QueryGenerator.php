@@ -159,7 +159,7 @@ class QueryGenerator implements QueryGeneratorInterface
                     'max_tokens' => 500,
                 ]);
 
-                if ($response == 'NO QUERY REQUIRED') {
+                if ($response == 'NO QUERY REQUIRED' || !isset($response) || empty($response)) {
                     return [
                         'cypher' => '',
                         'explanation' => 'No query required to answer the question.',
@@ -218,7 +218,7 @@ class QueryGenerator implements QueryGeneratorInterface
      * @return array Validation result
      * @throws \InvalidArgumentException If query is empty
      */
-    public function validate(string $cypherQuery, array $options = []): array
+    public function validate(?string $cypherQuery, array $options = []): array
     {
         if (empty(trim($cypherQuery))) {
             throw new \InvalidArgumentException('Query cannot be empty');
@@ -277,7 +277,7 @@ class QueryGenerator implements QueryGeneratorInterface
      * @param string $cypherQuery Query to sanitize
      * @return string Sanitized query
      */
-    public function sanitize(string $cypherQuery): string
+    public function sanitize(?string $cypherQuery): string
     {
         // Remove dangerous keywords
         foreach ($this->dangerousKeywords as $keyword) {
