@@ -107,7 +107,6 @@ class QueryExecutor implements QueryExecutorInterface
             $cypherQuery = $this->applyTeamFilter($cypherQuery, $teamFilter);
             $parameters = array_merge($parameters, [
                 'teamIds' => $teamFilter->getTeamIds(),
-                'ownerId' => $teamFilter->getOwnerId(),
             ]);
         }
 
@@ -608,6 +607,11 @@ class QueryExecutor implements QueryExecutorInterface
     {
         // Extract node alias from first MATCH clause
         if (!preg_match('/MATCH\s*\((\w+)(?::\w+)?\)/i', $cypherQuery, $matches)) {
+            // SECURITY: Log when team filter cannot be applied - fail-open scenario
+            Log::warning('Team filter could not be applied: query pattern not recognized', [
+                'query' => substr($cypherQuery, 0, 200),
+                'team_ids' => $teamFilter->getTeamIds(),
+            ]);
             return $cypherQuery;
         }
 

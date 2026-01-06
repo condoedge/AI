@@ -77,4 +77,32 @@ class QueryExecutorSecurityTest extends TestCase
             ['team_filter' => $teamFilter]
         );
     }
+
+    /** @test */
+    public function it_merges_team_filter_with_existing_where_clause(): void
+    {
+        $mockGraph = Mockery::mock(GraphStoreInterface::class);
+        $mockGraph->shouldReceive('query')
+            ->once()
+            ->withArgs(function ($query, $params) {
+                // Verify team filter is applied AND original WHERE condition is preserved
+                return str_contains($query, 'BELONGS_TO_TEAM')
+                    && str_contains($query, 't.id IN $teamIds')
+                    && str_contains($query, 'n.age > 18')
+                    && isset($params['teamIds'])
+                    && $params['teamIds'] === [1, 2];
+            })
+            ->andReturn([['name' => 'Adult User']]);
+
+        $executor = new QueryExecutor($mockGraph);
+
+        $teamFilter = new TeamFilteredQuery([1, 2]);
+        $result = $executor->execute(
+            'MATCH (n:Person) WHERE n.age > 18 RETURN n',
+            [],
+            ['team_filter' => $teamFilter]
+        );
+
+        $this->assertTrue($result['success']);
+    }
 }
