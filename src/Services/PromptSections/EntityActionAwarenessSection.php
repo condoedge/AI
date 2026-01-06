@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
-use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
-
 /**
  * EntityActionAwarenessSection
  *
@@ -19,13 +17,6 @@ class EntityActionAwarenessSection extends BasePromptSection
 {
     protected string $name = 'entity_action_awareness';
     protected int $priority = 58;
-
-    private ?EntityAutoDiscovery $discovery = null;
-
-    public function __construct()
-    {
-        $this->discovery = app(EntityAutoDiscovery::class);
-    }
 
     /**
      * Include when there are entity actions or generic actions configured
@@ -97,7 +88,10 @@ class EntityActionAwarenessSection extends BasePromptSection
 
             $output .= "**Available Entity IDs from Previous Results:**\n";
             foreach ($lastResults as $index => $result) {
-                $id = $result['id'] ?? $result['_id'] ?? $result['neo4j_id'] ?? 'unknown';
+                $id = $this->extractEntityId($result);
+                if ($id === null) {
+                    continue; // Skip entries without valid ID
+                }
                 $name = $result['name'] ?? $result['title'] ?? $result['full_name'] ?? "Item " . ($index + 1);
                 $entityType = $focusedEntity ?? 'Entity';
                 $output .= "- {$entityType}: {$name} (ID: {$id})\n";
@@ -111,5 +105,21 @@ class EntityActionAwarenessSection extends BasePromptSection
         $output .= "- The response generator will format the action link using the ID\n\n";
 
         return $output;
+    }
+
+    /**
+     * Extract entity ID from result using configured field names
+     */
+    protected function extractEntityId(array $result): ?string
+    {
+        $idFields = config('ai.entity_id_fields') ?? ['id', '_id', 'neo4j_id'];
+
+        foreach ($idFields as $field) {
+            if (isset($result[$field]) && $result[$field] !== null) {
+                return (string) $result[$field];
+            }
+        }
+
+        return null;
     }
 }

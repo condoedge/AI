@@ -79,14 +79,14 @@ class ResponseEntityActionsSection extends BaseResponseSection
                 $output .= "\n";
             }
 
-            // Show available entity IDs
-            if (!empty($entityData)) {
+            // Show available entity IDs with pre-formatted links
+            if (!empty($entityData) && !empty($actions[0]['action_key'])) {
+                $firstActionKey = $actions[0]['action_key'];
                 $output .= "\n**Available {$entityType} IDs:**\n";
                 foreach ($entityData as $entity) {
-                    $id = $entity['id'] ?? $entity['_id'] ?? $entity['neo4j_id'] ?? null;
+                    $id = $this->extractEntityId($entity);
                     $name = $entity['name'] ?? $entity['title'] ?? $entity['full_name'] ?? 'Unknown';
                     if ($id) {
-                        $firstActionKey = $actions[0]['action_key'] ?? 'profile';
                         $output .= "- {$name}: `[View {$name}](entity://{$entityType}/{$id}/{$firstActionKey})`\n";
                     }
                 }
@@ -186,5 +186,21 @@ class ResponseEntityActionsSection extends BaseResponseSection
         }
 
         return array_unique($labels);
+    }
+
+    /**
+     * Extract entity ID from result using configured field names
+     */
+    protected function extractEntityId(array $result): ?string
+    {
+        $idFields = config('ai.entity_id_fields') ?? ['id', '_id', 'neo4j_id'];
+
+        foreach ($idFields as $field) {
+            if (isset($result[$field]) && $result[$field] !== null) {
+                return (string) $result[$field];
+            }
+        }
+
+        return null;
     }
 }

@@ -760,6 +760,90 @@ return [
     */
     'entities' => require __DIR__ . '/entities.php',
 
+    /*
+    |--------------------------------------------------------------------------
+    | Entity ID Field Names
+    |--------------------------------------------------------------------------
+    |
+    | Field names to check when extracting entity IDs from query results.
+    | Checked in order; first match wins. Add custom fields for your entities.
+    |
+    */
+    'entity_id_fields' => [
+        'id',
+        '_id',
+        'neo4j_id',
+        'uuid',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Entity Actions
+    |--------------------------------------------------------------------------
+    |
+    | Define actions for specific entity types. Each entity can have multiple
+    | actions, each with aliases for natural language matching.
+    |
+    | Structure:
+    | 'EntityType' => [
+    |     'action_key' => [
+    |         'action' => fn($id) => KompoElement,
+    |         'aliases' => ['alias1', 'alias2'],
+    |         'label' => 'Display Label', // optional, for AI context
+    |     ],
+    | ],
+    |
+    | AI uses format: [text](entity://EntityType/id/action_key)
+    |
+    */
+    'entity_actions' => [
+        // Example (applications should define their own):
+        // 'Person' => [
+        //     'profile' => [
+        //         'action' => fn($id) => _Link('View Profile')->href(route('people.show', $id)),
+        //         'aliases' => ['profile link', 'profile page', 'profile', 'view person'],
+        //         'label' => 'View Profile',
+        //     ],
+        //     'quick_view' => [
+        //         'action' => fn($id) => _Link('Quick View')->selfGet('personModal', ['id' => $id])->inModal(),
+        //         'aliases' => ['quick view', 'preview', 'details'],
+        //         'label' => 'Quick View',
+        //     ],
+        // ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Generic Actions
+    |--------------------------------------------------------------------------
+    |
+    | Define actions not tied to specific entities. These are app-wide
+    | navigation or functionality links.
+    |
+    | Structure:
+    | 'action_key' => [
+    |     'action' => fn() => KompoElement,
+    |     'aliases' => ['alias1', 'alias2'],
+    |     'label' => 'Display Label',
+    | ],
+    |
+    | AI uses format: [text](action://action_key)
+    |
+    */
+    'generic_actions' => [
+        // Example:
+        // 'settings' => [
+        //     'action' => fn() => _Link('Settings')->href(route('settings.index')),
+        //     'aliases' => ['settings', 'settings page', 'preferences'],
+        //     'label' => 'Settings',
+        // ],
+        // 'dashboard' => [
+        //     'action' => fn() => _Link('Dashboard')->href(route('dashboard')),
+        //     'aliases' => ['dashboard', 'home', 'main page'],
+        //     'label' => 'Dashboard',
+        // ],
+    ],
+
     'query_generator_sections' => [
         \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
         \Condoedge\Ai\Services\PromptSections\GenericContextSection::class,
@@ -770,6 +854,7 @@ return [
         \Condoedge\Ai\Services\PromptSections\FileContextSection::class,
         \Condoedge\Ai\Services\PromptSections\SimilarQueriesSection::class,
         \Condoedge\Ai\Services\PromptSections\ConversationContextSection::class, // Priority 55: After SimilarQueries (50), before DetectedEntities (60)
+        \Condoedge\Ai\Services\PromptSections\EntityActionAwarenessSection::class, // Priority 58: Teaches AI that "profile link" etc. are actions, not DB fields
         \Condoedge\Ai\Services\PromptSections\DetectedEntitiesSection::class,
         \Condoedge\Ai\Services\PromptSections\DetectedScopesSection::class,
         fn(SemanticPromptBuilder $promptBuilder) => new \Condoedge\Ai\Services\PromptSections\PatternLibrarySection($promptBuilder->getPatternLibrary()),
@@ -787,6 +872,7 @@ return [
         \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
         \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class, // For file reference follow-ups
         \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,
+        \Condoedge\Ai\Services\ResponseSections\ResponseEntityActionsSection::class, // Priority 55: After ResultsData (50), before Statistics (60)
         \Condoedge\Ai\Services\ResponseSections\StatisticsSection::class,
         \Condoedge\Ai\Services\ResponseSections\GuidelinesSection::class,
         \Condoedge\Ai\Services\ResponseSections\ResponseTaskSection::class,
