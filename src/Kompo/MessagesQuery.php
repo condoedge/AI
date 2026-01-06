@@ -3,8 +3,8 @@
 namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
-use Condoedge\Ai\Kompo\Modals\FilePreviewModal;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
+use Condoedge\Utils\Kompo\Files\DisplayFileModal;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
@@ -12,6 +12,8 @@ use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Chat\RegenerateMessageService;
 use Condoedge\Ai\Services\Chat\SendMessageService;
+use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
+use Condoedge\Ai\Services\Response\ResponseActionLinkProcessor;
 use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
 use Condoedge\Utils\Kompo\Common\Query;
 
@@ -241,6 +243,12 @@ class MessagesQuery extends Query
         // Main content
         $content[] = _Html($this->renderMarkdown($message->content))->class('prose prose-sm max-w-none' . $contentRevealClass);
 
+        // Action link proxies (hidden Kompo elements wired via wireActionButtons)
+        $actionProxies = $this->extractActionLinkProxies($message->content);
+        foreach ($actionProxies as $proxy) {
+            $content[] = $proxy;
+        }
+
         // Rich data display (tables, metrics, lists)
         if ($responseData = $message->response_data) {
             $richData = $this->renderRichData($responseData);
@@ -418,14 +426,18 @@ class MessagesQuery extends Query
         }
 
         $badgeColors = $this->theme()->activeBadge();
-        $listHtml = '<ul class="mt-4 space-y-2">' . implode('', array_map(fn($item) =>
-            '<li class="flex items-start gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">' .
-            '<span class="w-6 h-6 rounded-full ' . $badgeColors . ' flex items-center justify-center text-xs font-medium flex-shrink-0">' . ($item['icon'] ?? '•') . '</span>' .
-            '<div><div class="font-medium text-gray-800">' . e($item['title'] ?? '') . '</div>' .
-            '<div class="text-sm text-gray-500">' . e($item['description'] ?? '') . '</div></div></li>',
-            array_slice($items, 0, 5))) . '</ul>';
+        $listItems = array_map(fn($item) =>
+            _Flex(
+                _Html('<span class="w-6 h-6 rounded-full ' . $badgeColors . ' flex items-center justify-center text-xs font-medium flex-shrink-0">' . e($item['icon'] ?? '•') . '</span>'),
+                _Rows(
+                    _Html(e($item['title'] ?? ''))->class('font-medium text-gray-800'),
+                    _Html(e($item['description'] ?? ''))->class('text-sm text-gray-500'),
+                ),
+            )->class('items-start gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors'),
+            array_slice($items, 0, 5)
+        );
 
-        return _Html($listHtml);
+        return _Rows(...$listItems)->class('mt-4 space-y-2');
     }
 
     protected function renderMetrics($message)
@@ -464,7 +476,11 @@ class MessagesQuery extends Query
             _Html($file['name'])->class('text-sm text-gray-700 font-medium'),
         )->class('inline-flex items-center gap-2 px-3 py-2 rounded-lg ' . $this->theme()->primaryLightBg() . ' ' . $this->theme()->primaryLightBgHover() . ' cursor-pointer transition-all')
          ->balloon(__('ai.messages.click-to-view'), 'up')
-         ->selfGet('viewFile', ['id' => $file['id']])->inModal();
+         ->selfGet('viewFile', [
+             'id' => $file['id'],
+             'type' => $file['morphable_type'] ?? 'file',
+             'mime' => $file['mime_type'] ?? null,
+         ])->inModal();
     }
 
     protected function emptyState()
@@ -581,9 +597,14 @@ class MessagesQuery extends Query
         }
     }
 
-    public function viewFile($id)
+    public function viewFile($id, $type = 'file', $mime = null)
     {
-        return new FilePreviewModal(null, ['file_id' => $id]);
+        // Use utils package's DisplayFileModal which handles all preview types
+        return new DisplayFileModal(null, [
+            'mime' => $mime ?? 'application/octet-stream',
+            'type' => $type,
+            'id' => $id,
+        ]);
     }
 
     public function editMessage($id)
@@ -596,6 +617,163 @@ class MessagesQuery extends Query
 
     // ========== HELPERS ==========
 
+    /**
+     * Handle entity action link click
+     */
+    public function entityActionLink($entityType, $entityId, $actionKey)
+    {
+        $discovery = app(EntityAutoDiscovery::class);
+        $resolver = $discovery->getEntityActionResolver($entityType, $actionKey);
+
+        if (!$resolver) {
+            return _Html(__('ai.action.not-configured'))->class('text-red-500 p-4');
+        }
+
+        return $resolver($entityId);
+    }
+
+    /**
+     * Handle generic action link click
+     */
+    public function genericActionLink($actionKey)
+    {
+        $discovery = app(EntityAutoDiscovery::class);
+        $resolver = $discovery->getGenericActionResolver($actionKey);
+
+        if (!$resolver) {
+            return _Html(__('ai.action.not-configured'))->class('text-red-500 p-4');
+        }
+
+        return $resolver();
+    }
+
+    /**
+     * Process action links in message content
+     * Converts entity:// and action:// links to clickable spans that wire to Kompo proxies
+     */
+    protected function processActionLinks(string $content): string
+    {
+        // Replace entity action links with spans that match wireActionButtons pattern
+        $content = preg_replace_callback(
+            '/\[([^\]]+)\]\(entity:\/\/([^\/]+)\/([^\/]+)\/([^\)]+)\)/',
+            function ($matches) {
+                $text = e($matches[1]);
+                $entityType = e($matches[2]);
+                $entityId = e($matches[3]);
+                $actionKey = e($matches[4]);
+
+                // Class pattern: js-action-entity-{type}-{id}-{key} (wireActionButtons will find -proxy)
+                $actionClass = "js-action-entity-{$entityType}-{$entityId}-{$actionKey}";
+
+                return "<span class=\"{$actionClass} action-link cursor-pointer text-indigo-600 hover:text-indigo-800 underline\" "
+                     . "data-action-type=\"entity\" "
+                     . "data-entity-type=\"{$entityType}\" "
+                     . "data-entity-id=\"{$entityId}\" "
+                     . "data-action-key=\"{$actionKey}\">{$text}</span>";
+            },
+            $content
+        );
+
+        // Replace generic action links
+        $content = preg_replace_callback(
+            '/\[([^\]]+)\]\(action:\/\/([^\)]+)\)/',
+            function ($matches) {
+                $text = e($matches[1]);
+                $actionKey = e($matches[2]);
+
+                // Class pattern: js-action-generic-{key}
+                $actionClass = "js-action-generic-{$actionKey}";
+
+                return "<span class=\"{$actionClass} action-link cursor-pointer text-indigo-600 hover:text-indigo-800 underline\" "
+                     . "data-action-type=\"generic\" "
+                     . "data-action-key=\"{$actionKey}\">{$text}</span>";
+            },
+            $content
+        );
+
+        return $content;
+    }
+
+    /**
+     * Extract action links from content and create hidden Kompo proxy elements
+     * These proxies are wired to visible action-link spans via wireActionButtons
+     */
+    protected function extractActionLinkProxies(string $content): array
+    {
+        $proxies = [];
+        $discovery = app(EntityAutoDiscovery::class);
+
+        // Extract entity action links: [text](entity://Type/id/action)
+        if (preg_match_all('/\[([^\]]+)\]\(entity:\/\/([^\/]+)\/([^\/]+)\/([^\)]+)\)/', $content, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $entityType = $match[2];
+                $entityId = $match[3];
+                $actionKey = $match[4];
+
+                // Create unique key for deduplication
+                $key = "entity-{$entityType}-{$entityId}-{$actionKey}";
+                if (isset($proxies[$key])) {
+                    continue;
+                }
+
+                // Get the Kompo element from the config resolver
+                $resolver = $discovery->getEntityActionResolver($entityType, $actionKey);
+                if ($resolver) {
+                    try {
+                        $element = $resolver($entityId);
+                        if ($element) {
+                            // Add proxy class and hide it
+                            $proxyClass = "js-action-entity-{$entityType}-{$entityId}-{$actionKey}-proxy";
+                            $proxies[$key] = $element->class($proxyClass . ' hidden');
+                        }
+                    } catch (\Throwable $e) {
+                        \Log::warning('Action link resolver failed', [
+                            'entity_type' => $entityType,
+                            'entity_id' => $entityId,
+                            'action_key' => $actionKey,
+                            'error' => $e->getMessage(),
+                        ]);
+                        // Continue processing other links
+                    }
+                }
+            }
+        }
+
+        // Extract generic action links: [text](action://action_key)
+        if (preg_match_all('/\[([^\]]+)\]\(action:\/\/([^\)]+)\)/', $content, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $actionKey = $match[2];
+
+                // Create unique key for deduplication
+                $key = "generic-{$actionKey}";
+                if (isset($proxies[$key])) {
+                    continue;
+                }
+
+                // Get the Kompo element from the config resolver
+                $resolver = $discovery->getGenericActionResolver($actionKey);
+                if ($resolver) {
+                    try {
+                        $element = $resolver();
+                        if ($element) {
+                            // Add proxy class and hide it
+                            $proxyClass = "js-action-generic-{$actionKey}-proxy";
+                            $proxies[$key] = $element->class($proxyClass . ' hidden');
+                        }
+                    } catch (\Throwable $e) {
+                        \Log::warning('Action link resolver failed', [
+                            'action_key' => $actionKey,
+                            'error' => $e->getMessage(),
+                        ]);
+                        // Continue processing other links
+                    }
+                }
+            }
+        }
+
+        return array_values($proxies);
+    }
+
     protected function renderMarkdown(string $text): string
     {
         $renderer = new SafeMarkdownRenderer([
@@ -603,7 +781,10 @@ class MessagesQuery extends Query
             'primaryText' => $this->theme()->primaryText(),
         ]);
 
-        return $renderer->render($text);
+        $html = $renderer->render($text);
+
+        // Process action links after markdown rendering
+        return $this->processActionLinks($html);
     }
 
     protected function scrollScript($withTransition = true): string
