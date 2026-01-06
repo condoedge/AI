@@ -74,6 +74,9 @@ class QueryExecutor implements QueryExecutorInterface
         $format = $options['format'] ?? $this->config['default_format'] ?? 'table';
         $includeStats = $options['include_stats'] ?? true;
 
+        // Get team filter if provided
+        $teamFilter = $options['team_filter'] ?? null;
+
         // Some cases we'll send an empty cypher query because there's nothing to run, just a direct answers, so we don't throw a direct error
         if (empty(trim($cypherQuery ?? ''))) {
             return [
@@ -97,6 +100,15 @@ class QueryExecutor implements QueryExecutorInterface
             throw new ReadOnlyViolationException(
                 'Write operations not allowed in read-only mode'
             );
+        }
+
+        // Apply team filtering if provided
+        if ($teamFilter instanceof \Condoedge\Ai\Services\Security\TeamFilteredQuery && $teamFilter->hasFilters()) {
+            $cypherQuery = $this->applyTeamFilter($cypherQuery, $teamFilter);
+            $parameters = array_merge($parameters, [
+                'teamIds' => $teamFilter->getTeamIds(),
+                'ownerId' => $teamFilter->getOwnerId(),
+            ]);
         }
 
         // Apply limit if not present
@@ -583,5 +595,51 @@ class QueryExecutor implements QueryExecutorInterface
         }
 
         return null;
+    }
+
+    /**
+     * Apply team filter to a Cypher query
+     *
+     * @param string $cypherQuery The original Cypher query
+     * @param \Condoedge\Ai\Services\Security\TeamFilteredQuery $teamFilter The team filter to apply
+     * @return string Modified Cypher query with team filtering
+     */
+    protected function applyTeamFilter(string $cypherQuery, \Condoedge\Ai\Services\Security\TeamFilteredQuery $teamFilter): string
+    {
+        // Extract node alias from first MATCH clause
+        if (!preg_match('/MATCH\s*\((\w+)(?::\w+)?\)/i', $cypherQuery, $matches)) {
+            return $cypherQuery;
+        }
+
+        $nodeAlias = $matches[1];
+
+        // Build team filter clause
+        $teamClause = '';
+        if (!empty($teamFilter->getTeamIds())) {
+            $teamClause = "-[:BELONGS_TO_TEAM]->(t:Team) WHERE t.id IN \$teamIds";
+        }
+
+        if (empty($teamClause)) {
+            return $cypherQuery;
+        }
+
+        // Inject team relationship into first MATCH
+        $cypherQuery = preg_replace(
+            '/MATCH\s*\((\w+)(:\w+)?\)/i',
+            "MATCH ($1$2){$teamClause}",
+            $cypherQuery,
+            1
+        );
+
+        // Handle existing WHERE clause
+        if (preg_match('/WHERE\s+t\.id\s+IN.*?WHERE\s/i', $cypherQuery)) {
+            $cypherQuery = preg_replace(
+                '/WHERE\s+t\.id\s+IN\s+\$teamIds\s+WHERE\s/i',
+                'WHERE t.id IN $teamIds AND ',
+                $cypherQuery
+            );
+        }
+
+        return $cypherQuery;
     }
 }
