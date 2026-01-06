@@ -252,4 +252,34 @@ class ConversationContextManagerTest extends TestCase
         $this->assertArrayHasKey('last_available_actions', $snapshot);
         $this->assertArrayHasKey('Person', $snapshot['last_available_actions']);
     }
+
+    /** @test */
+    public function it_persists_visualization_metadata(): void
+    {
+        $conversation = AiConversation::create([
+            'user_id' => 1,
+            'title' => 'Test',
+        ]);
+
+        $queryResult = [
+            'data' => [['month' => 'Jan', 'count' => 10]],
+            'visualizations' => [
+                ['type' => 'bar_chart', 'title' => 'Monthly Counts', 'x_axis' => 'month', 'y_axis' => 'count'],
+            ],
+        ];
+
+        $this->manager->recordResponse(
+            $conversation,
+            'Here is a chart.',
+            'MATCH (n) RETURN n.month, count(n)',
+            $queryResult
+        );
+
+        $conversation->refresh();
+        $snapshot = $conversation->context_snapshot;
+
+        $this->assertArrayHasKey('last_visualizations', $snapshot);
+        $this->assertCount(1, $snapshot['last_visualizations']);
+        $this->assertEquals('bar_chart', $snapshot['last_visualizations'][0]['type']);
+    }
 }

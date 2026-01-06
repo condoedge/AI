@@ -131,6 +131,9 @@ class ConversationContextManager
         // Extract available actions for entity types
         $availableActions = $queryResult['available_actions'] ?? [];
 
+        // Extract visualization metadata from query result
+        $visualizations = $queryResult['visualizations'] ?? [];
+
         // Build snapshot update - only include non-empty values to preserve previous context
         $snapshotUpdate = [
             'focused_entity' => $focusedEntity,
@@ -174,6 +177,12 @@ class ConversationContextManager
         // Otherwise preserve the previous actions for follow-up context
         if (!empty($availableActions)) {
             $snapshotUpdate['last_available_actions'] = $availableActions;
+        }
+
+        // Only update last_visualizations if there are new visualizations
+        // Otherwise preserve the previous visualizations for follow-up context
+        if (!empty($visualizations)) {
+            $snapshotUpdate['last_visualizations'] = $visualizations;
         }
 
         $conversation->updateContextSnapshot($snapshotUpdate);
