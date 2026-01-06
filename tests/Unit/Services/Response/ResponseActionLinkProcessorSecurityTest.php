@@ -88,4 +88,61 @@ class ResponseActionLinkProcessorSecurityTest extends TestCase
         $this->assertCount(1, $links);
         $this->assertEquals('generic', $links[0]['type']);
     }
+
+    /** @test */
+    public function process_response_propagates_user_for_access_checking(): void
+    {
+        $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
+        $mockDiscovery->shouldReceive('getEntityActionResolver')
+            ->andReturn(fn($id) => 'link');
+
+        $mockAccessChecker = Mockery::mock(EntityAccessCheckerInterface::class);
+        $mockAccessChecker->shouldReceive('canAccess')
+            ->with('Person', '123', Mockery::on(fn($u) => $u->id === 1))
+            ->once()
+            ->andReturn(true);
+        $mockAccessChecker->shouldReceive('canAccess')
+            ->with('Person', '456', Mockery::on(fn($u) => $u->id === 1))
+            ->once()
+            ->andReturn(false);
+
+        $processor = new ResponseActionLinkProcessor($mockDiscovery, $mockAccessChecker);
+
+        $response = '[John](entity://Person/123/profile) [Jane](entity://Person/456/profile)';
+
+        $user = (object) ['id' => 1];
+        $result = $processor->processResponse($response, $user);
+
+        // Should only include accessible link
+        $this->assertTrue($result['has_action_links']);
+        $this->assertCount(1, $result['action_links']);
+        $this->assertEquals('123', $result['action_links'][0]['entity_id']);
+    }
+
+    /** @test */
+    public function enrich_response_propagates_user_for_access_checking(): void
+    {
+        $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
+        $mockDiscovery->shouldReceive('getEntityActionResolver')
+            ->andReturn(fn($id) => 'link');
+
+        $mockAccessChecker = Mockery::mock(EntityAccessCheckerInterface::class);
+        $mockAccessChecker->shouldReceive('canAccess')
+            ->with('Person', '123', Mockery::on(fn($u) => $u->id === 2))
+            ->once()
+            ->andReturn(false); // User 2 cannot access
+
+        $processor = new ResponseActionLinkProcessor($mockDiscovery, $mockAccessChecker);
+
+        $response = [
+            'answer' => '[John](entity://Person/123/profile)',
+        ];
+
+        $user = (object) ['id' => 2];
+        $enriched = $processor->enrichResponse($response, $user);
+
+        // Link should be filtered out
+        $this->assertFalse($enriched['has_action_links']);
+        $this->assertCount(0, $enriched['action_links']);
+    }
 }

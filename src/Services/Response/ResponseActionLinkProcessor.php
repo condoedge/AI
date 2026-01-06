@@ -83,11 +83,12 @@ class ResponseActionLinkProcessor
      * Process response and return enriched data
      *
      * @param string $response The AI response text
+     * @param mixed $user Optional user for access checking
      * @return array Contains 'action_links' array and 'has_action_links' boolean
      */
-    public function processResponse(string $response): array
+    public function processResponse(string $response, mixed $user = null): array
     {
-        $links = $this->extractActionLinks($response);
+        $links = $this->extractActionLinks($response, $user);
 
         return [
             'action_links' => $links,
@@ -99,12 +100,13 @@ class ResponseActionLinkProcessor
      * Enrich a response array with action link metadata
      *
      * @param array $response The response array (must contain 'answer' or 'content')
+     * @param mixed $user Optional user for access checking
      * @return array The enriched response
      */
-    public function enrichResponse(array $response): array
+    public function enrichResponse(array $response, mixed $user = null): array
     {
         $content = $response['answer'] ?? $response['content'] ?? '';
-        $actionData = $this->processResponse($content);
+        $actionData = $this->processResponse($content, $user);
 
         return array_merge($response, $actionData);
     }
