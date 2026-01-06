@@ -31,6 +31,7 @@ class ResponseEntityActionsSection extends BaseResponseSection
 
     public function __construct()
     {
+        parent::__construct();
         $this->discovery = app(EntityAutoDiscovery::class);
     }
 
@@ -55,7 +56,7 @@ class ResponseEntityActionsSection extends BaseResponseSection
 
     public function format(array $context, array $options = []): string
     {
-        $output = "=== ACTION LINKS ===\n\n";
+        $output = $this->header('Action Links');
         $output .= "You can include clickable action links in your response using Markdown syntax.\n\n";
 
         // Resolve entity types and IDs
