@@ -5,21 +5,15 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Tests\Unit\Services\PromptSections;
 
 use Condoedge\Ai\Services\PromptSections\EntityActionAwarenessSection;
-use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Condoedge\Ai\Tests\TestCase;
-use Mockery;
 
 class EntityActionAwarenessSectionTest extends TestCase
 {
     private EntityActionAwarenessSection $section;
-    private $mockDiscovery;
 
     public function setUp(): void
     {
         parent::setUp();
-
-        $this->mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
-        $this->app->instance(EntityAutoDiscovery::class, $this->mockDiscovery);
 
         $this->section = new EntityActionAwarenessSection();
     }
@@ -27,13 +21,6 @@ class EntityActionAwarenessSectionTest extends TestCase
     /** @test */
     public function it_should_include_when_entity_actions_configured(): void
     {
-        $this->mockDiscovery->shouldReceive('getEntityActions')
-            ->with('Person')
-            ->andReturn([
-                ['action_key' => 'profile', 'aliases' => ['profile link'], 'label' => 'View Profile'],
-            ]);
-        $this->mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
-
         config(['ai.entity_actions' => ['Person' => ['profile' => []]]]);
 
         $result = $this->section->shouldInclude('give me the profile link', [], []);
@@ -44,14 +31,14 @@ class EntityActionAwarenessSectionTest extends TestCase
     /** @test */
     public function it_formats_action_awareness_with_context_ids(): void
     {
-        $this->mockDiscovery->shouldReceive('getEntityActions')
-            ->with('Person')
-            ->andReturn([
-                ['action_key' => 'profile', 'aliases' => ['profile link', 'profile page'], 'label' => 'View Profile'],
-            ]);
-        $this->mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
-
-        config(['ai.entity_actions' => ['Person' => ['profile' => []]]]);
+        config(['ai.entity_actions' => [
+            'Person' => [
+                'profile' => [
+                    'aliases' => ['profile link', 'profile page'],
+                    'label' => 'View Profile',
+                ],
+            ],
+        ]]);
 
         $context = [
             'conversation_context' => [
@@ -77,11 +64,32 @@ class EntityActionAwarenessSectionTest extends TestCase
         config(['ai.entity_actions' => []]);
         config(['ai.generic_actions' => []]);
 
-        $this->mockDiscovery->shouldReceive('getEntityActions')->andReturn([]);
-        $this->mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
-
         $result = $this->section->shouldInclude('show me all people', [], []);
 
         $this->assertFalse($result);
+    }
+
+    /** @test */
+    public function it_formats_generic_actions_correctly(): void
+    {
+        config(['ai.entity_actions' => []]);
+        config(['ai.generic_actions' => [
+            'settings' => [
+                'aliases' => ['settings page', 'preferences'],
+                'label' => 'Settings',
+            ],
+        ]]);
+
+        $output = $this->section->format('open settings', [], []);
+
+        $this->assertStringContainsString('settings page', $output);
+        $this->assertStringContainsString('(generic)', $output);
+    }
+
+    /** @test */
+    public function it_has_correct_name_and_priority(): void
+    {
+        $this->assertEquals('entity_action_awareness', $this->section->getName());
+        $this->assertEquals(58, $this->section->getPriority());
     }
 }
