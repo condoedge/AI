@@ -226,7 +226,10 @@ const ChatMessageInjector = {
         visibleButtons.forEach(btn => {
             // Extract action class (e.g., "js-action-copy" → look for "js-action-copy-proxy")
             const actionClass = [...btn.classList].find(c => /^js-action-[\w-]+$/.test(c) && !c.includes('-proxy'));
-            if (!actionClass) return;
+            if (!actionClass) {
+                console.warn('[AI Chat] Action button found but no action class extracted:', btn);
+                return;
+            }
 
             const proxyClass = actionClass + '-proxy';
             const proxy = messageElement.querySelector('.' + proxyClass);
@@ -249,8 +252,18 @@ const ChatMessageInjector = {
                     }
 
                     // Trigger the proxy click
-                    proxy.click();
+                    try {
+                        proxy.click();
+                    } catch (err) {
+                        console.error('[AI Chat] Proxy click failed:', actionClass, err);
+                    }
                 };
+            } else {
+                // Log warning for entity/generic action links that have no proxy
+                // (Standard buttons like copy/feedback/regenerate may not have proxies)
+                if (actionClass.includes('-entity-') || actionClass.includes('-generic-')) {
+                    console.warn('[AI Chat] Action proxy not found:', proxyClass, 'Button:', btn);
+                }
             }
         });
 
