@@ -100,4 +100,67 @@ class ConversationContextSectionTest extends TestCase
 
         $this->assertStringContainsString('follow-up', strtolower($output));
     }
+
+    /** @test */
+    public function it_includes_insights_in_prompt(): void
+    {
+        $context = [
+            'conversation_context' => [
+                'last_insights' => ['Customer growth is 15%', 'Most customers are in NYC'],
+                'focused_entity' => 'Customer',
+            ],
+        ];
+
+        $result = $this->section->format('follow up question', $context, []);
+
+        $this->assertStringContainsString('Previous Insights', $result);
+        $this->assertStringContainsString('Customer growth is 15%', $result);
+        $this->assertStringContainsString('Most customers are in NYC', $result);
+    }
+
+    /** @test */
+    public function it_includes_truncation_warning_in_prompt(): void
+    {
+        $context = [
+            'conversation_context' => [
+                'last_execution_stats' => [
+                    'was_truncated' => true,
+                    'rows_returned' => 100,
+                    'rows_available' => 500,
+                ],
+                'focused_entity' => 'Order',
+            ],
+        ];
+
+        $result = $this->section->format('follow up question', $context, []);
+
+        $this->assertStringContainsString('truncated', $result);
+        $this->assertStringContainsString('100', $result);
+        $this->assertStringContainsString('500', $result);
+    }
+
+    /** @test */
+    public function it_formats_available_actions_in_output(): void
+    {
+        $section = new ConversationContextSection();
+
+        $context = [
+            'conversation_context' => [
+                'focused_entity' => 'Person',
+                'last_available_actions' => [
+                    'Person' => [
+                        ['action_key' => 'profile', 'label' => 'View Profile'],
+                        ['action_key' => 'edit', 'label' => 'Edit Person'],
+                    ],
+                ],
+            ],
+        ];
+
+        $output = $section->format('what actions can I do?', $context);
+
+        $this->assertStringContainsString('Available Actions', $output);
+        $this->assertStringContainsString('View Profile', $output);
+        $this->assertStringContainsString('Edit Person', $output);
+        $this->assertStringContainsString('profile', $output);
+    }
 }

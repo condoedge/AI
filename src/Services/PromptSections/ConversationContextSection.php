@@ -114,10 +114,58 @@ class ConversationContextSection extends BasePromptSection
             }
         }
 
+        // Previous insights from response
+        if (!empty($conversationContext['last_insights'])) {
+            $output .= "\n**Previous Insights:**\n";
+            foreach ($conversationContext['last_insights'] as $insight) {
+                $output .= "- {$insight}\n";
+            }
+        }
+
+        // Truncation warning from execution stats
+        if (!empty($conversationContext['last_execution_stats']['was_truncated'])) {
+            $stats = $conversationContext['last_execution_stats'];
+            $rowsReturned = $stats['rows_returned'] ?? 0;
+            $rowsAvailable = $stats['rows_available'] ?? 0;
+            $output .= "\n**Note:** Previous results were truncated ";
+            $output .= "(showing {$rowsReturned} of {$rowsAvailable} available).\n";
+        }
+
+        // Available actions from previous response
+        $availableActions = $conversationContext['last_available_actions'] ?? [];
+        if (!empty($availableActions)) {
+            $output .= $this->formatAvailableActions($availableActions);
+        }
+
         // Follow-up hint (enhanced instructions)
         $output .= "\n**Instructions:** Use the above context to understand follow-up questions. ";
         $output .= "If user references 'those', 'them', 'the same', etc., use the previous results/filter. ";
         $output .= "If user asks about 'the file', 'that file', etc., refer to the files referenced above.\n";
+
+        return $output;
+    }
+
+    /**
+     * Format available actions for display in prompt
+     */
+    protected function formatAvailableActions(array $actions): string
+    {
+        if (empty($actions)) {
+            return '';
+        }
+
+        $output = "\n**Available Actions from Previous Response:**\n";
+
+        foreach ($actions as $entityType => $entityActions) {
+            $output .= "- **{$entityType}:**\n";
+            foreach ($entityActions as $action) {
+                $actionKey = $action['action_key'] ?? 'unknown';
+                $label = $action['label'] ?? $actionKey;
+                $output .= "  - `{$actionKey}`: {$label}\n";
+            }
+        }
+
+        $output .= "\nIf user asks about actions, reference the above.\n";
 
         return $output;
     }
