@@ -5,13 +5,14 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Kompo\Traits;
 
 use Condoedge\Ai\Models\AiMessage;
+use Condoedge\Ai\Services\Response\ContentLinkProcessor;
 use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
 
 /**
  * Provides staged message rendering for JS-injected chat messages.
  *
  * This trait renders assistant responses in a structure that JS can process:
- * - Content is injected into the typing indicator
+ * - Content is rendered with link elements directly (actions + file citations)
  * - Visible action buttons are included (static HTML)
  * - Hidden proxy buttons with Kompo bindings are moved into message elements
  *
@@ -25,32 +26,64 @@ trait HasStagedMessageRendering
      * Render a staged assistant response for JS injection.
      *
      * Returns a structure containing:
-     * - Content (to be injected into typing indicator)
+     * - Content with link elements rendered directly (actions + citations)
      * - Visible action bar (static HTML buttons)
      * - Hidden proxies (Kompo bindings, moved into message elements by JS)
      */
     protected function renderStagedAssistantResponse(AiMessage $assistantMessage, ?AiMessage $userMessage = null)
     {
         $renderer = new SafeMarkdownRenderer();
+        $linkProcessor = app(ContentLinkProcessor::class);
+
+        // Get file references for citation linking
+        $files = $assistantMessage->hasFileReferences() ? $assistantMessage->getReferencedFiles() : [];
+
+        // Process content: strip links, create elements (actions + file citations)
+        $processed = $linkProcessor->processForDirectRendering(
+            $assistantMessage->content,
+            ['files' => $files]
+        );
+
+        // Render clean markdown (links replaced with plain text)
+        $htmlContent = $renderer->render($processed['content']);
 
         return _Rows(
-            // 1. Content - injected into typing indicator
-            _Html($renderer->render($assistantMessage->content))
+            // 1. Main content
+            _Html($htmlContent)
                 ->class('prose prose-sm max-w-none chat-staged-content'),
 
-            // 2. Visible action bar - injected alongside content
+            // 2. Link elements rendered directly (actions + file citations)
+            $this->stagedLinkElements($processed['elements']),
+
+            // 3. Visible action bar - injected alongside content
             $this->stagedVisibleActionBar($assistantMessage),
 
-            // 3. Hidden proxies for assistant actions - moved into assistant message element
+            // 4. Hidden proxies for assistant actions - moved into assistant message element
             $this->stagedAssistantProxies($assistantMessage),
 
-            // 4. Hidden proxy for user edit - moved into user message element
+            // 5. Hidden proxy for user edit - moved into user message element
             $this->stagedUserEditProxy($userMessage),
+
+            // 6. Hidden proxies for file citation actions - moved into assistant message element
+            $this->stagedFileCitationProxies($processed['file_citations'] ?? []),
 
         )->attr([
             'data-user-message-id' => $userMessage?->id,
             'data-assistant-message-id' => $assistantMessage->id,
         ]);
+    }
+
+    /**
+     * Render link elements directly (actions + file citations from AI response).
+     */
+    protected function stagedLinkElements(array $elements)
+    {
+        if (empty($elements)) {
+            return null;
+        }
+
+        return _Flex(...$elements)
+            ->class('chat-staged-actions mt-3 pt-2 border-t border-gray-100 gap-2 flex-wrap');
     }
 
     /**
@@ -149,6 +182,37 @@ trait HasStagedMessageRendering
             ->attr(['data-for-user-message-id' => $userMessage->id]);
     }
 
+    /**
+     * Hidden proxy buttons for file citation actions (with Kompo bindings).
+     * JS moves these into the assistant message element for persistence.
+     *
+     * @param array $fileCitations Citation metadata from ContentLinkProcessor
+     */
+    protected function stagedFileCitationProxies(array $fileCitations)
+    {
+        if (empty($fileCitations)) {
+            return null;
+        }
+
+        $proxies = [];
+
+        foreach ($fileCitations as $citation) {
+            $proxies[] = _Link()
+                ->selfGet('viewFile', [
+                    'id' => $citation['id'],
+                    'type' => $citation['type'],
+                    'mime' => $citation['mime'],
+                ])
+                ->inModal()
+                ->class('hidden js-file-citation-proxy')
+                ->attr(['data-action-proxy' => $citation['slot']]);
+        }
+
+        return _Rows(...$proxies)
+            ->class('chat-staged-file-citation-proxies hidden');
+    }
+
     // Note: Action methods (feedback, regenerate) are provided by HasMessageActions trait
     // Make sure to also use HasMessageActions in your component
+    // Note: viewFile() method is provided by HasFilePreview trait
 }
