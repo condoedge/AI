@@ -100,24 +100,28 @@ class FileContextProvider
             $filenameResults = array_merge($filenameResults, $results);
         }
 
-        // Step 3: Search by content (semantic search)
-        $contentResults = $this->searchService->searchByContent($question, [
+        // Step 3: Enhance query with conversation context for follow-up questions
+        $conversationContext = $options['conversation_context'] ?? [];
+        $enhancedQuery = $this->enhanceQueryWithContext($question, $conversationContext);
+
+        // Step 4: Search by content (semantic search)
+        $contentResults = $this->searchService->searchByContent($enhancedQuery, [
             'limit' => $maxReferences * 3,
             'include_relationships' => false,
         ]);
 
-        // Step 4: Combine results, filename matches first
+        // Step 5: Combine results, filename matches first
         $combinedResults = $this->combineSearchResults($filenameResults, $contentResults);
 
         if (empty($combinedResults)) {
             return [];
         }
 
-        // Step 5: Apply access control
+        // Step 6: Apply access control
         $fileIds = array_column($combinedResults, 'file_id');
         $accessibleFileIds = $this->accessResolver->filterAccessibleFileIds($fileIds, $user);
 
-        // Step 6: Filter by access and apply score thresholds
+        // Step 7: Filter by access and apply score thresholds
         $filteredResults = [];
         foreach ($combinedResults as $result) {
             $fileId = $result['file_id'];
@@ -308,5 +312,61 @@ class FileContextProvider
         if ($this->accessResolver->shouldEnforceSecurity() && $user === null) {
             throw new \RuntimeException('User required for file context retrieval');
         }
+    }
+
+    /**
+     * Enhance search query with conversation context for follow-up questions
+     *
+     * When a question appears to be a follow-up (referencing "those", "them", etc.)
+     * and there's a focused entity from the conversation context, the query is
+     * enhanced by prepending the entity context for better search relevance.
+     *
+     * @param string $question The original search question
+     * @param array $conversationContext Context from the conversation including:
+     *   - focused_entity: The main entity being discussed (e.g., "Team", "User")
+     *   - last_answer_summary: Summary of the previous answer
+     * @return string The enhanced query or original question if no enhancement needed
+     */
+    private function enhanceQueryWithContext(string $question, array $conversationContext): string
+    {
+        if (empty($conversationContext)) {
+            return $question;
+        }
+
+        // Check if this looks like a follow-up question
+        if (!$this->isFollowUpQuestion($question)) {
+            return $question;
+        }
+
+        // Add focused entity context
+        if (!empty($conversationContext['focused_entity'])) {
+            $entity = $conversationContext['focused_entity'];
+            return "{$entity}: {$question}";
+        }
+
+        return $question;
+    }
+
+    /**
+     * Detect if question is a follow-up referencing previous results
+     *
+     * Looks for common patterns that indicate the question refers to
+     * previously mentioned items, such as "those", "them", "these", etc.
+     *
+     * @param string $question The question to analyze
+     * @return bool True if the question appears to be a follow-up
+     */
+    private function isFollowUpQuestion(string $question): bool
+    {
+        $followUpPatterns = ['those', 'them', 'these', 'which of', 'any of', 'the same'];
+        $questionLower = strtolower($question);
+
+        foreach ($followUpPatterns as $pattern) {
+            if (str_contains($questionLower, $pattern)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

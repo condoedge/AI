@@ -23,7 +23,23 @@ class ExampleEntitiesSection extends BasePromptSection
     public function format(string $question, array $context, array $options = []): string
     {
         $entities = $context['relevant_entities'] ?? [];
+        $selectionInfo = $context['selection_info'] ?? [];
 
+        if (empty($entities)) {
+            return '';
+        }
+
+        // Filter entities if semantic selection was used
+        if (!empty($selectionInfo['selected_entities'])) {
+            $selectedLabels = $selectionInfo['selected_entities'];
+            $entities = array_filter(
+                $entities,
+                fn($label) => in_array($label, $selectedLabels, true),
+                ARRAY_FILTER_USE_KEY
+            );
+        }
+
+        // Return empty if all entities were filtered out
         if (empty($entities)) {
             return '';
         }

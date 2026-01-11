@@ -329,7 +329,7 @@ return [
     'response_generation' => [
         'default_format' => env('AI_RESPONSE_FORMAT', 'text'), // text, markdown, json
         'default_style' => env('AI_RESPONSE_STYLE', 'friendly'), // minimal, concise, friendly, detailed, technical
-        'default_max_length' => env('AI_RESPONSE_MAX_LENGTH', 100), // words (auto-adjusted by style)
+        'default_max_length' => env('AI_RESPONSE_MAX_LENGTH', 500), // words (auto-adjusted by style)
         'temperature' => env('AI_RESPONSE_TEMPERATURE', 0.3),
         'include_insights' => env('AI_RESPONSE_INSIGHTS', true),
         'include_visualizations' => env('AI_RESPONSE_VIZ', true),
@@ -787,25 +787,26 @@ return [
     | Structure:
     | 'EntityType' => [
     |     'action_key' => [
-    |         'action' => fn($id) => KompoElement,
+    |         'action' => fn($id, $text = 'Default Text') => KompoElement,
     |         'aliases' => ['alias1', 'alias2'],
     |         'label' => 'Display Label', // optional, for AI context
     |     ],
     | ],
     |
     | AI uses format: [text](entity://EntityType/id/action_key)
+    | The $text parameter receives the link text from markdown (e.g., "text" above).
     |
     */
     'entity_actions' => [
         // Example (applications should define their own):
         // 'Person' => [
         //     'profile' => [
-        //         'action' => fn($id) => _Link('View Profile')->href(route('people.show', $id)),
+        //         'action' => fn($id, $text = 'View Profile') => _Link($text)->href(route('people.show', $id)),
         //         'aliases' => ['profile link', 'profile page', 'profile', 'view person'],
         //         'label' => 'View Profile',
         //     ],
         //     'quick_view' => [
-        //         'action' => fn($id) => _Link('Quick View')->selfGet('personModal', ['id' => $id])->inModal(),
+        //         'action' => fn($id, $text = 'Quick View') => _Link($text)->selfGet('personModal', ['id' => $id])->inModal(),
         //         'aliases' => ['quick view', 'preview', 'details'],
         //         'label' => 'Quick View',
         //     ],
@@ -822,23 +823,24 @@ return [
     |
     | Structure:
     | 'action_key' => [
-    |     'action' => fn() => KompoElement,
+    |     'action' => fn($text = 'Default Text') => KompoElement,
     |     'aliases' => ['alias1', 'alias2'],
     |     'label' => 'Display Label',
     | ],
     |
     | AI uses format: [text](action://action_key)
+    | The $text parameter receives the link text from markdown (e.g., "text" above).
     |
     */
     'generic_actions' => [
         // Example:
         // 'settings' => [
-        //     'action' => fn() => _Link('Settings')->href(route('settings.index')),
+        //     'action' => fn($text = 'Settings') => _Link($text)->href(route('settings.index')),
         //     'aliases' => ['settings', 'settings page', 'preferences'],
         //     'label' => 'Settings',
         // ],
         // 'dashboard' => [
-        //     'action' => fn() => _Link('Dashboard')->href(route('dashboard')),
+        //     'action' => fn($text = 'Dashboard') => _Link($text)->href(route('dashboard')),
         //     'aliases' => ['dashboard', 'home', 'main page'],
         //     'label' => 'Dashboard',
         // ],

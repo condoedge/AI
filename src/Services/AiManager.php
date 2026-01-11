@@ -15,6 +15,7 @@ use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Services\Context\FileContextProvider;
 use Condoedge\Ai\Services\Response\ResponseFileEnricher;
+use Condoedge\Ai\Services\Response\ResponseEntityEnricher;
 
 /**
  * AI Manager - Convenient wrapper around AI services
@@ -80,6 +81,7 @@ class AiManager
      * @param VectorStoreInterface $vectorStore Vector store for query storage
      * @param FileContextProvider|null $fileContextProvider File context provider for file-based RAG
      * @param ResponseFileEnricher|null $responseFileEnricher Response enricher for file references
+     * @param ResponseEntityEnricher|null $responseEntityEnricher Response enricher for entity actions
      */
     public function __construct(
         private readonly DataIngestionServiceInterface $ingestion,
@@ -91,7 +93,8 @@ class AiManager
         private readonly ResponseGeneratorInterface $responseGenerator,
         private readonly VectorStoreInterface $vectorStore,
         private readonly ?FileContextProvider $fileContextProvider = null,
-        private readonly ?ResponseFileEnricher $responseFileEnricher = null
+        private readonly ?ResponseFileEnricher $responseFileEnricher = null,
+        private readonly ?ResponseEntityEnricher $responseEntityEnricher = null
     ) {
     }
 
@@ -763,6 +766,9 @@ class AiManager
             // Step 3: Execute query
             $executionResult = $this->executeQuery($queryResult['cypher'], [], $options);
 
+            // Step 3.5: Enrich results with entity action metadata
+            $executionResult = $this->enrichResultsWithEntityActions($executionResult);
+
             // Step 4: Generate natural language response
             // Pass both file_context and conversation_context for follow-up awareness
             $responseResult = $this->generateResponse(
@@ -856,5 +862,31 @@ class AiManager
         }
 
         return $this->responseFileEnricher->enrichResponse($response, $fileContext, $options);
+    }
+
+    /**
+     * Enrich query results with entity action metadata
+     *
+     * Adds 'has_actions', 'available_actions', and 'entity_type' to each result
+     * that has entity actions configured.
+     *
+     * @param array $executionResult The query execution result (contains 'data' key)
+     * @return array The execution result with enriched data
+     */
+    protected function enrichResultsWithEntityActions(array $executionResult): array
+    {
+        if ($this->responseEntityEnricher === null) {
+            return $executionResult;
+        }
+
+        if (empty($executionResult['data'])) {
+            return $executionResult;
+        }
+
+        $executionResult['data'] = $this->responseEntityEnricher->enrichEntityResults(
+            $executionResult['data']
+        );
+
+        return $executionResult;
     }
 }

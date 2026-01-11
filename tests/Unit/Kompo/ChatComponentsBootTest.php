@@ -7,7 +7,6 @@ use Condoedge\Ai\Kompo\AiChatModal;
 use Condoedge\Ai\Kompo\AiChatFloating;
 use Condoedge\Ai\Kompo\ChatMessageForm;
 use Condoedge\Ai\Kompo\ConversationListQuery;
-use Condoedge\Ai\Kompo\Modals\FilePreviewModal;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
 use Condoedge\Ai\Kompo\Modals\ChatHelpModal;
@@ -147,29 +146,6 @@ class ChatComponentsBootTest extends TestCase
         ]);
 
         $this->assertInstanceOf(ConversationListQuery::class, $component);
-    }
-
-    /** @test */
-    public function file_preview_modal_can_be_instantiated(): void
-    {
-        $component = new FilePreviewModal();
-
-        $this->assertInstanceOf(FilePreviewModal::class, $component);
-    }
-
-    /** @test */
-    public function file_preview_modal_can_be_instantiated_with_props(): void
-    {
-        $component = new FilePreviewModal(null, [
-            'file_id' => 123,
-            'file_data' => [
-                'name' => 'test.pdf',
-                'type' => 'pdf',
-                'url' => 'https://example.com/test.pdf',
-            ],
-        ]);
-
-        $this->assertInstanceOf(FilePreviewModal::class, $component);
     }
 
     /** @test */

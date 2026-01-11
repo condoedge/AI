@@ -211,8 +211,14 @@ class ContextRetriever implements ContextRetrieverInterface
                         'top_k' => config('ai.semantic_context.top_k', 10),
                     ]
                 );
+                // Extract selected entity labels (short names)
+                $selectedEntities = array_map(
+                    fn($entityName) => class_basename($entityName),
+                    array_keys($semanticContext['entities'] ?? [])
+                );
                 $context['selection_info'] = [
                     'method' => $semanticContext['selection_method'] ?? 'semantic',
+                    'selected_entities' => $selectedEntities,
                     'entities_selected' => count($semanticContext['entities'] ?? []),
                     'relationships_selected' => count($semanticContext['relationships'] ?? []),
                     'scopes_selected' => count($semanticContext['scopes'] ?? []),
@@ -990,9 +996,15 @@ class ContextRetriever implements ContextRetrieverInterface
                         'top_k' => 5, // Limit to top 5 most relevant
                     ]
                 );
+                // Extract selected entity labels (short names)
+                $selectedEntities = array_map(
+                    fn($entityName) => class_basename($entityName),
+                    array_keys($semanticContext['entities'] ?? [])
+                );
                 $context['selection_info'] = [
                     'method' => 'semantic',
                     'mode' => 'minimal',
+                    'selected_entities' => $selectedEntities,
                     'entities_selected' => count($semanticContext['entities'] ?? []),
                     'relationships_selected' => count($semanticContext['relationships'] ?? []),
                 ];
