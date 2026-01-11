@@ -8,7 +8,7 @@ use Condoedge\Ai\Facades\AI;
 use Condoedge\Ai\Tests\Fixtures\TestCustomer;
 use Condoedge\Ai\Tests\Fixtures\TestOrder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
+use Condoedge\Ai\Tests\TestCase;
 
 /**
  * AI System Feature Tests
