@@ -4,22 +4,22 @@ namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
-use Condoedge\Utils\Kompo\Files\DisplayFileModal;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
+use Condoedge\Ai\Kompo\Traits\HasFilePreview;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Chat\RegenerateMessageService;
 use Condoedge\Ai\Services\Chat\SendMessageService;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
-use Condoedge\Ai\Services\Response\ResponseActionLinkProcessor;
+use Condoedge\Ai\Services\Response\ContentLinkProcessor;
 use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
 use Condoedge\Utils\Kompo\Common\Query;
 
 class MessagesQuery extends Query
 {
-    use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation;
+    use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation, HasFilePreview;
 
     public const ID = 'chat-messages-panel';
     public $class = '';
@@ -240,13 +240,38 @@ class MessagesQuery extends Query
 
         $content = [];
 
-        // Main content
-        $content[] = _Html($this->renderMarkdown($message->content))->class('prose prose-sm max-w-none' . $contentRevealClass);
+        // Get file references for citation linking
+        $files = $message->hasFileReferences() ? $message->getReferencedFiles() : [];
 
-        // Action link proxies (hidden Kompo elements wired via wireActionButtons)
-        $actionProxies = $this->extractActionLinkProxies($message->content);
-        foreach ($actionProxies as $proxy) {
-            $content[] = $proxy;
+        // Process content: strip action links, strip citations, create elements
+        $processed = $this->getContentLinkProcessor()->processForDirectRendering(
+            $message->content,
+            ['files' => $files]
+        );
+
+        // Main content (links stripped to plain text)
+        $content[] = _Html($this->renderMarkdown($processed['content']))->class('prose prose-sm max-w-none' . $contentRevealClass);
+
+        // Link elements rendered directly (actions + file citations)
+        if ($processed['has_links']) {
+            $content[] = _Flex(...$processed['elements'])
+                ->class('mt-3 pt-2 border-t border-gray-100 gap-2 flex-wrap');
+        }
+
+        // File citation proxy elements (hidden, with Kompo bindings)
+        // These provide the actual click behavior for citation links via JS wiring
+        if (!empty($processed['file_citations'])) {
+            foreach ($processed['file_citations'] as $citation) {
+                $content[] = _Link()
+                    ->selfGet('viewFile', [
+                        'id' => $citation['id'],
+                        'type' => $citation['type'],
+                        'mime' => $citation['mime'],
+                    ])
+                    ->inModal()
+                    ->class('hidden')
+                    ->attr(['data-action-proxy' => $citation['slot']]);
+            }
         }
 
         // Rich data display (tables, metrics, lists)
@@ -258,9 +283,9 @@ class MessagesQuery extends Query
             $content[] = $richData;
         }
 
-        // File references
-        if ($message->hasFileReferences()) {
-            $content[] = $this->renderFileReferences($message->getReferencedFiles());
+        // File reference cards (separate from citations)
+        if (!empty($files)) {
+            $content[] = $this->renderFileReferences($files);
         }
 
         // Follow-up suggestions
@@ -597,16 +622,6 @@ class MessagesQuery extends Query
         }
     }
 
-    public function viewFile($id, $type = 'file', $mime = null)
-    {
-        // Use utils package's DisplayFileModal which handles all preview types
-        return new DisplayFileModal(null, [
-            'mime' => $mime ?? 'application/octet-stream',
-            'type' => $type,
-            'id' => $id,
-        ]);
-    }
-
     public function editMessage($id)
     {
         return new EditMessageModal(null, [
@@ -647,133 +662,6 @@ class MessagesQuery extends Query
         return $resolver();
     }
 
-    /**
-     * Process action links in message content
-     * Converts entity:// and action:// links to clickable spans that wire to Kompo proxies
-     */
-    protected function processActionLinks(string $content): string
-    {
-        // Replace entity action links with spans that match wireActionButtons pattern
-        $content = preg_replace_callback(
-            '/\[([^\]]+)\]\(entity:\/\/([^\/]+)\/([^\/]+)\/([^\)]+)\)/',
-            function ($matches) {
-                $text = e($matches[1]);
-                $entityType = e($matches[2]);
-                $entityId = e($matches[3]);
-                $actionKey = e($matches[4]);
-
-                // Class pattern: js-action-entity-{type}-{id}-{key} (wireActionButtons will find -proxy)
-                $actionClass = "js-action-entity-{$entityType}-{$entityId}-{$actionKey}";
-
-                return "<span class=\"{$actionClass} action-link cursor-pointer text-indigo-600 hover:text-indigo-800 underline\" "
-                     . "data-action-type=\"entity\" "
-                     . "data-entity-type=\"{$entityType}\" "
-                     . "data-entity-id=\"{$entityId}\" "
-                     . "data-action-key=\"{$actionKey}\">{$text}</span>";
-            },
-            $content
-        );
-
-        // Replace generic action links
-        $content = preg_replace_callback(
-            '/\[([^\]]+)\]\(action:\/\/([^\)]+)\)/',
-            function ($matches) {
-                $text = e($matches[1]);
-                $actionKey = e($matches[2]);
-
-                // Class pattern: js-action-generic-{key}
-                $actionClass = "js-action-generic-{$actionKey}";
-
-                return "<span class=\"{$actionClass} action-link cursor-pointer text-indigo-600 hover:text-indigo-800 underline\" "
-                     . "data-action-type=\"generic\" "
-                     . "data-action-key=\"{$actionKey}\">{$text}</span>";
-            },
-            $content
-        );
-
-        return $content;
-    }
-
-    /**
-     * Extract action links from content and create hidden Kompo proxy elements
-     * These proxies are wired to visible action-link spans via wireActionButtons
-     */
-    protected function extractActionLinkProxies(string $content): array
-    {
-        $proxies = [];
-        $discovery = app(EntityAutoDiscovery::class);
-
-        // Extract entity action links: [text](entity://Type/id/action)
-        if (preg_match_all('/\[([^\]]+)\]\(entity:\/\/([^\/]+)\/([^\/]+)\/([^\)]+)\)/', $content, $matches, PREG_SET_ORDER)) {
-            foreach ($matches as $match) {
-                $entityType = $match[2];
-                $entityId = $match[3];
-                $actionKey = $match[4];
-
-                // Create unique key for deduplication
-                $key = "entity-{$entityType}-{$entityId}-{$actionKey}";
-                if (isset($proxies[$key])) {
-                    continue;
-                }
-
-                // Get the Kompo element from the config resolver
-                $resolver = $discovery->getEntityActionResolver($entityType, $actionKey);
-                if ($resolver) {
-                    try {
-                        $element = $resolver($entityId);
-                        if ($element) {
-                            // Add proxy class and hide it
-                            $proxyClass = "js-action-entity-{$entityType}-{$entityId}-{$actionKey}-proxy";
-                            $proxies[$key] = $element->class($proxyClass . ' hidden');
-                        }
-                    } catch (\Throwable $e) {
-                        \Log::warning('Action link resolver failed', [
-                            'entity_type' => $entityType,
-                            'entity_id' => $entityId,
-                            'action_key' => $actionKey,
-                            'error' => $e->getMessage(),
-                        ]);
-                        // Continue processing other links
-                    }
-                }
-            }
-        }
-
-        // Extract generic action links: [text](action://action_key)
-        if (preg_match_all('/\[([^\]]+)\]\(action:\/\/([^\)]+)\)/', $content, $matches, PREG_SET_ORDER)) {
-            foreach ($matches as $match) {
-                $actionKey = $match[2];
-
-                // Create unique key for deduplication
-                $key = "generic-{$actionKey}";
-                if (isset($proxies[$key])) {
-                    continue;
-                }
-
-                // Get the Kompo element from the config resolver
-                $resolver = $discovery->getGenericActionResolver($actionKey);
-                if ($resolver) {
-                    try {
-                        $element = $resolver();
-                        if ($element) {
-                            // Add proxy class and hide it
-                            $proxyClass = "js-action-generic-{$actionKey}-proxy";
-                            $proxies[$key] = $element->class($proxyClass . ' hidden');
-                        }
-                    } catch (\Throwable $e) {
-                        \Log::warning('Action link resolver failed', [
-                            'action_key' => $actionKey,
-                            'error' => $e->getMessage(),
-                        ]);
-                        // Continue processing other links
-                    }
-                }
-            }
-        }
-
-        return array_values($proxies);
-    }
-
     protected function renderMarkdown(string $text): string
     {
         $renderer = new SafeMarkdownRenderer([
@@ -781,10 +669,15 @@ class MessagesQuery extends Query
             'primaryText' => $this->theme()->primaryText(),
         ]);
 
-        $html = $renderer->render($text);
+        return $renderer->render($text);
+    }
 
-        // Process action links after markdown rendering
-        return $this->processActionLinks($html);
+    /**
+     * Get the content link processor service.
+     */
+    protected function getContentLinkProcessor(): ContentLinkProcessor
+    {
+        return app(ContentLinkProcessor::class);
     }
 
     protected function scrollScript($withTransition = true): string
