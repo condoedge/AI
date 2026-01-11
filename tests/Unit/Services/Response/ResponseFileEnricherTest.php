@@ -124,17 +124,17 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 123,
-                    'file_name' => 'document.pdf',
+                    'filename' => 'document.pdf',
                     'snippet' => 'This is some relevant content.',
-                    'relevance_score' => 0.85,
+                    'relevance' => 0.85,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
                 [
                     'file_id' => 456,
-                    'file_name' => 'other.pdf',
+                    'filename' => 'other.pdf',
                     'snippet' => 'Other content not cited.',
-                    'relevance_score' => 0.75,
+                    'relevance' => 0.75,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
@@ -162,9 +162,9 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 42,
-                    'file_name' => 'report.pdf',
+                    'filename' => 'report.pdf',
                     'snippet' => 'Report content snippet.',
-                    'relevance_score' => 0.92,
+                    'relevance' => 0.92,
                     'chunk_index' => 2,
                     'source' => 'database',
                 ],
@@ -217,9 +217,9 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 'physical:/docs/readme.md',
-                    'file_name' => 'readme.md',
+                    'filename' => 'readme.md',
                     'snippet' => 'Documentation snippet.',
-                    'relevance_score' => 0.88,
+                    'relevance' => 0.88,
                     'chunk_index' => 0,
                     'source' => 'physical',
                 ],
@@ -249,25 +249,25 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 1,
-                    'file_name' => 'first.pdf',
+                    'filename' => 'first.pdf',
                     'snippet' => 'First snippet.',
-                    'relevance_score' => 0.9,
+                    'relevance' => 0.9,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
                 [
                     'file_id' => 2,
-                    'file_name' => 'second.pdf',
+                    'filename' => 'second.pdf',
                     'snippet' => 'Second snippet.',
-                    'relevance_score' => 0.85,
+                    'relevance' => 0.85,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
                 [
                     'file_id' => 3,
-                    'file_name' => 'third.pdf',
+                    'filename' => 'third.pdf',
                     'snippet' => 'Third snippet.',
-                    'relevance_score' => 0.8,
+                    'relevance' => 0.8,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
@@ -294,9 +294,9 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 1,
-                    'file_name' => 'unused.pdf',
+                    'filename' => 'unused.pdf',
                     'snippet' => 'Unused content.',
-                    'relevance_score' => 0.9,
+                    'relevance' => 0.9,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
@@ -321,9 +321,9 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 1,
-                    'file_name' => 'only.pdf',
+                    'filename' => 'only.pdf',
                     'snippet' => 'Only file.',
-                    'relevance_score' => 0.9,
+                    'relevance' => 0.9,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
@@ -349,9 +349,9 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 42,
-                    'file_name' => 'file.pdf',
+                    'filename' => 'file.pdf',
                     'snippet' => 'Content.',
-                    'relevance_score' => 0.9,
+                    'relevance' => 0.9,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
@@ -407,9 +407,9 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 1,
-                    'file_name' => 'file.pdf',
+                    'filename' => 'file.pdf',
                     'snippet' => 'Content.',
-                    'relevance_score' => 0.9,
+                    'relevance' => 0.9,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
@@ -446,9 +446,9 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 1,
-                    'file_name' => 'document.pdf',
+                    'filename' => 'document.pdf',
                     'snippet' => 'Document content.',
-                    'relevance_score' => 0.85,
+                    'relevance' => 0.85,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
@@ -483,9 +483,9 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 1,
-                    'file_name' => 'document.pdf',
+                    'filename' => 'document.pdf',
                     'snippet' => 'Document content.',
-                    'relevance_score' => 0.85,
+                    'relevance' => 0.85,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
@@ -516,9 +516,9 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 1,
-                    'file_name' => 'file.pdf',
+                    'filename' => 'file.pdf',
                     'snippet' => 'Content.',
-                    'relevance_score' => 0.9,
+                    'relevance' => 0.9,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
@@ -548,9 +548,9 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 99,
-                    'file_name' => 'special.pdf',
+                    'filename' => 'special.pdf',
                     'snippet' => 'Special content.',
-                    'relevance_score' => 0.95,
+                    'relevance' => 0.95,
                     'chunk_index' => 1,
                     'source' => 'database',
                 ],
@@ -608,17 +608,17 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 1,
-                    'file_name' => 'first.pdf',
+                    'filename' => 'first.pdf',
                     'snippet' => 'First content.',
-                    'relevance_score' => 0.9,
+                    'relevance' => 0.9,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
                 [
                     'file_id' => 2,
-                    'file_name' => 'second.pdf',
+                    'filename' => 'second.pdf',
                     'snippet' => 'Second content.',
-                    'relevance_score' => 0.85,
+                    'relevance' => 0.85,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
@@ -732,17 +732,17 @@ class ResponseFileEnricherTest extends TestCase
             'relevant_files' => [
                 [
                     'file_id' => 'physical:/docs/guide.md',
-                    'file_name' => 'guide.md',
+                    'filename' => 'guide.md',
                     'snippet' => 'Guide content.',
-                    'relevance_score' => 0.9,
+                    'relevance' => 0.9,
                     'chunk_index' => 0,
                     'source' => 'physical',
                 ],
                 [
                     'file_id' => 42,
-                    'file_name' => 'data.pdf',
+                    'filename' => 'data.pdf',
                     'snippet' => 'Data content.',
-                    'relevance_score' => 0.85,
+                    'relevance' => 0.85,
                     'chunk_index' => 0,
                     'source' => 'database',
                 ],
