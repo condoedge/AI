@@ -695,6 +695,23 @@ const ChatMessageInjector = {
         if (messages.length === 0) return null;
         const lastMessage = messages[messages.length - 1];
         return lastMessage ? lastMessage.getAttribute('data-message-id') : null;
+    },
+
+    /**
+     * Wire all file citation links on the page.
+     * Called on page load for PHP-rendered messages.
+     */
+    wireAllFileCitations() {
+        // Find all message containers (PHP-rendered)
+        const messageContainers = document.querySelectorAll('[data-message-id]');
+
+        messageContainers.forEach(container => {
+            // Check if this message has file citation slots
+            const slots = container.querySelectorAll('[data-action-slot^="file-citation-"]');
+            if (slots.length > 0) {
+                this.wireActionButtons(container);
+            }
+        });
     }
 };
 
@@ -753,3 +770,23 @@ window.updateMessageContent = updateMessageContent;
 window.removeMessagesAfter = removeMessagesAfter;
 window.showTypingAfterMessage = showTypingAfterMessage;
 window.removeMessageAndAfter = removeMessageAndAfter;
+
+/**
+ * Wire all file citations helper
+ */
+window.wireAllFileCitations = () => ChatMessageInjector.wireAllFileCitations();
+
+/**
+ * Auto-initialize on DOMContentLoaded
+ */
+document.addEventListener('DOMContentLoaded', () => {
+    // Wire file citations for PHP-rendered messages
+    ChatMessageInjector.wireAllFileCitations();
+});
+
+/**
+ * Re-wire after Kompo refreshes (for paginated content)
+ */
+document.addEventListener('kompo:refresh', () => {
+    ChatMessageInjector.wireAllFileCitations();
+});
