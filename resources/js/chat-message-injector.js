@@ -165,6 +165,12 @@ const ChatMessageInjector = {
                 typingIndicator.appendChild(assistantProxies);
             }
 
+            // Move file citation proxies INTO this element (for [1], [2] links)
+            const fileCitationProxies = stagingPanel.querySelector('.chat-staged-file-citation-proxies');
+            if (fileCitationProxies) {
+                typingIndicator.appendChild(fileCitationProxies);
+            }
+
             // Wire visible action buttons to proxies within same element
             this.wireActionButtons(typingIndicator);
         }
@@ -215,7 +221,10 @@ const ChatMessageInjector = {
 
     /**
      * Wire visible action buttons to their proxy counterparts within the same element.
-     * Uses class naming convention: js-action-X → js-action-X-proxy
+     *
+     * Supports two wiring patterns:
+     * 1. Class-based: js-action-X → js-action-X-proxy (for action bar buttons)
+     * 2. Data attribute: data-action-slot="X" → data-action-proxy="X" (for file citations)
      */
     wireActionButtons(messageElement) {
         if (!messageElement) return;
@@ -276,6 +285,31 @@ const ChatMessageInjector = {
                     e.stopPropagation();
                     proxy.click();
                 };
+            }
+        });
+
+        // Pattern 2: Data attribute wiring (for file citations)
+        const slotButtons = messageElement.querySelectorAll('[data-action-slot]');
+
+        slotButtons.forEach(btn => {
+            const slot = btn.getAttribute('data-action-slot');
+            if (!slot) return;
+
+            const proxy = messageElement.querySelector(`[data-action-proxy="${slot}"]`);
+
+            if (proxy) {
+                btn.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    try {
+                        proxy.click();
+                    } catch (err) {
+                        console.error('[AI Chat] File citation proxy click failed:', slot, err);
+                    }
+                };
+            } else {
+                console.warn('[AI Chat] File citation proxy not found for slot:', slot);
             }
         });
     },
