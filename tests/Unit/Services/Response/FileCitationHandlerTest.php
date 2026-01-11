@@ -90,4 +90,42 @@ class FileCitationHandlerTest extends TestCase
             $this->assertNotContains('viewFile', $interaction['action']['method'] ?? '');
         }
     }
+
+    public function test_resetMetadata_clears_previous_metadata()
+    {
+        $content = 'See [1] for details.';
+        $files = [
+            ['id' => 42, 'name' => 'doc.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf'],
+        ];
+
+        // Process once
+        $this->handler->createElements($content, ['files' => $files]);
+        $this->assertCount(1, $this->handler->getCitationMetadata());
+
+        // Reset
+        $this->handler->resetMetadata();
+        $this->assertEmpty($this->handler->getCitationMetadata());
+    }
+
+    public function test_createElements_auto_resets_metadata()
+    {
+        $content1 = 'See [1] for details.';
+        $content2 = 'See [1] and [2] for details.';
+        $files1 = [['id' => 1, 'name' => 'a.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf']];
+        $files2 = [
+            ['id' => 2, 'name' => 'b.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf'],
+            ['id' => 3, 'name' => 'c.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf'],
+        ];
+
+        // Process first content
+        $this->handler->createElements($content1, ['files' => $files1]);
+        $this->assertCount(1, $this->handler->getCitationMetadata());
+        $this->assertEquals(1, $this->handler->getCitationMetadata()[0]['id']);
+
+        // Process second content - should NOT accumulate
+        $this->handler->createElements($content2, ['files' => $files2]);
+        $this->assertCount(2, $this->handler->getCitationMetadata());
+        $this->assertEquals(2, $this->handler->getCitationMetadata()[0]['id']); // New ID, not 1
+        $this->assertEquals(3, $this->handler->getCitationMetadata()[1]['id']);
+    }
 }

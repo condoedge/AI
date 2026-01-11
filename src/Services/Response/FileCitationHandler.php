@@ -28,6 +28,19 @@ class FileCitationHandler extends AbstractContentLinkHandler
         return self::CITATION_PATTERN;
     }
 
+    /**
+     * Create elements for all matched citations.
+     *
+     * Overrides parent to auto-reset metadata before processing,
+     * preventing state accumulation when handler is reused.
+     */
+    public function createElements(string $content, array $context = []): array
+    {
+        $this->resetMetadata();
+
+        return parent::createElements($content, $context);
+    }
+
     protected function getDeduplicationKey(array $match): string
     {
         return "file-citation-{$match[1]}";
