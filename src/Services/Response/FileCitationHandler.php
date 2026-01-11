@@ -90,19 +90,18 @@ class FileCitationHandler extends AbstractContentLinkHandler
     /**
      * Create a clickable file citation link.
      *
-     * Uses the same modal as the file reference cards in MessagesQuery.
+     * Creates a visible link element with data-action-slot attribute for JS wiring.
+     * The actual click behavior is wired via hidden proxy elements with matching
+     * data-action-proxy attributes.
      */
     protected function createFileLink(array $file, int $citationNumber): mixed
     {
         $fileName = $file['name'] ?? "File {$citationNumber}";
+        $slot = "file-citation-{$citationNumber}";
 
         return _Link("[{$citationNumber}]")
             ->class('text-indigo-600 font-medium cursor-pointer hover:underline')
             ->balloon($fileName, 'up')
-            ->selfGet('viewFile', [
-                'id' => $file['id'] ?? null,
-                'type' => $file['morphable_type'] ?? 'file',
-                'mime' => $file['mime_type'] ?? null,
-            ])->inModal();
+            ->attr(['data-action-slot' => $slot]);
     }
 }
