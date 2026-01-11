@@ -123,7 +123,22 @@
       "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" add tests/Feature/FileContextIntegrationTest.php)",
       "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" commit -m \"$\\(cat <<''EOF''\nAdd explicit shouldNotReceive assertion for searchByFilename\n\nReplace incorrect comment with proper Mockery assertion to ensure\ntest_semantic_search_still_works_without_filename actually validates\nthat searchByFilename is not called when no filename is detected.\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline -15)",
-      "Bash(timeout 30 vendor/bin/phpunit:*)"
+      "Bash(timeout 30 vendor/bin/phpunit:*)",
+      "Bash(git checkout:*)",
+      "Bash(vendor\\\\bin\\\\phpunit:*)",
+      "Bash(composer show:*)",
+      "Bash(del \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\\\\src\\\\Services\\\\PromptSections\\\\EntityActionsPromptSection.php\")",
+      "Bash(timeout 60 php:*)",
+      "Bash(vendor/bin/phpunit.bat:*)",
+      "Bash(.vendorbinphpunit testsUnitServicesResponseResponseActionLinkProcessorSecurityTest.php --testdox)",
+      "Bash(pushd:*)",
+      "Bash(popd)",
+      "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline 0f40a96..HEAD)",
+      "Bash(vendorbinphpunit.bat:*)",
+      "Bash(powershell -Command \"\\(Get-Content tests/Feature/AiSystemFeatureTest.php\\) -replace ''use Tests\\\\\\\\TestCase;'', ''use Condoedge\\\\Ai\\\\Tests\\\\TestCase;'' | Set-Content tests/Feature/AiSystemFeatureTest.php\")",
+      "Bash(do echo \"=== Testing $f ===\")",
+      "Bash(powershell -Command \"\\(Get-Content tests/Unit/Services/Response/ResponseFileEnricherTest.php\\) -replace \"\"''file_name''\"\", \"\"''filename''\"\" -replace \"\"''relevance_score''\"\", \"\"''relevance''\"\" | Set-Content tests/Unit/Services/Response/ResponseFileEnricherTest.php\")",
+      "Bash(do echo \"=== $d ===\")"
     ],
     "deny": [],
     "ask": []

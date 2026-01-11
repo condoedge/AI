@@ -14,7 +14,7 @@ class ResponseEntityActionsSectionTest extends TestCase
     private ResponseEntityActionsSection $section;
     private $mockDiscovery;
 
-    protected function setUp(): void
+    public function setUp(): void
     {
         parent::setUp();
 

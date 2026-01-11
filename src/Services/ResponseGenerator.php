@@ -227,7 +227,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $style = $options['style'] ?? $this->config['default_style'] ?? 'detailed';
         $includeInsights = $options['include_insights'] ?? true;
         $includeVisualization = $options['include_visualization'] ?? true;
-        $maxLength = $options['max_length'] ?? 200;
+        $maxLength = $options['max_length'] ?? $this->config['default_max_length'] ?? 500;
         $temperature = $options['temperature'] ?? 0.3;
 
         // Handle empty results

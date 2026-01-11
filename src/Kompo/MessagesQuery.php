@@ -47,14 +47,28 @@ class MessagesQuery extends Query
             : 'none';
         $speedClass = 'animation-speed-' . $animationSpeed;
 
-        $this->conversation = AiConversation::where('user_id', auth()->id())
-            ->find($this->prop('conversation_id') ?? session('selected_conversation_id'));
+        // Only query for conversation if auth is available
+        if ($this->isAuthAvailable()) {
+            $this->conversation = AiConversation::where('user_id', auth()->id())
+                ->find($this->prop('conversation_id') ?? session('selected_conversation_id'));
+        }
 
         $this->class = '!static flex-1 bg-gradient-to-b ' . $this->theme()->heroBackground() . ' ' . $speedClass;
 
         $this->latestMessageId = $this->conversation?->messages()
             ->orderBy('created_at', 'desc')
             ->first()?->id;
+    }
+
+    /**
+     * Check if authentication service is available.
+     *
+     * During early container resolution (e.g., before AuthServiceProvider),
+     * the 'auth' binding may not exist yet.
+     */
+    protected function isAuthAvailable(): bool
+    {
+        return app()->bound('auth');
     }
 
     public function top()
