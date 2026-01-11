@@ -27,10 +27,8 @@ class UserChatThemeFactory implements ChatThemeFactoryInterface
     public function create(?string $themeName = null, array $overrides = []): ChatThemeInterface
     {
         // Get user settings if authenticated
-        // IMPORTANT: Check if auth is available before calling - prevents
-        // "Target class [auth] does not exist" during early container resolution
         $userSettings = null;
-        if ($this->isAuthAvailable() && auth()->check()) {
+        if (auth()->check()) {
             $userSettings = AiUserSetting::forUser(auth()->id());
         }
 
@@ -76,17 +74,5 @@ class UserChatThemeFactory implements ChatThemeFactoryInterface
     {
         return isset($this->themes[$name]) ||
                (class_exists($name) && is_subclass_of($name, ChatThemeInterface::class));
-    }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet. This prevents the
-     * "Target class [auth] does not exist" error.
-     */
-    private function isAuthAvailable(): bool
-    {
-        return app()->bound('auth');
     }
 }

@@ -148,8 +148,6 @@ class ResponseFileEnricher
                 'download_url' => null,
                 'preview_url' => null,
                 'can_download' => false,
-                'morphable_type' => null,  // Physical files have no morphable type
-                'mime_type' => $file['mime_type'] ?? null,
             ];
         }
 
@@ -173,8 +171,6 @@ class ResponseFileEnricher
             'download_url' => $downloadUrl,
             'preview_url' => $previewUrl,
             'can_download' => $canDownload,
-            'morphable_type' => $file['morphable_type'] ?? $options['default_morphable_type'] ?? 'file',
-            'mime_type' => $file['mime_type'] ?? null,
         ];
     }
 

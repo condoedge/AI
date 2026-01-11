@@ -67,10 +67,7 @@ use Condoedge\Ai\Services\Context\FileAccessResolver;
 use Condoedge\Ai\Services\Context\FileContextProvider;
 use Condoedge\Ai\Services\Files\PhysicalFileIndexer;
 use Condoedge\Ai\Services\Response\ResponseFileEnricher;
-use Condoedge\Ai\Services\Response\ResponseEntityEnricher;
-use Condoedge\Ai\Services\Response\ContentLinkProcessor;
-use Condoedge\Ai\Services\Response\ActionLinkHandler;
-use Condoedge\Ai\Services\Response\FileCitationHandler;
+use Condoedge\Utils\Models\Files\File;
 use Condoedge\Ai\Models\Plugins\FileProcessingPlugin;
 use Condoedge\Ai\Models\Plugins\FileAccessScopePlugin;
 use Condoedge\Ai\Services\UI\ChatThemeFactoryInterface;
@@ -345,8 +342,7 @@ class AiServiceProvider extends ServiceProvider
                 responseGenerator: $app->make(ResponseGeneratorInterface::class),
                 vectorStore: $app->make(VectorStoreInterface::class),
                 fileContextProvider: $app->make(FileContextProvider::class),
-                responseFileEnricher: $app->make(ResponseFileEnricher::class),
-                responseEntityEnricher: $app->make(ResponseEntityEnricher::class)
+                responseFileEnricher: $app->make(ResponseFileEnricher::class)
             );
         });
 
@@ -553,19 +549,8 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Response enrichers
+        // Response enricher
         $this->app->singleton(ResponseFileEnricher::class);
-        $this->app->singleton(ResponseEntityEnricher::class);
-
-        // Content link processors
-        $this->app->singleton(ActionLinkHandler::class);
-        $this->app->singleton(FileCitationHandler::class);
-        $this->app->singleton(ContentLinkProcessor::class, function ($app) {
-            return new ContentLinkProcessor(
-                $app->make(ActionLinkHandler::class),
-                $app->make(FileCitationHandler::class)
-            );
-        });
     }
 
     /**
@@ -788,7 +773,6 @@ class AiServiceProvider extends ServiceProvider
             FileContextProvider::class,
             PhysicalFileIndexer::class,
             ResponseFileEnricher::class,
-            ResponseEntityEnricher::class,
             ChatThemeFactoryInterface::class,
             ChatThemeInterface::class,
             ChatSettingsInterface::class,

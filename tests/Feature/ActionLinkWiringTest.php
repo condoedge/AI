@@ -4,80 +4,91 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Feature;
 
+use Condoedge\Ai\Kompo\MessagesQuery;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
-use Condoedge\Ai\Services\Response\ResponseActionLinkProcessor;
 use Condoedge\Ai\Tests\TestCase;
 use Kompo\Link;
 use Mockery;
 
-/**
- * Tests for action link processing and direct rendering.
- */
 class ActionLinkWiringTest extends TestCase
 {
-    /** @test */
-    public function it_creates_action_elements_for_direct_rendering(): void
+    public function setUp(): void
     {
-        $mockLink = (new Link('View Profile'))->href('/person/123');
+        parent::setUp();
 
-        $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
-        $mockDiscovery->shouldReceive('getEntityActionResolver')
-            ->with('Person', 'profile')
-            ->andReturn(fn($id, $text) => (new Link($text))->href("/person/{$id}"));
-
-        $processor = new ResponseActionLinkProcessor($mockDiscovery);
-
-        $content = '[View John](entity://Person/123/profile)';
-        $elements = $processor->createActionElements($content);
-
-        $this->assertCount(1, $elements);
-        $this->assertInstanceOf(Link::class, $elements[0]);
+        // Set bootFlag to false so Query constructor doesn't try to boot
+        // This allows testing methods in isolation without full Kompo boot
+        $this->app->instance('bootFlag', false);
     }
 
     /** @test */
-    public function it_strips_action_links_to_plain_text(): void
-    {
-        $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
-        $processor = new ResponseActionLinkProcessor($mockDiscovery);
-
-        $content = 'See [John](entity://Person/123/profile) and [settings](action://settings).';
-        $result = $processor->stripActionLinks($content);
-
-        $this->assertEquals('See John and settings.', $result);
-    }
-
-    /** @test */
-    public function it_processes_for_direct_rendering_with_elements_and_clean_content(): void
+    public function it_creates_matching_class_patterns_for_wiring(): void
     {
         $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
         $mockDiscovery->shouldReceive('getEntityActionResolver')
             ->with('Person', 'profile')
-            ->andReturn(fn($id, $text) => (new Link($text))->href("/person/{$id}"));
+            ->andReturn(fn($id) => (new Link('View Profile'))->href("/person/{$id}"));
+        $mockDiscovery->shouldReceive('getGenericActionResolver')
+            ->andReturn(null);
 
-        $processor = new ResponseActionLinkProcessor($mockDiscovery);
+        $this->app->instance(EntityAutoDiscovery::class, $mockDiscovery);
 
-        $content = 'See [View John](entity://Person/123/profile) here.';
-        $result = $processor->processForDirectRendering($content);
+        $query = new MessagesQuery();
 
-        $this->assertEquals('See View John here.', $result['content']);
-        $this->assertCount(1, $result['elements']);
-        $this->assertTrue($result['has_actions']);
+        // Test processActionLinks produces correct visible element class
+        $processMethod = new \ReflectionMethod($query, 'processActionLinks');
+        $processMethod->setAccessible(true);
+
+        $html = $processMethod->invoke($query, '[John](entity://Person/123/profile)');
+
+        // Visible span should have js-action-entity-Person-123-profile (no -proxy)
+        $this->assertStringContainsString('js-action-entity-Person-123-profile', $html);
+        $this->assertStringNotContainsString('js-action-entity-Person-123-profile-proxy', $html);
+
+        // Test extractActionLinkProxies produces correct proxy element class
+        $extractMethod = new \ReflectionMethod($query, 'extractActionLinkProxies');
+        $extractMethod->setAccessible(true);
+
+        $proxies = $extractMethod->invoke($query, '[John](entity://Person/123/profile)');
+
+        $this->assertCount(1, $proxies);
+
+        // Get the rendered proxy HTML
+        $proxyElement = $proxies[0];
+
+        // The proxy should have the -proxy suffix class
+        // Check the element's class contains the proxy pattern (using public $class property)
+        $elementClasses = $proxyElement->class ?? '';
+        $this->assertStringContainsString('js-action-entity-Person-123-profile-proxy', $elementClasses);
+        $this->assertStringContainsString('hidden', $elementClasses);
     }
 
     /** @test */
-    public function it_handles_multiple_action_links(): void
+    public function it_handles_multiple_action_links_with_unique_classes(): void
     {
         $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
         $mockDiscovery->shouldReceive('getEntityActionResolver')
-            ->andReturn(fn($id, $text) => (new Link($text))->href("/view/{$id}"));
+            ->andReturn(fn($id) => (new Link('View'))->href("/view/{$id}"));
+        $mockDiscovery->shouldReceive('getGenericActionResolver')
+            ->andReturn(null);
 
-        $processor = new ResponseActionLinkProcessor($mockDiscovery);
+        $this->app->instance(EntityAutoDiscovery::class, $mockDiscovery);
+
+        $query = new MessagesQuery();
+
+        $extractMethod = new \ReflectionMethod($query, 'extractActionLinkProxies');
+        $extractMethod->setAccessible(true);
 
         $content = '[John](entity://Person/123/profile) and [Jane](entity://Person/456/profile)';
-        $elements = $processor->createActionElements($content);
+        $proxies = $extractMethod->invoke($query, $content);
 
-        // Should have 2 unique elements
-        $this->assertCount(2, $elements);
+        // Should have 2 unique proxies
+        $this->assertCount(2, $proxies);
+
+        // Each should have unique class (using public $class property)
+        $classes = array_map(fn($p) => $p->class ?? '', $proxies);
+        $this->assertStringContainsString('Person-123-profile-proxy', $classes[0]);
+        $this->assertStringContainsString('Person-456-profile-proxy', $classes[1]);
     }
 
     /** @test */
@@ -85,31 +96,22 @@ class ActionLinkWiringTest extends TestCase
     {
         $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
         $mockDiscovery->shouldReceive('getEntityActionResolver')
-            ->andReturn(fn($id, $text) => (new Link($text))->href("/view/{$id}"));
-
-        $processor = new ResponseActionLinkProcessor($mockDiscovery);
-
-        // Same link twice (same entity/id/action)
-        $content = '[John](entity://Person/123/profile) [John Again](entity://Person/123/profile)';
-        $elements = $processor->createActionElements($content);
-
-        // Should deduplicate to 1 element
-        $this->assertCount(1, $elements);
-    }
-
-    /** @test */
-    public function it_returns_empty_when_no_resolver_configured(): void
-    {
-        $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
-        $mockDiscovery->shouldReceive('getEntityActionResolver')
+            ->andReturn(fn($id) => (new Link('View'))->href("/view/{$id}"));
+        $mockDiscovery->shouldReceive('getGenericActionResolver')
             ->andReturn(null);
 
-        $processor = new ResponseActionLinkProcessor($mockDiscovery);
+        $this->app->instance(EntityAutoDiscovery::class, $mockDiscovery);
 
-        $content = '[John](entity://Person/123/profile)';
-        $elements = $processor->createActionElements($content);
+        $query = new MessagesQuery();
 
-        // No resolver = no elements
-        $this->assertCount(0, $elements);
+        $extractMethod = new \ReflectionMethod($query, 'extractActionLinkProxies');
+        $extractMethod->setAccessible(true);
+
+        // Same link twice
+        $content = '[John](entity://Person/123/profile) [John Again](entity://Person/123/profile)';
+        $proxies = $extractMethod->invoke($query, $content);
+
+        // Should deduplicate to 1 proxy
+        $this->assertCount(1, $proxies);
     }
 }

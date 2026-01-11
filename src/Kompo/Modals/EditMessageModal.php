@@ -35,8 +35,7 @@ class EditMessageModal extends Modal
         $this->messageId = $this->prop('message_id');
         $this->conversationId = $this->prop('conversation_id');
 
-        // Only query for conversation if auth is available
-        if ($this->messageId && $this->conversationId && $this->isAuthAvailable()) {
+        if ($this->messageId && $this->conversationId) {
             // Only allow editing own messages
             $conversation = AiConversation::where('user_id', auth()->id())
                 ->find($this->conversationId);
@@ -53,17 +52,6 @@ class EditMessageModal extends Modal
             'message_id' => $this->messageId,
             'conversation_id' => $this->conversationId,
         ]);
-    }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet.
-     */
-    protected function isAuthAvailable(): bool
-    {
-        return app()->bound('auth');
     }
 
     public function body()
@@ -128,7 +116,11 @@ class EditMessageModal extends Modal
                         }')
                         // 2. Send to server (withAllFormValues captures form data at click time)
                         && $e->selfPost('updateMessageAndGetResponse')->withAllFormValues()
-                            ->refresh(MessagesQuery::ID)
+                            ->inPanel('temp-message-staging')
+                            // 3. Process response AFTER AJAX completes
+                            ->run('() => {
+                                setTimeout(() => processServerResponse(), 100);
+                            }')
                     ),
             )->class('gap-3'),
         )->class('px-6 py-4 border-t border-gray-200 bg-gray-50');
@@ -217,6 +209,9 @@ class EditMessageModal extends Modal
             if (!$assistantMessage) {
                 return _Html('')->class('hidden');
             }
+
+            // Use shared staged rendering (content + action bar + proxies)
+            return $this->renderStagedAssistantResponse($assistantMessage, $this->message);
         } catch (\Throwable $e) {
             \Log::error('Edit message regeneration failed: ' . $e->getMessage());
             return _Html(__('ai.chat.error-message'))->class('text-red-500 text-sm');

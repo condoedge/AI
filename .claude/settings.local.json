@@ -138,7 +138,8 @@
       "Bash(powershell -Command \"\\(Get-Content tests/Feature/AiSystemFeatureTest.php\\) -replace ''use Tests\\\\\\\\TestCase;'', ''use Condoedge\\\\Ai\\\\Tests\\\\TestCase;'' | Set-Content tests/Feature/AiSystemFeatureTest.php\")",
       "Bash(do echo \"=== Testing $f ===\")",
       "Bash(powershell -Command \"\\(Get-Content tests/Unit/Services/Response/ResponseFileEnricherTest.php\\) -replace \"\"''file_name''\"\", \"\"''filename''\"\" -replace \"\"''relevance_score''\"\", \"\"''relevance''\"\" | Set-Content tests/Unit/Services/Response/ResponseFileEnricherTest.php\")",
-      "Bash(do echo \"=== $d ===\")"
+      "Bash(do echo \"=== $d ===\")",
+      "Bash(git revert:*)"
     ],
     "deny": [],
     "ask": []

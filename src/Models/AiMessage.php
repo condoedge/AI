@@ -36,13 +36,10 @@ class AiMessage extends Model
 
     /**
      * Get referenced files from metadata.
-     *
-     * Checks both 'sources' (current storage key) and 'referenced_files'
-     * for backwards compatibility.
      */
     public function getReferencedFiles(): array
     {
-        return $this->metadata['sources'] ?? $this->metadata['referenced_files'] ?? [];
+        return $this->metadata['referenced_files'] ?? [];
     }
 
     /**

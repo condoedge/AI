@@ -22,25 +22,10 @@ class ConversationListQuery extends Query
     public function created()
     {
         $this->id(self::ID);
-
+        
         $this->conversationId = (int) session('selected_conversation_id');
-
-        // Only query for conversation if auth is available
-        if ($this->isAuthAvailable()) {
-            $this->conversation = AiConversation::where('user_id', auth()->id())
-                ->find($this->conversationId);
-        }
-    }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet.
-     */
-    protected function isAuthAvailable(): bool
-    {
-        return app()->bound('auth');
+        $this->conversation = AiConversation::where('user_id', auth()->id())
+            ->find($this->conversationId);
     }
 
     public function top()
@@ -71,11 +56,6 @@ class ConversationListQuery extends Query
 
     public function query()
     {
-        // Return empty query if auth is not available
-        if (!$this->isAuthAvailable()) {
-            return AiConversation::whereRaw('1 = 0');
-        }
-
         return AiConversation::where('user_id', auth()->id())
             ->forFilter(request('filter', $this->conversation->status ?? 'active'))
             ->when(request('search'), fn($q, $search) => $q->search($search))

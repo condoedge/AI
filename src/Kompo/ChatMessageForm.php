@@ -9,7 +9,6 @@ use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
-use Condoedge\Ai\Kompo\Traits\HasFilePreview;
 use Condoedge\Ai\Kompo\Traits\HasMessageActions;
 use Condoedge\Ai\Kompo\Traits\HasStagedMessageRendering;
 use Condoedge\Ai\Models\AiMessage;
@@ -29,7 +28,7 @@ use Condoedge\Utils\Kompo\Common\Form;
  */
 class ChatMessageForm extends Form
 {
-    use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation, HasFilePreview, HasMessageActions, HasStagedMessageRendering;
+    use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation, HasMessageActions, HasStagedMessageRendering;
 
     public $id = 'chat-message-form';
     public $class = 'w-full';
@@ -43,22 +42,10 @@ class ChatMessageForm extends Form
         $this->conversationId = $this->prop('conversation_id');
         $this->responseStyle = $this->prop('response_style') ?? $this->settings()->responseStyle() ?? 'friendly';
 
-        // Only query for conversation if auth is available
-        if ($this->conversationId && $this->isAuthAvailable()) {
+        if ($this->conversationId) {
             $this->conversation = AiConversation::where('user_id', auth()->id())
                 ->find($this->conversationId);
         }
-    }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet.
-     */
-    protected function isAuthAvailable(): bool
-    {
-        return app()->bound('auth');
     }
 
     public function render()
@@ -205,6 +192,9 @@ class ChatMessageForm extends Form
             if (!$assistantMessage) {
                 return _Html('')->class('hidden');
             }
+
+            // Use shared staged rendering (content + action bar + proxies)
+            return $this->renderStagedAssistantResponse($assistantMessage, $userMessage);
         } catch (\Throwable $e) {
             \Log::error('Chat message failed: ' . $e->getMessage(), [
                 'conversation_id' => $this->conversation->id,
@@ -310,9 +300,14 @@ class ChatMessageForm extends Form
             }')
             // 2. Send to server, response goes to hidden staging panel
             // 3. JS processes staging content and moves to display area
-            && $e->selfPost('sendMessageAndGetResponse')
-                ->withAllFormValues()
-                ->refresh(MessagesQuery::ID);
+            && $e->selfPost('sendMessageAndGetResponse')->withAllFormValues()
+                ->inPanel('temp-message-staging')
+                ->run('() => {
+                    setTimeout(() => {
+                        processServerResponse();
+                    }, 100);
+                }')
+                ->onError->run('clearMessagePlaceholders');
     }
 
     public function editMessage($id)

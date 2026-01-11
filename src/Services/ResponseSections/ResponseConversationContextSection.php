@@ -48,18 +48,12 @@ class ResponseConversationContextSection extends BaseResponseSection
             $output .= "**Files Referenced in Previous Response:**\n\n";
 
             foreach ($conversationContext['last_referenced_files'] as $index => $file) {
-                $refNum = $file['ref'] ?? ($index + 1);
+                $refNum = $index + 1;
                 $filename = $file['name'] ?? $file['filename'] ?? 'Unknown file';
                 $fileId = $file['id'] ?? $file['file_id'] ?? '';
                 $snippet = $file['snippet'] ?? '';
-                $downloadUrl = $file['download_url'] ?? null;
-                $canDownload = $file['can_download'] ?? false;
 
                 $output .= "**[{$refNum}] {$filename}** (ID: {$fileId})\n";
-
-                if ($canDownload && $downloadUrl) {
-                    $output .= "Download: {$downloadUrl}\n";
-                }
 
                 // Include the full snippet/chunk content so AI can reference it
                 if (!empty($snippet)) {

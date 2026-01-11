@@ -43,9 +43,7 @@ class UserChatSettings extends AbstractChatSettings
         }
 
         // 1. Check user DB direct columns (if authenticated)
-        // IMPORTANT: Check if auth is available before calling - prevents
-        // "Target class [auth] does not exist" during early container resolution
-        if ($this->isAuthAvailable() && auth()->check()) {
+        if (auth()->check()) {
             $userSetting = AiUserSetting::forUser(auth()->id());
 
             // Read from direct model property if it exists and is not null
@@ -254,17 +252,5 @@ class UserChatSettings extends AbstractChatSettings
     public function typingAnimationStyle(): string
     {
         return $this->get('typing_animation_style', 'dots');
-    }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet. This prevents the
-     * "Target class [auth] does not exist" error.
-     */
-    private function isAuthAvailable(): bool
-    {
-        return app()->bound('auth');
     }
 }

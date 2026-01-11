@@ -60,22 +60,10 @@ class AiChatPanel extends Form
             $this->isOnline = false;
         }
 
-        if ($this->selectedConversationId && $this->isAuthAvailable()) {
+        if ($this->selectedConversationId) {
             $this->conversation = AiConversation::where('user_id', auth()->id())
                 ->find($this->selectedConversationId);
         }
-    }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet. This prevents the
-     * "Target class [auth] does not exist" error.
-     */
-    protected function isAuthAvailable(): bool
-    {
-        return app()->bound('auth');
     }
 
     public function render()
