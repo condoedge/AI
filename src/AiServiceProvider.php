@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai;
 
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 use Condoedge\Ai\Services\AiManager;
 use Condoedge\Ai\Services\DataIngestionService;
@@ -79,6 +80,8 @@ use Condoedge\Ai\Services\UI\ConfigChatThemeFactory;
 use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
 use Condoedge\Ai\Services\Settings\UserChatSettings;
 use Condoedge\Ai\Services\Security\AccessLevelResolver;
+use Condoedge\Ai\Models\AiConversation;
+use Condoedge\Ai\Policies\AiConversationPolicy;
 use Condoedge\Utils\Facades\FileModel;
 
 /**
@@ -605,6 +608,9 @@ class AiServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Register policies
+        Gate::policy(AiConversation::class, AiConversationPolicy::class);
+
         // Load routes
         $this->loadRoutesFrom(__DIR__."/../routes/api.php");
         $this->loadRoutesFrom(__DIR__."/../routes/web.php");
