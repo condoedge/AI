@@ -212,7 +212,8 @@ trait HasStagedMessageRendering
             ->class('chat-staged-file-citation-proxies hidden');
     }
 
-    // Note: Action methods (feedback, regenerate) are provided by HasMessageActions trait
-    // Make sure to also use HasMessageActions in your component
-    // Note: viewFile() method is provided by HasFilePreview trait
+    public function viewFile()
+    {
+        
+    }
 }

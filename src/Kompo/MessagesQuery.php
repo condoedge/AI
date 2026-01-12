@@ -7,7 +7,6 @@ use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
-use Condoedge\Ai\Kompo\Traits\HasFilePreview;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Chat\RegenerateMessageService;
@@ -19,7 +18,7 @@ use Condoedge\Utils\Kompo\Common\Query;
 
 class MessagesQuery extends Query
 {
-    use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation, HasFilePreview;
+    use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation;
 
     public const ID = 'chat-messages-panel';
     public $class = '';

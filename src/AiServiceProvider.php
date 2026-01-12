@@ -67,6 +67,9 @@ use Condoedge\Ai\Services\Context\FileAccessResolver;
 use Condoedge\Ai\Services\Context\FileContextProvider;
 use Condoedge\Ai\Services\Files\PhysicalFileIndexer;
 use Condoedge\Ai\Services\Response\ResponseFileEnricher;
+use Condoedge\Ai\Services\Response\ContentLinkProcessor;
+use Condoedge\Ai\Services\Response\ActionLinkHandler;
+use Condoedge\Ai\Services\Response\FileCitationHandler;
 use Condoedge\Utils\Models\Files\File;
 use Condoedge\Ai\Models\Plugins\FileProcessingPlugin;
 use Condoedge\Ai\Models\Plugins\FileAccessScopePlugin;
@@ -551,6 +554,16 @@ class AiServiceProvider extends ServiceProvider
 
         // Response enricher
         $this->app->singleton(ResponseFileEnricher::class);
+
+        // Content link processors
+        $this->app->singleton(ActionLinkHandler::class);
+        $this->app->singleton(FileCitationHandler::class);
+        $this->app->singleton(ContentLinkProcessor::class, function ($app) {
+            return new ContentLinkProcessor(
+                $app->make(ActionLinkHandler::class),
+                $app->make(FileCitationHandler::class)
+            );
+        });
     }
 
     /**

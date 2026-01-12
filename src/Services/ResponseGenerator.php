@@ -230,10 +230,12 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $maxLength = $options['max_length'] ?? 200;
         $temperature = $options['temperature'] ?? 0.3;
 
-        // Handle empty results
-        if (empty($queryResult['data']) && ($queryResult['context'] ?? '') !== 'NO QUERY') {
-            return $this->generateEmptyResponse($originalQuestion, $cypherQuery, $options);
-        }
+        // Handle empty results. TODO WE NEED TO IMPROVE THIS
+        // SOMETIMES TRIES TO MAKE A QUERY THAT DOESN'T WORK BUT WE WANT TO CONTINUE BECAUSE 
+        // YOU COULD BE ASKING FOR A FILE AS WELL
+        // if (empty($queryResult['data']) && ($queryResult['context'] ?? '') !== 'NO QUERY') {
+        //     return $this->generateEmptyResponse($originalQuestion, $cypherQuery, $options);
+        // }
 
         // Prepare context for sections
         $context = [
