@@ -104,7 +104,8 @@ class QueryExecutor implements QueryExecutorInterface
 
         // Apply team filtering if provided
         if ($teamFilter instanceof \Condoedge\Ai\Services\Security\TeamFilteredQuery && $teamFilter->hasFilters()) {
-            $cypherQuery = $this->applyTeamFilter($cypherQuery, $teamFilter);
+            $requireTeamFilter = $options['require_team_filter'] ?? true; // Default to required
+            $cypherQuery = $this->applyTeamFilter($cypherQuery, $teamFilter, $requireTeamFilter);
             $parameters = array_merge($parameters, [
                 'teamIds' => $teamFilter->getTeamIds(),
             ]);
@@ -601,13 +602,29 @@ class QueryExecutor implements QueryExecutorInterface
      *
      * @param string $cypherQuery The original Cypher query
      * @param \Condoedge\Ai\Services\Security\TeamFilteredQuery $teamFilter The team filter to apply
+     * @param bool $required Whether team filtering is mandatory (fail-closed)
      * @return string Modified Cypher query with team filtering
+     * @throws QueryExecutionException If filter is required but cannot be applied
      */
-    protected function applyTeamFilter(string $cypherQuery, \Condoedge\Ai\Services\Security\TeamFilteredQuery $teamFilter): string
-    {
+    protected function applyTeamFilter(
+        string $cypherQuery,
+        \Condoedge\Ai\Services\Security\TeamFilteredQuery $teamFilter,
+        bool $required = true
+    ): string {
         // Extract node alias from first MATCH clause
         if (!preg_match('/MATCH\s*\((\w+)(?::\w+)?\)/i', $cypherQuery, $matches)) {
-            // SECURITY: Log when team filter cannot be applied - fail-open scenario
+            // SECURITY: Fail-closed when team filter is required
+            if ($required) {
+                Log::error('Team filter required but query pattern not recognized', [
+                    'query' => substr($cypherQuery, 0, 200),
+                    'team_ids' => $teamFilter->getTeamIds(),
+                ]);
+                throw new QueryExecutionException(
+                    'Team filter required but could not be applied to query. Access denied for security.'
+                );
+            }
+
+            // Log warning for backwards compatibility mode
             Log::warning('Team filter could not be applied: query pattern not recognized', [
                 'query' => substr($cypherQuery, 0, 200),
                 'team_ids' => $teamFilter->getTeamIds(),
