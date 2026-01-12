@@ -231,9 +231,9 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $temperature = $options['temperature'] ?? 0.3;
 
         // Handle empty results
-        if (empty($queryResult['data']) && ($queryResult['context'] ?? '') !== 'NO QUERY') {
-            return $this->generateEmptyResponse($originalQuestion, $cypherQuery, $options);
-        }
+        // if (empty($queryResult['data']) && ($queryResult['context'] ?? '') !== 'NO QUERY') {
+        //     return $this->generateEmptyResponse($originalQuestion, $cypherQuery, $options);
+        // }
 
         // Prepare context for sections
         $context = [

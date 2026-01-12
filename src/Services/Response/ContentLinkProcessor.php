@@ -19,7 +19,7 @@ use Condoedge\Ai\Contracts\ContentLinkHandlerInterface;
  *
  * Default handlers:
  * - ActionLinkHandler: entity:// and action:// links (configured)
- * - FileCitationHandler: [1], [2] citations (default modal)
+ * - FileCitationHandler: [1], [2] citations (strips from text only)
  *
  * Extensible: Add custom handlers via registerHandler()
  */
@@ -112,6 +112,10 @@ class ContentLinkProcessor
      * Strips links and creates elements in one pass.
      * This is the main entry point for message rendering.
      *
+     * Note: File citation elements are NOT included in the returned elements array
+     * because file references are rendered separately via renderFileReferences().
+     * Citations [1], [2] are still stripped from the content text.
+     *
      * @param string $content The AI response content
      * @param array $context Context for handlers (files, user, etc.)
      * @return array{content: string, elements: array, has_links: bool, file_citations: array}
@@ -123,10 +127,17 @@ class ContentLinkProcessor
             $this->citationHandler->resetMetadata();
         }
 
-        $elements = $this->createElements($content, $context);
+        // Only create elements from action handler (not citations)
+        // File citations are rendered separately via renderFileReferences()
+        $elements = [];
+        if (isset($this->handlers['actions'])) {
+            $elements = $this->handlers['actions']->createElements($content, $context);
+        }
+
+        // Strip all links (including citations) from content
         $cleanContent = $this->stripLinks($content);
 
-        // Collect file citation metadata for proxy element creation
+        // Collect file citation metadata (for potential future use)
         $fileCitations = $this->citationHandler
             ? $this->citationHandler->getCitationMetadata()
             : [];

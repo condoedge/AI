@@ -172,10 +172,13 @@ class AiConversation extends Model
     // ACTIONS
     public function addMessage(string $role, string $content, array $data = []): AiMessage
     {
-        // Extract referenced_files and merge into metadata
+        // Extract data fields and merge into metadata
         $metadata = $data['metadata'] ?? [];
         if (isset($data['referenced_files'])) {
             $metadata['referenced_files'] = $data['referenced_files'];
+        }
+        if (isset($data['suggestions'])) {
+            $metadata['suggestions'] = $data['suggestions'];
         }
 
         $message = $this->messages()->create([

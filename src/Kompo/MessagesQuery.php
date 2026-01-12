@@ -15,6 +15,7 @@ use Condoedge\Ai\Services\Chat\SendMessageService;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Condoedge\Ai\Services\Response\ContentLinkProcessor;
 use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
+use Condoedge\Utils\Facades\FileModel;
 use Condoedge\Utils\Kompo\Common\Query;
 
 class MessagesQuery extends Query
@@ -259,22 +260,6 @@ class MessagesQuery extends Query
                 ->class('mt-3 pt-2 border-t border-gray-100 gap-2 flex-wrap');
         }
 
-        // File citation proxy elements (hidden, with Kompo bindings)
-        // These provide the actual click behavior for citation links via JS wiring
-        if (!empty($processed['file_citations'])) {
-            foreach ($processed['file_citations'] as $citation) {
-                $content[] = _Link()
-                    ->selfGet('viewFile', [
-                        'id' => $citation['id'],
-                        'type' => $citation['type'],
-                        'mime' => $citation['mime'],
-                    ])
-                    ->inModal()
-                    ->class('hidden')
-                    ->attr(['data-action-proxy' => $citation['slot']]);
-            }
-        }
-
         // Rich data display (tables, metrics, lists)
         if ($responseData = $message->response_data) {
             $richData = $this->renderRichData($responseData);
@@ -490,23 +475,18 @@ class MessagesQuery extends Query
 
     protected function fileReferenceCard(array $file)
     {
-        $icon = match($file['type'] ?? 'file') {
-            'pdf' => 'document-text',
-            'image', 'png', 'jpg' => 'photo',
-            'spreadsheet', 'xlsx', 'csv' => 'table-cells',
-            default => 'document',
-        };
+        $file = FileModel::find($file['id']);
+        $type = $file->file_type_enum;
+        $icon = $type->icon();
+        $isPreviewable = $type->isPreviewable();
 
         return _Flex(
             _Sax($icon, 16)->class($this->theme()->primaryText()),
             _Html($file['name'])->class('text-sm text-gray-700 font-medium'),
         )->class('inline-flex items-center gap-2 px-3 py-2 rounded-lg ' . $this->theme()->primaryLightBg() . ' ' . $this->theme()->primaryLightBgHover() . ' cursor-pointer transition-all')
          ->balloon(__('ai.messages.click-to-view'), 'up')
-         ->selfGet('viewFile', [
-             'id' => $file['id'],
-             'type' => $file['morphable_type'] ?? 'file',
-             'mime' => $file['mime_type'] ?? null,
-         ])->inModal();
+         ->when($isPreviewable, fn($link) => $type->getPreviewButton($link, $file)
+         );
     }
 
     protected function emptyState()

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Kompo\Traits;
 
+use Condoedge\Utils\Facades\FileModel;
 use Condoedge\Utils\Kompo\Files\DisplayFileModal;
 
 /**
@@ -21,15 +22,11 @@ trait HasFilePreview
      * Called via selfGet from file citation links [1], [2], etc.
      *
      * @param int|string $id The file ID
-     * @param string $type The morphable type (default: 'file')
-     * @param string|null $mime The MIME type
      * @return DisplayFileModal
      */
-    public function viewFile($id, $type = 'file', $mime = null)
+    public function viewFile($id)
     {
         return new DisplayFileModal(null, [
-            'mime' => $mime ?? 'application/octet-stream',
-            'type' => $type,
             'id' => $id,
         ]);
     }

@@ -136,7 +136,7 @@ class AiChatService implements AiChatServiceInterface
                 'response_data' => $queryData,
                 'cypher_query' => $cypherQuery,
                 'suggestions' => $aiResponse['suggestions'] ?? [],
-                'sources' => $aiResponse['referenced_files'] ?? [],
+                'referenced_files' => $aiResponse['referenced_files'] ?? [],
             ]);
 
             // 8. Return structured response
@@ -222,7 +222,7 @@ class AiChatService implements AiChatServiceInterface
                 'response_data' => $queryData,
                 'cypher_query' => $cypherQuery,
                 'suggestions' => $aiResponse['suggestions'] ?? [],
-                'sources' => $aiResponse['referenced_files'] ?? [],
+                'referenced_files' => $aiResponse['referenced_files'] ?? [],
                 'regenerated' => true,
             ]);
 
