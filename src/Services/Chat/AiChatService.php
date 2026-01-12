@@ -83,6 +83,16 @@ class AiChatService implements AiChatServiceInterface
     ): array {
         $options = array_merge($this->config, $options);
 
+        // SECURITY: Require user context unless explicitly marked as anonymous-safe
+        $user = $options['user'] ?? null;
+        $allowAnonymous = $options['allow_anonymous'] ?? false;
+
+        if ($user === null && !$allowAnonymous) {
+            throw new \InvalidArgumentException(
+                'User context required for AI queries. Pass user in options or set allow_anonymous=true for public queries.'
+            );
+        }
+
         try {
             // 1. Get schema for entity extraction
             $schema = $this->getSchema();
@@ -190,6 +200,16 @@ class AiChatService implements AiChatServiceInterface
     ): array {
         $options = array_merge($this->config, $options);
         $question = $userMessage->content;
+
+        // SECURITY: Require user context unless explicitly marked as anonymous-safe
+        $user = $options['user'] ?? null;
+        $allowAnonymous = $options['allow_anonymous'] ?? false;
+
+        if ($user === null && !$allowAnonymous) {
+            throw new \InvalidArgumentException(
+                'User context required for AI queries. Pass user in options or set allow_anonymous=true for public queries.'
+            );
+        }
 
         try {
             $schema = $this->getSchema();
