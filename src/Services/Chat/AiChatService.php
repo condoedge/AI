@@ -102,6 +102,25 @@ class AiChatService implements AiChatServiceInterface
             // This extracts entities, resolves references, updates context
             $contextResult = $contextManager->processQuestion($conversation, $question, $schema);
 
+            // SECURITY: Analyze input for prompt injection attempts
+            $inputSanitizer = app(\Condoedge\Ai\Services\Security\InputSanitizer::class);
+            $inputAnalysis = $inputSanitizer->analyze($question);
+
+            if ($inputAnalysis['risk_level'] === 'high') {
+                Log::warning('High-risk prompt injection blocked', [
+                    'conversation_id' => $conversation->id,
+                    'user_id' => $options['user']?->id,
+                ]);
+
+                return [
+                    'answer' => 'I cannot process this request as it appears to contain instructions that could compromise system security.',
+                    'data' => [],
+                    'suggestions' => [],
+                    'sources' => [],
+                    'cypher_query' => null,
+                ];
+            }
+
             // 3. Build conversation context for the prompt
             $conversationContext = $contextManager->buildPromptContext($conversation);
 
