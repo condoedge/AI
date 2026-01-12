@@ -170,25 +170,52 @@ class FileAccessResolver implements FileAccessResolverInterface
      */
     public function canAccessFile(int|string $fileId, mixed $user): bool
     {
-        // Physical files are always accessible
-        if ($this->isPhysicalFile($fileId)) {
-            return true;
+        $accessMethod = null;
+        $granted = false;
+
+        try {
+            // Physical files are always accessible
+            if ($this->isPhysicalFile($fileId)) {
+                $granted = true;
+                $accessMethod = 'physical';
+                return true;
+            }
+
+            // If security is disabled, all files are accessible
+            if (!$this->shouldEnforceSecurity()) {
+                $granted = true;
+                $accessMethod = 'security_disabled';
+                return true;
+            }
+
+            // No user means no database file access
+            if ($user === null) {
+                $granted = false;
+                $accessMethod = 'no_user';
+                return false;
+            }
+
+            // Check if file is in accessible list
+            $accessibleIds = $this->getAccessibleFileIds($user);
+            $granted = in_array($fileId, $accessibleIds, false);
+            $accessMethod = 'access_list';
+
+            return $granted;
+        } finally {
+            // Log all access attempts (non-blocking)
+            if (config('ai.file_context.log_access', true)) {
+                try {
+                    \Condoedge\Ai\Models\AiFileAccessLog::log(
+                        $user,
+                        $fileId,
+                        $granted,
+                        $accessMethod
+                    );
+                } catch (\Exception $e) {
+                    \Log::debug('Failed to log file access', ['error' => $e->getMessage()]);
+                }
+            }
         }
-
-        // If security is disabled, all files are accessible
-        if (!$this->shouldEnforceSecurity()) {
-            return true;
-        }
-
-        // No user means no database file access
-        if ($user === null) {
-            return false;
-        }
-
-        // Check if file is in accessible list
-        $accessibleIds = $this->getAccessibleFileIds($user);
-
-        return in_array($fileId, $accessibleIds, false);
     }
 
     /**

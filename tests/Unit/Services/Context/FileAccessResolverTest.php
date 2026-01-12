@@ -334,4 +334,126 @@ class FileAccessResolverTest extends TestCase
     {
         $this->assertEquals('physical:', FileAccessResolver::PHYSICAL_PREFIX);
     }
+
+    // =========================================================================
+    // File access audit logging tests
+    // =========================================================================
+
+    /** @test */
+    public function test_logs_file_access_attempts(): void
+    {
+        // Arrange: Set up database for logging
+        $this->loadMigrationsFrom(__DIR__ . '/../../../../database/migrations');
+
+        $user = new \stdClass();
+        $user->id = 1;
+        $fileId = 123;
+
+        config([
+            'ai.file_context.security_enabled' => true,
+            'ai.file_context.log_access' => true,
+            'ai.file_context.access_resolver' => function ($u) {
+                return [123]; // User can access file 123
+            },
+        ]);
+
+        $resolver = new FileAccessResolver();
+
+        // Act
+        $resolver->canAccessFile($fileId, $user);
+
+        // Assert: Access attempt was logged
+        $this->assertDatabaseHas('ai_file_access_logs', [
+            'user_id' => $user->id,
+            'file_id' => (string) $fileId,
+        ]);
+    }
+
+    /** @test */
+    public function test_logs_unauthorized_access_attempts(): void
+    {
+        // Arrange: Set up database for logging
+        $this->loadMigrationsFrom(__DIR__ . '/../../../../database/migrations');
+
+        $user = new \stdClass();
+        $user->id = 1;
+        $unauthorizedFileId = 999;
+
+        config([
+            'ai.file_context.security_enabled' => true,
+            'ai.file_context.log_access' => true,
+            'ai.file_context.access_resolver' => function ($u) {
+                return [1, 2, 3]; // User can only access files 1, 2, 3
+            },
+        ]);
+
+        $resolver = new FileAccessResolver();
+
+        // Act
+        $canAccess = $resolver->canAccessFile($unauthorizedFileId, $user);
+
+        // Assert: Unauthorized attempt logged with denied status
+        $this->assertFalse($canAccess);
+        $this->assertDatabaseHas('ai_file_access_logs', [
+            'user_id' => $user->id,
+            'file_id' => (string) $unauthorizedFileId,
+            'access_granted' => false,
+        ]);
+    }
+
+    /** @test */
+    public function test_logs_physical_file_access(): void
+    {
+        // Arrange: Set up database for logging
+        $this->loadMigrationsFrom(__DIR__ . '/../../../../database/migrations');
+
+        config([
+            'ai.file_context.security_enabled' => true,
+            'ai.file_context.log_access' => true,
+        ]);
+
+        $resolver = new FileAccessResolver();
+        $physicalFileId = 'physical:/docs/readme.md';
+
+        // Act
+        $canAccess = $resolver->canAccessFile($physicalFileId, null);
+
+        // Assert: Physical file access logged as granted
+        $this->assertTrue($canAccess);
+        $this->assertDatabaseHas('ai_file_access_logs', [
+            'file_id' => $physicalFileId,
+            'access_granted' => true,
+            'access_method' => 'physical',
+        ]);
+    }
+
+    /** @test */
+    public function test_does_not_log_when_logging_disabled(): void
+    {
+        // Arrange: Set up database for logging
+        $this->loadMigrationsFrom(__DIR__ . '/../../../../database/migrations');
+
+        $user = new \stdClass();
+        $user->id = 1;
+        $fileId = 123;
+
+        config([
+            'ai.file_context.security_enabled' => true,
+            'ai.file_context.log_access' => false, // Logging disabled
+            'ai.file_context.access_resolver' => function ($u) {
+                return [123];
+            },
+        ]);
+
+        $resolver = new FileAccessResolver();
+
+        // Act
+        $resolver->canAccessFile($fileId, $user);
+
+        // Assert: No log entry created
+        $this->assertDatabaseMissing('ai_file_access_logs', [
+            'user_id' => $user->id,
+            'file_id' => (string) $fileId,
+        ]);
+    }
 }
