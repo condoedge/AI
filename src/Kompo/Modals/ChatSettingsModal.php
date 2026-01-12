@@ -29,7 +29,7 @@ class ChatSettingsModal extends Modal
     {
         if (!$this->model->id) {
             // On boot we automatically set the columns with their default values based on config
-            $model = $this->isAuthAvailable() && auth()->check()
+            $model = auth()->check()
                 ? AiUserSetting::forUser(auth()->id())
                 : new AiUserSetting();
             $this->model($model);
@@ -38,18 +38,7 @@ class ChatSettingsModal extends Modal
 
     public function beforeSave()
     {
-        $this->model->user_id = $this->isAuthAvailable() ? auth()->id() : null;
-    }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet.
-     */
-    protected function isAuthAvailable(): bool
-    {
-        return app()->bound('auth');
+        $this->model->user_id = auth()->id();
     }
 
     public function body()

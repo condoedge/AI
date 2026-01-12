@@ -44,23 +44,11 @@ class ChatMessageForm extends Form
         $this->responseStyle = $this->prop('response_style') ?? $this->settings()->responseStyle() ?? 'friendly';
 
         // Only query for conversation if auth is available
-        if ($this->conversationId && $this->isAuthAvailable()) {
+        if ($this->conversationId) {
             $this->conversation = AiConversation::where('user_id', auth()->id())
                 ->find($this->conversationId);
         }
     }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet.
-     */
-    protected function isAuthAvailable(): bool
-    {
-        return app()->bound('auth');
-    }
-
     public function render()
     {
         return _Rows(

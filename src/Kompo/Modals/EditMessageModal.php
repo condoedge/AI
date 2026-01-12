@@ -36,7 +36,7 @@ class EditMessageModal extends Modal
         $this->conversationId = $this->prop('conversation_id');
 
         // Only query for conversation if auth is available
-        if ($this->messageId && $this->conversationId && $this->isAuthAvailable()) {
+        if ($this->messageId && $this->conversationId) {
             // Only allow editing own messages
             $conversation = AiConversation::where('user_id', auth()->id())
                 ->find($this->conversationId);
@@ -53,17 +53,6 @@ class EditMessageModal extends Modal
             'message_id' => $this->messageId,
             'conversation_id' => $this->conversationId,
         ]);
-    }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet.
-     */
-    protected function isAuthAvailable(): bool
-    {
-        return app()->bound('auth');
     }
 
     public function body()

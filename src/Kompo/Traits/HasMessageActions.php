@@ -52,12 +52,6 @@ trait HasMessageActions
             return;
         }
 
-        // Require auth for regenerate
-        if (!$this->isAuthAvailableForActions()) {
-            \Log::warning('Regenerate called without auth available');
-            return;
-        }
-
         try {
             // Use the same method as MessagesQuery
             $service = app(RegenerateMessageService::class);
@@ -90,21 +84,10 @@ trait HasMessageActions
 
         // Try to get from session or prop
         $conversationId = $this->prop('conversation_id') ?? session('selected_conversation_id');
-        if ($conversationId && $this->isAuthAvailableForActions()) {
+        if ($conversationId) {
             return AiConversation::where('user_id', auth()->id())->find($conversationId);
         }
 
         return null;
-    }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet.
-     */
-    protected function isAuthAvailableForActions(): bool
-    {
-        return app()->bound('auth');
     }
 }

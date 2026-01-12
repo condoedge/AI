@@ -7,24 +7,13 @@ trait HasAvatars
     protected function userAvatarHtml(): string
     {
         // Check if auth is available before accessing user
-        $user = $this->isAuthAvailableForAvatars() ? auth()->user() : null;
+        $user = auth()->user();
         $initial = strtoupper(substr($user?->name ?? 'U', 0, 1));
         $initial = htmlspecialchars($initial, ENT_QUOTES, 'UTF-8');
         $colors = ['from-blue-500 to-cyan-500', 'from-green-500 to-emerald-500', 'from-purple-500 to-pink-500', 'from-orange-500 to-amber-500'];
         $colorIndex = $user ? ($user->id % count($colors)) : 0;
 
         return '<span class="w-9 h-9 rounded-full bg-gradient-to-br ' . $colors[$colorIndex] . ' text-white flex items-center justify-center text-sm font-semibold shadow-sm ring-2 ring-white">' . $initial . '</span>';
-    }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet.
-     */
-    protected function isAuthAvailableForAvatars(): bool
-    {
-        return app()->bound('auth');
     }
 
     protected function assistantAvatarHtml(): string

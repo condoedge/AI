@@ -21,7 +21,7 @@ class CurrentUserContextSection extends BasePromptSection
 
         // Include if user is authenticated
         // Check if auth is available first to prevent early resolution errors
-        if ($this->isAuthAvailable() && auth()->check()) {
+        if (auth()->check()) {
             return true;
         }
 
@@ -30,7 +30,7 @@ class CurrentUserContextSection extends BasePromptSection
 
     public function format(string $question, array $context, array $options = []): string
     {
-        $isAuthenticated = $this->isAuthAvailable() && auth()->check();
+        $isAuthenticated = auth()->check();
 
         $output = $this->header('CURRENT USER CONTEXT. USE IT TO HAVE CURRENT TEAM AND CURRENT USER CONTEXT');
         $output .= "Current user name: " . ($isAuthenticated ? auth()->user()->name : 'Guest') . "\n\n";
@@ -40,16 +40,5 @@ class CurrentUserContextSection extends BasePromptSection
         $output .= "Current team name: " . ($isAuthenticated ? (safeCurrentTeam()?->team_name ?? 'N/A') : 'N/A') . "\n\n";
 
         return $output;
-    }
-
-    /**
-     * Check if authentication service is available.
-     *
-     * During early container resolution (e.g., before AuthServiceProvider),
-     * the 'auth' binding may not exist yet.
-     */
-    private function isAuthAvailable(): bool
-    {
-        return app()->bound('auth');
     }
 }
