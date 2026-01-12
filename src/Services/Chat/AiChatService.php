@@ -102,23 +102,10 @@ class AiChatService implements AiChatServiceInterface
             // This extracts entities, resolves references, updates context
             $contextResult = $contextManager->processQuestion($conversation, $question, $schema);
 
-            // SECURITY: Analyze input for prompt injection attempts
-            $inputSanitizer = app(\Condoedge\Ai\Services\Security\InputSanitizer::class);
-            $inputAnalysis = $inputSanitizer->analyze($question);
-
-            if ($inputAnalysis['risk_level'] === 'high') {
-                Log::warning('High-risk prompt injection blocked', [
-                    'conversation_id' => $conversation->id,
-                    'user_id' => $options['user']?->id,
-                ]);
-
-                return [
-                    'answer' => 'I cannot process this request as it appears to contain instructions that could compromise system security.',
-                    'data' => [],
-                    'suggestions' => [],
-                    'sources' => [],
-                    'cypher_query' => null,
-                ];
+            // SECURITY: Check for prompt injection attempts
+            $injectionCheck = $this->checkForInjectionAttempt($question, $conversation, $options['user'] ?? null);
+            if ($injectionCheck !== null) {
+                return $injectionCheck;
             }
 
             // 3. Build conversation context for the prompt
@@ -231,6 +218,12 @@ class AiChatService implements AiChatServiceInterface
         }
 
         try {
+            // SECURITY: Check for prompt injection attempts
+            $injectionCheck = $this->checkForInjectionAttempt($question, $conversation, $options['user'] ?? null);
+            if ($injectionCheck !== null) {
+                return $injectionCheck;
+            }
+
             $schema = $this->getSchema();
             $contextManager = $this->getContextManager();
 
@@ -336,6 +329,38 @@ class AiChatService implements AiChatServiceInterface
     public function getSchema(): array
     {
         return $this->getSchemaForContext([]);
+    }
+
+    /**
+     * Check for prompt injection attempts and return blocked response if detected.
+     *
+     * @param string $question The user's question to check
+     * @param AiConversation $conversation The conversation context
+     * @param mixed $user The user making the request (for logging)
+     * @return array|null Returns blocked response array if injection detected, null otherwise
+     */
+    private function checkForInjectionAttempt(string $question, AiConversation $conversation, $user): ?array
+    {
+        $inputSanitizer = app(\Condoedge\Ai\Services\Security\InputSanitizer::class);
+        $inputAnalysis = $inputSanitizer->analyze($question);
+
+        if ($inputAnalysis['has_injection_risk']) {
+            Log::warning('Prompt injection attempt blocked', [
+                'conversation_id' => $conversation->id,
+                'user_id' => $user?->id,
+                'risk_level' => $inputAnalysis['risk_level'],
+            ]);
+
+            return [
+                'answer' => 'I cannot process this request as it appears to contain instructions that could compromise system security.',
+                'data' => [],
+                'suggestions' => [],
+                'sources' => [],
+                'cypher_query' => null,
+            ];
+        }
+
+        return null;
     }
 
     /**
