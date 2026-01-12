@@ -769,6 +769,9 @@ class AiManager
             // Step 3.5: Enrich results with entity action metadata
             $executionResult = $this->enrichResultsWithEntityActions($executionResult);
 
+            // Step 3.6: SECURITY - Server-side filter of sensitive data
+            $executionResult = $this->filterSensitiveResults($executionResult, $options['user'] ?? null);
+
             // Step 4: Generate natural language response
             // Pass both file_context and conversation_context for follow-up awareness
             $responseResult = $this->generateResponse(
@@ -888,5 +891,64 @@ class AiManager
         );
 
         return $executionResult;
+    }
+
+    // =========================================================================
+    // Security Methods
+    // =========================================================================
+
+    /**
+     * Filter sensitive data from query results server-side
+     *
+     * This provides defense-in-depth beyond LLM prompt-level access control.
+     * The key insight is that access restrictions in prompts can be bypassed
+     * via prompt injection - this adds a second layer of protection at the data level.
+     *
+     * @param array $executionResult Query execution result
+     * @param mixed $user User for access checking
+     * @return array Filtered execution result
+     */
+    protected function filterSensitiveResults(array $executionResult, mixed $user): array
+    {
+        if (empty($executionResult['data'])) {
+            return $executionResult;
+        }
+
+        $filter = app(Security\QueryResultFilter::class);
+
+        // Detect entity type from results or metadata
+        $entityType = $this->detectEntityType($executionResult);
+
+        if ($entityType) {
+            $executionResult['data'] = $filter->filterResults(
+                $executionResult['data'],
+                $entityType,
+                $user
+            );
+        }
+
+        return $executionResult;
+    }
+
+    /**
+     * Detect entity type from query results
+     *
+     * @param array $executionResult Query execution result
+     * @return string|null Entity type or null if not detected
+     */
+    protected function detectEntityType(array $executionResult): ?string
+    {
+        // Check metadata first
+        if (!empty($executionResult['metadata']['entity_type'])) {
+            return $executionResult['metadata']['entity_type'];
+        }
+
+        // Try to detect from first result's labels
+        $firstRow = $executionResult['data'][0] ?? null;
+        if ($firstRow && isset($firstRow['_labels'])) {
+            return $firstRow['_labels'][0] ?? null;
+        }
+
+        return null;
     }
 }
