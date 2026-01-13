@@ -1,142 +1,127 @@
-# MASTER PLAN - Kompo AI Chat System Audit
+# Documentation Audit & Update - Master Plan
 
-> **Orchestrator:** This plan externalizes cognition to defeat large-context limitations.
-> **Anchor:** CHAT-CENTRIC - All analysis flows from and to the chat interface.
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** Comprehensively audit and update the `resources/docs/1.0` documentation to match the current codebase, creating accurate, developer-friendly documentation with proper diagrams and examples.
+
+**Architecture:** Phase-locked execution with externalized cognition through structured artifacts. Documentation updates driven by code analysis, not assumptions.
+
+**Tech Stack:** Laravel package documentation in Markdown, Mermaid diagrams, LaRecipe-compatible format.
 
 ---
 
 ## Phase Checklist
 
-### PHASE 0 - Master Plan Creation
-- [x] Create /analysis directory structure
-- [x] Create MASTER_PLAN.md (this file)
-- [x] Create MODULE_INDEX.md with hypothesized modules
-- [x] Create STATUS.md with phase tracking
-- [x] User confirmation to proceed
+- [ ] **PHASE 0** - Master Plan Creation (NO CODE ANALYSIS)
+  - [x] Create MASTER_PLAN.md
+  - [x] Create MODULE_INDEX.md with hypothesized modules
+  - [x] Create STATUS.md with tracking state
+  - [ ] User confirmation to proceed
 
-### PHASE 1 - Raw Inventory
-- [x] Complete file/folder inventory of entire repo
-- [x] Record inventory in MODULE_INDEX.md appendix
-- [x] No interpretations, pure factual listing
-- [x] Update STATUS.md
-- [x] User confirmation to proceed
+- [ ] **PHASE 1** - Raw Inventory (NO INTERPRETATION)
+  - [ ] Complete file inventory of resources/docs/1.0/*
+  - [ ] Complete file inventory of src/**/*.php
+  - [ ] Complete file inventory of config/*.php
+  - [ ] Record all Artisan commands
+  - [ ] User confirmation to proceed
 
-### PHASE 2 - Module Discovery & Refinement
-- [x] Map files/folders to responsibilities
-- [x] Identify boundary violations and mixed concerns
-- [x] Split/merge modules as needed (20 → 23 modules)
-- [x] Define for each module:
-  - [x] Responsibility
-  - [x] Non-responsibility
-  - [x] Entry points
-  - [x] External dependencies
-  - [x] Key contracts
-- [x] Update MODULE_INDEX.md with refined modules
-- [x] Update STATUS.md
-- [x] User confirmation to proceed
+- [ ] **PHASE 2** - Module Discovery & Refinement
+  - [ ] Map code files to documentation sections
+  - [ ] Identify undocumented features
+  - [ ] Identify outdated documentation
+  - [ ] Refine MODULE_INDEX.md with boundaries
+  - [ ] User confirmation to proceed
 
-### PHASE 3 - Micro-Plan Creation
-- [x] Create /analysis/modules/<slug>/ for each module (23 directories)
-- [x] For each module create:
-  - [x] PLAN.md (verbose, exhaustive)
-  - [x] CHECKLIST.md (binary items)
-  - [x] FINDINGS.md (empty initially)
-  - [x] DOC_UPDATES.md (empty initially)
-- [x] Update STATUS.md
-- [x] User confirmation to proceed
+- [ ] **PHASE 3** - Micro-Plan Creation Per Module
+  - [ ] Create plan for each documentation module
+  - [ ] Define file-by-file reading plan
+  - [ ] Create checklists for each module
+  - [ ] User confirmation to proceed
 
-### PHASE 4 - Agent Dispatch & Module Execution
-- [x] Execute module-by-module analysis
-- [x] For each module:
-  - [x] Dispatch dedicated agent with strict scope
-  - [x] Read every file in module
-  - [x] Prove usage via reference tracing
-  - [x] Detect dead code, duplicates, leakage
-  - [x] Evaluate AI/chat correctness
-  - [x] Update CHECKLIST.md, FINDINGS.md, DOC_UPDATES.md
-- [x] Merge findings into cross-module coherence notes
-- [x] Update STATUS.md after each module
-- [ ] User confirmation to proceed to Phase 5
+- [ ] **PHASE 4** - Agent Dispatch & Module Execution
+  - [ ] Execute module-by-module documentation updates
+  - [ ] Update FINDINGS.md per module
+  - [ ] Update DOC_UPDATES.md per module
+  - [ ] User confirmation after each module
 
-### PHASE 5 - Documentation
-- [x] Create/update ARCHITECTURE_GLOBAL.md (merged into internals/architecture.md)
-- [x] Create/update QUICK_START.md (verified in usage/quick-start.md)
-- [x] Create/update EXTENSION_GUIDE.md (exists in extending/)
-- [x] Create/update INTERNAL_ARCHITECTURE.md (merged into internals/)
-- [x] Include diagrams (Mermaid format) (ASCII diagrams merged)
-- [x] Update STATUS.md
-- [ ] User confirmation to proceed
+- [ ] **PHASE 5** - Documentation Production
+  - [ ] Produce/update ARCHITECTURE_GLOBAL.md
+  - [ ] Produce/update QUICK_START.md
+  - [ ] Produce/update EXTENSION_GUIDE.md
+  - [ ] Produce/update INTERNAL_ARCHITECTURE.md
+  - [ ] Create Mermaid diagrams
+  - [ ] User confirmation to proceed
 
-### PHASE 6 - Consolidation: Cleanup & Improvement Plan
-- [x] Document each issue with:
-  - [x] Description
-  - [x] Evidence
-  - [x] Severity
-  - [x] Root cause
-  - [x] Fix proposal
-  - [x] Impact analysis
-  - [x] Migration steps
-  - [x] Test plan
-- [x] Produce prioritized roadmap (4 sprints defined)
-- [x] Define minimum safe changeset (2 hours critical fixes)
-- [x] Update STATUS.md
-- [ ] User confirmation to proceed
+- [ ] **PHASE 6** - Consolidation & Cleanup Plan
+  - [ ] Prioritized improvement roadmap
+  - [ ] Documentation gaps report
+  - [ ] Minimum safe changeset
 
-### PHASE 7 - Final Synthesis & Resumability
-- [x] Verify STATUS.md shows completion state
-- [x] Verify MASTER_PLAN.md fully checked
-- [x] Verify MODULE_INDEX.md is final and consistent
-- [x] Verify all module folders complete
-- [x] Final user confirmation
+- [ ] **PHASE 7** - Final Synthesis & Resumability
+  - [ ] STATUS.md indicates completion
+  - [ ] All module folders complete
+  - [ ] MODULE_INDEX.md finalized
 
 ---
 
-## Chat-Centric Flow (Global Anchor)
+## Documentation Modules (Chat-Centric Anchor)
+
+All documentation flows from the **Chat Interface** as the primary entry point:
 
 ```
-User Input
-    |
-    v
-+-------------------+
-|   Kompo Chat UI   |  (AiChatPanel, ChatMessageForm, MessagesQuery)
-+-------------------+
-    |
-    v
-+-------------------+
-|  Chat Service     |  (AiChatService, SendMessageService)
-+-------------------+
-    |
-    +-------+-------+
-    |               |
-    v               v
-+----------+   +-----------+
-| Context  |   | Query     |
-| Pipeline |   | Pipeline  |
-+----------+   +-----------+
-    |               |
-    v               v
-+-------------------+
-| Response Generator|
-+-------------------+
-    |
-    v
-+-------------------+
-|   LLM Provider    |  (Anthropic, OpenAI)
-+-------------------+
-    |
-    v
-Response to User
+User -> Chat UI -> AiChatService -> Pipeline -> External Effects
+                     |
+        +-----------+|-----------+
+        |            |           |
+   Query Path   File Path   Entity Actions
+        |            |           |
+   Neo4j/Qdrant  Physical   Response
+                 /DB Files  Enrichment
 ```
 
-All modules must be understood relative to this flow.
+### Primary Documentation Sections
+
+1. **Foundations** - Installation, requirements, infrastructure
+2. **Chat UI** - Components, pipeline, context management
+3. **Configuration** - All config options (ai.php, entities.php)
+4. **Usage Guide** - Facade, services, ingestion, file search
+5. **Advanced Topics** - Semantic matching, context selection, scopes
+6. **Extending** - Custom providers, sections, extractors
+7. **Reference** - Commands, facades, interfaces
+8. **Internals** - Architecture, flows, storage, resilience
 
 ---
 
-## Non-Negotiable Rules
+## Key Findings (Pre-Analysis)
 
-1. **No shallow summaries** - Every file must be read and recorded
-2. **No assumed usage** - Prove usage with reference tracing
-3. **No phase skipping** - User must confirm each phase
-4. **No agent dispatch without micro-plan** - Plan first, execute second
-5. **No closing without docs** - Documentation updates required
-6. **Artifacts are truth** - If not written, it doesn't exist
+Based on initial exploration:
+
+### Features Potentially Underdocumented
+1. **Entity Actions** - entity_actions and generic_actions config
+2. **File Context System** - file_context configuration with physical/DB files
+3. **UI Theming** - ChatThemeInterface, theme factories, user themes
+4. **Conversation Context** - ConversationContextManager and its modules
+5. **Response Enrichers** - ResponseFileEnricher, ResponseEntityEnricher
+6. **Content Link Processing** - ActionLinkHandler, FileCitationHandler
+7. **Security Services** - InputSanitizer, QueryResultFilter
+8. **Chat Settings** - ChatSettingsInterface, UserChatSettings
+9. **Conversation Export** - ExportConversationMdService
+10. **DiagnoseCommand** and **ValidateConfigCommand** - newer commands
+
+### Documentation That May Need Updates
+1. **commands.md** - References commands that may not exist
+2. **architecture.md** - Missing many new services from ServiceProvider
+3. **chat-ui.md** - May not cover all theming/settings options
+4. **configuration.md** - Missing newer config sections
+
+---
+
+## Success Criteria
+
+1. **Completeness**: Every public API, config option, and command is documented
+2. **Accuracy**: Documentation matches actual code behavior
+3. **Discoverability**: Clear navigation, proper cross-references
+4. **Diagrams**: Mermaid diagrams for all major flows
+5. **Examples**: Working code examples for all features
+6. **Plug-and-Play**: Quick start works in < 5 minutes
+7. **Advanced Options**: All customization points documented

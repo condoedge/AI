@@ -86,11 +86,11 @@ class ConversationContextSection extends BasePromptSection
 
             foreach ($conversationContext['recent_exchanges'] as $exchange) {
                 if (!empty($exchange['question'])) {
-                    $userContent = $this->truncate($exchange['question'], 100);
+                    $userContent = $this->truncate($exchange['question'], 200);
                     $output .= "- User: {$userContent}\n";
                 }
                 if (!empty($exchange['answer_summary'])) {
-                    $assistantContent = $this->truncate($exchange['answer_summary'], 150);
+                    $assistantContent = $this->truncate($exchange['answer_summary'], 300);
                     $output .= "  Assistant: {$assistantContent}\n";
                 }
             }

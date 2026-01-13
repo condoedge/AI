@@ -73,7 +73,7 @@ Configure the file context system in `config/ai.php` under the `file_context` ke
     'max_references' => 5,
 
     // Minimum relevance score for file inclusion (0.0 - 1.0)
-    'min_relevance_score' => 0.7,
+    'min_relevance_score' => 0.4,
 
     // Include file snippets in response metadata
     'include_snippets' => true,
@@ -87,8 +87,17 @@ Configure the file context system in `config/ai.php` under the `file_context` ke
     // The scope method to call for user-accessible files
     'access_scope' => 'accessibleBy',
 
+    // Fallback filtering when accessibleBy scope is not available
+    'fallback_filters' => [
+        'use_user_filter' => env('AI_FILE_USE_USER_FILTER', true),
+        'use_team_filter' => env('AI_FILE_USE_TEAM_FILTER', true),
+    ],
+
     // Alternative: closure-based resolver (takes precedence over scope)
     'access_resolver' => null,
+
+    // Log file access attempts for security auditing
+    'log_access' => env('AI_FILE_ACCESS_LOG', true),
 ],
 ```
 
@@ -103,12 +112,15 @@ Configure the file context system in `config/ai.php` under the `file_context` ke
 | `base_path` | string | `base_path()` | Root directory for physical file paths |
 | `physical_collection` | string | `'documentation_chunks'` | Qdrant collection for physical files |
 | `max_references` | int | `5` | Maximum files to include in context |
-| `min_relevance_score` | float | `0.7` | Minimum similarity score (0.0-1.0) |
+| `min_relevance_score` | float | `0.4` | Minimum similarity score (0.0-1.0) |
 | `include_snippets` | bool | `true` | Include content snippets in metadata |
 | `snippet_length` | int | `200` | Maximum characters per snippet |
 | `file_model` | string | `'App\\Models\\File'` | Eloquent model for database files |
 | `access_scope` | string | `'accessibleBy'` | Scope method name on file model |
 | `access_resolver` | Closure | `null` | Custom access resolver function |
+| `fallback_filters.use_user_filter` | bool | `true` | Filter by user_id when scope fails |
+| `fallback_filters.use_team_filter` | bool | `true` | Filter by team_id when scope fails |
+| `log_access` | bool | `true` | Log file access attempts for auditing |
 
 ---
 
@@ -215,6 +227,27 @@ public function boot()
 
 The closure receives the user object and must return an array of accessible file IDs.
 
+### Fallback Filters
+
+When the `accessibleBy` scope is not available or fails, the system uses fallback filters based on `user_id` and `team_id`:
+
+```php
+// config/ai.php
+'file_context' => [
+    'fallback_filters' => [
+        // Filter files by user_id when security is enabled
+        'use_user_filter' => env('AI_FILE_USE_USER_FILTER', true),
+
+        // Also filter by team_id using safeCurrentTeamId()
+        'use_team_filter' => env('AI_FILE_USE_TEAM_FILTER', true),
+    ],
+],
+```
+
+The fallback uses OR logic: files where `user_id` matches OR `team_id` matches the current team are accessible.
+
+**Important:** If both filters are disabled (`false`), the fallback returns an empty array for security - no database files would be accessible.
+
 ---
 
 ## Indexing Files
@@ -269,21 +302,64 @@ php artisan ai:process-files --path=storage/documents
 
 ## How It Works
 
-The system consists of four main components working together:
+The system consists of several components working together to provide file-aware AI responses:
 
+```mermaid
+flowchart LR
+    subgraph Input
+        Q[User Question]
+        U[User]
+    end
+
+    subgraph Search["File Search"]
+        FCP[FileContextProvider]
+        FAR[FileAccessResolver]
+        FS[FileSearchService]
+    end
+
+    subgraph Sources["File Sources"]
+        PF[(Physical Files<br/>docs/*.md)]
+        DB[(Database Files<br/>user uploads)]
+        QD[(Qdrant<br/>Vector Store)]
+    end
+
+    subgraph Prompt["Prompt Building"]
+        PCS[PromptSections/<br/>FileContextSection]
+        RCS[ResponseSections/<br/>FileContextSection]
+    end
+
+    subgraph Response["Response Processing"]
+        LLM[LLM Response]
+        RFE[ResponseFileEnricher]
+        FCH[FileCitationHandler]
+    end
+
+    Q --> FCP
+    U --> FAR
+    FCP --> FS
+    FAR --> FCP
+    FS --> QD
+    PF --> QD
+    DB --> QD
+    FCP --> PCS
+    FCP --> RCS
+    PCS --> LLM
+    RCS --> LLM
+    LLM --> RFE
+    RFE --> FCH
+    FCH --> |Clickable [1] [2]| UI[Chat UI]
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌────────────────────┐
-│ FileContext     │────►│ FileContext     │────►│ ResponseFile       │
-│ Provider        │     │ Section         │     │ Enricher           │
-│                 │     │                 │     │                    │
-│ - searchQdrant  │     │ - formatPrompt  │     │ - extractCitations │
-│ - filterAccess  │     │ - addCiteRules  │     │ - buildReferences  │
-└─────────────────┘     └─────────────────┘     └────────────────────┘
-        │                       │                        │
-        ▼                       ▼                        ▼
-   Relevant Files         Prompt with            referenced_files
-   with snippets          file context           in response
-```
+
+### Component Overview
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| FileContextProvider | `src/Services/Context/FileContextProvider.php` | Searches files, applies access control |
+| FileAccessResolver | `src/Services/Context/FileAccessResolver.php` | Determines which files user can access |
+| FileContextSection (Prompt) | `src/Services/PromptSections/FileContextSection.php` | Injects files into query prompt |
+| FileContextSection (Response) | `src/Services/ResponseSections/FileContextSection.php` | Injects files into response prompt |
+| ResponseFileEnricher | `src/Services/Response/ResponseFileEnricher.php` | Extracts citations, builds metadata |
+| FileCitationHandler | `src/Services/Response/FileCitationHandler.php` | Creates clickable citation links |
 
 ### FileContextProvider
 
@@ -490,6 +566,46 @@ The AI response includes a `referenced_files` array with metadata for cited file
 
 ## Security
 
+The file context system uses a layered security model to protect sensitive files:
+
+```mermaid
+flowchart TD
+    subgraph Request["Incoming Request"]
+        Q[Question]
+        U[User]
+    end
+
+    subgraph FAR["FileAccessResolver"]
+        SEC{Security<br/>Enabled?}
+        PHY{Physical<br/>File?}
+        SCOPE[accessibleBy Scope]
+        FALL[Fallback Filters]
+        CLOS[Closure Resolver]
+    end
+
+    subgraph Result
+        ALLOW[Access Granted]
+        DENY[Access Denied]
+        LOG[Audit Log]
+    end
+
+    Q --> SEC
+    U --> SEC
+    SEC -->|No| ALLOW
+    SEC -->|Yes| PHY
+    PHY -->|Yes: physical:*| ALLOW
+    PHY -->|No: DB file| CLOS
+    CLOS -->|Not set| SCOPE
+    CLOS -->|Set| ALLOW
+    SCOPE -->|Available| ALLOW
+    SCOPE -->|Fails| FALL
+    FALL -->|user_id OR team_id| ALLOW
+    FALL -->|No match| DENY
+
+    ALLOW --> LOG
+    DENY --> LOG
+```
+
 ### Physical Files
 
 Physical files have **no runtime security checks**. Security is enforced at configuration time by explicitly listing which paths to include:
@@ -542,6 +658,35 @@ Disable security checks entirely (use with caution):
 ```
 
 When disabled, all database files are accessible to all users.
+
+### Access Audit Logging
+
+File access attempts are logged to the `ai_file_access_logs` table for security auditing:
+
+```php
+// config/ai.php
+'file_context' => [
+    // Enable/disable access logging
+    'log_access' => env('AI_FILE_ACCESS_LOG', true),
+],
+```
+
+Each log entry records:
+- **user_id** - The user attempting access
+- **file_id** - The file being accessed (physical or database)
+- **granted** - Whether access was allowed
+- **access_method** - How access was determined (`physical`, `security_disabled`, `no_user`, `access_list`)
+
+Query the logs for security analysis:
+
+```php
+use Condoedge\Ai\Models\AiFileAccessLog;
+
+// Get denied access attempts in the last 24 hours
+$deniedAttempts = AiFileAccessLog::where('granted', false)
+    ->where('created_at', '>', now()->subDay())
+    ->get();
+```
 
 ### How Security is Enforced
 
@@ -707,7 +852,11 @@ class ResponseFileEnricher
 }
 ```
 
-### FileContextSection
+### FileContextSection (Prompt)
+
+Adds file context to the AI prompt with citation instructions.
+
+**Location:** `src/Services/PromptSections/FileContextSection.php`
 
 ```php
 class FileContextSection extends BasePromptSection
@@ -734,6 +883,60 @@ class FileContextSection extends BasePromptSection
     ): string;
 }
 ```
+
+### FileContextSection (Response)
+
+Adds file content to response generation prompts.
+
+**Location:** `src/Services/ResponseSections/FileContextSection.php`
+
+```php
+class FileContextSection extends BaseResponseSection
+{
+    protected string $name = 'file_context';
+    protected int $priority = 45;
+
+    /**
+     * Check if this section should be included
+     */
+    public function shouldInclude(array $context, array $options = []): bool;
+
+    /**
+     * Format the section content
+     */
+    public function format(array $context, array $options = []): string;
+}
+```
+
+### FileCitationHandler
+
+Processes citation markers `[1]`, `[2]`, etc. in AI responses and creates clickable elements that open file preview modals.
+
+**Location:** `src/Services/Response/FileCitationHandler.php`
+
+```php
+use Condoedge\Ai\Services\Response\FileCitationHandler;
+
+$handler = new FileCitationHandler();
+
+// Get the regex pattern for matching citations
+$pattern = $handler->getPatterns(); // '/\[(\d+)\]/'
+
+// Create clickable citation elements from response content
+// Context must include 'files' array from message->getReferencedFiles()
+$elements = $handler->createElements($content, [
+    'files' => $message->getReferencedFiles(),
+]);
+
+// Get metadata for processed citations
+$metadata = $handler->getCitationMetadata();
+// Returns: [['slot' => 'file-citation-1', 'id' => 42, 'type' => 'file', 'mime' => 'application/pdf'], ...]
+
+// Reset metadata before processing new content
+$handler->resetMetadata();
+```
+
+The handler creates `_Link` elements with `data-action-slot` attributes for JavaScript wiring. The actual file preview is handled by proxy elements with matching `data-action-proxy` attributes.
 
 ---
 
@@ -763,7 +966,9 @@ class FileContextSection extends BasePromptSection
 | FileContextProvider | `tests/Unit/Services/Context/FileContextProviderTest.php` |
 | FileAccessResolver | `tests/Unit/Services/Context/FileAccessResolverTest.php` |
 | ResponseFileEnricher | `tests/Unit/Services/Response/ResponseFileEnricherTest.php` |
-| FileContextSection | `tests/Unit/Services/PromptSections/FileContextSectionTest.php` |
+| FileContextSection (Prompt) | `tests/Unit/Services/PromptSections/FileContextSectionTest.php` |
+| FileContextSection (Response) | `tests/Unit/Services/ResponseSections/FileContextSectionTest.php` |
+| FileCitationHandler | `tests/Unit/Services/Response/FileCitationHandlerTest.php` |
 | Configuration | `tests/Unit/Config/FileContextConfigTest.php` |
 | Physical File Indexing | `tests/Feature/Commands/IngestPhysicalFilesTest.php` |
 

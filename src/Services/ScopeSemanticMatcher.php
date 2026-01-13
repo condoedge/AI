@@ -354,30 +354,4 @@ class ScopeSemanticMatcher
 
         return array_values($words);
     }
-
-    /**
-     * Get match explanation for debugging
-     */
-    public function explainMatch(string $question, array $entityConfigs): array
-    {
-        $matches = $this->findMatchingScopes($question, $entityConfigs, 0.5, 10);
-
-        $explanation = [
-            'question' => $question,
-            'matches' => [],
-        ];
-
-        foreach ($matches as $scopeName => $match) {
-            $explanation['matches'][] = [
-                'scope' => $scopeName,
-                'entity' => $match['entity'],
-                'score' => round($match['match_score'] ?? 0, 3),
-                'type' => $match['match_type'] ?? 'unknown',
-                'matched_text' => $match['matched_example'] ?? '',
-                'concept' => $match['concept'] ?? '',
-            ];
-        }
-
-        return $explanation;
-    }
 }

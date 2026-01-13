@@ -1,6 +1,6 @@
 # Facades API
 
-Reference for the AI facade and service methods.
+Reference for the AI and FileSearch facades.
 
 ---
 
@@ -14,140 +14,82 @@ use Condoedge\Ai\Facades\AI;
 
 ---
 
-## Chat & Query Methods
-
-### chat()
-
-Generate a response to a natural language question.
-
-```php
-AI::chat(string $question, array $options = []): string
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `$question` | string | Natural language question |
-| `$options` | array | Optional settings |
-
-**Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `style` | string | 'friendly' | Response style |
-| `format` | string | 'text' | Output format |
-| `max_length` | int | 100 | Max words |
-| `include_query` | bool | false | Include Cypher query |
-
-**Examples:**
-
-```php
-// Simple query
-$response = AI::chat("How many active customers?");
-
-// With options
-$response = AI::chat("Show top 10 customers", [
-    'style' => 'detailed',
-    'format' => 'markdown',
-]);
-
-// Minimal style
-$answer = AI::chat("What is John's email?", [
-    'style' => 'minimal',
-]);
-// Returns: "john@example.com"
-```
-
-### query()
-
-Execute a Cypher query directly.
-
-```php
-AI::query(string $cypher, array $params = []): array
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `$cypher` | string | Cypher query |
-| `$params` | array | Query parameters |
-
-**Examples:**
-
-```php
-// Simple query
-$results = AI::query("MATCH (n:Customer) RETURN n LIMIT 10");
-
-// Parameterized query
-$results = AI::query(
-    "MATCH (n:Customer) WHERE n.status = \$status RETURN n",
-    ['status' => 'active']
-);
-```
-
-### generateQuery()
-
-Generate Cypher from natural language without executing.
-
-```php
-AI::generateQuery(string $question, array $options = []): string
-```
-
-**Examples:**
-
-```php
-$cypher = AI::generateQuery("Show active customers");
-// Returns: "MATCH (n:Customer) WHERE n.status = 'active' RETURN n"
-```
-
----
-
-## Ingestion Methods
+## Data Ingestion Methods
 
 ### ingest()
 
-Ingest a single entity.
+Ingest a single entity into the AI system (Neo4j graph + Qdrant vectors).
 
 ```php
-AI::ingest(Model $entity): bool
+AI::ingest(\Condoedge\Ai\Domain\Contracts\Nodeable $entity): array
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `$entity` | Nodeable | Entity implementing Nodeable contract |
+
+**Returns:**
+
+```php
+[
+    'graph_stored' => true,
+    'vector_stored' => true,
+    'relationships_created' => 2,
+    'errors' => []
+]
 ```
 
 **Examples:**
 
 ```php
 $customer = Customer::find(1);
-AI::ingest($customer);
+$result = AI::ingest($customer);
+
+if ($result['graph_stored'] && $result['vector_stored']) {
+    echo "Entity ingested successfully!";
+}
 ```
 
-### bulkIngest()
+### ingestBatch()
 
-Ingest multiple entities.
+Ingest multiple entities in a batch operation.
 
 ```php
-AI::bulkIngest(Collection|array $entities, array $options = []): array
+AI::ingestBatch(array $entities): array
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `chunk_size` | int | 100 | Batch size |
-| `with_relationships` | bool | true | Include relationships |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `$entities` | array | Array of Nodeable entities |
 
 **Examples:**
 
 ```php
-$customers = Customer::all();
-$result = AI::bulkIngest($customers);
-
-// With options
-$result = AI::bulkIngest($customers, [
-    'chunk_size' => 500,
-    'with_relationships' => true,
-]);
+$customers = Customer::all()->toArray();
+$result = AI::ingestBatch($customers);
 
 // Returns:
 [
-    'ingested' => 1000,
+    'ingested' => 100,
     'failed' => 0,
     'errors' => [],
 ]
+```
+
+### sync()
+
+Sync an entity - updates existing or creates new entry.
+
+```php
+AI::sync(\Condoedge\Ai\Domain\Contracts\Nodeable $entity): array
+```
+
+**Examples:**
+
+```php
+$customer = Customer::find(1);
+$customer->update(['status' => 'premium']);
+$result = AI::sync($customer); // Updates graph and vector stores
 ```
 
 ### remove()
@@ -155,7 +97,7 @@ $result = AI::bulkIngest($customers, [
 Remove an entity from the AI system.
 
 ```php
-AI::remove(Model $entity): bool
+AI::remove(\Condoedge\Ai\Domain\Contracts\Nodeable $entity): bool
 ```
 
 **Examples:**
@@ -168,73 +110,25 @@ $customer->delete();
 
 ---
 
-## Search Methods
+## Context Retrieval Methods (RAG)
 
-### search()
+### retrieveContext()
 
-Semantic search across entities.
+Retrieve relevant context for a question (used for RAG).
 
 ```php
-AI::search(string $query, array $options = []): array
+AI::retrieveContext(string $question, array $options = []): array
 ```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `collection` | string | null | Search specific collection |
-| `limit` | int | 10 | Max results |
-| `threshold` | float | 0.7 | Similarity threshold |
-| `filters` | array | [] | Metadata filters |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `$question` | string | Natural language question |
+| `$options` | array | Optional settings |
 
 **Examples:**
 
 ```php
-// Basic search
-$results = AI::search("premium software customers");
-
-// With filters
-$results = AI::search("active customers", [
-    'collection' => 'customers',
-    'limit' => 20,
-    'filters' => ['status' => 'active'],
-]);
-```
-
-### searchFiles()
-
-Search file content.
-
-```php
-AI::searchFiles(string $query, array $options = []): array
-```
-
-**Examples:**
-
-```php
-$results = AI::searchFiles("quarterly revenue report");
-
-// With filters
-$results = AI::searchFiles("budget 2024", [
-    'limit' => 5,
-    'filters' => ['file_type' => 'pdf'],
-]);
-```
-
----
-
-## Context Methods
-
-### getContext()
-
-Retrieve context for a question.
-
-```php
-AI::getContext(string $question, array $options = []): array
-```
-
-**Examples:**
-
-```php
-$context = AI::getContext("Show customer orders");
+$context = AI::retrieveContext("Show teams with most active members");
 
 // Returns:
 [
@@ -243,6 +137,22 @@ $context = AI::getContext("Show customer orders");
     'examples' => [...],
     'similar_queries' => [...],
 ]
+```
+
+### searchSimilar()
+
+Search for similar questions/queries in the vector store.
+
+```php
+AI::searchSimilar(string $question, array $options = []): array
+```
+
+**Examples:**
+
+```php
+$similar = AI::searchSimilar("Show all teams");
+
+// Returns matching questions with similarity scores
 ```
 
 ### getSchema()
@@ -270,61 +180,43 @@ $schema = AI::getSchema();
 ]
 ```
 
----
+### getExampleEntities()
 
-## Configuration Methods
-
-### getConfig()
-
-Get entity configuration.
+Get example entities for specific labels (useful for few-shot prompting).
 
 ```php
-AI::getConfig(string $entityClass): array
+AI::getExampleEntities(array $labels, int $limit = 3): array
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `$labels` | array | Node labels to get examples for |
+| `$limit` | int | Max examples per label (default: 3) |
+
+**Examples:**
+
+```php
+$examples = AI::getExampleEntities(['Customer', 'Order'], 5);
+
+// Returns example nodes for building context
+```
+
+### storeQuery()
+
+Store a question-query pair for future retrieval.
+
+```php
+AI::storeQuery(string $question, string $cypherQuery, array $metadata = [], string $collection = 'questions'): array
 ```
 
 **Examples:**
 
 ```php
-$config = AI::getConfig(Customer::class);
-
-// Returns:
-[
-    'graph' => [
-        'label' => 'Customer',
-        'properties' => [...],
-    ],
-    'vector' => [...],
-    'metadata' => [...],
-]
-```
-
-### isEnabled()
-
-Check if AI features are enabled.
-
-```php
-AI::isEnabled(): bool
-```
-
-### status()
-
-Get system status.
-
-```php
-AI::status(): array
-```
-
-**Examples:**
-
-```php
-$status = AI::status();
-
-// Returns:
-[
-    'neo4j' => ['connected' => true, 'uri' => 'bolt://...'],
-    'qdrant' => ['connected' => true, 'host' => '...'],
-    'llm' => ['provider' => 'openai', 'available' => true],
-]
+AI::storeQuery(
+    "Show all customers",
+    "MATCH (c:Customer) RETURN c",
+    ['confidence' => 0.9]
+);
 ```
 
 ---
@@ -333,51 +225,677 @@ $status = AI::status();
 
 ### embed()
 
-Generate embeddings for text.
+Generate embedding vector for text.
 
 ```php
-AI::embed(string|array $text): array
+AI::embed(string $text): array
 ```
 
 **Examples:**
 
 ```php
-// Single text
-$embedding = AI::embed("Customer support inquiry");
+$vector = AI::embed("Customer support inquiry");
+// Returns: [0.123, -0.456, 0.789, ...]
+```
 
-// Batch
-$embeddings = AI::embed([
+### embedBatch()
+
+Generate embeddings for multiple texts.
+
+```php
+AI::embedBatch(array $texts): array
+```
+
+**Examples:**
+
+```php
+$vectors = AI::embedBatch([
     "First text",
     "Second text",
 ]);
+
+// Returns array of embedding vectors
+```
+
+### getEmbeddingDimensions()
+
+Get the embedding vector dimensions for the current model.
+
+```php
+AI::getEmbeddingDimensions(): int
+```
+
+**Examples:**
+
+```php
+$dimensions = AI::getEmbeddingDimensions();
+// Returns: 1536 (for OpenAI ada-002)
+```
+
+### getEmbeddingModel()
+
+Get the current embedding model name.
+
+```php
+AI::getEmbeddingModel(): string
+```
+
+**Examples:**
+
+```php
+$model = AI::getEmbeddingModel();
+// Returns: "text-embedding-ada-002"
 ```
 
 ---
 
-## Low-Level Access
+## LLM Chat Methods
 
-### neo4j()
+### chat()
 
-Get Neo4j client instance.
+Generate a response using the LLM.
 
 ```php
-AI::neo4j(): \Laudis\Neo4j\Contracts\ClientInterface
+AI::chat(string|array $input, array $options = []): string
 ```
 
-### qdrant()
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `$input` | string\|array | Message or messages array |
+| `$options` | array | Optional settings |
 
-Get Qdrant client instance.
+**Examples:**
 
 ```php
-AI::qdrant(): \Qdrant\Client
+// Simple chat
+$response = AI::chat("What is 2+2?");
+
+// With message array
+$response = AI::chat([
+    ['role' => 'system', 'content' => 'You are a helpful assistant.'],
+    ['role' => 'user', 'content' => 'What is 2+2?'],
+]);
+
+// With options
+$response = AI::chat("Explain Laravel", [
+    'temperature' => 0.7,
+    'max_tokens' => 500,
+]);
 ```
 
-### llm()
+### chatJson()
 
-Get LLM provider instance.
+Generate a structured JSON response from the LLM.
 
 ```php
-AI::llm(): LlmProviderInterface
+AI::chatJson(string|array $input, array $options = []): object|array
+```
+
+**Examples:**
+
+```php
+$data = AI::chatJson("Generate a user profile with name and age");
+
+// Returns parsed JSON:
+// ['name' => 'John Doe', 'age' => 30]
+```
+
+### complete()
+
+Complete a prompt with an optional system message.
+
+```php
+AI::complete(string $prompt, string|null $systemPrompt = null, array $options = []): string
+```
+
+**Examples:**
+
+```php
+$translation = AI::complete(
+    "Translate 'hello' to French",
+    "You are a translator"
+);
+// Returns: "Bonjour"
+```
+
+### stream()
+
+Stream responses from the LLM.
+
+```php
+AI::stream(array $messages, callable $callback, array $options = []): void
+```
+
+**Examples:**
+
+```php
+AI::stream(
+    [['role' => 'user', 'content' => 'Write a story']],
+    function ($chunk) {
+        echo $chunk;
+        ob_flush();
+    }
+);
+```
+
+### getLlmModel()
+
+Get the current LLM model name.
+
+```php
+AI::getLlmModel(): string
+```
+
+**Examples:**
+
+```php
+$model = AI::getLlmModel();
+// Returns: "gpt-4"
+```
+
+### getLlmProvider()
+
+Get the current LLM provider name.
+
+```php
+AI::getLlmProvider(): string
+```
+
+**Examples:**
+
+```php
+$provider = AI::getLlmProvider();
+// Returns: "openai"
+```
+
+### getLlmMaxTokens()
+
+Get the maximum tokens for the current LLM.
+
+```php
+AI::getLlmMaxTokens(): int
+```
+
+**Examples:**
+
+```php
+$maxTokens = AI::getLlmMaxTokens();
+// Returns: 8192
+```
+
+### countTokens()
+
+Count tokens in a text string.
+
+```php
+AI::countTokens(string $text): int
+```
+
+**Examples:**
+
+```php
+$count = AI::countTokens("Hello, world!");
+// Returns: 4
+```
+
+---
+
+## Query Generation Methods
+
+### generateQuery()
+
+Generate Cypher query from natural language.
+
+```php
+AI::generateQuery(string $question, array $context = [], array $options = []): array
+```
+
+**Examples:**
+
+```php
+$result = AI::generateQuery("Show all customers with orders > 100");
+
+// Returns:
+[
+    'query' => "MATCH (c:Customer)-[:HAS_ORDER]->(o:Order) WHERE o.total > 100 RETURN c",
+    'confidence' => 0.85,
+    'explanation' => "...",
+]
+```
+
+### validateQuery()
+
+Validate a Cypher query for syntax and safety.
+
+```php
+AI::validateQuery(string $cypherQuery, array $options = []): array
+```
+
+**Examples:**
+
+```php
+$validation = AI::validateQuery("MATCH (n:Customer) RETURN n LIMIT 10");
+
+// Returns:
+[
+    'valid' => true,
+    'safe' => true,
+    'errors' => [],
+    'warnings' => [],
+]
+```
+
+### sanitizeQuery()
+
+Sanitize a Cypher query by removing unsafe operations.
+
+```php
+AI::sanitizeQuery(string $cypherQuery): string
+```
+
+**Examples:**
+
+```php
+$safe = AI::sanitizeQuery("MATCH (n) DELETE n");
+// Returns query with DELETE removed
+```
+
+### getQueryTemplates()
+
+Get available query templates.
+
+```php
+AI::getQueryTemplates(): array
+```
+
+**Examples:**
+
+```php
+$templates = AI::getQueryTemplates();
+
+// Returns array of template patterns
+```
+
+### detectQueryTemplate()
+
+Detect if a question matches a known template.
+
+```php
+AI::detectQueryTemplate(string $question): string|null
+```
+
+**Examples:**
+
+```php
+$template = AI::detectQueryTemplate("How many customers?");
+// Returns: "count_entities" or null if no match
+```
+
+### askQuestion()
+
+Generate and validate a query for a question (without executing).
+
+```php
+AI::askQuestion(string $question, array $options = []): array
+```
+
+**Examples:**
+
+```php
+$result = AI::askQuestion("How many teams are active?");
+
+// Returns validated query ready for execution
+```
+
+---
+
+## Query Execution Methods
+
+### executeQuery()
+
+Execute a Cypher query directly.
+
+```php
+AI::executeQuery(string $cypherQuery, array $parameters = [], array $options = []): array
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `$cypherQuery` | string | Cypher query |
+| `$parameters` | array | Query parameters |
+| `$options` | array | Execution options |
+
+**Examples:**
+
+```php
+$results = AI::executeQuery("MATCH (n:Customer) RETURN n LIMIT 10");
+
+// Parameterized query
+$results = AI::executeQuery(
+    "MATCH (n:Customer) WHERE n.status = \$status RETURN n",
+    ['status' => 'active']
+);
+```
+
+### executeCount()
+
+Execute a query and return the count.
+
+```php
+AI::executeCount(string $cypherQuery, array $parameters = [], array $options = []): int
+```
+
+**Examples:**
+
+```php
+$count = AI::executeCount("MATCH (n:Customer) RETURN n");
+// Returns: 150
+```
+
+### executePaginated()
+
+Execute a query with pagination.
+
+```php
+AI::executePaginated(string $cypherQuery, int $page = 1, int $perPage = 20, array $parameters = [], array $options = []): array
+```
+
+**Examples:**
+
+```php
+$results = AI::executePaginated(
+    "MATCH (n:Customer) RETURN n",
+    page: 2,
+    perPage: 25
+);
+
+// Returns:
+[
+    'data' => [...],
+    'total' => 150,
+    'page' => 2,
+    'per_page' => 25,
+    'total_pages' => 6,
+]
+```
+
+### explainQuery()
+
+Get execution plan for a query.
+
+```php
+AI::explainQuery(string $cypherQuery, array $parameters = []): array
+```
+
+**Examples:**
+
+```php
+$plan = AI::explainQuery("MATCH (n:Customer) RETURN n");
+
+// Returns query execution plan
+```
+
+### testQuery()
+
+Test if a query is valid and executable.
+
+```php
+AI::testQuery(string $cypherQuery): bool
+```
+
+**Examples:**
+
+```php
+$valid = AI::testQuery("MATCH (n:Customer) RETURN n");
+// Returns: true
+```
+
+---
+
+## Full Pipeline Methods
+
+### ask()
+
+Execute the full pipeline: Question -> Query -> Execute.
+
+```php
+AI::ask(string $question, array $options = []): array
+```
+
+**Examples:**
+
+```php
+$result = AI::ask("How many customers do we have?");
+
+// Returns:
+[
+    'question' => "How many customers do we have?",
+    'query' => "MATCH (c:Customer) RETURN count(c) as count",
+    'result' => [['count' => 150]],
+]
+```
+
+### answerQuestion()
+
+Complete pipeline with insights and visualizations.
+
+```php
+AI::answerQuestion(string $question, array $options = []): array
+```
+
+**Examples:**
+
+```php
+$answer = AI::answerQuestion("Which customers have the most orders?");
+
+// Returns:
+[
+    'question' => "Which customers have the most orders?",
+    'answer' => "The top customers by order count are...",
+    'insights' => [...],
+    'visualizations' => [...],
+    'cypher' => "MATCH (c:Customer)-[:HAS_ORDER]->(o) RETURN c, count(o) ORDER BY count(o) DESC",
+    'data' => [...],
+    'stats' => [...],
+]
+```
+
+---
+
+## Response Generation Methods
+
+### generateResponse()
+
+Generate a natural language response from query results.
+
+```php
+AI::generateResponse(string $originalQuestion, array $queryResult, string $cypherQuery, array $options = []): array
+```
+
+**Examples:**
+
+```php
+$response = AI::generateResponse(
+    "How many teams?",
+    [['count' => 25]],
+    "MATCH (n:Team) RETURN count(n) as count"
+);
+```
+
+### extractInsights()
+
+Extract insights from query results.
+
+```php
+AI::extractInsights(array $queryResult): array
+```
+
+**Examples:**
+
+```php
+$insights = AI::extractInsights($queryResult);
+
+// Returns:
+[
+    'summary' => "...",
+    'key_findings' => [...],
+    'trends' => [...],
+]
+```
+
+### suggestVisualizations()
+
+Suggest appropriate visualizations for query results.
+
+```php
+AI::suggestVisualizations(array $queryResult, string $cypherQuery): array
+```
+
+**Examples:**
+
+```php
+$charts = AI::suggestVisualizations($results, "MATCH (n) RETURN n");
+
+// Returns:
+[
+    ['type' => 'bar', 'config' => [...]],
+    ['type' => 'pie', 'config' => [...]],
+]
+```
+
+---
+
+## FileSearch Facade
+
+Search files across Neo4j (metadata/relationships) and Qdrant (content).
+
+```php
+use Condoedge\Ai\Facades\FileSearch;
+```
+
+### searchByContent()
+
+Search files by content using semantic search (Qdrant).
+
+```php
+FileSearch::searchByContent(string $query, array $options = []): array
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `limit` | int | 10 | Max results |
+| `file_types` | array | [] | Filter by file types |
+| `min_score` | float | 0.7 | Minimum similarity score |
+
+**Examples:**
+
+```php
+$results = FileSearch::searchByContent("Laravel configuration", [
+    'limit' => 5,
+    'file_types' => ['pdf', 'md'],
+    'min_score' => 0.7,
+]);
+
+// Returns:
+[
+    [
+        'file_id' => 1,
+        'score' => 0.85,
+        'chunk_count' => 3,
+        'best_chunk' => FileChunk,
+        'chunks' => [FileChunk, FileChunk, FileChunk],
+        'file' => File,
+    ],
+]
+```
+
+### searchByMetadata()
+
+Search files by metadata using Neo4j.
+
+```php
+FileSearch::searchByMetadata(array $criteria, int $limit = 10): array
+```
+
+**Examples:**
+
+```php
+$files = FileSearch::searchByMetadata([
+    'extension' => 'pdf',
+    'user_id' => 123,
+    'size_min' => 1000,
+], limit: 10);
+
+// Returns:
+[
+    [
+        'file' => File,
+        'relationships' => [
+            ['type' => 'UPLOADED_BY', 'labels' => ['User'], 'properties' => [...]],
+            ['type' => 'BELONGS_TO_TEAM', 'labels' => ['Team'], 'properties' => [...]],
+        ],
+    ],
+]
+```
+
+### hybridSearch()
+
+Combine content and metadata search.
+
+```php
+FileSearch::hybridSearch(string $contentQuery, array $metadataFilters = [], array $options = []): array
+```
+
+**Examples:**
+
+```php
+$results = FileSearch::hybridSearch(
+    contentQuery: "Redis configuration",
+    metadataFilters: ['extension' => 'md'],
+    options: ['limit' => 10, 'include_relationships' => true]
+);
+```
+
+### getRelatedFiles()
+
+Get related files via graph traversal.
+
+```php
+FileSearch::getRelatedFiles(\Condoedge\Utils\Models\Files\File $file, ?string $relationshipType = null, int $limit = 10): array
+```
+
+**Examples:**
+
+```php
+$related = FileSearch::getRelatedFiles($file, 'BELONGS_TO', limit: 10);
+```
+
+### getFilesByUser()
+
+Get files uploaded by a specific user.
+
+```php
+FileSearch::getFilesByUser(int $userId, int $limit = 10): array
+```
+
+**Examples:**
+
+```php
+$files = FileSearch::getFilesByUser(userId: 123, limit: 10);
+```
+
+### getFilesByTeam()
+
+Get files belonging to a team.
+
+```php
+FileSearch::getFilesByTeam(int $teamId, int $limit = 10): array
+```
+
+**Examples:**
+
+```php
+$files = FileSearch::getFilesByTeam(teamId: 456, limit: 10);
 ```
 
 ---
@@ -389,65 +907,105 @@ AI::llm(): LlmProviderInterface
 ```php
 use Condoedge\Ai\Facades\AI;
 
-// Ask question and get response
-$response = AI::chat("How many active customers placed orders this month?");
+// Full pipeline - question to answer
+$answer = AI::answerQuestion("How many active customers placed orders this month?");
 
-// Get detailed response with Cypher
-$response = AI::chat("Top 10 customers by revenue", [
-    'style' => 'detailed',
-    'include_query' => true,
-]);
-
-// Get minimal answer for API
-$count = AI::chat("Total order count", ['style' => 'minimal']);
+// Step by step
+$query = AI::generateQuery("Show active customers");
+$validated = AI::validateQuery($query['query']);
+if ($validated['valid']) {
+    $results = AI::executeQuery($query['query']);
+}
 ```
 
-### Manual Ingestion
+### Data Ingestion Workflow
 
 ```php
 // Single entity
 $customer = Customer::create(['name' => 'Acme Corp', 'status' => 'active']);
 AI::ingest($customer);
 
-// Bulk ingestion
+// Batch ingestion
 $customers = Customer::where('created_at', '>', now()->subDay())->get();
-AI::bulkIngest($customers);
+AI::ingestBatch($customers->toArray());
 
-// Remove entity
-$customer = Customer::find(1);
+// Sync after update
+$customer->update(['status' => 'premium']);
+AI::sync($customer);
+
+// Remove before delete
 AI::remove($customer);
 $customer->delete();
 ```
 
-### Semantic Search
+### File Search with AI Context
 
 ```php
-// Find similar customers
-$results = AI::search("technology companies in California", [
-    'collection' => 'customers',
-    'limit' => 5,
-]);
+use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Facades\FileSearch;
 
-foreach ($results as $result) {
-    echo "{$result['name']} - Score: {$result['score']}\n";
-}
+// Search for relevant files
+$results = FileSearch::searchByContent("Redis configuration");
+
+// Build context from file chunks
+$context = collect($results)
+    ->flatMap(fn($r) => $r['chunks'])
+    ->pluck('content')
+    ->implode("\n\n");
+
+// Get AI-powered answer using file context
+$answer = AI::answerQuestion("How do I configure Redis?", [
+    'context' => $context,
+]);
 ```
 
-### Direct Query Execution
+### Streaming Responses
 
 ```php
-// Execute Cypher directly
-$results = AI::query("
-    MATCH (c:Customer)-[:HAS_ORDER]->(o:Order)
-    WHERE o.created_at > datetime() - duration('P30D')
-    RETURN c.name, count(o) as order_count
-    ORDER BY order_count DESC
-    LIMIT 10
-");
+AI::stream(
+    [
+        ['role' => 'system', 'content' => 'You are a helpful assistant.'],
+        ['role' => 'user', 'content' => 'Write a detailed explanation of Laravel facades.'],
+    ],
+    function ($chunk) {
+        echo $chunk;
+        ob_flush();
+        flush();
+    },
+    ['temperature' => 0.7]
+);
+```
 
-foreach ($results as $row) {
-    echo "{$row['c.name']}: {$row['order_count']} orders\n";
-}
+---
+
+## Testing with Facades
+
+```php
+use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Facades\FileSearch;
+
+// Mock AI facade
+AI::shouldReceive('ingest')
+    ->once()
+    ->with($customer)
+    ->andReturn([
+        'graph_stored' => true,
+        'vector_stored' => true,
+        'relationships_created' => 2,
+        'errors' => []
+    ]);
+
+// Mock FileSearch facade
+FileSearch::shouldReceive('searchByContent')
+    ->once()
+    ->with('test query', ['limit' => 10])
+    ->andReturn([
+        [
+            'file_id' => 1,
+            'score' => 0.85,
+            'file' => $mockFile,
+        ]
+    ]);
 ```
 
 ---
@@ -460,7 +1018,7 @@ use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Exceptions\ConnectionException;
 
 try {
-    $response = AI::chat("Complex query here");
+    $response = AI::answerQuestion("Complex query here");
 } catch (QueryGenerationException $e) {
     // Failed to generate valid Cypher
     Log::warning("Query generation failed: " . $e->getMessage());

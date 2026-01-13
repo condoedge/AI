@@ -20,7 +20,7 @@ class QdrantStore implements VectorStoreInterface
 
     public function __construct(?array $config = null)
     {
-        $config = $config ?? config('ai.qdrant');
+        $config = $config ?? config('ai.vector.qdrant');
 
         $this->host = $config['host'] ?? 'localhost';
         $this->port = $config['port'] ?? 6333;

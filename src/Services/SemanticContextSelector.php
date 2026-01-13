@@ -113,6 +113,8 @@ class SemanticContextSelector
                             'from_entity' => $result['metadata']['from_entity'] ?? '',
                             'to_entity' => $result['metadata']['to_entity'] ?? '',
                             'type' => $result['metadata']['relationship_type'] ?? '',
+                            'foreign_key' => $result['metadata']['foreign_key'] ?? null,
+                            'direction' => $result['metadata']['direction'] ?? 'outgoing',
                         ];
 
                         // Also include related entities
@@ -302,10 +304,15 @@ class SemanticContextSelector
             $relType = $relConfig['type'] ?? $relName;
             $targetEntity = $relConfig['target'] ?? 'Unknown';
             $targetShort = class_basename($targetEntity);
+            $foreignKey = $relConfig['foreign_key'] ?? null;
+            $direction = $relConfig['direction'] ?? 'outgoing';
 
             $text = "{$shortName} {$relType} {$targetShort}";
             if (!empty($relConfig['description'])) {
                 $text .= ' - ' . $relConfig['description'];
+            }
+            if ($foreignKey) {
+                $text .= " (via {$foreignKey})";
             }
 
             $relKey = "{$shortName}-{$relType}-{$targetShort}";
@@ -319,6 +326,8 @@ class SemanticContextSelector
                     'from_entity' => $shortName,
                     'to_entity' => $targetShort,
                     'relationship_type' => $relType,
+                    'foreign_key' => $foreignKey,
+                    'direction' => $direction,
                     'text' => $text,
                 ],
             ];
@@ -468,6 +477,8 @@ class SemanticContextSelector
                         'from_entity' => $shortName,
                         'to_entity' => $targetShort,
                         'type' => $relType,
+                        'foreign_key' => $relConfig['foreign_key'] ?? null,
+                        'direction' => $relConfig['direction'] ?? 'outgoing',
                     ];
                 }
             }

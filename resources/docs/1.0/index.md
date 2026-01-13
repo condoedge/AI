@@ -7,11 +7,14 @@
 - ## Chat UI
     - [Chat Components](/docs/{{version}}/chat/chat-ui)
     - [Chat Pipeline](/docs/{{version}}/chat/module-pipeline)
+    - [Theming](/docs/{{version}}/chat/theming)
     - [Conversation Context](/docs/{{version}}/chat/conversation-context-management)
+    - [Conversation Export](/docs/{{version}}/chat/conversation-export)
     - [File Context System](/docs/{{version}}/chat/file-context-system)
 - ## Configuration
     - [Basic Configuration](/docs/{{version}}/foundations/configuration)
     - [Entity Configuration](/docs/{{version}}/configuration/entities)
+    - [Entity Actions](/docs/{{version}}/configuration/entity-actions)
     - [Response Styles](/docs/{{version}}/configuration/response-styles)
     - [Environment Variables](/docs/{{version}}/configuration/environment)
 - ## Usage Guide
@@ -21,12 +24,18 @@
     - [Data Ingestion](/docs/{{version}}/usage/data-ingestion)
     - [File Search](/docs/{{version}}/usage/file-search)
     - [Context Retrieval & RAG](/docs/{{version}}/usage/context-retrieval)
+    - [LLM API](/docs/{{version}}/usage/llm)
+    - [Embeddings API](/docs/{{version}}/usage/embeddings)
+    - [Laravel Integration](/docs/{{version}}/usage/laravel-integration)
+    - [Testing](/docs/{{version}}/usage/testing)
+    - [Real-World Examples](/docs/{{version}}/usage/examples)
 - ## Advanced Topics
     - [Semantic Matching](/docs/{{version}}/advanced/semantic-matching)
     - [Context Selection (Token Optimization)](/docs/{{version}}/advanced/context-selection)
     - [Scopes & Business Logic](/docs/{{version}}/advanced/scopes)
     - [Query Patterns](/docs/{{version}}/advanced/patterns)
     - [Auto-Discovery](/docs/{{version}}/advanced/auto-discovery)
+    - [Security](/docs/{{version}}/advanced/security)
 - ## Extending
     - [Overview](/docs/{{version}}/usage/extending)
     - [Custom Chat Service](/docs/{{version}}/usage/extending#custom-chat-service)

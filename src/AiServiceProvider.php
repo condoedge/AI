@@ -79,7 +79,6 @@ use Condoedge\Ai\Services\UI\ChatThemeInterface;
 use Condoedge\Ai\Services\UI\ConfigChatThemeFactory;
 use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
 use Condoedge\Ai\Services\Settings\UserChatSettings;
-use Condoedge\Ai\Services\Security\AccessLevelResolver;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Policies\AiConversationPolicy;
 use Condoedge\Utils\Facades\FileModel;
@@ -332,9 +331,6 @@ class AiServiceProvider extends ServiceProvider
 
         // Alias for dependency injection
         $this->app->alias('file-search', FileSearchService::class);
-
-        // Register Access Level Resolver
-        $this->app->singleton(AccessLevelResolver::class);
 
         // Register AI Manager as singleton
         $this->app->singleton('ai', function ($app) {

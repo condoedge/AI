@@ -11,6 +11,7 @@ graph TB
     subgraph "User Interface Layer"
         User[User Application]
         Controller[Laravel Controllers]
+        UI[UI Services<br/>Theme/Settings/Markdown]
     end
 
     subgraph "API Layer"
@@ -19,8 +20,24 @@ graph TB
     end
 
     subgraph "Service Layer"
-        DIS[DataIngestionService]
-        CR[ContextRetriever]
+        subgraph "Core Services"
+            DIS[DataIngestionService]
+            CR[ContextRetriever]
+        end
+        subgraph "Context Services"
+            FCP[FileContextProvider]
+            CCM[ConversationContextManager]
+        end
+        subgraph "Response Services"
+            RFE[ResponseFileEnricher]
+            REE[ResponseEntityEnricher]
+            CLP[ContentLinkProcessor]
+        end
+        subgraph "Security Services"
+            IS[InputSanitizer]
+            QRF[QueryResultFilter]
+            PCB[PromptContextBuilder]
+        end
     end
 
     subgraph "Infrastructure Layer"
@@ -40,22 +57,31 @@ graph TB
     User --> Controller
     Controller --> Facade
     Controller --> Manager
-    Controller --> DIS
-    Controller --> CR
+    Controller --> UI
 
     Facade --> Manager
     Manager --> DIS
     Manager --> CR
+    Manager --> FCP
+    Manager --> RFE
+    Manager --> REE
     Manager --> EP
     Manager --> LP
+
+    CR --> CCM
+    CR --> EP
+    CR --> VS
+    CR --> GS
+
+    FCP --> VS
 
     DIS --> EP
     DIS --> VS
     DIS --> GS
 
-    CR --> EP
-    CR --> VS
-    CR --> GS
+    IS --> Manager
+    QRF --> Manager
+    PCB --> Manager
 
     EP --> OpenAI
     EP --> Anthropic
@@ -68,8 +94,17 @@ graph TB
     style Manager fill:#4CAF50
     style DIS fill:#2196F3
     style CR fill:#2196F3
+    style FCP fill:#2196F3
+    style CCM fill:#2196F3
+    style RFE fill:#9C27B0
+    style REE fill:#9C27B0
+    style CLP fill:#9C27B0
+    style IS fill:#F44336
+    style QRF fill:#F44336
+    style PCB fill:#F44336
     style VS fill:#FF9800
     style GS fill:#FF9800
+    style UI fill:#00BCD4
 ```
 
 ---
@@ -493,14 +528,33 @@ src/
 │   │   └── DataIngestionService.php     # Orchestrates ingestion
 │   │
 │   ├── Context/
-│   │   └── ContextRetriever.php         # Retrieves relevant context
+│   │   ├── ContextRetriever.php         # Retrieves relevant context
+│   │   ├── FileContextProvider.php      # File search for RAG
+│   │   ├── FileAccessResolver.php       # File access permissions
+│   │   ├── ConversationContextManager.php # Conversation state tracking
+│   │   ├── EntityExtractor.php          # Extract entities from text
+│   │   └── ReferenceResolver.php        # Resolve pronouns/references
 │   │
 │   ├── Query/
 │   │   ├── QueryGenerator.php           # LLM generates queries
 │   │   └── QueryExecutor.php            # Executes & filters
 │   │
-│   └── Response/
-│       └── ResponseGenerator.php        # Formats final response
+│   ├── Response/
+│   │   ├── ResponseGenerator.php        # Formats final response
+│   │   ├── ResponseFileEnricher.php     # Enriches with file refs
+│   │   ├── ResponseEntityEnricher.php   # Enriches with entity actions
+│   │   ├── ContentLinkProcessor.php     # Processes special links
+│   │   ├── ActionLinkHandler.php        # entity:// and action:// links
+│   │   └── FileCitationHandler.php      # File citation [1] links
+│   │
+│   ├── UI/
+│   │   ├── ChatThemeFactoryInterface.php # Theme factory contract
+│   │   ├── ConfigChatThemeFactory.php   # Config-based themes
+│   │   ├── UserChatThemeFactory.php     # User preference themes
+│   │   └── SafeMarkdownRenderer.php     # Secure markdown rendering
+│   │
+│   └── Settings/
+│       └── ChatSettingsInterface.php    # Chat UI settings contract
 │
 ├── Stores/
 │   ├── Neo4j/
@@ -522,13 +576,535 @@ src/
 |-------|---------|-------------|
 | **Domain** | Business contracts and value objects | `Nodeable`, `GraphConfig`, `VectorConfig` |
 | **Services/Discovery** | Auto-discover models and relationships | `EntityAutoDiscovery`, `PropertyDiscoverer` |
-| **Services/Security** | Access control and permissions | `AccessLevelResolver`, `PromptContextBuilder` |
+| **Services/Security** | Access control and input validation | `AccessLevelResolver`, `InputSanitizer`, `QueryResultFilter`, `PromptContextBuilder` |
 | **Services/Ingestion** | Data sync to graph/vector stores | `DataIngestionService` |
-| **Services/Context** | RAG context retrieval | `ContextRetriever` |
+| **Services/Context** | RAG context and conversation state | `ContextRetriever`, `FileContextProvider`, `ConversationContextManager`, `EntityExtractor`, `ReferenceResolver` |
 | **Services/Query** | LLM query generation and execution | `QueryGenerator`, `QueryExecutor` |
-| **Services/Response** | Format and generate responses | `ResponseGenerator` |
+| **Services/Response** | Response formatting and enrichment | `ResponseGenerator`, `ResponseFileEnricher`, `ResponseEntityEnricher`, `ContentLinkProcessor` |
+| **Services/UI** | Chat theming and rendering | `ChatThemeFactoryInterface`, `ConfigChatThemeFactory`, `SafeMarkdownRenderer` |
+| **Services/Settings** | Chat UI configuration | `ChatSettingsInterface`, `UserChatSettings` |
 | **Stores** | Database adapters | `Neo4jStore`, `QdrantStore` |
 | **Console** | Artisan commands | Discovery, ingestion, sync commands |
+
+---
+
+## Response Processing Services
+
+Response processing services enrich AI responses with actionable metadata, process special link formats, and handle entity actions.
+
+### ResponseFileEnricher
+
+**Responsibility:** Enriches AI responses with file reference metadata by extracting citation markers and building actionable file references.
+
+**Key Features:**
+- Extracts citation markers `[1]`, `[2]`, etc. from response text
+- Maps citations to files in the provided file context
+- Builds actionable metadata for database files (download/preview URLs)
+- Physical files have null URLs and cannot be downloaded directly
+
+```php
+$enricher = app(ResponseFileEnricher::class);
+
+// Extract citation markers
+$markers = $enricher->extractCitationMarkers($response);
+// Returns: [1, 2, 3] for response containing [1], [2], [3]
+
+// Build referenced files with metadata
+$files = $enricher->buildReferencedFiles($response, $fileContext, [
+    'download_url_resolver' => fn($id) => route('files.download', $id),
+    'preview_url_resolver' => fn($id) => route('files.preview', $id),
+]);
+
+// Enrich full response
+$enriched = $enricher->enrichResponse($response, $fileContext);
+// Adds 'referenced_files' and 'has_file_references' keys
+```
+
+---
+
+### ResponseEntityEnricher
+
+**Responsibility:** Enriches query results with entity action metadata by checking if each entity type has configured profile actions.
+
+**Key Features:**
+- Adds available actions info to each result with an entity label
+- Uses EntityAutoDiscovery to resolve configured entity actions
+- Enables actionable entity links in responses
+
+```php
+$enricher = app(ResponseEntityEnricher::class);
+
+$enrichedResults = $enricher->enrichEntityResults($queryResults);
+// Each result gets: has_actions, available_actions, entity_type
+```
+
+---
+
+### ContentLinkProcessor
+
+**Responsibility:** Orchestrates processing of all inline content links by combining multiple handlers (actions, file citations) into a single entry point.
+
+**Key Features:**
+- Combines ActionLinkHandler and FileCitationHandler
+- Extensible: Add custom handlers via `registerHandler()`
+- Single entry point for message rendering
+
+```php
+$processor = app(ContentLinkProcessor::class);
+
+// Process for direct rendering (strips links, creates elements)
+$result = $processor->processForDirectRendering($content, ['files' => $files]);
+// Returns: ['content' => '...', 'elements' => [...], 'has_links' => true]
+
+// Check if content has any processable links
+if ($processor->hasLinks($content)) {
+    // Process content
+}
+
+// Register custom handler
+$processor->registerHandler('custom', new MyLinkHandler());
+```
+
+---
+
+### ActionLinkHandler
+
+**Responsibility:** Handles `entity://` and `action://` protocol links in AI responses.
+
+**Link Formats:**
+- `[text](entity://EntityType/id/action_key)` - Entity-specific action
+- `[text](action://action_key)` - Generic action
+
+**Key Features:**
+- Processes AI-generated action links
+- Creates Kompo elements using configured resolvers from config/ai.php
+- Deduplicates multiple occurrences of the same link
+
+```php
+$handler = app(ActionLinkHandler::class);
+
+// AI response containing: [View Customer](entity://Customer/123/profile)
+$elements = $handler->createElements($content, $context);
+// Returns Kompo link elements with configured action handlers
+```
+
+---
+
+### FileCitationHandler
+
+**Responsibility:** Handles file citation links `[1]`, `[2]`, etc. in AI responses.
+
+**Key Features:**
+- Processes numbered citations referencing files
+- Creates clickable elements that open file preview modals
+- Tracks citation metadata for proxy element creation
+
+```php
+$handler = app(FileCitationHandler::class);
+
+// AI response containing: Based on the report [1] and analysis [2]...
+$elements = $handler->createElements($content, ['files' => $referencedFiles]);
+
+// Get metadata for processed citations
+$metadata = $handler->getCitationMetadata();
+// Returns: [['slot' => 'file-citation-1', 'id' => 1, 'type' => 'file', ...]]
+```
+
+---
+
+## Context Management Services
+
+Context services manage conversation state, file context for RAG, and resolve references across messages.
+
+### FileContextProvider
+
+**Responsibility:** Provides unified file search across both physical documentation files and database-backed files with access control filtering.
+
+**Key Features:**
+- Searches both physical (documentation) and database file collections
+- Detects explicit filename references in queries for targeted search
+- Combines filename-based and semantic content search results
+- Applies access filtering (physical files always pass through)
+- Truncates snippets to configured length
+
+```php
+$provider = app(FileContextProvider::class);
+
+// Search for relevant files
+$files = $provider->searchRelevantFiles($question, $user, [
+    'limit' => 5,
+    'min_score' => 0.4,
+]);
+
+// Get full file context for prompt building
+$context = $provider->getFileContext($question, $user);
+// Returns: [
+//     'relevant_files' => [...],
+//     'file_count' => 3,
+//     'has_physical' => true,
+//     'has_database' => true,
+// ]
+```
+
+---
+
+### FileAccessResolver
+
+**Responsibility:** Resolves file access permissions for the AI context system, supporting both physical files and database-backed files.
+
+**Key Features:**
+- Physical files (with `physical:` prefix) always bypass security
+- Supports configurable access resolver closures
+- Falls back to user_id/team_id filtering
+- Logs all access attempts for auditing
+
+```php
+$resolver = app(FileAccessResolverInterface::class);
+
+// Check if security is enabled
+if ($resolver->shouldEnforceSecurity()) {
+    // Check individual file access
+    if ($resolver->canAccessFile($fileId, $user)) {
+        // Allow access
+    }
+}
+
+// Filter list of file IDs to accessible ones
+$accessibleIds = $resolver->filterAccessibleFileIds($fileIds, $user);
+
+// Check if file is physical (documentation)
+if ($resolver->isPhysicalFile($fileId)) {
+    // Physical files always accessible
+}
+
+// Create physical file ID
+$physicalId = $resolver->makePhysicalFileId('/path/to/doc.md');
+// Returns: 'physical:/path/to/doc.md'
+```
+
+---
+
+### ConversationContextManager
+
+**Responsibility:** Orchestrates conversation context tracking by combining entity extraction, reference resolution, and context snapshot management.
+
+**Key Features:**
+- Main entry point for conversation context handling
+- Processes incoming questions and updates context
+- Records AI responses with enhanced entity data
+- Builds prompt context for follow-up questions
+
+```php
+$manager = app(ConversationContextManager::class);
+
+// Process incoming question
+$result = $manager->processQuestion($conversation, $question, $schema);
+// Returns: [
+//     'is_follow_up' => true,
+//     'focused_entity' => 'Customer',
+//     'query_type' => 'list',
+//     'mentioned_entities' => ['Customer', 'Order'],
+//     'enriched_question' => 'Show customers with...',
+//     'resolved_entity' => 'Customer',
+// ]
+
+// Record AI response
+$manager->recordResponse($conversation, $response, $cypherQuery, $queryResult);
+
+// Build prompt context for follow-up
+$context = $manager->buildPromptContext($conversation, maxHistory: 5);
+```
+
+---
+
+### EntityExtractor
+
+**Responsibility:** Extracts entity types and query patterns from questions and Cypher queries.
+
+**Key Features:**
+- Extracts mentioned entities from natural language questions
+- Detects query types (count, list, detail, aggregate, compare)
+- Extracts entities and relationships from Cypher queries
+
+```php
+$extractor = app(EntityExtractor::class);
+
+// Extract from question
+$result = $extractor->extractFromQuestion('Show all customers with orders', $schema);
+// Returns: [
+//     'focused_entity' => 'Customer',
+//     'query_type' => 'list',
+//     'mentioned_entities' => ['Customer', 'Order'],
+// ]
+
+// Extract from Cypher
+$result = $extractor->extractFromCypher('MATCH (c:Customer)-[:PLACED]->(o:Order)...');
+// Returns: [
+//     'entities' => ['Customer', 'Order'],
+//     'relationships' => ['PLACED'],
+// ]
+```
+
+---
+
+### ReferenceResolver
+
+**Responsibility:** Resolves conversational references like "those", "them", "the same" using conversation context.
+
+**Key Features:**
+- Detects follow-up questions
+- Identifies reference types (pronoun, demonstrative, definite, implicit)
+- Enriches questions with resolved entity references
+
+```php
+$resolver = app(ReferenceResolver::class);
+
+// Check if question is a follow-up
+if ($resolver->isFollowUp('Show those with pending status')) {
+    // Resolve references
+    $result = $resolver->resolve($question, $conversationContext);
+    // Returns: [
+    //     'resolved' => true,
+    //     'resolved_entity' => 'Order',
+    //     'operation' => 'filter',
+    //     'enriched_question' => 'Show orders with pending status',
+    //     'reference_type' => 'demonstrative',
+    // ]
+}
+
+// Detect reference type
+$type = $resolver->detectReferenceType('Filter those by date');
+// Returns: 'demonstrative'
+```
+
+---
+
+## UI Services
+
+UI services provide theming and rendering capabilities for the chat interface.
+
+### ChatThemeFactoryInterface
+
+**Responsibility:** Factory contract for theme selection and creation.
+
+**Implementations:**
+- `ConfigChatThemeFactory` - Resolves themes from config/ai.php (default)
+- `UserChatThemeFactory` - Resolves themes from user database settings
+
+**Key Methods:**
+```php
+$factory = app(ChatThemeFactoryInterface::class);
+
+// Create theme with overrides
+$theme = $factory->create('indigo', ['primaryBg' => 'bg-blue-600']);
+
+// Register custom theme
+$factory->register('corporate', CorporateTheme::class);
+
+// Get available themes
+$themes = $factory->available(); // ['indigo', 'green', 'config']
+
+// Check if theme exists
+if ($factory->has('dark')) {
+    // Theme available
+}
+```
+
+---
+
+### ConfigChatThemeFactory
+
+**Responsibility:** Factory that resolves themes from config/ai.php (default implementation).
+
+**Built-in Themes:**
+- `indigo` - Purple-blue professional theme (default)
+- `green` - Fresh green theme
+- `config` - Fully configurable via config values
+
+```php
+// Configuration (config/ai.php)
+'ui' => [
+    'theme' => 'indigo',
+    'colors' => [
+        'primaryBg' => 'bg-indigo-600',
+        'primaryText' => 'text-indigo-600',
+    ],
+],
+```
+
+---
+
+### UserChatThemeFactory
+
+**Responsibility:** Factory that resolves themes from user database settings, with fallback to config.
+
+**Key Features:**
+- Priority: runtime param > user setting > config
+- Merges color overrides from all sources
+- Falls back gracefully when user is not authenticated
+
+```php
+// Uses AiUserSetting model to store user preferences
+// Theme selection: $userSetting->getThemeName()
+// Color overrides: $userSetting->getColorOverrides()
+```
+
+---
+
+### ChatSettingsInterface
+
+**Responsibility:** Contract for chat settings providing configuration values for UI behavior and features.
+
+**Key Settings:**
+```php
+$settings = app(ChatSettingsInterface::class);
+
+// Welcome/onboarding
+$settings->welcomeTitle();        // "Welcome to AI Assistant"
+$settings->welcomeMessage();      // "Ask me anything..."
+$settings->exampleQuestions();    // ["Show all teams", "List customers"]
+
+// Display options
+$settings->showTimestamps();      // true/false
+$settings->showAvatars();         // true/false
+$settings->showTyping();          // true/false
+$settings->showSuggestions();     // true/false
+$settings->showMetrics();         // true/false
+
+// Feature toggles
+$settings->enableCopy();          // true/false
+$settings->enableFeedback();      // true/false
+$settings->enableEdit();          // true/false
+$settings->enableRegenerate();    // true/false
+
+// Behavior
+$settings->responseStyle();       // 'concise', 'detailed', 'balanced'
+$settings->typingAnimationStyle(); // 'dots', 'wave', 'pulse', 'brain'
+$settings->animationSpeed();      // 'slow', 'normal', 'fast', 'none'
+```
+
+---
+
+### SafeMarkdownRenderer
+
+**Responsibility:** Minimal, secure markdown renderer for chat messages with XSS prevention.
+
+**Supported Syntax:**
+- Code blocks (```language)
+- Inline code (`code`)
+- Bold (**text**)
+- Italic (*text*)
+- Lists (- item, 1. item)
+- Headers (## H2, ### H3)
+- Links ([text](url))
+- Citations ([1], [2])
+
+**Key Features:**
+- All outputs properly HTML escaped
+- Only safe URL schemes allowed (http, https, mailto, tel, #)
+- No javascript:, data:, or other dangerous schemes
+- Theme-aware styling
+
+```php
+$renderer = new SafeMarkdownRenderer(['primaryText' => 'text-blue-600']);
+
+$html = $renderer->render('**Bold** and `code` with [link](https://example.com)');
+// Returns safe HTML with proper escaping
+```
+
+---
+
+## Security Services
+
+Security services provide defense-in-depth for the AI system, including input validation, access control, and result filtering.
+
+### InputSanitizer
+
+**Responsibility:** Detects and mitigates prompt injection attempts in user input.
+
+**Detection Patterns:**
+- Direct instruction overrides ("ignore previous instructions")
+- System-level impersonation ("SYSTEM:", "[[]]")
+- Role manipulation ("you are now", "pretend to be")
+- Code block injection
+- Access control bypass attempts
+
+**Key Methods:**
+```php
+$sanitizer = app(InputSanitizer::class);
+
+// Analyze input for injection risk
+$analysis = $sanitizer->analyze($userInput);
+// Returns: [
+//     'has_injection_risk' => true,
+//     'patterns_matched' => [...],
+//     'risk_level' => 'medium', // none, low, medium, high
+// ]
+
+// Sanitize by removing dangerous patterns
+$clean = $sanitizer->sanitize($userInput);
+
+// Combined analysis and sanitization
+$result = $sanitizer->process($userInput, sanitize: true);
+
+// Add custom pattern
+$sanitizer->addPattern('/custom_bad_pattern/i');
+```
+
+---
+
+### QueryResultFilter
+
+**Responsibility:** Server-side filter for query results based on user access levels. Provides defense-in-depth beyond LLM prompt-level access control.
+
+**Key Features:**
+- Filters sensitive columns from results
+- Applies count threshold protection to prevent identifying individuals
+- Works as second layer after prompt-based restrictions
+
+```php
+$filter = app(QueryResultFilter::class);
+
+// Filter results based on user access
+$filtered = $filter->filterResults($results, 'Employee', $user);
+// Removes sensitive columns like salary if user lacks access
+
+// Apply count threshold protection
+$protectedCount = $filter->applyCountThreshold(3, 'Employee');
+// Returns "fewer than 5" if below threshold, actual count if above
+```
+
+---
+
+### PromptContextBuilder
+
+**Responsibility:** Builds access-aware prompt context for RAG queries. Injects access control instructions into prompts to guide the AI on data access.
+
+**Key Features:**
+- Builds entity-specific access sections
+- Describes allowed and restricted access levels
+- Applies count thresholds for privacy
+- Filters sensitive content from semantic results
+
+```php
+$builder = new PromptContextBuilder($user);
+
+// Set sensible columns for entities
+$builder->setEntitySensibleColumns('Employee', ['salary', 'ssn', 'bank_account']);
+
+// Build access section for prompt
+$accessSection = $builder->buildAccessSection(['Employee', 'Department']);
+
+// Build full context including semantic results
+$fullContext = $builder->buildFullContext(
+    entities: ['Employee'],
+    semanticResults: $vectorSearchResults,
+    aggregates: ['total_employees' => 150]
+);
+
+// Build complete system prompt with access rules
+$systemPrompt = $builder->buildSystemPrompt(['Employee', 'Department']);
+```
 
 ---
 

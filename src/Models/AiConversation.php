@@ -180,6 +180,18 @@ class AiConversation extends Model
         if (isset($data['suggestions'])) {
             $metadata['suggestions'] = $data['suggestions'];
         }
+        if (isset($data['is_follow_up'])) {
+            $metadata['is_follow_up'] = $data['is_follow_up'];
+        }
+        if (isset($data['resolved_entity'])) {
+            $metadata['resolved_entity'] = $data['resolved_entity'];
+        }
+        if (isset($data['error'])) {
+            $metadata['error'] = $data['error'];
+        }
+        if (isset($data['regenerated'])) {
+            $metadata['regenerated'] = $data['regenerated'];
+        }
 
         $message = $this->messages()->create([
             'role' => $role,

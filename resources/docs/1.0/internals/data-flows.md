@@ -54,21 +54,27 @@ sequenceDiagram
     participant Controller as Laravel Controller
     participant AI as AiManager / Facade
     participant Context as ContextRetriever
+    participant FileCtx as FileContextProvider
     participant LLM as QueryGenerator + LLM
     participant Neo4j
     participant Response as ResponseGenerator
+    participant Enricher as ResponseFileEnricher
 
     User->>Controller: HTTP request / GraphQL / CLI
-    Controller->>AI: chat($messages)
+    Controller->>AI: answerQuestion($question)
     AI->>Context: retrieveContext(question)
     Context->>Qdrant: vector search (similar queries)
     Context->>Neo4j: schema + sample nodes
     Context--)AI: context bundle
+    AI->>FileCtx: getFileContext(question, user)
+    FileCtx--)AI: relevant files
     AI->>LLM: generate Cypher (prompt + context)
     LLM--)AI: validated Cypher query
     AI->>Neo4j: execute query (QueryExecutor)
     Neo4j--)AI: rows + stats
     AI->>Response: generate natural language answer
+    AI->>Enricher: enrichResponseWithFiles()
+    Enricher--)AI: response with file references
     Response--)Controller: insights + suggested viz
     Controller--)User: JSON / HTML / streaming chunks
 ```
@@ -77,6 +83,123 @@ Key safeguards:
 - Context retrieval tolerates partial failures (e.g., Qdrant offline) and still proceeds with available data.
 - Query validation enforces read-only patterns unless explicitly overridden.
 - Query execution enforces `AI_MAX_RESULTS` and `AI_QUERY_TIMEOUT`.
+
+---
+
+## Chat Message Flow
+
+This diagram shows the complete flow when a user sends a message through the chat interface. The `SendMessageService` provides a clean API while `AiChatService` handles conversation context and entity tracking.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Modal as AiChatModal
+    participant Send as SendMessageService
+    participant Chat as AiChatService
+    participant CtxMgr as ConversationContextManager
+    participant Sanitizer as InputSanitizer
+    participant AI as AI Facade
+    participant Context as ContextRetriever
+    participant FileCtx as FileContextProvider
+    participant QueryGen as QueryGenerator
+    participant QueryExec as QueryExecutor
+    participant Response as ResponseGenerator
+    participant LinkProc as ContentLinkProcessor
+
+    User->>Modal: Send message
+    Modal->>Send: sendMessage(conversation, message)
+    Send->>Chat: askWithConversation(question, conversation)
+
+    Note over Chat: Step 1: Context Processing
+    Chat->>CtxMgr: processQuestion(conversation, question, schema)
+    CtxMgr-->>Chat: contextResult (entities, references)
+
+    Note over Chat: Step 2: Security Check
+    Chat->>Sanitizer: analyze(question)
+    alt Injection detected
+        Sanitizer-->>Chat: {has_injection_risk: true}
+        Chat-->>User: Security blocked response
+    end
+    Sanitizer-->>Chat: {has_injection_risk: false}
+
+    Note over Chat: Step 3: Build Conversation Context
+    Chat->>CtxMgr: buildPromptContext(conversation)
+    CtxMgr-->>Chat: conversationContext
+
+    Note over Chat: Step 4: Store User Message
+    Chat->>Chat: conversation.addMessage('user', question)
+
+    Note over Chat: Step 5: Call AI Pipeline
+    Chat->>AI: answerQuestion(enrichedQuestion, options)
+    AI->>Context: retrieveContext(question)
+    AI->>FileCtx: getFileContext(question, user)
+    AI->>QueryGen: generate(question, context)
+    QueryGen->>QueryGen: buildPrompt via SemanticPromptBuilder
+    QueryGen-->>AI: {cypher, confidence, ...}
+    AI->>QueryExec: execute(cypher, params)
+    QueryExec-->>AI: {data, stats}
+    AI->>Response: generate(question, result, cypher)
+    Response-->>AI: {answer, insights, visualizations}
+    AI-->>Chat: complete response
+
+    Note over Chat: Step 6: Record & Store Response
+    Chat->>CtxMgr: recordResponse(conversation, answer, cypher, data)
+    Chat->>Chat: conversation.addMessage('assistant', answer)
+
+    Note over Chat: Step 7: Process Response Links
+    Chat-->>Modal: {answer, data, suggestions, sources}
+    Modal->>LinkProc: processForDirectRendering(content)
+    LinkProc-->>Modal: {content, elements, file_citations}
+    Modal-->>User: Formatted response with links
+```
+
+### Key Components in Chat Flow
+
+| Component | Responsibility |
+|-----------|----------------|
+| `SendMessageService` | Thin wrapper that validates input and delegates to `AiChatService` |
+| `AiChatService` | Orchestrates conversation context, security checks, and AI calls |
+| `ConversationContextManager` | Extracts entities, resolves references (e.g., "that person"), builds context |
+| `InputSanitizer` | Detects prompt injection attempts before processing |
+| `ContentLinkProcessor` | Processes entity links and file citations in responses |
+
+---
+
+## Response Processing Pipeline
+
+After the AI generates a response, it goes through several enrichment stages before being displayed to the user.
+
+```mermaid
+flowchart TD
+    A[Raw AI Response] --> B{Has File Context?}
+    B -->|Yes| C[ResponseFileEnricher]
+    B -->|No| D[Skip File Enrichment]
+    C --> E[Add file references to response]
+    E --> F[ResponseEntityEnricher]
+    D --> F
+    F --> G[Add entity action metadata]
+    G --> H{Security Filter}
+    H --> I[QueryResultFilter.filterResults]
+    I --> J[Remove sensitive columns]
+    J --> K[Final Response]
+    K --> L[ContentLinkProcessor]
+    L --> M[Process entity:// links]
+    M --> N[Process file citations]
+    N --> O[Strip inline markers]
+    O --> P[Create Kompo elements]
+    P --> Q[Rendered Message]
+```
+
+### Response Enrichment Details
+
+The response passes through multiple enrichers:
+
+1. **ResponseFileEnricher**: Adds `referenced_files` array with file metadata (name, path, relevance score)
+2. **ResponseEntityEnricher**: Adds `has_actions`, `available_actions`, `entity_type` to result rows
+3. **QueryResultFilter**: Server-side security - removes sensitive columns based on user permissions
+4. **ContentLinkProcessor**: Handles inline content processing for display:
+   - `ActionLinkHandler`: Processes `entity://Person/123` and `action://view` links
+   - `FileCitationHandler`: Processes `[1]`, `[2]` citation markers
 
 ---
 

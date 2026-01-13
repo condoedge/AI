@@ -337,6 +337,194 @@ protected function tearDown(): void
 └─────────────────┘  └─────────────────┘  └─────────────────┘
 ```
 
+---
+
+## Prompt Building Pipeline
+
+The `SemanticPromptBuilder` assembles LLM prompts by processing sections in priority order. Lower priority numbers execute first.
+
+```mermaid
+flowchart TD
+    subgraph Input["Input Data"]
+        Q[User Question]
+        CTX[Context Array]
+        OPT[Options]
+    end
+
+    subgraph Pipeline["Section Pipeline (sorted by priority)"]
+        direction TB
+        S10["10: project_context<br/>Project name, description, rules"]
+        S15["15: generic_context<br/>Current date/time"]
+        S17["17: current_user<br/>User and team context"]
+        S20["20: schema<br/>Database schema, node types"]
+        S30["30: relationships<br/>Relationship types"]
+        S40["40: example_entities<br/>Sample data"]
+        S45["45: file_context<br/>Relevant file content"]
+        S50["50: similar_queries<br/>Past successful queries"]
+        S55["55: conversation_context<br/>Chat history"]
+        S60["60: detected_entities<br/>Entities in question"]
+        S65["65: detected_scopes<br/>Filters detected"]
+        S70["70: pattern_library<br/>Query patterns"]
+        S75["75: query_rules<br/>Generation rules"]
+        S80["80: question<br/>The actual question"]
+        S90["90: task_instructions<br/>Final instructions"]
+    end
+
+    subgraph Processing["Processing Logic"]
+        CHECK{shouldInclude?}
+        FORMAT[section.format]
+        CALLBACK[Run callbacks]
+    end
+
+    Q --> Pipeline
+    CTX --> Pipeline
+    OPT --> Pipeline
+
+    S10 --> CHECK
+    CHECK -->|Yes| FORMAT
+    CHECK -->|No| SKIP[Skip section]
+    FORMAT --> CALLBACK
+    CALLBACK --> S15
+    SKIP --> S15
+
+    S15 -.-> S17 -.-> S20 -.-> S30 -.-> S40 -.-> S45 -.-> S50
+    S50 -.-> S55 -.-> S60 -.-> S65 -.-> S70 -.-> S75 -.-> S80 -.-> S90
+
+    S90 --> OUTPUT[Complete Prompt]
+```
+
+### Section Inclusion Logic
+
+Each section implements `shouldInclude()` to conditionally participate in the prompt:
+
+```mermaid
+flowchart LR
+    subgraph Conditions["shouldInclude() Examples"]
+        SC1["schema: Always included"]
+        SC2["similar_queries: Only if queries exist"]
+        SC3["conversation_context: Only if history exists"]
+        SC4["file_context: Only if files provided"]
+        SC5["detected_scopes: Only if scopes detected"]
+    end
+```
+
+### Extension Points
+
+The pipeline supports multiple extension mechanisms:
+
+```mermaid
+flowchart TD
+    subgraph Extensions["Extension Mechanisms"]
+        EXT1["addModule(section)<br/>Add new section"]
+        EXT2["removeModule(name)<br/>Remove section"]
+        EXT3["replaceModule(name, section)<br/>Swap implementation"]
+        EXT4["extendBefore(name, callback)<br/>Run before section"]
+        EXT5["extendAfter(name, callback)<br/>Run after section"]
+        EXT6["extendBuild(callback)<br/>Global: all instances"]
+    end
+
+    BUILDER[SemanticPromptBuilder] --> EXT1
+    BUILDER --> EXT2
+    BUILDER --> EXT3
+    BUILDER --> EXT4
+    BUILDER --> EXT5
+    STATIC[Static Method] --> EXT6
+```
+
+---
+
+## ResponseGenerator Pipeline
+
+The `ResponseGenerator` uses the same pipeline architecture to build prompts for transforming query results into natural language.
+
+```mermaid
+flowchart TD
+    subgraph Input["Input Data"]
+        RQ[Original Question]
+        RD[Query Results]
+        RC[Cypher Query]
+        RO[Options]
+    end
+
+    subgraph Pipeline["Response Section Pipeline"]
+        direction TB
+        R10["10: system<br/>LLM role definition"]
+        R15["15: security_restrictions<br/>Privacy guidelines"]
+        R20["20: project_context<br/>Project info"]
+        R30["30: question<br/>Original question"]
+        R40["40: query_info<br/>Executed Cypher"]
+        R45["45: file_context<br/>File content/citations"]
+        R50["50: data<br/>Results data"]
+        R60["60: statistics<br/>Result stats"]
+        R70["70: guidelines<br/>Formatting guidelines"]
+        R80["80: task<br/>Task instructions"]
+    end
+
+    subgraph Output["Output"]
+        PROMPT[Response Prompt]
+        LLM[LLM Call]
+        ANSWER[Natural Language Answer]
+    end
+
+    RQ --> Pipeline
+    RD --> Pipeline
+    RC --> Pipeline
+    RO --> Pipeline
+
+    R10 --> R15 --> R20 --> R30 --> R40 --> R45 --> R50 --> R60 --> R70 --> R80
+    R80 --> PROMPT
+    PROMPT --> LLM
+    LLM --> ANSWER
+```
+
+---
+
+## Complete Query-to-Response Flow
+
+This diagram shows how both pipelines work together in the full AI query flow:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant QueryGen as QueryGenerator
+    participant PromptBuilder as SemanticPromptBuilder
+    participant LLM as LLM Provider
+    participant QueryExec as QueryExecutor
+    participant ResponseGen as ResponseGenerator
+
+    User->>QueryGen: question + context
+    QueryGen->>PromptBuilder: buildPrompt(question, context)
+
+    Note over PromptBuilder: Process 15 sections<br/>in priority order
+
+    loop For each section (10-90)
+        PromptBuilder->>PromptBuilder: Run beforeCallbacks
+        PromptBuilder->>PromptBuilder: if shouldInclude() then format()
+        PromptBuilder->>PromptBuilder: Run afterCallbacks
+    end
+
+    PromptBuilder-->>QueryGen: Complete Cypher generation prompt
+    QueryGen->>LLM: Generate Cypher
+    LLM-->>QueryGen: Cypher query
+    QueryGen->>QueryExec: Execute query
+    QueryExec-->>QueryGen: Results + stats
+
+    QueryGen->>ResponseGen: generate(question, results, cypher)
+    ResponseGen->>ResponseGen: buildPrompt(context, options)
+
+    Note over ResponseGen: Process 10 sections<br/>in priority order
+
+    loop For each section (10-80)
+        ResponseGen->>ResponseGen: Run beforeCallbacks
+        ResponseGen->>ResponseGen: if shouldInclude() then format()
+        ResponseGen->>ResponseGen: Run afterCallbacks
+    end
+
+    ResponseGen->>LLM: Generate natural language response
+    LLM-->>ResponseGen: Answer text
+    ResponseGen-->>User: {answer, insights, visualizations}
+```
+
 ## Best Practices
 
 1. **Use configuration for default sections**: Define your section list in config files for easy deployment-specific customization.

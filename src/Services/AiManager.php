@@ -898,11 +898,11 @@ class AiManager
     // =========================================================================
 
     /**
-     * Filter sensitive data from query results server-side
+     * Filter sensitive data from query results based on user access level
      *
-     * This provides defense-in-depth beyond LLM prompt-level access control.
-     * The key insight is that access restrictions in prompts can be bypassed
-     * via prompt injection - this adds a second layer of protection at the data level.
+     * Note: Security filtering is now handled at the Eloquent level via HasSecurity.
+     * This method is kept as a placeholder for future AiAccessGate integration
+     * that will provide AI-specific permission checks.
      *
      * @param array $executionResult Query execution result
      * @param mixed $user User for access checking
@@ -910,45 +910,8 @@ class AiManager
      */
     protected function filterSensitiveResults(array $executionResult, mixed $user): array
     {
-        if (empty($executionResult['data'])) {
-            return $executionResult;
-        }
-
-        $filter = app(Security\QueryResultFilter::class);
-
-        // Detect entity type from results or metadata
-        $entityType = $this->detectEntityType($executionResult);
-
-        if ($entityType) {
-            $executionResult['data'] = $filter->filterResults(
-                $executionResult['data'],
-                $entityType,
-                $user
-            );
-        }
-
+        // Security is now enforced at the Eloquent fetch level via HasSecurity
+        // This method is a no-op pending AiAccessGate implementation
         return $executionResult;
-    }
-
-    /**
-     * Detect entity type from query results
-     *
-     * @param array $executionResult Query execution result
-     * @return string|null Entity type or null if not detected
-     */
-    protected function detectEntityType(array $executionResult): ?string
-    {
-        // Check metadata first
-        if (!empty($executionResult['metadata']['entity_type'])) {
-            return $executionResult['metadata']['entity_type'];
-        }
-
-        // Try to detect from first result's labels
-        $firstRow = $executionResult['data'][0] ?? null;
-        if ($firstRow && isset($firstRow['_labels'])) {
-            return $firstRow['_labels'][0] ?? null;
-        }
-
-        return null;
     }
 }

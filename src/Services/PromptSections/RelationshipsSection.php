@@ -55,11 +55,10 @@ class RelationshipsSection extends BasePromptSection
                 $foreignKey = $rel['foreign_key'] ?? 'id';
                 $direction = $rel['direction'] ?? 'outgoing';
                 $pivot = $rel['pivot'] ?? false;
-                $inferred = $rel['inferred'] ?? false;
                 $description = $rel['description'] ?? '';
 
-                if ($pivot || !$inferred) {
-                    // Skip pivot and non inferred relationships for clarity
+                if ($pivot) {
+                    // Skip pivot/junction table relationships for clarity
                     continue;
                 }
 

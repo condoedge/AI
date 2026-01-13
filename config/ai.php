@@ -618,6 +618,10 @@ return [
         // Alternative: closure-based resolver (takes precedence over scope)
         // Set in boot method: config(['ai.file_context.access_resolver' => fn($user) => [...]])
         'access_resolver' => null,
+
+        // Log file access attempts for security auditing
+        // Creates audit trail in ai_file_access_logs table
+        'log_access' => env('AI_FILE_ACCESS_LOG', true),
     ],
 
     /*

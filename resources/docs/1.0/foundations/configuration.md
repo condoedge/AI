@@ -297,6 +297,516 @@ AI_DOCS_PREFIX=ai-docs
 
 ---
 
+### Rate Limiting Configuration
+
+Configure rate limits to prevent DoS attacks via expensive query flooding:
+
+```env
+AI_QUERIES_PER_MINUTE=30
+AI_LLM_REQUESTS_PER_MINUTE=60
+```
+
+| Variable | Type | Default | Description |
+| --- | --- | --- | --- |
+| `AI_QUERIES_PER_MINUTE` | int | 30 | Max queries per minute per user |
+| `AI_LLM_REQUESTS_PER_MINUTE` | int | 60 | Max LLM API requests per minute |
+
+**Configure in `config/ai.php`:**
+
+```php
+'rate_limits' => [
+    'queries_per_minute' => env('AI_QUERIES_PER_MINUTE', 30),
+    'llm_requests_per_minute' => env('AI_LLM_REQUESTS_PER_MINUTE', 60),
+],
+```
+
+---
+
+### Access Control Configuration
+
+Control access levels and identify sensitive fields:
+
+```php
+'access_control' => [
+    'default_threshold' => env('AI_ACCESS_DEFAULT_THRESHOLD', 5),
+    'thresholds' => [],
+    'identifying_fields' => [
+        '*' => ['date_of_birth', 'email', 'phone', 'ssn', 'medical_id'],
+    ],
+],
+```
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `default_threshold` | int | 5 | Default access level threshold |
+| `thresholds` | array | [] | Custom thresholds per entity/action |
+| `identifying_fields` | array | [...] | Fields considered PII (per entity or `*` for all) |
+
+**Why this matters:**
+- Controls which fields are treated as personally identifying information (PII)
+- Enables automatic redaction or access control based on user permissions
+- The `*` key applies to all entities; use specific entity names for overrides
+
+---
+
+### Sync Triggers Configuration
+
+Define triggers for syncing related models when a model changes:
+
+```php
+'sync_triggers' => [
+    // Example: When a Customer is updated, also sync their Orders
+    // 'App\\Models\\Customer' => [
+    //     'orders' => ['on' => ['update']],
+    // ],
+],
+```
+
+| Option | Type | Description |
+| --- | --- | --- |
+| Model class | array | Map of relationship names to trigger configs |
+| `on` | array | Events that trigger sync: `create`, `update`, `delete` |
+
+**Use case:** Automatically propagate changes to related models in the graph database when a parent model changes.
+
+---
+
+### Model Namespaces Configuration
+
+Define which namespaces to scan for Eloquent models during discovery:
+
+```php
+'model_namespaces' => [
+    'App\Models',
+],
+```
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| (array items) | string | `App\Models` | Namespace paths to scan for models |
+
+**Customize this when:**
+- Your models are in a different namespace
+- You have multiple model directories (e.g., `App\Models`, `Domain\Models`)
+
+---
+
+### Relationship Weights Configuration
+
+Configure importance weights for different relationship types. Used to prioritize more important relationships when retrieving context for queries:
+
+```php
+'relationship_weights' => [
+    // High importance - direct business relationships
+    'PURCHASED' => 1.0,
+    'BELONGS_TO' => 0.9,
+    'MEMBER_OF' => 0.9,
+    'CREATED_BY' => 0.8,
+    'OWNS' => 0.8,
+
+    // Medium importance - secondary relationships
+    'RELATED_TO' => 0.6,
+    'TAGGED_WITH' => 0.5,
+    'CATEGORIZED_AS' => 0.5,
+
+    // Low importance - metadata relationships
+    'VIEWED' => 0.3,
+    'LOGGED' => 0.2,
+
+    // Default for unspecified relationships
+    'default' => 0.5,
+],
+```
+
+| Weight | Range | Description |
+| --- | --- | --- |
+| High | 0.8 - 1.0 | Direct business relationships (purchases, ownership) |
+| Medium | 0.5 - 0.7 | Secondary relationships (tags, categories) |
+| Low | 0.0 - 0.4 | Metadata relationships (views, logs) |
+| `default` | 0.5 | Applied to unspecified relationship types |
+
+**Why this matters:**
+- Helps the system prioritize context from important relationships
+- Reduces noise from less relevant connections
+- Customize weights based on your domain's relationship importance
+
+---
+
+### Semantic Context Selection
+
+Intelligent context selection uses vector similarity to determine which entities, relationships, and schema information are relevant to a question. This significantly reduces token consumption.
+
+```env
+AI_SEMANTIC_CONTEXT_ENABLED=true
+AI_SEMANTIC_CONTEXT_COLLECTION=context_index
+AI_SEMANTIC_CONTEXT_THRESHOLD=0.65
+AI_SEMANTIC_CONTEXT_TOP_K=10
+AI_SEMANTIC_CONTEXT_DIMENSION=1536
+```
+
+| Variable | Type | Default | Description |
+| --- | --- | --- | --- |
+| `AI_SEMANTIC_CONTEXT_ENABLED` | bool | true | Enable semantic context selection |
+| `AI_SEMANTIC_CONTEXT_COLLECTION` | string | context_index | Qdrant collection name |
+| `AI_SEMANTIC_CONTEXT_THRESHOLD` | float | 0.65 | Minimum similarity score (0.0-1.0) |
+| `AI_SEMANTIC_CONTEXT_TOP_K` | int | 10 | Maximum context items to retrieve |
+| `AI_SEMANTIC_CONTEXT_DIMENSION` | int | 1536 | Vector dimensions (match embedding provider) |
+
+**Configure in `config/ai.php`:**
+
+```php
+'semantic_context' => [
+    'enabled' => env('AI_SEMANTIC_CONTEXT_ENABLED', true),
+    'collection' => env('AI_SEMANTIC_CONTEXT_COLLECTION', 'context_index'),
+    'threshold' => (float) env('AI_SEMANTIC_CONTEXT_THRESHOLD', 0.65),
+    'top_k' => (int) env('AI_SEMANTIC_CONTEXT_TOP_K', 10),
+    'dimension' => (int) env('AI_SEMANTIC_CONTEXT_DIMENSION', 1536),
+],
+```
+
+**Benefits:**
+- Up to 80% reduction in token usage
+- Faster LLM responses
+- More focused context for better query generation
+
+**Workflow:**
+1. Run: `php artisan ai:index-context`
+2. System will automatically use semantic context selection
+
+---
+
+### Scope Matching Configuration
+
+Semantic matching for scope detection uses vector embeddings to match natural language phrases to registered scopes.
+
+```env
+AI_SCOPE_MATCHING_COLLECTION=scope_examples
+AI_SCOPE_MATCHING_THRESHOLD=0.70
+AI_SCOPE_MATCHING_TOP_K=5
+```
+
+| Variable | Type | Default | Description |
+| --- | --- | --- | --- |
+| `AI_SCOPE_MATCHING_COLLECTION` | string | scope_examples | Qdrant collection for scope examples |
+| `AI_SCOPE_MATCHING_THRESHOLD` | float | 0.70 | Similarity threshold for matching |
+| `AI_SCOPE_MATCHING_TOP_K` | int | 5 | Maximum scopes to retrieve |
+
+**Configure in `config/ai.php`:**
+
+```php
+'scope_matching' => [
+    'collection' => env('AI_SCOPE_MATCHING_COLLECTION', 'scope_examples'),
+    'threshold' => (float) env('AI_SCOPE_MATCHING_THRESHOLD', 0.70),
+    'top_k' => (int) env('AI_SCOPE_MATCHING_TOP_K', 5),
+],
+```
+
+**Example:** "show me volunteers" -> matches `volunteers` scope automatically.
+
+**Workflow:**
+1. Run: `php artisan ai:index-scopes`
+2. System will automatically use semantic scope matching
+
+---
+
+### File Context Configuration
+
+Configure how files are used as context for AI responses. Supports two modes: physical files (documentation) and database files.
+
+```env
+AI_FILE_CONTEXT_ENABLED=true
+AI_FILE_SECURITY_ENABLED=true
+AI_DOCS_BASE_PATH=
+AI_FILE_MODEL=App\Models\File
+AI_FILE_ACCESS_LOG=true
+```
+
+**Configure in `config/ai.php`:**
+
+```php
+'file_context' => [
+    // Enable file context in AI responses
+    'enabled' => env('AI_FILE_CONTEXT_ENABLED', true),
+
+    // Security mode for database files
+    'security_enabled' => env('AI_FILE_SECURITY_ENABLED', true),
+
+    // Physical file paths (glob patterns) - for documentation
+    'physical_paths' => [
+        // 'docs/**/*.mdx',
+        // 'resources/docs/**/*.md',
+    ],
+
+    // Supported extensions for physical files
+    'supported_extensions' => ['md', 'mdx', 'txt', 'rst'],
+
+    // Base path for physical files
+    'base_path' => env('AI_DOCS_BASE_PATH', base_path()),
+
+    // Qdrant collection for documentation chunks
+    'physical_collection' => 'documentation_chunks',
+
+    // Response limits
+    'max_references' => 5,
+    'min_relevance_score' => 0.4,
+    'include_snippets' => true,
+    'snippet_length' => 200,
+
+    // Database file access
+    'file_model' => env('AI_FILE_MODEL', 'App\\Models\\File'),
+    'access_scope' => 'accessibleBy',  // Scope method for filtering
+
+    // Fallback filters when scope unavailable
+    'fallback_filters' => [
+        'use_user_filter' => env('AI_FILE_USE_USER_FILTER', true),
+        'use_team_filter' => env('AI_FILE_USE_TEAM_FILTER', true),
+    ],
+
+    // Security auditing
+    'log_access' => env('AI_FILE_ACCESS_LOG', true),
+],
+```
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | bool | true | Enable file context in responses |
+| `security_enabled` | bool | true | Enable security filtering for DB files |
+| `physical_paths` | array | [] | Glob patterns for documentation files |
+| `supported_extensions` | array | [...] | Allowed file extensions |
+| `base_path` | string | base_path() | Root path for physical files |
+| `physical_collection` | string | documentation_chunks | Qdrant collection name |
+| `max_references` | int | 5 | Max file references per response |
+| `min_relevance_score` | float | 0.4 | Minimum score for inclusion |
+| `file_model` | string | App\Models\File | Your File model class |
+| `access_scope` | string | accessibleBy | Scope method for user access |
+| `log_access` | bool | true | Enable access audit logging |
+
+**Physical files:** Index documentation with `php artisan ai:ingest --docs`
+
+**Database files:** Configure `access_scope` to point to your File model's scope for user-accessible files. The system calls `File::accessibleBy($user)` to filter results.
+
+---
+
+### UI Theming Configuration
+
+Configure the visual theme for AI chat components:
+
+```env
+AI_UI_FACTORY=Condoedge\Ai\Services\UI\UserChatThemeFactory::class
+AI_UI_THEME=green
+```
+
+**Configure in `config/ai.php`:**
+
+```php
+'ui' => [
+    // Factory class for theme resolution
+    'factory' => env('AI_UI_FACTORY', \Condoedge\Ai\Services\UI\UserChatThemeFactory::class),
+
+    // Default theme: 'indigo', 'green', or 'config'
+    'theme' => env('AI_UI_THEME', 'green'),
+
+    // Optional color overrides
+    'colors' => [
+        // 'primary_gradient' => 'from-indigo-600 to-purple-600',
+    ],
+],
+```
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `factory` | string | UserChatThemeFactory | Theme factory class |
+| `theme` | string | green | Default theme name |
+| `colors` | array | [] | Custom color overrides |
+
+**Available themes:** `indigo`, `green`, `config`
+
+**Factory options:**
+- `ConfigChatThemeFactory`: Reads theme from config only
+- `UserChatThemeFactory`: Reads from user database settings first, falls back to config
+
+---
+
+### Entity ID Fields Configuration
+
+Field names checked when extracting entity IDs from query results. Checked in order; first match wins.
+
+```php
+'entity_id_fields' => [
+    'id',
+    '_id',
+    'neo4j_id',
+    'uuid',
+],
+```
+
+**Customize this when:**
+- Your entities use non-standard ID field names
+- You need to support multiple ID conventions
+
+---
+
+### Entity Actions Configuration
+
+Define clickable actions for specific entity types in AI responses. The AI generates markdown links that render as interactive elements.
+
+```php
+'entity_actions' => [
+    'Person' => [
+        'profile' => [
+            'action' => fn($id, $text = 'View Profile') => _Link($text)->href(route('people.show', $id)),
+            'aliases' => ['profile link', 'profile page', 'profile', 'view person'],
+            'label' => 'View Profile',
+        ],
+        'quick_view' => [
+            'action' => fn($id, $text = 'Quick View') => _Link($text)->selfGet('personModal', ['id' => $id])->inModal(),
+            'aliases' => ['quick view', 'preview', 'details'],
+            'label' => 'Quick View',
+        ],
+    ],
+],
+```
+
+| Option | Type | Description |
+| --- | --- | --- |
+| Entity key | string | The Neo4j node label (e.g., `Person`, `Order`) |
+| `action` | Closure | Returns a UI element; receives `$id` and optional `$text` |
+| `aliases` | array | Natural language phrases that trigger this action |
+| `label` | string | Display label for AI context |
+
+**AI link format:** `[link text](entity://EntityType/id/action_key)`
+
+**Example:** When AI generates `[John Smith](entity://Person/123/profile)`, it renders as a clickable link to view John Smith's profile.
+
+See: [Entity Actions](/docs/{{version}}/usage/entity-actions) for detailed configuration.
+
+---
+
+### Generic Actions Configuration
+
+Define app-wide navigation actions not tied to specific entities:
+
+```php
+'generic_actions' => [
+    'settings' => [
+        'action' => fn($text = 'Settings') => _Link($text)->href(route('settings.index')),
+        'aliases' => ['settings', 'settings page', 'preferences'],
+        'label' => 'Settings',
+    ],
+    'dashboard' => [
+        'action' => fn($text = 'Dashboard') => _Link($text)->href(route('dashboard')),
+        'aliases' => ['dashboard', 'home', 'main page'],
+        'label' => 'Dashboard',
+    ],
+],
+```
+
+| Option | Type | Description |
+| --- | --- | --- |
+| Action key | string | Unique identifier for the action |
+| `action` | Closure | Returns a UI element; receives optional `$text` |
+| `aliases` | array | Natural language phrases that trigger this action |
+| `label` | string | Display label for AI context |
+
+**AI link format:** `[link text](action://action_key)`
+
+See: [Entity Actions](/docs/{{version}}/usage/entity-actions) for detailed configuration.
+
+---
+
+### Query Generator Sections (Prompt Pipeline)
+
+Configure the sections included in the query generation prompt. Each section adds specific context for the LLM:
+
+```php
+'query_generator_sections' => [
+    \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
+    \Condoedge\Ai\Services\PromptSections\GenericContextSection::class,
+    \Condoedge\Ai\Services\PromptSections\CurrentUserContextSection::class,
+    \Condoedge\Ai\Services\PromptSections\SchemaSection::class,
+    \Condoedge\Ai\Services\PromptSections\RelationshipsSection::class,
+    \Condoedge\Ai\Services\PromptSections\ExampleEntitiesSection::class,
+    \Condoedge\Ai\Services\PromptSections\FileContextSection::class,
+    \Condoedge\Ai\Services\PromptSections\SimilarQueriesSection::class,
+    \Condoedge\Ai\Services\PromptSections\ConversationContextSection::class,
+    \Condoedge\Ai\Services\PromptSections\EntityActionAwarenessSection::class,
+    \Condoedge\Ai\Services\PromptSections\DetectedEntitiesSection::class,
+    \Condoedge\Ai\Services\PromptSections\DetectedScopesSection::class,
+    // Pattern library (uses closure for dependency injection)
+    fn(SemanticPromptBuilder $promptBuilder) => new \Condoedge\Ai\Services\PromptSections\PatternLibrarySection($promptBuilder->getPatternLibrary()),
+    \Condoedge\Ai\Services\PromptSections\QueryRulesSection::class,
+    \Condoedge\Ai\Services\PromptSections\QuestionSection::class,
+    \Condoedge\Ai\Services\PromptSections\TaskInstructionsSection::class,
+],
+```
+
+**Section descriptions:**
+
+| Section | Purpose |
+| --- | --- |
+| `ProjectContextSection` | Project name, description, domain |
+| `GenericContextSection` | General application context |
+| `CurrentUserContextSection` | Current user information for scoping |
+| `SchemaSection` | Neo4j schema (labels, properties) |
+| `RelationshipsSection` | Available relationships between entities |
+| `ExampleEntitiesSection` | Sample data for context |
+| `FileContextSection` | Relevant file/document content |
+| `SimilarQueriesSection` | Previously successful similar queries |
+| `ConversationContextSection` | Chat history context |
+| `EntityActionAwarenessSection` | Teaches AI about available actions |
+| `DetectedEntitiesSection` | Entities detected in the question |
+| `DetectedScopesSection` | Scopes detected in the question |
+| `PatternLibrarySection` | Query pattern templates |
+| `QueryRulesSection` | Rules for query generation |
+| `QuestionSection` | The user's question |
+| `TaskInstructionsSection` | Final task instructions |
+
+**Customization:** Add, remove, or reorder sections to control what context the LLM receives.
+
+---
+
+### Response Generator Sections (Response Pipeline)
+
+Configure the sections included in the response generation prompt:
+
+```php
+'response_generator_sections' => [
+    \Condoedge\Ai\Services\ResponseSections\SystemPromptSection::class,
+    \Condoedge\Ai\Services\ResponseSections\PrivacyAndSecurityGuidelinesSection::class,
+    \Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection::class,
+    \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
+    \Condoedge\Ai\Services\ResponseSections\QueryInfoSection::class,
+    \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
+    \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class,
+    \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,
+    \Condoedge\Ai\Services\ResponseSections\ResponseEntityActionsSection::class,
+    \Condoedge\Ai\Services\ResponseSections\StatisticsSection::class,
+    \Condoedge\Ai\Services\ResponseSections\GuidelinesSection::class,
+    \Condoedge\Ai\Services\ResponseSections\ResponseTaskSection::class,
+],
+```
+
+**Section descriptions:**
+
+| Section | Purpose |
+| --- | --- |
+| `SystemPromptSection` | System-level instructions |
+| `PrivacyAndSecurityGuidelinesSection` | PII handling rules |
+| `ResponseProjectContextSection` | Project context for response tone |
+| `OriginalQuestionSection` | The user's original question |
+| `QueryInfoSection` | Query that was executed |
+| `FileContextSection` | Relevant file content |
+| `ResponseConversationContextSection` | Chat history for follow-ups |
+| `ResultsDataSection` | Query results data |
+| `ResponseEntityActionsSection` | Available entity actions |
+| `StatisticsSection` | Result statistics |
+| `GuidelinesSection` | Response formatting guidelines |
+| `ResponseTaskSection` | Final response task |
+
+**Customization:** Modify the pipeline to add custom sections or change response behavior.
+
+---
+
 ---
 
 ## Configuration Priority

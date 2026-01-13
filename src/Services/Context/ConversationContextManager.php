@@ -111,8 +111,8 @@ class ConversationContextManager
         // Extract entity filter from Cypher WHERE clause
         $entityFilter = $this->extractEntityFilter($cypherQuery);
 
-        // Store result sample (first 3 results for context)
-        $resultSample = array_slice($queryResult['data'] ?? [], 0, 3);
+        // Store result sample (first 10 results for context)
+        $resultSample = array_slice($queryResult['data'] ?? [], 0, 10);
 
         // Extract referenced files for follow-up resolution
         // Only include if there are new files - don't overwrite previous with empty
@@ -143,7 +143,7 @@ class ConversationContextManager
             'last_result_count' => count($queryResult['data'] ?? []),
             'last_result_sample' => $resultSample,
             'focused_entity_filter' => $entityFilter,
-            'last_answer_summary' => Str::limit($response, 200),
+            'last_answer_summary' => Str::limit($response, 500),
             'updated_at' => now()->toIso8601String(),
         ];
 
@@ -259,7 +259,7 @@ class ConversationContextManager
                 'role' => $role,
                 'question' => $role === 'user' ? $content : null,
                 'answer_summary' => $role === 'assistant'
-                    ? Str::limit($content, 100)
+                    ? Str::limit($content, 300)
                     : null,
             ];
         }
