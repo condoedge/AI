@@ -9,8 +9,10 @@ use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Exceptions\QueryExecutionException;
 use Condoedge\Ai\Exceptions\QueryTimeoutException;
 use Condoedge\Ai\Exceptions\ReadOnlyViolationException;
+use Condoedge\Ai\Exceptions\SecurityException;
 use Condoedge\Ai\Models\AiQueryLog;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
+use Condoedge\Ai\Services\Security\AiSecurityService;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -84,6 +86,9 @@ class QueryExecutor implements QueryExecutorInterface
                 'context' => 'NO QUERY',
             ];
         }
+
+        // Apply security filtering if enabled
+        $cypherQuery = $this->applySecurityFilter($cypherQuery, $options);
 
         // SECURITY: Enforce rate limiting to prevent DoS via expensive query flooding
         if (!$this->rateLimiter->attempt()) {
@@ -583,5 +588,123 @@ class QueryExecutor implements QueryExecutorInterface
         }
 
         return null;
+    }
+
+    /**
+     * Apply security filtering to Cypher query.
+     *
+     * @param string $cypherQuery The query to filter
+     * @param array $options Execution options
+     * @return string The filtered query
+     * @throws SecurityException If access denied
+     */
+    private function applySecurityFilter(string $cypherQuery, array $options): string
+    {
+        // Skip if security filtering disabled in options
+        if (($options['skip_security'] ?? false) === true) {
+            return $cypherQuery;
+        }
+
+        // Get security service
+        $securityService = app(AiSecurityService::class);
+
+        // Check if security is enabled
+        if (!config('ai.security.enabled', true)) {
+            return $cypherQuery;
+        }
+
+        // Get current user
+        $user = auth()->user();
+        if (!$user) {
+            return $cypherQuery; // No user = no filtering (will be handled elsewhere)
+        }
+
+        // Extract entity from query
+        $entity = $this->extractPrimaryEntity($cypherQuery);
+        if (!$entity) {
+            return $cypherQuery; // Can't determine entity = can't filter
+        }
+
+        $alias = $this->extractEntityAlias($cypherQuery, $entity);
+
+        // Check for COUNT query with global permission
+        if ($this->isCountQuery($cypherQuery)) {
+            if ($securityService->shouldSkipTeamFilterForCount($user, $entity)) {
+                return $cypherQuery; // Global count permission - skip filter
+            }
+        }
+
+        // Get team filter
+        $teamFilter = $securityService->getTeamFilter($user, $entity, $alias);
+
+        if ($teamFilter) {
+            $cypherQuery = $this->injectTeamFilter($cypherQuery, $teamFilter);
+        }
+
+        return $cypherQuery;
+    }
+
+    /**
+     * Extract primary entity (label) from Cypher query.
+     * Looks for patterns like (n:Invoice), (i:Invoice), MATCH (n:Invoice)
+     */
+    private function extractPrimaryEntity(string $query): ?string
+    {
+        // Match patterns like (n:Invoice) or (invoice:Invoice)
+        if (preg_match('/\(\s*\w+\s*:\s*(\w+)\s*\)/i', $query, $matches)) {
+            return $matches[1];
+        }
+        return null;
+    }
+
+    /**
+     * Extract the alias used for the primary entity.
+     * e.g., MATCH (i:Invoice) -> 'i'
+     */
+    private function extractEntityAlias(string $query, string $entity): string
+    {
+        // Match (alias:Entity)
+        if (preg_match('/\(\s*(\w+)\s*:\s*' . preg_quote($entity, '/') . '\s*\)/i', $query, $matches)) {
+            return $matches[1];
+        }
+        return strtolower(substr($entity, 0, 1));
+    }
+
+    /**
+     * Check if query is a COUNT query.
+     */
+    private function isCountQuery(string $query): bool
+    {
+        return (bool) preg_match('/\bCOUNT\s*\(/i', $query);
+    }
+
+    /**
+     * Inject team filter into Cypher query.
+     * Inserts WHERE clause after MATCH but before RETURN/WITH.
+     */
+    private function injectTeamFilter(string $query, string $filter): string
+    {
+        // If filter already has WHERE, we need to use AND
+        $hasWhere = preg_match('/\bWHERE\b/i', $query);
+
+        if ($hasWhere) {
+            // Replace first WHERE with WHERE (filter) AND
+            // Extract just the condition part from filter (remove "WHERE" prefix)
+            $condition = preg_replace('/^\s*WHERE\s+/i', '', $filter);
+            return preg_replace(
+                '/\bWHERE\b/i',
+                'WHERE (' . $condition . ') AND ',
+                $query,
+                1
+            );
+        }
+
+        // No WHERE exists - insert filter before RETURN/WITH/ORDER
+        return preg_replace(
+            '/\b(RETURN|WITH|ORDER)\b/i',
+            $filter . ' $1',
+            $query,
+            1
+        );
     }
 }
