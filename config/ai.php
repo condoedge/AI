@@ -136,6 +136,51 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Security Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Team-based query filtering for AI. Filters all AI queries by user's
+    | permitted teams using Neo4j relationship traversal.
+    |
+    | Permission chain checks permissions in order; first with teams wins.
+    | Global count permission allows seeing total counts across all teams.
+    |
+    */
+    'security' => [
+        // Master switch
+        'enabled' => env('AI_SECURITY_ENABLED', true),
+
+        // Permission chain - checked in order, first with teams wins
+        'permission_chain' => [
+            '{Entity}.AiRetrieving',   // AI-specific (primary)
+            '{Entity}',                // Standard entity (fallback)
+        ],
+
+        // Global count permission - allows seeing total counts
+        'global_count_permission' => '{Entity}.AiGlobalCount',
+
+        // Default team_path for entities without explicit config
+        // 'auto' = detect from relationships
+        // 'team_id' = assume direct column
+        'default_team_path' => 'auto',
+
+        // What to do when no team_path found
+        // 'deny' = block query
+        // 'bypass' = allow without filtering
+        'on_missing_team_path' => 'deny',
+
+        // Response scope clarification
+        'clarify_scope' => true,
+        'scope_prefix' => 'Based on your permissions, ',
+
+        // Logging
+        'log_denied_access' => true,
+        'log_missing_team_path' => true,
+        'log_channel' => env('AI_SECURITY_LOG_CHANNEL', 'ai-security'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Sync Triggers Configuration
     |--------------------------------------------------------------------------
     */
