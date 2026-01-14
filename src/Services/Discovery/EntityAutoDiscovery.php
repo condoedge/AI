@@ -529,6 +529,12 @@ class EntityAutoDiscovery
      * - team_id column
      * - scopeSecurityForTeams() scope
      *
+     * Also discovers team_path for AI security filtering:
+     * - 'team_id' for direct column
+     * - 'auto' to detect from relationships
+     * - 'parent.team_id' for parent entity traversal
+     * - ['rel' => 'X', 'target' => 'Team'] for relationship traversal
+     *
      * @param string|Model $model Model class name or instance
      * @return array Security configuration
      */
@@ -542,6 +548,7 @@ class EntityAutoDiscovery
             'multiple_teams' => false,
             'has_owner_bypass' => false,
             'sensible_columns' => [],
+            'team_path' => null, // AI security: team filtering path
         ];
 
         // Strategy 1: Check for securityRelatedTeamIds method
@@ -572,7 +579,86 @@ class EntityAutoDiscovery
         // Get sensible columns from model
         $config['sensible_columns'] = $this->getSensibleColumns($modelInstance);
 
+        // Discover team_path for AI security filtering
+        $config['team_path'] = $this->discoverTeamPath($model);
+
         return $config;
+    }
+
+    /**
+     * Discover team_path for AI security filtering
+     *
+     * Determines how this entity relates to teams for query filtering:
+     * - Direct team_id column → 'team_id'
+     * - Relationship to Team → ['rel' => 'TYPE', 'target' => 'Team']
+     * - Through parent entity → 'parent.team_id'
+     * - Cannot determine → 'auto' (let runtime auto-detect)
+     *
+     * @param string|Model $model Model class name or instance
+     * @return string|array|null Team path configuration
+     */
+    protected function discoverTeamPath(string|Model $model): string|array|null
+    {
+        $modelInstance = $this->resolveModel($model);
+
+        // Priority 1: Direct team_id column
+        if ($this->hasColumn($modelInstance, 'team_id')) {
+            return 'team_id';
+        }
+
+        // Priority 2: Check TEAM_ID_COLUMN property for custom column name
+        if (property_exists($modelInstance, 'TEAM_ID_COLUMN')) {
+            $column = $this->getModelProperty($modelInstance, 'TEAM_ID_COLUMN');
+            if ($column && $this->hasColumn($modelInstance, $column)) {
+                return $column;
+            }
+        }
+
+        // Priority 3: Look for relationship to Team in discovered relationships
+        $relationships = $this->relationships->discover($model);
+        foreach ($relationships as $relationship) {
+            $targetLabel = $relationship['target_label'] ?? '';
+
+            // Direct relationship to Team
+            if ($targetLabel === 'Team') {
+                // If has foreign_key, it's a direct column
+                if (!empty($relationship['foreign_key'])) {
+                    return $relationship['foreign_key'];
+                }
+                // Otherwise, relationship traversal
+                return [
+                    'rel' => $relationship['type'] ?? 'BELONGS_TO_TEAM',
+                    'target' => 'Team',
+                ];
+            }
+        }
+
+        // Priority 4: Look for parent entity with team_id (e.g., InvoiceItem -> Invoice -> team_id)
+        foreach ($relationships as $relationship) {
+            $targetLabel = $relationship['target_label'] ?? '';
+            $relType = $relationship['type'] ?? '';
+
+            // Skip if this is not a "belongs to" type relationship
+            if (!str_contains(strtoupper($relType), 'BELONGS') && !str_contains(strtoupper($relType), 'OF')) {
+                continue;
+            }
+
+            // Check if the target entity has team_id
+            $relatedModel = $relationship['related_model'] ?? null;
+            if ($relatedModel && class_exists($relatedModel)) {
+                try {
+                    $relatedInstance = new $relatedModel();
+                    if ($this->hasColumn($relatedInstance, 'team_id')) {
+                        return strtolower($targetLabel) . '.team_id';
+                    }
+                } catch (\Throwable $e) {
+                    // Cannot instantiate related model, skip
+                }
+            }
+        }
+
+        // Default: auto-detect at runtime
+        return 'auto';
     }
 
     /**

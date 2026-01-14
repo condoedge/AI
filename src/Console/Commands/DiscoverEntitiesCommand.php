@@ -105,7 +105,8 @@ class DiscoverEntitiesCommand extends Command
             }
 
             $existingConfig = include $configPath;
-            $configurations = array_merge($existingConfig, $configurations);
+            // Deep merge: discovered values fill in gaps, but user customizations are preserved
+            $configurations = $this->mergeConfigurations($existingConfig, $configurations);
         }
 
         $content = $this->generateConfigFileContent($configurations);
@@ -159,6 +160,84 @@ class DiscoverEntitiesCommand extends Command
             $children = array_map('class_basename', $config['metadata']['child_models']);
             $this->line("    Children: <fg=yellow>" . implode(', ', $children) . "</>");
         }
+
+        // Display security team_path
+        if (!empty($config['security']['team_path'])) {
+            $teamPath = $config['security']['team_path'];
+            if (is_array($teamPath)) {
+                $teamPathDisplay = "[rel: {$teamPath['rel']}, target: {$teamPath['target']}]";
+            } else {
+                $teamPathDisplay = $teamPath;
+            }
+            $this->line("    Team Path: <fg=magenta>{$teamPathDisplay}</>");
+        }
+    }
+
+    /**
+     * Merge configurations preserving user customizations
+     *
+     * Discovery fills in gaps, but user-defined values take precedence.
+     * This ensures custom descriptions, team_path overrides, etc. are preserved.
+     *
+     * @param array $existing Existing user configuration
+     * @param array $discovered Newly discovered configuration
+     * @return array Merged configuration
+     */
+    private function mergeConfigurations(array $existing, array $discovered): array
+    {
+        $merged = $existing;
+
+        foreach ($discovered as $modelClass => $config) {
+            if (!isset($merged[$modelClass])) {
+                // New model - add entirely
+                $merged[$modelClass] = $config;
+                continue;
+            }
+
+            // Existing model - deep merge, preserving user values
+            $merged[$modelClass] = $this->deepMergePreserveExisting(
+                $merged[$modelClass],
+                $config
+            );
+        }
+
+        return $merged;
+    }
+
+    /**
+     * Deep merge where existing (user) values take precedence
+     *
+     * - If existing has a value, keep it (user customization)
+     * - If existing is null/empty but discovered has value, use discovered
+     * - Arrays are recursively merged
+     *
+     * @param array $existing Existing user config
+     * @param array $discovered Discovered config
+     * @return array Merged config
+     */
+    private function deepMergePreserveExisting(array $existing, array $discovered): array
+    {
+        foreach ($discovered as $key => $value) {
+            // Key doesn't exist in existing - add it
+            if (!array_key_exists($key, $existing)) {
+                $existing[$key] = $value;
+                continue;
+            }
+
+            // Both are arrays - recurse
+            if (is_array($value) && is_array($existing[$key])) {
+                $existing[$key] = $this->deepMergePreserveExisting($existing[$key], $value);
+                continue;
+            }
+
+            // Existing has null/empty but discovered has value - use discovered
+            if (empty($existing[$key]) && !empty($value)) {
+                $existing[$key] = $value;
+            }
+            // Otherwise keep existing (user customization preserved)
+        }
+
+        return $existing;
     }
 
     private function generateConfigFileContent(array $configurations): string
