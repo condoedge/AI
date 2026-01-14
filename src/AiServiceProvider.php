@@ -81,6 +81,10 @@ use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
 use Condoedge\Ai\Services\Settings\UserChatSettings;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Policies\AiConversationPolicy;
+use Condoedge\Ai\Contracts\AiAuthAdapterInterface;
+use Condoedge\Ai\Auth\KompoAuthAdapter;
+use Condoedge\Ai\Services\Security\TeamPathResolver;
+use Condoedge\Ai\Services\Security\AiSecurityService;
 use Condoedge\Utils\Facades\FileModel;
 
 /**
@@ -372,6 +376,9 @@ class AiServiceProvider extends ServiceProvider
 
         // Register Settings Services
         $this->registerSettingsServices();
+
+        // Register Security Services
+        $this->registerSecurityServices();
     }
 
     /**
@@ -598,6 +605,28 @@ class AiServiceProvider extends ServiceProvider
     }
 
     /**
+     * Register security services.
+     */
+    private function registerSecurityServices(): void
+    {
+        // Register Auth Adapter (abstract interface for swappable implementations)
+        $this->app->singleton(AiAuthAdapterInterface::class, function ($app) {
+            return new KompoAuthAdapter();
+        });
+
+        // Register TeamPathResolver
+        $this->app->singleton(TeamPathResolver::class);
+
+        // Register AiSecurityService (main orchestrator)
+        $this->app->singleton(AiSecurityService::class, function ($app) {
+            return new AiSecurityService(
+                $app->make(AiAuthAdapterInterface::class),
+                $app->make(TeamPathResolver::class)
+            );
+        });
+    }
+
+    /**
      * Bootstrap services
      *
      * @return void
@@ -795,6 +824,10 @@ class AiServiceProvider extends ServiceProvider
             ChatThemeInterface::class,
             ChatSettingsInterface::class,
             RegenerateMessageService::class,
+            AiAuthAdapterInterface::class,
+            KompoAuthAdapter::class,
+            TeamPathResolver::class,
+            AiSecurityService::class,
         ];
     }
 }
