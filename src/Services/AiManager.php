@@ -789,13 +789,17 @@ class AiManager
                 $responseResult = $this->enrichResponseWithFiles($responseResult, $context['file_context'], $options);
             }
 
-            // Apply scope clarification if security is enabled
+            // Apply scope clarification only if security filtering was actually applied
             $answer = $responseResult['answer'];
-            if (config('ai.security.enabled', true) && config('ai.security.clarify_scope', true)) {
+            $securityFilterApplied = $executionResult['metadata']['security_filter_applied'] ?? false;
+            $scopeClarified = false;
+
+            if ($securityFilterApplied && config('ai.security.clarify_scope', true)) {
                 $prefix = config('ai.security.scope_prefix', 'Based on your permissions, ');
                 // Only add prefix if answer doesn't already start with it
                 if (!str_starts_with($answer, $prefix)) {
                     $answer = $prefix . lcfirst($answer);
+                    $scopeClarified = true;
                 }
             }
 
@@ -812,7 +816,8 @@ class AiManager
                     'query' => $queryResult['metadata'],
                     'execution' => $executionResult['metadata'],
                     'response' => $responseResult['metadata'],
-                    'scope_clarified' => config('ai.security.enabled', true) && config('ai.security.clarify_scope', true),
+                    'scope_clarified' => $scopeClarified,
+                    'security_filter_applied' => $securityFilterApplied,
                 ],
             ];
 

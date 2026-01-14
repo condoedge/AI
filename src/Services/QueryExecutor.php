@@ -88,7 +88,9 @@ class QueryExecutor implements QueryExecutorInterface
         }
 
         // Apply security filtering if enabled
-        $cypherQuery = $this->applySecurityFilter($cypherQuery, $options);
+        $securityResult = $this->applySecurityFilter($cypherQuery, $options);
+        $cypherQuery = $securityResult['query'];
+        $securityFilterApplied = $securityResult['filter_applied'];
 
         // SECURITY: Enforce rate limiting to prevent DoS via expensive query flooding
         if (!$this->rateLimiter->attempt()) {
@@ -157,6 +159,7 @@ class QueryExecutor implements QueryExecutorInterface
                     'format' => $format,
                     'read_only' => $readOnly,
                     'timeout' => $timeout,
+                    'security_filter_applied' => $securityFilterApplied,
                 ],
                 'errors' => [],
             ];
@@ -595,14 +598,14 @@ class QueryExecutor implements QueryExecutorInterface
      *
      * @param string $cypherQuery The query to filter
      * @param array $options Execution options
-     * @return string The filtered query
+     * @return array{query: string, filter_applied: bool}
      * @throws SecurityException If access denied
      */
-    private function applySecurityFilter(string $cypherQuery, array $options): string
+    private function applySecurityFilter(string $cypherQuery, array $options): array
     {
         // Skip if security filtering disabled in options
         if (($options['skip_security'] ?? false) === true) {
-            return $cypherQuery;
+            return ['query' => $cypherQuery, 'filter_applied' => false];
         }
 
         // Get security service
@@ -610,19 +613,19 @@ class QueryExecutor implements QueryExecutorInterface
 
         // Check if security is enabled
         if (!config('ai.security.enabled', true)) {
-            return $cypherQuery;
+            return ['query' => $cypherQuery, 'filter_applied' => false];
         }
 
         // Get current user
         $user = auth()->user();
         if (!$user) {
-            return $cypherQuery; // No user = no filtering (will be handled elsewhere)
+            return ['query' => $cypherQuery, 'filter_applied' => false];
         }
 
         // Extract entity from query
         $entity = $this->extractPrimaryEntity($cypherQuery);
         if (!$entity) {
-            return $cypherQuery; // Can't determine entity = can't filter
+            return ['query' => $cypherQuery, 'filter_applied' => false];
         }
 
         $alias = $this->extractEntityAlias($cypherQuery, $entity);
@@ -630,7 +633,7 @@ class QueryExecutor implements QueryExecutorInterface
         // Check for COUNT query with global permission
         if ($this->isCountQuery($cypherQuery)) {
             if ($securityService->shouldSkipTeamFilterForCount($user, $entity)) {
-                return $cypherQuery; // Global count permission - skip filter
+                return ['query' => $cypherQuery, 'filter_applied' => false];
             }
         }
 
@@ -639,9 +642,10 @@ class QueryExecutor implements QueryExecutorInterface
 
         if ($teamFilter) {
             $cypherQuery = $this->injectTeamFilter($cypherQuery, $teamFilter);
+            return ['query' => $cypherQuery, 'filter_applied' => true];
         }
 
-        return $cypherQuery;
+        return ['query' => $cypherQuery, 'filter_applied' => false];
     }
 
     /**
