@@ -8,6 +8,7 @@ use Condoedge\Ai\Contracts\ContextRetrieverInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Domain\Traits\ResolvesEntityConfigKey;
 
 /**
  * ContextRetriever
@@ -67,6 +68,8 @@ use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
  */
 class ContextRetriever implements ContextRetrieverInterface
 {
+    use ResolvesEntityConfigKey;
+
     /**
      * Default options for context retrieval
      */
@@ -413,7 +416,7 @@ class ContextRetriever implements ContextRetrieverInterface
         // Process selected scopes
         foreach ($semanticContext['scopes'] ?? [] as $scopeName => $scopeInfo) {
             $entityName = $scopeInfo['entity'] ?? '';
-            $fullEntityName = $this->findFullEntityName($entityName);
+            $fullEntityName = $this->findFullEntityName($entityName, $this->entityConfigs);
 
             // Get scope config from entity configs
             $scopeConfig = [];
@@ -626,7 +629,7 @@ class ContextRetriever implements ContextRetrieverInterface
                 $entityName = $scopeData['entity'] ?? '';
 
                 // Find the full entity name (with namespace) if needed
-                $fullEntityName = $this->findFullEntityName($entityName);
+                $fullEntityName = $this->findFullEntityName($entityName, $this->entityConfigs);
 
                 if ($fullEntityName) {
                     $detectedEntities[] = $fullEntityName;
@@ -735,22 +738,6 @@ class ContextRetriever implements ContextRetrieverInterface
             'match_type' => $scopeConfig['match_type'] ?? 'string',
             'matched_example' => $scopeConfig['matched_example'] ?? null,
         ];
-    }
-
-    /**
-     * Find the full entity name (with namespace) from a short name
-     *
-     * @param string $shortName Short entity name (e.g., "Person")
-     * @return string|null Full entity name or null if not found
-     */
-    private function findFullEntityName(string $shortName): ?string
-    {
-        foreach ($this->entityConfigs as $fullName => $config) {
-            if (strcasecmp(class_basename($fullName), $shortName) === 0) {
-                return $fullName;
-            }
-        }
-        return null;
     }
 
     /**

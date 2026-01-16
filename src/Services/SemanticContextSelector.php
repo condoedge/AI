@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Domain\Traits\ResolvesEntityConfigKey;
 
 /**
  * SemanticContextSelector
@@ -27,6 +28,8 @@ use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
  */
 class SemanticContextSelector
 {
+    use ResolvesEntityConfigKey;
+
     private const DEFAULT_COLLECTION_NAME = 'context_index';
     private const DEFAULT_THRESHOLD = 0.65;
     private const DEFAULT_TOP_K = 10;
@@ -505,16 +508,4 @@ class SemanticContextSelector
         }
     }
 
-    /**
-     * Find full entity name from short name
-     */
-    private function findFullEntityName(string $shortName, array $entityConfigs): ?string
-    {
-        foreach ($entityConfigs as $fullName => $config) {
-            if (strcasecmp(class_basename($fullName), $shortName) === 0) {
-                return $fullName;
-            }
-        }
-        return null;
-    }
 }

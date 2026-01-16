@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Security;
 
+use Condoedge\Ai\Domain\Traits\ResolvesEntityConfigKey;
+
 /**
  * Resolves team_path config to Cypher filter clauses.
  */
 class TeamPathResolver
 {
+    use ResolvesEntityConfigKey;
     /**
      * Resolve team path config to Cypher filter.
      *
@@ -61,7 +64,8 @@ class TeamPathResolver
      */
     private function getTeamPath(string $entity): mixed
     {
-        $entityConfig = config("entities.{$entity}.security.team_path");
+        $configKey = $this->getEntityConfigKey($entity);
+        $entityConfig = config("entities.{$configKey}.security.team_path");
 
         if ($entityConfig !== null) {
             return $entityConfig;
@@ -76,7 +80,8 @@ class TeamPathResolver
      */
     private function autoDetect(string $entity, string $alias, array $teamIds): ?array
     {
-        $relationships = config("entities.{$entity}.graph.relationships", []);
+        $configKey = $this->getEntityConfigKey($entity);
+        $relationships = config("entities.{$configKey}.graph.relationships", []);
 
         // Find relationship to Team
         $teamRel = collect($relationships)
@@ -112,7 +117,8 @@ class TeamPathResolver
         $parentEntity = ucfirst($parentKey);
 
         // Find relationship to parent
-        $relationships = config("entities.{$entity}.graph.relationships", []);
+        $configKey = $this->getEntityConfigKey($entity);
+        $relationships = config("entities.{$configKey}.graph.relationships", []);
         $parentRel = collect($relationships)
             ->first(fn($r) => ($r['target_label'] ?? null) === $parentEntity);
 
