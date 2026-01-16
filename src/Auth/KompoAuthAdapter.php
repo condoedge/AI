@@ -21,6 +21,10 @@ class KompoAuthAdapter implements AiAuthAdapterInterface
             return [];
         }
 
+        if (config('ai.security.permission_level', 'teams') === 'teams') {
+            return $user->getAllAccessibleTeamIds();
+        }
+
         $permissionChain = config('ai.security.permission_chain', [
             '{Entity}.AiRetrieving',
             '{Entity}',
@@ -60,7 +64,7 @@ class KompoAuthAdapter implements AiAuthAdapterInterface
      */
     public function isEnabled(): bool
     {
-        return config('ai.security.enabled', true);
+        return config('ai.security.enabled', true) && !globalSecurityBypass();
     }
 
     /**

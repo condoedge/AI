@@ -32,7 +32,7 @@ return new class extends Migration
             $table->text('content');
             $table->json('response_data')->nullable(); // AiChatResponseData serialized
             $table->json('context_used')->nullable(); // RAG context for debugging
-            $table->string('cypher_query')->nullable();
+            $table->text('cypher_query')->nullable();
             $table->integer('execution_time_ms')->nullable();
             $table->float('confidence_score')->nullable();
             $table->json('metadata')->nullable();

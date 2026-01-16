@@ -150,6 +150,8 @@ return [
         // Master switch
         'enabled' => env('AI_SECURITY_ENABLED', true),
 
+        'permission_level' => 'teams', // 'teams' or 'roles'
+
         // Permission chain - checked in order, first with teams wins
         'permission_chain' => [
             '{Entity}.AiRetrieving',   // AI-specific (primary)
@@ -164,13 +166,16 @@ return [
         // 'team_id' = assume direct column
         'default_team_path' => 'auto',
 
+        // When there is no record of the permissions we must select if it must be deny first or bypass
+        'on_permission_unexistent' => 'bypass', // 'deny' or 'bypass'
+
         // What to do when no team_path found
         // 'deny' = block query
         // 'bypass' = allow without filtering
         'on_missing_team_path' => 'deny',
 
         // Response scope clarification
-        'clarify_scope' => true,
+        'clarify_scope' => false,
         'scope_prefix' => 'Based on your permissions, ',
 
         // Logging

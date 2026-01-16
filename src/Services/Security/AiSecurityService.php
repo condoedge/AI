@@ -7,6 +7,7 @@ namespace Condoedge\Ai\Services\Security;
 use Condoedge\Ai\Contracts\AiAuthAdapterInterface;
 use Condoedge\Ai\Exceptions\SecurityException;
 use Illuminate\Support\Facades\Log;
+use Kompo\Auth\Models\Teams\Permission;
 
 /**
  * Main security service for AI queries.
@@ -31,6 +32,19 @@ class AiSecurityService
     public function getTeamFilter($user, string $entity, string $alias): ?string
     {
         if (!$this->authAdapter->isEnabled()) {
+            return null;
+        }
+
+        if ($this->checkIfPermissionsExist($user, $entity) === false) {
+            $action = config('ai.security.on_permission_unexistent', 'deny');
+
+            if ($action === 'deny') {
+                throw new SecurityException(
+                    "Cannot verify permissions for {$entity} data"
+                );
+            }
+
+            // 'bypass' - return null (no filter)
             return null;
         }
 
@@ -76,6 +90,23 @@ class AiSecurityService
         }
 
         return $this->authAdapter->getTeamsWithPermission($user, $entity);
+    }
+
+    private function checkIfPermissionsExist($user, string $entity): bool
+    {
+        $permissionChain = config('ai.security.permission_chain', [
+            '{Entity}.AiRetrieving',
+            '{Entity}',
+        ]);
+
+        while ($pattern = array_shift($permissionChain)) {
+            $permission = str_replace('{Entity}', $entity, $pattern);
+            if (Permission::findByKey($permission) !== null) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
