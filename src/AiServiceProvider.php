@@ -502,7 +502,9 @@ class AiServiceProvider extends ServiceProvider
     {
         // Register AI Chat Service
         $this->app->singleton(AiChatServiceInterface::class, function ($app) {
-            return new AiChatService(
+            $aiChatService = config('ai.chat.service', AiChatService::class);
+            
+            return new $aiChatService(
                 config: config('ai.chat', [])
             );
         });

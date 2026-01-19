@@ -687,12 +687,6 @@ return [
         // Service class for chat functionality
         'service' => env('AI_CHAT_SERVICE', \Condoedge\Ai\Services\Chat\AiChatService::class),
 
-        // Default theme: modern, minimal, gradient, glassmorphism
-        'theme' => env('AI_CHAT_THEME', 'modern'),
-
-        // Primary brand color
-        'primary_color' => env('AI_CHAT_PRIMARY_COLOR', '#6366f1'),
-
         // Welcome screen
         'welcome' => [
             'title' => env('AI_CHAT_WELCOME_TITLE', 'AI Assistant'),
