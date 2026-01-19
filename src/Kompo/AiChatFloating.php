@@ -2,97 +2,36 @@
 
 namespace Condoedge\Ai\Kompo;
 
+use Condoedge\Ai\Kompo\Traits\HasChatTheme;
+use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
 use Condoedge\Utils\Kompo\Common\Form;
 
 /**
  * AI Chat Floating Button - A floating action button that opens the AI chat.
  *
  * Features ultra-visual design with animations and gradient effects.
- *
- * Usage:
- *   // Basic - just include in your layout
- *   new AiChatFloating()
- *
- *   // With custom position and label
- *   new AiChatFloating(null, [
- *       'position' => 'bottom-left',
- *       'label' => 'Ask AI',
- *       'pulse' => true,
- *   ])
  */
 class AiChatFloating extends Form
 {
-    protected string $position;
-    protected string $size;
-    protected string $theme;
-    protected ?string $label;
-    protected bool $pulse;
-    protected array $modalConfig;
-
-    public function created()
-    {
-        $this->position = $this->prop('position') ?? 'bottom-right';
-        $this->size = $this->prop('size') ?? 'lg';
-        $this->theme = $this->prop('theme') ?? 'gradient';
-        $this->label = $this->prop('label');
-        $this->pulse = $this->prop('pulse') ?? false;
-        $this->modalConfig = $this->prop('modal_config') ?? [];
-
-        $this->store(['modal_config' => $this->modalConfig]);
-    }
+    use HasChatTheme, HasMethodsAsProperties;
 
     public function render()
     {
-        $positions = [
-            'bottom-right' => 'bottom-6 right-6',
-            'bottom-left' => 'bottom-6 left-6',
-            'top-right' => 'top-6 right-6',
-            'top-left' => 'top-6 left-6',
-        ];
-
-        $sizes = [
-            'sm' => ['button' => 'w-12 h-12', 'icon' => 'w-5 h-5'],
-            'md' => ['button' => 'w-14 h-14', 'icon' => 'w-6 h-6'],
-            'lg' => ['button' => 'w-16 h-16', 'icon' => 'w-7 h-7'],
-        ];
-
-        $themes = [
-            'gradient' => 'bg-gradient-to-r from-indigo-600 via-purple-600 to-fuchsia-600 text-white hover:from-indigo-700 hover:via-purple-700 hover:to-fuchsia-700 shadow-lg shadow-indigo-500/30',
-            'solid' => 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-500/30',
-            'outline' => 'bg-white/90 backdrop-blur-sm text-indigo-600 border-2 border-indigo-400 hover:bg-indigo-50 hover:border-indigo-500 shadow-lg',
-            'dark' => 'bg-gray-900 text-white hover:bg-gray-800 shadow-lg shadow-gray-900/30',
-        ];
-
-        $positionClass = $positions[$this->position] ?? $positions['bottom-right'];
-        $sizeConfig = $sizes[$this->size] ?? $sizes['lg'];
-        $themeClass = $themes[$this->theme] ?? $themes['gradient'];
-
-        $buttonClass = $this->label
-            ? "px-6 py-4 rounded-2xl gap-2 {$themeClass}"
-            : "rounded-full {$sizeConfig['button']} {$themeClass}";
-
-        $content = [_Html($this->chatIcon($sizeConfig['icon']))];
-        if ($this->label) {
-            $content[] = _Html($this->label)->class('font-semibold whitespace-nowrap');
-        }
-
         return _Rows(
             // Glow effect
-            $this->pulse
-                ? _Html('')->class('absolute inset-0 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 animate-ping opacity-30')
-                : null,
+            _Html('')->class('absolute inset-0 rounded-full animate-ping opacity-30' . $this->theme_gradient),
             // Outer glow ring
-            _Html('')->class('absolute inset-[-4px] rounded-full bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-fuchsia-500/20 blur-lg'),
+            _Html('')->class('absolute inset-[-4px] rounded-full blur-lg ' . $this->theme_gradient),
             // Main button
-            _Link(...$content)
-                ->class("relative inline-flex items-center justify-center hover:shadow-2xl transform hover:scale-110 active:scale-95 transition-all duration-300 ease-out {$buttonClass}")
+            _Link($this->chatIcon('w-8 h-8'))
+                ->class($this->themeAccentGradient() . " text-white/80 bg-opacity/80 p-2 rounded-full relative inline-flex items-center justify-center hover:shadow-2xl transform hover:scale-110 active:scale-95 transition-all duration-300 ease-out")
                 ->selfGet('openChatModal')->inModal()
-        )->class("fixed {$positionClass} z-50 group");
+        )->class("fixed bottom-10 right-10 z-50 group");
     }
 
     public function openChatModal()
     {
-        return new AiChatPanel(null, $this->modalConfig);
+        return new AiChatPanel();
     }
 
     protected function chatIcon(string $sizeClass): string
