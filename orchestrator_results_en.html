@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orchestrator - Test Results</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 2rem;
+            line-height: 1.6;
+        }
+        .container { max-width: 960px; margin: 0 auto; }
+
+        h1 {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            color: #f8fafc;
+        }
+        .subtitle {
+            text-align: center;
+            color: #94a3b8;
+            margin-bottom: 2.5rem;
+            font-size: 1rem;
+        }
+
+        .test-card {
+            background: #1e293b;
+            border-radius: 12px;
+            margin-bottom: 2rem;
+            overflow: hidden;
+            border: 1px solid #334155;
+        }
+
+        .test-header {
+            padding: 1.2rem 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .test-header.profile-copro { background: linear-gradient(135deg, #1e40af, #3b82f6); }
+        .test-header.profile-proxima { background: linear-gradient(135deg, #065f46, #10b981); }
+        .test-header.profile-strato { background: linear-gradient(135deg, #7c2d12, #f97316); }
+
+        .test-number {
+            background: rgba(255,255,255,0.2);
+            border-radius: 50%;
+            width: 40px; height: 40px;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+        .test-header-text h2 { font-size: 1.2rem; color: #fff; }
+        .test-header-text span { font-size: 0.85rem; opacity: 0.85; }
+
+        .section { padding: 1.2rem 1.5rem; border-top: 1px solid #334155; }
+
+        .question-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #64748b;
+            margin-bottom: 0.3rem;
+        }
+        .question-text {
+            font-size: 1.05rem;
+            color: #f1f5f9;
+            font-style: italic;
+        }
+
+        .routing-box {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+            border-left: 4px solid #6366f1;
+        }
+        .routing-box .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #818cf8;
+            margin-bottom: 0.2rem;
+        }
+        .routing-box .target {
+            font-weight: 700;
+            font-size: 1.05rem;
+            color: #a5b4fc;
+        }
+        .routing-box .reasoning {
+            margin-top: 0.5rem;
+            font-size: 0.9rem;
+            color: #94a3b8;
+        }
+
+        .response-body h3 {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #64748b;
+            margin-bottom: 0.8rem;
+        }
+        .response-content {
+            color: #cbd5e1;
+            font-size: 0.95rem;
+        }
+        .response-content p { margin-bottom: 0.8rem; }
+        .response-content strong { color: #f1f5f9; }
+        .response-content ol, .response-content ul {
+            margin: 0.5rem 0 1rem 1.5rem;
+        }
+        .response-content li { margin-bottom: 0.4rem; }
+
+        .brand-section {
+            margin-top: 1rem;
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+        }
+        .brand-section.proxima { border-left: 4px solid #10b981; }
+        .brand-section.strato { border-left: 4px solid #f97316; }
+        .brand-section h4 {
+            font-size: 0.95rem;
+            margin-bottom: 0.6rem;
+        }
+        .brand-section.proxima h4 { color: #34d399; }
+        .brand-section.strato h4 { color: #fb923c; }
+        .brand-section p, .brand-section li { font-size: 0.9rem; color: #94a3b8; }
+        .brand-section ol, .brand-section ul { margin: 0.5rem 0 0.5rem 1.5rem; }
+        .brand-section li { margin-bottom: 0.3rem; }
+
+        .signature {
+            margin-top: 0.8rem;
+            font-style: italic;
+            font-size: 0.85rem;
+            color: #64748b;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 2rem;
+            color: #475569;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <h1>Orchestrator - Condominium Management</h1>
+    <p class="subtitle">Multi-profile routing test results</p>
+
+    <!-- TEST 1 -->
+    <div class="test-card">
+        <div class="test-header profile-copro">
+            <div class="test-number">1</div>
+            <div class="test-header-text">
+                <h2>Co-owner</h2>
+                <span>Profile #1 - Standard response</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="question-label">Question asked</div>
+            <div class="question-text">"Am I allowed to have two dogs?"</div>
+        </div>
+
+        <div class="section">
+            <div class="routing-box">
+                <div class="label">Orchestrator - Routing</div>
+                <div class="target">Co-owner (standard response)</div>
+                <div class="reasoning">The user is a co-owner, so the request must be routed to 'base' in accordance with established rules.</div>
+            </div>
+        </div>
+
+        <div class="section response-body">
+            <h3>Response</h3>
+            <div class="response-content">
+                <p>Hello!</p>
+                <p>Whether you can have two dogs in your condominium depends primarily on the <strong>condominium by-laws</strong>. This document sets the rules for communal living and may include provisions regarding pet ownership.</p>
+                <p>Here is what I recommend you do:</p>
+                <ol>
+                    <li><strong>Check the condominium by-laws</strong>: Review this document to see if there are any restrictions or specific conditions on pet ownership.</li>
+                    <li><strong>Respect good neighbourly conduct</strong>: Even if the by-laws allow you to have two dogs, make sure their presence does not cause noise disturbances or odours for your neighbours.</li>
+                    <li><strong>Precautions and legal obligations</strong>: Make sure your dogs are properly identified (microchip or tattoo) and vaccinated according to current standards. Also remember to pick up after them in common areas.</li>
+                </ol>
+                <p>If you have specific questions or if the by-laws are unclear, do not hesitate to speak with your property manager or to contact your building's board of directors.</p>
+                <p>Feel free to come back to me if you have any other questions!</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- TEST 2 -->
+    <div class="test-card">
+        <div class="test-header profile-proxima">
+            <div class="test-number">2</div>
+            <div class="test-header-text">
+                <h2>ProximaCondo Management</h2>
+                <span>Profile #2 - Proximity management</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="question-label">Question asked</div>
+            <div class="question-text">"Can a resident at 123 Condo Street have 2 dogs?"</div>
+        </div>
+
+        <div class="section">
+            <div class="routing-box">
+                <div class="label">Orchestrator - Routing</div>
+                <div class="target">ProximaCondo (Proximity management)</div>
+                <div class="reasoning">The user has the role 'ProximaCondo Management', so the request must be routed to 'team1' which handles this type of management.</div>
+            </div>
+        </div>
+
+        <div class="section response-body">
+            <h3>Response</h3>
+            <div class="response-content">
+                <p>To determine whether a resident at 123 Condo Street can have two dogs, it is important to consult the <strong>condominium by-laws</strong> for that building. This document outlines the specific rules regarding pets, including the number of dogs allowed per unit. This can vary from one condominium to another based on decisions made by the co-ownership syndicate.</p>
+                <p>In general, here is how to proceed to obtain this information:</p>
+                <ol>
+                    <li><strong>Review the condominium by-laws</strong>: Consult the official document for the rules regarding pets.</li>
+                    <li><strong>Contact the co-ownership syndicate</strong>: They will be able to confirm what the regulations state.</li>
+                    <li><strong>Gather opinions or precedents</strong>: Sometimes it is possible to rely on precedents to obtain exceptions.</li>
+                </ol>
+
+                <div class="brand-section proxima">
+                    <h4>ProximaCondo | Our Approach</h4>
+                    <ol>
+                        <li><strong>Initial communication</strong>: We encourage residents to contact their dedicated manager directly to discuss their concerns. The manager can then help clarify the regulations in effect.</li>
+                        <li><strong>Personalised assessment</strong>: If the rules are unclear or inadequate, we may convene a resident advisory committee to assess the situation collectively.</li>
+                        <li><strong>Guidelines and mediation</strong>: In case of conflict between neighbours, our manager intervenes with proactive mediation, fostering constructive dialogue and seeking an acceptable compromise.</li>
+                        <li><strong>Timeline</strong>: We commit to providing a clarification or action plan within 30 days of the issue being reported.</li>
+                    </ol>
+                    <p class="signature">The ProximaCondo Team - Management on a human scale</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TEST 3 -->
+    <div class="test-card">
+        <div class="test-header profile-strato">
+            <div class="test-number">3</div>
+            <div class="test-header-text">
+                <h2>StratoGestion Management</h2>
+                <span>Profile #3 - Analytical management</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="question-label">Question asked</div>
+            <div class="question-text">"Can a resident at 123 Condo Street have 2 dogs?"</div>
+        </div>
+
+        <div class="section">
+            <div class="routing-box">
+                <div class="label">Orchestrator - Routing</div>
+                <div class="target">StratoGestion (Analytical management)</div>
+                <div class="reasoning">The user belongs to 'StratoGestion Management', so the question must be routed to the corresponding team, 'team2'.</div>
+            </div>
+        </div>
+
+        <div class="section response-body">
+            <h3>Response</h3>
+            <div class="response-content">
+                <p>To determine whether a resident at 123 Condo Street can have two dogs, it is important to consult the <strong>condominium by-laws</strong> for the building. This document outlines the specific rules regarding pets.</p>
+                <ol>
+                    <li><strong>Review the condominium by-laws</strong>: Consult the official document for rules regarding pets. Some condominiums limit the number of animals or have breed restrictions.</li>
+                    <li><strong>Contact the co-ownership syndicate</strong>: They will be able to confirm what the regulations state as well as any recent updates.</li>
+                    <li><strong>Gather opinions or precedents</strong>: Sometimes it is possible to rely on precedents to obtain exceptions. However, this will often require formal approval from the board of directors.</li>
+                </ol>
+
+                <div class="brand-section strato">
+                    <h4>StratoGestion | Analysis &amp; Recommendations</h4>
+                    <ul>
+                        <li><strong>Digital Dashboard</strong>: Having a real-time digital monitoring system for regulatory compliance allows any resident to immediately know the restrictions regarding pets.</li>
+                        <li><strong>Regulatory Benchmarking</strong>: A comparative analysis of by-laws from similar condominiums can shed light on industry standards and help the board adapt rules if necessary.</li>
+                        <li><strong>Resident Satisfaction Index (RSI)</strong>: Measuring the impact of pet policies on resident satisfaction can provide the data needed to re-evaluate the rules.</li>
+                        <li><strong>Resource Optimisation</strong>: Streamlining the management of pet-related complaints through prevention.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer>Orchestrator - Condominium Management | Test Results</footer>
+
+</div>
+</body>
+</html>

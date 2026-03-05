@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orchestrateur - Resultats de Tests</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 2rem;
+            line-height: 1.6;
+        }
+        .container { max-width: 960px; margin: 0 auto; }
+
+        h1 {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            color: #f8fafc;
+        }
+        .subtitle {
+            text-align: center;
+            color: #94a3b8;
+            margin-bottom: 2.5rem;
+            font-size: 1rem;
+        }
+
+        .test-card {
+            background: #1e293b;
+            border-radius: 12px;
+            margin-bottom: 2rem;
+            overflow: hidden;
+            border: 1px solid #334155;
+        }
+
+        .test-header {
+            padding: 1.2rem 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .test-header.profile-copro { background: linear-gradient(135deg, #1e40af, #3b82f6); }
+        .test-header.profile-proxima { background: linear-gradient(135deg, #065f46, #10b981); }
+        .test-header.profile-strato { background: linear-gradient(135deg, #7c2d12, #f97316); }
+
+        .test-number {
+            background: rgba(255,255,255,0.2);
+            border-radius: 50%;
+            width: 40px; height: 40px;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+        .test-header-text h2 { font-size: 1.2rem; color: #fff; }
+        .test-header-text span { font-size: 0.85rem; opacity: 0.85; }
+
+        .section { padding: 1.2rem 1.5rem; border-top: 1px solid #334155; }
+
+        .question-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #64748b;
+            margin-bottom: 0.3rem;
+        }
+        .question-text {
+            font-size: 1.05rem;
+            color: #f1f5f9;
+            font-style: italic;
+        }
+
+        .routing-box {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+            border-left: 4px solid #6366f1;
+        }
+        .routing-box .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #818cf8;
+            margin-bottom: 0.2rem;
+        }
+        .routing-box .target {
+            font-weight: 700;
+            font-size: 1.05rem;
+            color: #a5b4fc;
+        }
+        .routing-box .reasoning {
+            margin-top: 0.5rem;
+            font-size: 0.9rem;
+            color: #94a3b8;
+        }
+
+        .response-body h3 {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #64748b;
+            margin-bottom: 0.8rem;
+        }
+        .response-content {
+            color: #cbd5e1;
+            font-size: 0.95rem;
+        }
+        .response-content p { margin-bottom: 0.8rem; }
+        .response-content strong { color: #f1f5f9; }
+        .response-content ol, .response-content ul {
+            margin: 0.5rem 0 1rem 1.5rem;
+        }
+        .response-content li { margin-bottom: 0.4rem; }
+
+        .brand-section {
+            margin-top: 1rem;
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+        }
+        .brand-section.proxima { border-left: 4px solid #10b981; }
+        .brand-section.strato { border-left: 4px solid #f97316; }
+        .brand-section h4 {
+            font-size: 0.95rem;
+            margin-bottom: 0.6rem;
+        }
+        .brand-section.proxima h4 { color: #34d399; }
+        .brand-section.strato h4 { color: #fb923c; }
+        .brand-section p, .brand-section li { font-size: 0.9rem; color: #94a3b8; }
+        .brand-section ol, .brand-section ul { margin: 0.5rem 0 0.5rem 1.5rem; }
+        .brand-section li { margin-bottom: 0.3rem; }
+
+        .signature {
+            margin-top: 0.8rem;
+            font-style: italic;
+            font-size: 0.85rem;
+            color: #64748b;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 2rem;
+            color: #475569;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <h1>Orchestrateur - Gestion de Copropriete</h1>
+    <p class="subtitle">Resultats de tests de routage multi-profils</p>
+
+    <!-- TEST 1 -->
+    <div class="test-card">
+        <div class="test-header profile-copro">
+            <div class="test-number">1</div>
+            <div class="test-header-text">
+                <h2>Coproprietaire</h2>
+                <span>Profil #1 - Reponse standard</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="question-label">Question posee</div>
+            <div class="question-text">"Est-ce que j'ai le droit d'avoir deux chiens?"</div>
+        </div>
+
+        <div class="section">
+            <div class="routing-box">
+                <div class="label">Orchestrateur - Routage</div>
+                <div class="target">Coproprietaire (reponse standard)</div>
+                <div class="reasoning">L'utilisateur est un coproprietaire, donc la requete doit etre routee vers 'base' en accord avec les regles etablies.</div>
+            </div>
+        </div>
+
+        <div class="section response-body">
+            <h3>Reponse</h3>
+            <div class="response-content">
+                <p>Bonjour !</p>
+                <p>La possibilite d'avoir deux chiens dans votre copropriete depend principalement du <strong>reglement de copropriete</strong>. Ce document fixe les regles de vie commune et peut inclure des dispositions concernant la detention d'animaux de compagnie.</p>
+                <p>Voici ce que je vous recommande de faire :</p>
+                <ol>
+                    <li><strong>Verifiez le reglement de copropriete</strong> : Consultez ce document pour voir s'il y a des restrictions ou des conditions particulieres sur la detention d'animaux.</li>
+                    <li><strong>Respecter les regles de bon voisinage</strong> : Meme si le reglement vous permet d'avoir deux chiens, assurez-vous que leur presence ne cause pas de nuisances sonores ou d'odeurs a vos voisins.</li>
+                    <li><strong>Precautions et obligations legales</strong> : Assurez-vous que vos chiens soient bien identifies (puce ou tatouage) et vaccines selon les normes en vigueur. Pensez aussi a ramasser leurs dejections dans les parties communes.</li>
+                </ol>
+                <p>Si vous avez des questions specifiques ou si le reglement n'est pas clair, n'hesitez pas a en parler avec votre syndic ou a demander au conseil syndical de votre immeuble.</p>
+                <p>N'hesitez pas a revenir vers moi si vous avez d'autres questions !</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- TEST 2 -->
+    <div class="test-card">
+        <div class="test-header profile-proxima">
+            <div class="test-number">2</div>
+            <div class="test-header-text">
+                <h2>Gestion ProximaCondo</h2>
+                <span>Profil #2 - Gestion de proximite</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="question-label">Question posee</div>
+            <div class="question-text">"Est-ce qu'un resident du 123 rue des condo peut avoir 2 chiens?"</div>
+        </div>
+
+        <div class="section">
+            <div class="routing-box">
+                <div class="label">Orchestrateur - Routage</div>
+                <div class="target">ProximaCondo (Gestion de proximite)</div>
+                <div class="reasoning">L'utilisateur est du role 'Gestion ProximaCondo', donc la requete doit etre routee vers l'equipe 'team1' qui s'occupe de cette gestion.</div>
+            </div>
+        </div>
+
+        <div class="section response-body">
+            <h3>Reponse</h3>
+            <div class="response-content">
+                <p>Pour savoir si un resident du 123 rue des Condo peut avoir deux chiens, il est important de consulter le <strong>reglement de copropriete</strong> de l'immeuble. Ce document enonce les regles specifiques concernant les animaux de compagnie, y compris le nombre de chiens autorises par unite. Cela peut varier d'une copropriete a l'autre en fonction des decisions prises par le syndicat de copropriete.</p>
+                <p>En general, voici comment proceder pour obtenir cette information :</p>
+                <ol>
+                    <li><strong>Verification du reglement de copropriete</strong> : Consultez le document officiel pour les regles concernant les animaux.</li>
+                    <li><strong>Contacter le syndicat de copropriete</strong> : Ils seront en mesure de confirmer ce que disent les reglements.</li>
+                    <li><strong>Rassembler les avis ou precedents</strong> : Parfois, il est possible de se baser sur des precedents pour obtenir des exceptions.</li>
+                </ol>
+
+                <div class="brand-section proxima">
+                    <h4>ProximaCondo | Notre approche</h4>
+                    <ol>
+                        <li><strong>Communication initiale</strong> : Nous encourageons les residents a contacter leur gestionnaire dedie directement pour discuter de leurs preoccupations. Le gestionnaire peut alors aider a clarifier les reglements en vigueur.</li>
+                        <li><strong>Evaluation personnalisee</strong> : Dans le cas ou les regles seraient floues ou inadequates, nous pourrions convoquer un comite consultatif de residents pour evaluer la situation de maniere collective.</li>
+                        <li><strong>Consignes et mediation</strong> : En cas de conflit entre voisins, notre gestionnaire intervient pour une mediation proactive, favorisant un dialogue constructif et la recherche d'un compromis acceptable.</li>
+                        <li><strong>Echeance</strong> : Nous nous engageons a fournir une clarification ou un plan d'action dans les 30 jours suivant la notification du probleme.</li>
+                    </ol>
+                    <p class="signature">L'equipe ProximaCondo - La gestion a echelle humaine</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TEST 3 -->
+    <div class="test-card">
+        <div class="test-header profile-strato">
+            <div class="test-number">3</div>
+            <div class="test-header-text">
+                <h2>Gestion StratoGestion</h2>
+                <span>Profil #3 - Gestion analytique</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="question-label">Question posee</div>
+            <div class="question-text">"Est-ce qu'un resident du 123 rue des condos peut avoir 2 chiens?"</div>
+        </div>
+
+        <div class="section">
+            <div class="routing-box">
+                <div class="label">Orchestrateur - Routage</div>
+                <div class="target">StratoGestion (Gestion analytique)</div>
+                <div class="reasoning">L'utilisateur appartient a 'Gestion StratoGestion', donc la question doit etre routee vers l'equipe correspondante, 'team2'.</div>
+            </div>
+        </div>
+
+        <div class="section response-body">
+            <h3>Reponse</h3>
+            <div class="response-content">
+                <p>Pour savoir si un resident du 123 rue des Condos peut avoir deux chiens, il est important de consulter le <strong>reglement de copropriete</strong> de l'immeuble. Ce document enonce les regles specifiques concernant les animaux de compagnie.</p>
+                <ol>
+                    <li><strong>Verification du reglement de copropriete</strong> : Consultez le document officiel pour les regles concernant les animaux. Certaines coproprietes limitent le nombre d'animaux ou ont des restrictions sur les races.</li>
+                    <li><strong>Contacter le syndicat de copropriete</strong> : Ils seront en mesure de confirmer ce que disent les reglements et toute mise a jour eventuelle.</li>
+                    <li><strong>Rassembler les avis ou precedents</strong> : Parfois, il est possible de se baser sur des precedents pour obtenir des exceptions. Toutefois, cela requerra souvent l'accord formel du conseil d'administration.</li>
+                </ol>
+
+                <div class="brand-section strato">
+                    <h4>StratoGestion | Analyse &amp; Recommandations</h4>
+                    <ul>
+                        <li><strong>Tableau de Bord Numerique</strong> : Avoir un suivi numerique en temps reel du respect des reglements permet a tout resident de connaitre immediatement les restrictions concernant les animaux.</li>
+                        <li><strong>Comparatif des Reglementations</strong> : Analyse comparative des reglements d'autres coproprietes similaires peut apporter un eclairage sur les normes et aider le conseil a adapter les regles si necessaire.</li>
+                        <li><strong>Indicateur de Satisfaction Residente (ISR)</strong> : Mesurer l'impact de la politique d'animaux de compagnie sur la satisfaction des residents peut fournir des donnees necessaires pour reevaluer les regles.</li>
+                        <li><strong>Optimisation des Ressources</strong> : Rationalisation de la gestion des plaintes liees aux animaux par la prevention.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer>Orchestrateur - Gestion de Copropriete | Resultats de tests</footer>
+
+</div>
+</body>
+</html>
