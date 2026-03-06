@@ -122,7 +122,13 @@
       "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" diff tests/Feature/FileContextIntegrationTest.php)",
       "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" add tests/Feature/FileContextIntegrationTest.php)",
       "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" commit -m \"$\\(cat <<''EOF''\nAdd explicit shouldNotReceive assertion for searchByFilename\n\nReplace incorrect comment with proper Mockery assertion to ensure\ntest_semantic_search_still_works_without_filename actually validates\nthat searchByFilename is not called when no filename is detected.\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline -15)"
+      "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline -15)",
+      "Bash(pip:*)",
+      "Bash(python:*)",
+      "Read(//d/tmp/claude/**)",
+      "Read(//d/GithubRepo/AI/$LOCALAPPDATA/Temp/claude/D--GithubRepo-AI/**)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)"
     ],
     "deny": [],
     "ask": []
