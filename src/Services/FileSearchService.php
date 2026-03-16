@@ -28,6 +28,25 @@ class FileSearchService
     ) {}
 
     /**
+     * Build security axes filter from user's resolved axes.
+     *
+     * @param array $resolvedAxes e.g. ['team' => [1,2], 'role' => [3]]
+     * @return array e.g. ['team_id' => [1,2], 'role_id' => [3]]
+     */
+    public function buildSecurityAxesFilter(array $resolvedAxes): array
+    {
+        $filter = [];
+
+        foreach ($resolvedAxes as $axisName => $ids) {
+            if (!empty($ids)) {
+                $filter["{$axisName}_id"] = $ids;
+            }
+        }
+
+        return $filter;
+    }
+
+    /**
      * Search files by content similarity
      *
      * @param string $query Search query
@@ -54,6 +73,9 @@ class FileSearchService
         }
         if (isset($options['min_score'])) {
             $filters['min_score'] = $options['min_score'];
+        }
+        if (isset($options['security_axes'])) {
+            $filters['security_axes'] = $options['security_axes'];
         }
 
         // Search Qdrant for chunks (get more than limit to account for grouping)

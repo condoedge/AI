@@ -68,6 +68,18 @@
  *         'metadata' => ['id', 'status'],             // Metadata to store
  *     ],
  *
+ *     // Multi-axis security (OPTIONAL - for row-level access control)
+ *     // Defines how security axes map to this entity's data
+ *     'security' => [
+ *         'axes' => [
+ *             'team' => ['field' => 'team_id'],           // Direct column
+ *             'union' => ['join' => 'company.union_id'],  // Via Eloquent relation
+ *             'role' => ['field' => 'visible_to_role_id'],
+ *         ],
+ *         'category' => 'finance',                         // Static category
+ *         // OR: 'category_field' => 'document_type',      // Dynamic category
+ *     ],
+ *
  *     // Semantic metadata for AI (OPTIONAL - improves query accuracy)
  *     'metadata' => [
  *         'aliases' => ['singular', 'plural', 'synonym'],

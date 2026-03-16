@@ -386,6 +386,12 @@ class QdrantChunkStore implements ChunkStoreInterface
     /**
      * Build Qdrant filter from search filters
      *
+     * Supports security filtering:
+     * - security_axes: {'team_id': [1,2], 'role_id': [3]} => OR intra-axis, AND inter-axes
+     * - is_system documents bypass security (always visible)
+     *
+     * Logic: (is_system=true) OR (team_id IN [...] AND role_id IN [...])
+     *
      * @param array $filters
      * @return array
      */
@@ -416,6 +422,67 @@ class QdrantChunkStore implements ChunkStoreInterface
             }
         }
 
+        // Security axes filtering
+        if (!empty($filters['security_axes'])) {
+            $securityFilter = $this->buildSecurityAxesFilter($filters['security_axes']);
+            if (!empty($securityFilter)) {
+                $must[] = $securityFilter;
+            }
+        }
+
         return empty($must) ? [] : ['must' => $must];
+    }
+
+    /**
+     * Build security axes filter for Qdrant.
+     *
+     * Creates a filter where:
+     * - System documents (is_system=true) always pass
+     * - Non-system documents must match ALL axes (AND inter-axes)
+     * - Within each axis, any matching ID is accepted (OR intra-axis)
+     *
+     * @param array $securityAxes e.g. ['team_id' => [1,2], 'role_id' => [3,5]]
+     * @return array Qdrant filter clause
+     */
+    private function buildSecurityAxesFilter(array $securityAxes): array
+    {
+        // Build per-axis conditions (AND between axes)
+        $axisConditions = [];
+
+        foreach ($securityAxes as $axisProperty => $allowedIds) {
+            if (empty($allowedIds)) {
+                continue;
+            }
+
+            // OR within the axis: metadata.security_axes.{axis} in allowedIds
+            $axisShould = [];
+            foreach ($allowedIds as $id) {
+                $axisShould[] = [
+                    'key' => "metadata.security_axes.{$axisProperty}",
+                    'match' => ['value' => $id],
+                ];
+            }
+
+            $axisConditions[] = ['should' => $axisShould];
+        }
+
+        if (empty($axisConditions)) {
+            return [];
+        }
+
+        // Final filter: (is_system=true) OR (all axis conditions met)
+        return [
+            'should' => [
+                // System documents bypass security
+                [
+                    'key' => 'metadata.is_system',
+                    'match' => ['value' => true],
+                ],
+                // Non-system: must match all axes
+                [
+                    'must' => $axisConditions,
+                ],
+            ],
+        ];
     }
 }

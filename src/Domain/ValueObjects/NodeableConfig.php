@@ -388,6 +388,65 @@ class NodeableConfig
     }
 
     // =========================================================================
+    // Security Configuration Methods
+    // =========================================================================
+
+    /**
+     * Configure a security axis for this entity
+     *
+     * @param string $name Axis name (e.g., 'team', 'role', 'union')
+     * @param string|array $config Field name string or config array with 'field'/'join'/'path' keys
+     * @return self
+     */
+    public function securityAxis(string $name, string|array $config): self
+    {
+        if (!isset($this->config['security'])) {
+            $this->config['security'] = [];
+        }
+        if (!isset($this->config['security']['axes'])) {
+            $this->config['security']['axes'] = [];
+        }
+
+        if (is_string($config)) {
+            $this->config['security']['axes'][$name] = ['field' => $config];
+        } else {
+            $this->config['security']['axes'][$name] = $config;
+        }
+
+        return $this;
+    }
+
+    /**
+     * Set a static category for this entity
+     *
+     * @param string $category Category name (e.g., 'finance', 'legal')
+     * @return self
+     */
+    public function category(string $category): self
+    {
+        if (!isset($this->config['security'])) {
+            $this->config['security'] = [];
+        }
+        $this->config['security']['category'] = $category;
+        return $this;
+    }
+
+    /**
+     * Set a dynamic category field for this entity
+     *
+     * @param string $field Column name to read category from (e.g., 'document_type')
+     * @return self
+     */
+    public function categoryField(string $field): self
+    {
+        if (!isset($this->config['security'])) {
+            $this->config['security'] = [];
+        }
+        $this->config['security']['category_field'] = $field;
+        return $this;
+    }
+
+    // =========================================================================
     // Auto-Sync Configuration
     // =========================================================================
 

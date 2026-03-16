@@ -13,6 +13,7 @@ use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
 use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
 use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
 use Condoedge\Ai\Exceptions\DataConsistencyException;
+use Condoedge\Ai\Security\EntitySecurityResolver;
 use Condoedge\Ai\Services\Security\SensitiveDataSanitizer;
 use Illuminate\Support\Facades\Log;
 
@@ -477,7 +478,38 @@ class DataIngestionService implements DataIngestionServiceInterface
         // Always include entity ID
         $properties['id'] = $entity->getId();
 
+        // Resolve and merge security properties (_sec_* and _category)
+        $securityConfig = $this->getEntitySecurityConfig($entity, $config);
+        if (!empty($securityConfig)) {
+            $securityResolver = app(EntitySecurityResolver::class);
+            $securityProps = $securityResolver->resolve($entity, $securityConfig);
+            $properties = array_merge($properties, $securityProps);
+        }
+
         $this->graphStore->createNode($config->label, $properties);
+    }
+
+    /**
+     * Get security configuration for an entity.
+     */
+    private function getEntitySecurityConfig(Nodeable $entity, GraphConfig $config): array
+    {
+        // Check entity config for security section
+        $entityClass = get_class($entity);
+        $configKey = null;
+
+        foreach (config('entities', []) as $key => $entityConfig) {
+            if ($key === $entityClass || class_basename($key) === class_basename($entityClass)) {
+                $configKey = $key;
+                break;
+            }
+        }
+
+        if ($configKey) {
+            return config("entities.{$configKey}.security", []);
+        }
+
+        return [];
     }
 
     /**

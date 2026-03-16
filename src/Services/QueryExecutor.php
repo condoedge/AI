@@ -637,7 +637,17 @@ class QueryExecutor implements QueryExecutorInterface
             }
         }
 
-        // Get team filter
+        // Get multi-axis security filters
+        $securityFilters = $securityService->getSecurityFilters($user, $entity, $alias);
+
+        if (!empty($securityFilters)) {
+            foreach ($securityFilters as $filter) {
+                $cypherQuery = $this->injectTeamFilter($cypherQuery, $filter);
+            }
+            return ['query' => $cypherQuery, 'filter_applied' => true];
+        }
+
+        // Fallback to legacy team filter if no axes configured
         $teamFilter = $securityService->getTeamFilter($user, $entity, $alias);
 
         if ($teamFilter) {

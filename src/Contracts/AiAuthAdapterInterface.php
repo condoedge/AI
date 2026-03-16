@@ -31,6 +31,20 @@ interface AiAuthAdapterInterface
     public function hasGlobalCountPermission($user, string $entity): bool;
 
     /**
+     * Get accessible IDs for a specific security axis.
+     *
+     * For known axes (e.g., 'team'), implementations should use their native
+     * permission system. For custom axes, the SecurityAxis resolver closure
+     * takes precedence (called before this method).
+     *
+     * @param mixed $user User model
+     * @param string $axisName Axis name (e.g., 'team', 'role', 'union')
+     * @param string $entity Entity name (e.g., 'Invoice')
+     * @return array<int> Accessible IDs
+     */
+    public function getAccessibleIdsForAxis($user, string $axisName, string $entity): array;
+
+    /**
      * Check if security is enabled.
      */
     public function isEnabled(): bool;

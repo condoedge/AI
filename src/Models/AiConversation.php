@@ -19,6 +19,7 @@ class AiConversation extends Model
         'uuid',
         'user_id',
         'team_id',
+        'agent_id',
         'title',
         'status',
         'metadata',

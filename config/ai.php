@@ -152,6 +152,21 @@ return [
 
         'permission_level' => 'teams', // 'teams' or 'roles'
 
+        // Multi-axis security configuration
+        // Each axis represents a dimension of access control (team, role, union, etc.)
+        // If empty, the system auto-creates a 'team' axis from legacy config for backward compat.
+        'axes' => [
+            // Examples (uncomment to use):
+            // 'team' => [
+            //     'property' => 'team_id',
+            //     'resolver' => null,       // null = auth adapter default
+            //     'default_path' => 'auto',
+            //     'required' => true,
+            // ],
+            // 'role' => ['property' => 'role_id', 'required' => false],
+            // 'union' => ['property' => 'union_id', 'required' => true],
+        ],
+
         // Permission chain - checked in order, first with teams wins
         'permission_chain' => [
             '{Entity}.AiRetrieving',   // AI-specific (primary)
@@ -270,7 +285,7 @@ return [
     |--------------------------------------------------------------------------
     */
     'llm' => [
-        'default' => env('AI_LLM_PROVIDER', 'openai'), // 'openai' or 'anthropic'
+        'default' => env('AI_LLM_PROVIDER', 'openai'), // 'openai', 'anthropic', or 'ollama'
 
         'openai' => [
             'api_key' => env('OPENAI_API_KEY'),
@@ -285,6 +300,15 @@ return [
             'temperature' => env('ANTHROPIC_TEMPERATURE', 0.3),
             'max_tokens' => env('ANTHROPIC_MAX_TOKENS', 2000),
         ],
+
+        'ollama' => [
+            'base_url' => env('OLLAMA_BASE_URL', 'http://localhost:11434'),
+            'model' => env('OLLAMA_MODEL', 'llama3.1:8b'),
+            'temperature' => env('OLLAMA_TEMPERATURE', 0.3),
+            'max_tokens' => env('OLLAMA_MAX_TOKENS', 4096),
+            'timeout' => env('OLLAMA_TIMEOUT', 180),
+            'context_window' => env('OLLAMA_CONTEXT_WINDOW', 128000),
+        ],
     ],
 
     /*
@@ -293,7 +317,7 @@ return [
     |--------------------------------------------------------------------------
     */
     'embedding' => [
-        'default' => env('AI_EMBEDDING_PROVIDER', 'openai'), // 'openai' or 'anthropic'
+        'default' => env('AI_EMBEDDING_PROVIDER', 'openai'), // 'openai', 'anthropic', or 'ollama'
 
         'openai' => [
             'api_key' => env('OPENAI_API_KEY'),
@@ -305,6 +329,12 @@ return [
             'api_key' => env('ANTHROPIC_API_KEY'),
             'model' => env('ANTHROPIC_EMBEDDING_MODEL', 'claude-3-5-sonnet-20241022'), // Hypothetical
             'dimensions' => 1024,
+        ],
+
+        'ollama' => [
+            'base_url' => env('OLLAMA_BASE_URL', 'http://localhost:11434'),
+            'model' => env('OLLAMA_EMBEDDING_MODEL', 'nomic-embed-text'),
+            'dimensions' => (int) env('OLLAMA_EMBEDDING_DIMENSIONS', 768),
         ],
     ],
 
@@ -894,9 +924,67 @@ return [
         // ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Agents Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Define AI agents with specialized system prompts, business rules,
+    | and entity access restrictions. Agents can be customized per user/team.
+    |
+    */
+    /*
+    |--------------------------------------------------------------------------
+    | Tool Use Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure the tool/function calling system that allows the LLM to
+    | execute actions (CRUD, queries, workflows) autonomously.
+    |
+    | Requires a tool-capable LLM provider (e.g., Ollama with llama3.1).
+    |
+    */
+    'tools' => [
+        'enabled' => env('AI_TOOLS_ENABLED', false),
+        'max_iterations' => env('AI_TOOLS_MAX_ITERATIONS', 10),
+        'require_confirmation_for_writes' => true,
+        'builtins' => [
+            'entity_crud' => true,
+            'query' => true,
+            'file_search' => true,
+            'workflow' => false,
+        ],
+        'workflows' => [
+            // 'workflow_name' => WorkflowHandlerClass::class,
+        ],
+    ],
+
+    'agents' => [
+        'default' => 'general_assistant',
+        'definitions' => [
+            'general_assistant' => [
+                'name' => 'AI Assistant',
+                'system_prompt' => 'You are a helpful data analyst.',
+                'allowed_entities' => [],
+                'business_rules' => [],
+                'example_questions' => [],
+            ],
+            // 'finance_expert' => [
+            //     'name' => 'Expert Finance',
+            //     'system_prompt' => 'Tu es un expert financier...',
+            //     'allowed_entities' => ['Invoice', 'Payment', 'Budget'],
+            //     'business_rules' => ['Toujours afficher les montants en CAD'],
+            //     'example_questions' => ['Quel est le total des factures?'],
+            // ],
+        ],
+    ],
+
     'query_generator_sections' => [
+        \Condoedge\Ai\Services\PromptSections\AgentSystemPromptSection::class,           // Priority 5
+        \Condoedge\Ai\Services\PromptSections\AgentCustomInstructionsSection::class,     // Priority 6
         \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
         \Condoedge\Ai\Services\PromptSections\GenericContextSection::class,
+        \Condoedge\Ai\Services\PromptSections\SecurityContextSection::class,             // Priority 16
         \Condoedge\Ai\Services\PromptSections\CurrentUserContextSection::class,
         \Condoedge\Ai\Services\PromptSections\SchemaSection::class,
         \Condoedge\Ai\Services\PromptSections\RelationshipsSection::class,

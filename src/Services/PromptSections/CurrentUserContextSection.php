@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\Agents\ResolvedAgent;
+use Condoedge\Ai\Security\SecurityAxesRegistry;
+
 class CurrentUserContextSection extends BasePromptSection
 {
     protected string $name = 'current_user_context';
@@ -38,6 +41,29 @@ class CurrentUserContextSection extends BasePromptSection
         $output .= "Current user ID: " . ($isAuthenticated ? auth()->id() : 'N/A') . "\n\n";
         $output .= "Current team ID: " . ($isAuthenticated ? (safeCurrentTeam()?->id ?? 'N/A') : 'N/A') . "\n\n";
         $output .= "Current team name: " . ($isAuthenticated ? (safeCurrentTeam()?->team_name ?? 'N/A') : 'N/A') . "\n\n";
+
+        // Enrich with security axes values
+        if ($isAuthenticated && app()->bound(SecurityAxesRegistry::class)) {
+            $user = auth()->user();
+            $registry = app(SecurityAxesRegistry::class);
+            $resolvedAxes = $registry->resolveAll($user);
+
+            if (!empty($resolvedAxes)) {
+                $output .= "User access axes:\n";
+                foreach ($resolvedAxes as $axisName => $ids) {
+                    $idStr = !empty($ids) ? implode(', ', $ids) : 'none';
+                    $output .= "  {$axisName}: [{$idStr}]\n";
+                }
+                $output .= "\n";
+            }
+        }
+
+        // Include active agent info
+        if (isset($options['resolved_agent'])) {
+            /** @var ResolvedAgent $agent */
+            $agent = $options['resolved_agent'];
+            $output .= "Active agent: {$agent->getName()} ({$agent->getId()})\n\n";
+        }
 
         return $output;
     }

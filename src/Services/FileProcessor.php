@@ -21,6 +21,11 @@ use Condoedge\Ai\DTOs\FileChunk;
 class FileProcessor implements FileProcessorInterface
 {
     /**
+     * Current processing options (set during processFile for use in createFileChunks)
+     */
+    private array $currentOptions = [];
+
+    /**
      * @param FileExtractorRegistry $extractorRegistry
      * @param FileChunkerInterface $chunker
      * @param EmbeddingProviderInterface $embeddingProvider
@@ -39,6 +44,7 @@ class FileProcessor implements FileProcessorInterface
     public function processFile(object $file, array $options = []): ProcessingResult
     {
         $startTime = microtime(true);
+        $this->currentOptions = $options;
 
         try {
             // Validate file object
@@ -312,6 +318,13 @@ class FileProcessor implements FileProcessorInterface
             $chunkLength = strlen($chunkText);
             $endPosition = $position + $chunkLength;
 
+            // Build metadata from options (security axes, category, is_system)
+            $chunkMetadata = [
+                'security_axes' => $this->currentOptions['security_axes'] ?? [],
+                'category' => $this->currentOptions['category'] ?? null,
+                'is_system' => $this->currentOptions['is_system'] ?? false,
+            ];
+
             $fileChunks[] = new FileChunk(
                 fileId: $file->id,
                 fileName: $file->name,
@@ -321,7 +334,7 @@ class FileProcessor implements FileProcessorInterface
                 totalChunks: $totalChunks,
                 startPosition: $position,
                 endPosition: $endPosition,
-                metadata: []
+                metadata: $chunkMetadata
             );
 
             $position = $endPosition;

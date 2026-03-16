@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Context;
 
 use Condoedge\Ai\Contracts\FileAccessResolverInterface;
+use Condoedge\Ai\Security\SecurityAxesRegistry;
 use Condoedge\Ai\Services\FileSearchService;
 
 /**
@@ -46,7 +47,8 @@ class FileContextProvider
     public function __construct(
         private readonly FileSearchService $searchService,
         private readonly FileAccessResolverInterface $accessResolver,
-        ?FilenameExtractor $filenameExtractor = null
+        ?FilenameExtractor $filenameExtractor = null,
+        private readonly ?SecurityAxesRegistry $axesRegistry = null,
     ) {
         $this->filenameExtractor = $filenameExtractor ?? new FilenameExtractor();
     }
@@ -104,11 +106,22 @@ class FileContextProvider
         $conversationContext = $options['conversation_context'] ?? [];
         $enhancedQuery = $this->enhanceQueryWithContext($question, $conversationContext);
 
-        // Step 4: Search by content (semantic search)
-        $contentResults = $this->searchService->searchByContent($enhancedQuery, [
+        // Step 4: Search by content (semantic search) with security axes
+        $contentSearchOptions = [
             'limit' => $maxReferences * 3,
             'include_relationships' => false,
-        ]);
+        ];
+
+        // Inject security axes filters if registry is available and user exists
+        if ($this->axesRegistry !== null && $user !== null) {
+            $resolvedAxes = $this->axesRegistry->resolveAll($user);
+            $securityFilter = $this->searchService->buildSecurityAxesFilter($resolvedAxes);
+            if (!empty($securityFilter)) {
+                $contentSearchOptions['security_axes'] = $securityFilter;
+            }
+        }
+
+        $contentResults = $this->searchService->searchByContent($enhancedQuery, $contentSearchOptions);
 
         // Step 5: Combine results, filename matches first
         $combinedResults = $this->combineSearchResults($filenameResults, $contentResults);

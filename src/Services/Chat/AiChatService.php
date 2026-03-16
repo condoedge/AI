@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Chat;
 
+use Condoedge\Ai\Agents\AgentResolver;
 use Condoedge\Ai\Facades\AI;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
@@ -121,13 +122,28 @@ class AiChatService implements AiChatServiceInterface
                 'resolved_entity' => $contextResult['resolved_entity'] ?? null,
             ]);
 
-            // 5. Call AI with full context
-            $aiResponse = AI::answerQuestion($enrichedQuestion, [
+            // 5. Resolve agent for this conversation
+            $aiOptions = [
                 'style' => $options['style'] ?? 'friendly',
                 'conversation_id' => $conversation->id,
                 'conversation_context' => $conversationContext,
                 'user' => $options['user'] ?? null,
-            ]);
+            ];
+
+            // Resolve agent if agent system is available
+            if (app()->bound(AgentResolver::class)) {
+                $agentResolver = app(AgentResolver::class);
+                $user = $options['user'] ?? null;
+                $resolvedAgent = $agentResolver->resolve(
+                    $conversation->agent_id,
+                    $user?->id ?? null,
+                    $conversation->team_id
+                );
+                $aiOptions['resolved_agent'] = $resolvedAgent;
+            }
+
+            // Call AI with full context
+            $aiResponse = AI::answerQuestion($enrichedQuestion, $aiOptions);
 
             // Extract response data
             $answerText = $aiResponse['answer'] ?? '';
@@ -315,9 +331,22 @@ class AiChatService implements AiChatServiceInterface
     public function isAvailable(): bool
     {
         try {
-            // Check if the AI facade is available and LLM is configured
-            return config('ai.llm.default') !== null
-                && config('ai.llm.' . config('ai.llm.default') . '.api_key') !== null;
+            $provider = config('ai.llm.default');
+
+            if ($provider === null) {
+                return false;
+            }
+
+            // Ollama doesn't require an API key — check connectivity instead
+            if ($provider === 'ollama') {
+                $llm = app(\Condoedge\Ai\Contracts\LlmProviderInterface::class);
+
+                return $llm instanceof \Condoedge\Ai\LlmProviders\OllamaLlmProvider
+                    && $llm->isReachable();
+            }
+
+            // Cloud providers require an API key
+            return config('ai.llm.' . $provider . '.api_key') !== null;
         } catch (\Exception $e) {
             return false;
         }

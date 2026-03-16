@@ -62,6 +62,24 @@ class KompoAuthAdapter implements AiAuthAdapterInterface
     /**
      * {@inheritdoc}
      */
+    public function getAccessibleIdsForAxis($user, string $axisName, string $entity): array
+    {
+        if (!$this->isEnabled()) {
+            return [];
+        }
+
+        // For 'team' axis, delegate to existing team permission logic
+        if ($axisName === 'team') {
+            return $this->getTeamsWithPermission($user, $entity);
+        }
+
+        // For other axes, return empty (custom resolver closure should be used)
+        return [];
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     public function isEnabled(): bool
     {
         return config('ai.security.enabled', true) && !globalSecurityBypass();

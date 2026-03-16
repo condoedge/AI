@@ -25,14 +25,20 @@ trait HasConversationCreation
      * @return AiConversation The newly created conversation
      * @throws \RuntimeException If auth is not available
      */
-    protected function createNewConversation(): AiConversation
+    protected function createNewConversation(?string $agentId = null): AiConversation
     {
-        $conversation = AiConversation::create([
+        $data = [
             'user_id' => auth()->id(),
             'team_id' => currentTeamId(),
             'status' => 'active',
             'title' => __('ai.chat.new-conversation'),
-        ]);
+        ];
+
+        if ($agentId !== null) {
+            $data['agent_id'] = $agentId;
+        }
+
+        $conversation = AiConversation::create($data);
 
         session(['selected_conversation_id' => $conversation->id]);
 

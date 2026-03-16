@@ -18,6 +18,16 @@ use Condoedge\Ai\EmbeddingProviders\OpenAiEmbeddingProvider;
 use Condoedge\Ai\EmbeddingProviders\AnthropicEmbeddingProvider;
 use Condoedge\Ai\LlmProviders\OpenAiLlmProvider;
 use Condoedge\Ai\LlmProviders\AnthropicLlmProvider;
+use Condoedge\Ai\LlmProviders\OllamaLlmProvider;
+use Condoedge\Ai\EmbeddingProviders\OllamaEmbeddingProvider;
+use Condoedge\Ai\Tools\ToolRegistry;
+use Condoedge\Ai\Tools\ToolExecutor;
+use Condoedge\Ai\Tools\ToolCallLoop;
+use Condoedge\Ai\Tools\Builtins\EntityCrudTool;
+use Condoedge\Ai\Tools\Builtins\QueryTool;
+use Condoedge\Ai\Tools\Builtins\FileSearchTool;
+use Condoedge\Ai\Tools\Builtins\WorkflowTool;
+use Condoedge\Ai\Services\Chat\ToolAwareChatService;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
@@ -85,6 +95,13 @@ use Condoedge\Ai\Contracts\AiAuthAdapterInterface;
 use Condoedge\Ai\Auth\KompoAuthAdapter;
 use Condoedge\Ai\Services\Security\TeamPathResolver;
 use Condoedge\Ai\Services\Security\AiSecurityService;
+use Condoedge\Ai\Security\SecurityAxis;
+use Condoedge\Ai\Security\SecurityAxesRegistry;
+use Condoedge\Ai\Security\SecurityAxisPathResolver;
+use Condoedge\Ai\Security\EntitySecurityResolver;
+use Condoedge\Ai\Agents\AgentDefinition;
+use Condoedge\Ai\Agents\AgentRegistry;
+use Condoedge\Ai\Agents\AgentResolver;
 use Condoedge\Utils\Facades\FileModel;
 
 /**
@@ -190,6 +207,7 @@ class AiServiceProvider extends ServiceProvider
             return match ($defaultProvider) {
                 'openai' => new OpenAiEmbeddingProvider(config('ai.embedding.openai')),
                 'anthropic' => new AnthropicEmbeddingProvider(config('ai.embedding.anthropic')),
+                'ollama' => new OllamaEmbeddingProvider(config('ai.embedding.ollama')),
                 default => throw new \RuntimeException("Unsupported embedding provider: {$defaultProvider}")
             };
         });
@@ -201,6 +219,7 @@ class AiServiceProvider extends ServiceProvider
             return match ($defaultProvider) {
                 'openai' => new OpenAiLlmProvider(config('ai.llm.openai')),
                 'anthropic' => new AnthropicLlmProvider(config('ai.llm.anthropic')),
+                'ollama' => new OllamaLlmProvider(config('ai.llm.ollama')),
                 default => throw new \RuntimeException("Unsupported LLM provider: {$defaultProvider}")
             };
         });
@@ -379,6 +398,12 @@ class AiServiceProvider extends ServiceProvider
 
         // Register Security Services
         $this->registerSecurityServices();
+
+        // Register Agent Services
+        $this->registerAgentServices();
+
+        // Register Tool Services
+        $this->registerToolServices();
     }
 
     /**
@@ -501,9 +526,16 @@ class AiServiceProvider extends ServiceProvider
     private function registerChatServices(): void
     {
         // Register AI Chat Service
+        // Uses ToolAwareChatService when tools are enabled, otherwise the configured service
         $this->app->singleton(AiChatServiceInterface::class, function ($app) {
+            if (config('ai.tools.enabled', false)) {
+                return new ToolAwareChatService(
+                    config: config('ai.chat', [])
+                );
+            }
+
             $aiChatService = config('ai.chat.service', AiChatService::class);
-            
+
             return new $aiChatService(
                 config: config('ai.chat', [])
             );
@@ -557,7 +589,9 @@ class AiServiceProvider extends ServiceProvider
         $this->app->singleton(FileContextProvider::class, function ($app) {
             return new FileContextProvider(
                 $app->make(FileSearchService::class),
-                $app->make(FileAccessResolverInterface::class)
+                $app->make(FileAccessResolverInterface::class),
+                null, // FilenameExtractor (uses default)
+                $app->make(SecurityAxesRegistry::class),
             );
         });
 
@@ -616,14 +650,131 @@ class AiServiceProvider extends ServiceProvider
             return new KompoAuthAdapter();
         });
 
-        // Register TeamPathResolver
+        // Register TeamPathResolver (legacy, deprecated)
         $this->app->singleton(TeamPathResolver::class);
+
+        // Register SecurityAxisPathResolver (new multi-axis resolver)
+        $this->app->singleton(SecurityAxisPathResolver::class);
+
+        // Register SecurityAxesRegistry (populated from config)
+        $this->app->singleton(SecurityAxesRegistry::class, function ($app) {
+            $registry = new SecurityAxesRegistry(
+                $app->make(AiAuthAdapterInterface::class)
+            );
+
+            $axesConfig = config('ai.security.axes', []);
+
+            // If no axes configured, auto-create 'team' axis from legacy config for backward compat
+            if (empty($axesConfig) && config('ai.security.enabled', true)) {
+                $registry->register(new SecurityAxis(
+                    name: 'team',
+                    property: 'team_id',
+                    resolver: null,
+                    defaultPath: config('ai.security.default_team_path', 'auto'),
+                    required: true,
+                ));
+            } else {
+                foreach ($axesConfig as $name => $config) {
+                    $registry->register(SecurityAxis::fromArray($name, $config));
+                }
+            }
+
+            return $registry;
+        });
+
+        // Register EntitySecurityResolver
+        $this->app->singleton(EntitySecurityResolver::class);
 
         // Register AiSecurityService (main orchestrator)
         $this->app->singleton(AiSecurityService::class, function ($app) {
             return new AiSecurityService(
                 $app->make(AiAuthAdapterInterface::class),
-                $app->make(TeamPathResolver::class)
+                $app->make(TeamPathResolver::class),
+                $app->make(SecurityAxesRegistry::class),
+                $app->make(SecurityAxisPathResolver::class),
+            );
+        });
+    }
+
+    /**
+     * Register agent services.
+     */
+    private function registerAgentServices(): void
+    {
+        // Register AgentRegistry (populated from config)
+        $this->app->singleton(AgentRegistry::class, function ($app) {
+            $registry = new AgentRegistry();
+            $definitions = config('ai.agents.definitions', []);
+
+            foreach ($definitions as $id => $config) {
+                $registry->register(AgentDefinition::fromArray($id, $config));
+            }
+
+            $defaultId = config('ai.agents.default', 'general_assistant');
+            $registry->setDefaultId($defaultId);
+
+            return $registry;
+        });
+
+        // Register AgentResolver
+        $this->app->singleton(AgentResolver::class, function ($app) {
+            return new AgentResolver(
+                $app->make(AgentRegistry::class)
+            );
+        });
+    }
+
+    /**
+     * Register tool use services.
+     */
+    private function registerToolServices(): void
+    {
+        // Register ToolRegistry
+        $this->app->singleton(ToolRegistry::class, function ($app) {
+            $registry = new ToolRegistry();
+
+            if (!config('ai.tools.enabled', false)) {
+                return $registry;
+            }
+
+            $builtins = config('ai.tools.builtins', []);
+
+            // Register built-in tools
+            if ($builtins['entity_crud'] ?? true) {
+                (new EntityCrudTool($app->make(GraphStoreInterface::class)))->register($registry);
+            }
+
+            if ($builtins['query'] ?? true) {
+                (new QueryTool($app->make(QueryExecutorInterface::class)))->register($registry);
+            }
+
+            if ($builtins['file_search'] ?? true) {
+                (new FileSearchTool($app->make(FileSearchService::class)))->register($registry);
+            }
+
+            if ($builtins['workflow'] ?? false) {
+                $workflows = config('ai.tools.workflows', []);
+                if (!empty($workflows)) {
+                    (new WorkflowTool($workflows))->register($registry);
+                }
+            }
+
+            return $registry;
+        });
+
+        // Register ToolExecutor
+        $this->app->singleton(ToolExecutor::class, function ($app) {
+            return new ToolExecutor(
+                $app->make(ToolRegistry::class),
+                $app->make(AiSecurityService::class),
+            );
+        });
+
+        // Register ToolCallLoop
+        $this->app->singleton(ToolCallLoop::class, function ($app) {
+            return new ToolCallLoop(
+                $app->make(ToolExecutor::class),
+                (int) config('ai.tools.max_iterations', 10),
             );
         });
     }
@@ -688,6 +839,7 @@ class AiServiceProvider extends ServiceProvider
                 \Condoedge\Ai\Console\Commands\IndexScopesCommand::class,
                 \Condoedge\Ai\Console\Commands\IndexContextCommand::class,
                 \Condoedge\Ai\Console\Commands\ValidateConfigCommand::class,
+                \Condoedge\Ai\Console\Commands\OllamaSetupCommand::class,
             ]);
         }
 
@@ -829,7 +981,15 @@ class AiServiceProvider extends ServiceProvider
             AiAuthAdapterInterface::class,
             KompoAuthAdapter::class,
             TeamPathResolver::class,
+            SecurityAxesRegistry::class,
+            SecurityAxisPathResolver::class,
+            EntitySecurityResolver::class,
             AiSecurityService::class,
+            AgentRegistry::class,
+            AgentResolver::class,
+            ToolRegistry::class,
+            ToolExecutor::class,
+            ToolCallLoop::class,
         ];
     }
 }

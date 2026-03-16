@@ -8,6 +8,8 @@ use Condoedge\Ai\Domain\Traits\ResolvesEntityConfigKey;
 
 /**
  * Resolves team_path config to Cypher filter clauses.
+ *
+ * @deprecated Use SecurityAxisPathResolver instead. This class is kept for backward compatibility.
  */
 class TeamPathResolver
 {

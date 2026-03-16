@@ -40,7 +40,11 @@ class ProcessFilesCommand extends Command
                             {--force : Reprocess all files, even if already processed}
                             {--chunk=50 : Batch size for processing}
                             {--types= : Comma-separated list of file extensions to process (e.g., pdf,docx,txt)}
-                            {--dry-run : Show what would be processed without actually processing}';
+                            {--dry-run : Show what would be processed without actually processing}
+                            {--team= : Team ID for security axis}
+                            {--role= : Role ID for security axis}
+                            {--category= : Category for file metadata}
+                            {--system : Mark files as system documents (visible to all)}';
 
     /**
      * The console command description.
@@ -197,10 +201,36 @@ class ProcessFilesCommand extends Command
                         continue;
                     }
 
+                    // Build processing options with security metadata
+                    $processOptions = [];
+                    if ($this->option('force')) {
+                        $processOptions['force'] = true;
+                    }
+
+                    // Security axes
+                    $securityAxes = [];
+                    if ($this->option('team')) {
+                        $securityAxes['team_id'] = (int) $this->option('team');
+                    }
+                    if ($this->option('role')) {
+                        $securityAxes['role_id'] = (int) $this->option('role');
+                    }
+                    if (!empty($securityAxes)) {
+                        $processOptions['security_axes'] = $securityAxes;
+                    }
+
+                    if ($this->option('category')) {
+                        $processOptions['category'] = $this->option('category');
+                    }
+
+                    if ($this->option('system')) {
+                        $processOptions['is_system'] = true;
+                    }
+
                     // Process file
                     $result = $this->option('force')
                         ? $this->fileProcessor->reprocessFile($file)
-                        : $this->fileProcessor->processFile($file);
+                        : $this->fileProcessor->processFile($file, $processOptions);
 
                     if ($result->succeeded()) {
                         $processed++;

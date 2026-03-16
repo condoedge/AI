@@ -16,11 +16,13 @@ class GraphConfig
      * @param string $label Node label (e.g., "Customer", "Person", "Order")
      * @param array $properties List of property names to store (e.g., ['id', 'name', 'email'])
      * @param RelationshipConfig[] $relationships Array of relationship configurations
+     * @param array $securityAxes Security axis configuration for this entity
      */
     public function __construct(
         public readonly string $label,
         public readonly array $properties,
-        public readonly array $relationships = []
+        public readonly array $relationships = [],
+        public readonly array $securityAxes = [],
     ) {
         if (empty($this->label)) {
             throw new \InvalidArgumentException('Graph label cannot be empty');
@@ -57,7 +59,8 @@ class GraphConfig
         return new self(
             label: $config['label'],
             properties: $config['properties'],
-            relationships: array_filter($relationships)
+            relationships: array_filter($relationships),
+            securityAxes: $config['security_axes'] ?? [],
         );
     }
 

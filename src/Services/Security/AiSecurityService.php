@@ -6,22 +6,87 @@ namespace Condoedge\Ai\Services\Security;
 
 use Condoedge\Ai\Contracts\AiAuthAdapterInterface;
 use Condoedge\Ai\Exceptions\SecurityException;
+use Condoedge\Ai\Security\SecurityAxesRegistry;
+use Condoedge\Ai\Security\SecurityAxisPathResolver;
 use Illuminate\Support\Facades\Log;
 use Kompo\Auth\Models\Teams\Permission;
 
 /**
  * Main security service for AI queries.
- * Orchestrates permission checking and team filter generation.
+ * Orchestrates permission checking and multi-axis filter generation.
  */
 class AiSecurityService
 {
     public function __construct(
         private readonly AiAuthAdapterInterface $authAdapter,
-        private readonly TeamPathResolver $pathResolver
+        private readonly TeamPathResolver $pathResolver,
+        private readonly SecurityAxesRegistry $axesRegistry,
+        private readonly SecurityAxisPathResolver $axisPathResolver,
     ) {}
 
     /**
-     * Get team filter for entity query.
+     * Get security filters for all configured axes.
+     *
+     * Returns an array of Cypher WHERE clauses (one per axis), to be combined with AND.
+     *
+     * @param mixed $user User model
+     * @param string $entity Entity name
+     * @param string $alias Cypher alias
+     * @return string[] Array of filter clauses
+     * @throws SecurityException When access denied
+     */
+    public function getSecurityFilters($user, string $entity, string $alias): array
+    {
+        if (!$this->authAdapter->isEnabled()) {
+            return [];
+        }
+
+        $axes = $this->axesRegistry->all();
+
+        // If no axes configured, fall back to legacy team-only behavior
+        if (empty($axes)) {
+            $legacyFilter = $this->getTeamFilter($user, $entity, $alias);
+            return $legacyFilter ? [$legacyFilter] : [];
+        }
+
+        $filters = [];
+
+        foreach ($axes as $name => $axis) {
+            $ids = $this->axesRegistry->resolveAxis($name, $user);
+
+            if (empty($ids)) {
+                if ($axis->required) {
+                    $this->logDeniedAccess($user, $entity, "no_ids_for_axis_{$name}");
+                    throw new SecurityException(
+                        "You do not have permission to query {$entity} data (axis: {$name})"
+                    );
+                }
+                // Non-required axis with no IDs = skip filter
+                continue;
+            }
+
+            $resolved = $this->axisPathResolver->resolve($name, $entity, $alias, $ids);
+
+            if ($resolved === null) {
+                $action = config('ai.security.on_missing_team_path', 'deny');
+                if ($action === 'deny') {
+                    $this->logMissingAxisPath($user, $entity, $name);
+                    throw new SecurityException(
+                        "Cannot verify permissions for {$entity} data (axis: {$name})"
+                    );
+                }
+                // 'bypass' = skip this axis filter
+                continue;
+            }
+
+            $filters[] = $resolved['filter'];
+        }
+
+        return $filters;
+    }
+
+    /**
+     * Get team filter for entity query (backward compatibility).
      *
      * @param mixed $user User model
      * @param string $entity Entity name
@@ -109,9 +174,6 @@ class AiSecurityService
         return false;
     }
 
-    /**
-     * Handle missing team path based on config.
-     */
     private function handleMissingTeamPath($user, string $entity): ?string
     {
         $this->logMissingTeamPath($user, $entity);
@@ -124,13 +186,9 @@ class AiSecurityService
             );
         }
 
-        // 'bypass' - return null (no filter)
         return null;
     }
 
-    /**
-     * Log denied access attempt.
-     */
     private function logDeniedAccess($user, string $entity, string $reason): void
     {
         if (!config('ai.security.log_denied_access', true)) {
@@ -147,9 +205,6 @@ class AiSecurityService
         );
     }
 
-    /**
-     * Log missing team path.
-     */
     private function logMissingTeamPath($user, string $entity): void
     {
         if (!config('ai.security.log_missing_team_path', true)) {
@@ -161,6 +216,23 @@ class AiSecurityService
             [
                 'user_id' => $user->id ?? null,
                 'entity' => $entity,
+                'action' => config('ai.security.on_missing_team_path', 'deny'),
+            ]
+        );
+    }
+
+    private function logMissingAxisPath($user, string $entity, string $axisName): void
+    {
+        if (!config('ai.security.log_missing_team_path', true)) {
+            return;
+        }
+
+        Log::channel(config('ai.security.log_channel', 'ai-security'))->warning(
+            "Entity has no path configured for security axis",
+            [
+                'user_id' => $user->id ?? null,
+                'entity' => $entity,
+                'axis' => $axisName,
                 'action' => config('ai.security.on_missing_team_path', 'deny'),
             ]
         );
