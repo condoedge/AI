@@ -7,7 +7,6 @@ namespace Condoedge\Ai\Services\Security;
 use Condoedge\Ai\Contracts\AiAuthAdapterInterface;
 use Condoedge\Ai\Exceptions\SecurityException;
 use Illuminate\Support\Facades\Log;
-use Kompo\Auth\Models\Teams\Permission;
 
 /**
  * Main security service for AI queries.
@@ -35,7 +34,7 @@ class AiSecurityService
             return null;
         }
 
-        if ($this->checkIfPermissionsExist($user, $entity) === false) {
+        if ($this->authAdapter->checkIfPermissionsExist($user, $entity) === false) {
             $action = config('ai.security.on_permission_unexistent', 'deny');
 
             if ($action === 'deny') {
@@ -90,23 +89,6 @@ class AiSecurityService
         }
 
         return $this->authAdapter->getTeamsWithPermission($user, $entity);
-    }
-
-    private function checkIfPermissionsExist($user, string $entity): bool
-    {
-        $permissionChain = config('ai.security.permission_chain', [
-            '{Entity}.AiRetrieving',
-            '{Entity}',
-        ]);
-
-        while ($pattern = array_shift($permissionChain)) {
-            $permission = str_replace('{Entity}', $entity, $pattern);
-            if (Permission::findByKey($permission) !== null) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**

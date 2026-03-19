@@ -130,12 +130,14 @@ ANTHROPIC_MAX_TOKENS=2000
 ```env
 AI_EMBEDDING_PROVIDER=openai
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+AI_EMBEDDING_VECTOR_SIZE=
 ```
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `AI_EMBEDDING_PROVIDER` | string | openai | Embedding provider |
 | `OPENAI_EMBEDDING_MODEL` | string | text-embedding-3-small | Embedding model |
+| `AI_EMBEDDING_VECTOR_SIZE` | int | null | Override embedding dimensions. When null, uses the active provider's default dimensions. Set this if you use a custom or fine-tuned embedding model. |
 
 ---
 
@@ -365,6 +367,22 @@ AI_DOCS_PREFIX=ai-docs
 
 ---
 
+## Debugging & Logging
+
+```env
+AI_DEBUG=false
+AI_LOG_CHANNEL=
+```
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `AI_DEBUG` | bool | false | Enable detailed pipeline logging. When true, every semantic search result, threshold decision, entity expansion, prompt size, and retry reason is logged. |
+| `AI_LOG_CHANNEL` | string | null | Laravel log channel to use for AI logs. When null, uses the application's default log channel. |
+
+See: [Debugging the AI Pipeline](/docs/{{version}}/advanced/debugging)
+
+---
+
 ## Example .env File
 
 ```env
@@ -408,6 +426,10 @@ AI_RESPONSE_STYLE=friendly
 # Semantic features
 AI_SEMANTIC_MATCHING=true
 AI_SEMANTIC_CONTEXT_ENABLED=true
+
+# Debugging (disable in production)
+AI_DEBUG=false
+AI_LOG_CHANNEL=
 ```
 
 ---

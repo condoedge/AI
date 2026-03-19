@@ -222,6 +222,11 @@ class CypherScopeAdapter
             return null;
         }
 
+        // Handle union/intersection types (PHP 8.1+) which don't have getName()
+        if (!($type instanceof \ReflectionNamedType)) {
+            return null;
+        }
+
         $typeName = $type->getName();
 
         return match ($typeName) {
@@ -257,14 +262,15 @@ class CypherScopeAdapter
      */
     private function determineScopeType(array $calls): string
     {
-        // Check if any call is a relationship query
+        $relationshipMethods = ['whereHas', 'whereDoesntHave', 'has', 'doesntHave', 'withWhereHas'];
+
         foreach ($calls as $call) {
-            if (($call['method'] ?? '') === 'whereHas') {
+            $method = $call['method'] ?? '';
+            if (in_array($method, $relationshipMethods)) {
                 return 'relationship_traversal';
             }
         }
 
-        // Default to property filter
         return 'property_filter';
     }
 
@@ -403,7 +409,7 @@ class CypherScopeAdapter
                 $targetEntity = Str::studly(Str::singular($relation));
 
                 $relationships[] = [
-                    'type' => 'HAS_' . strtoupper(Str::snake($relation)),
+                    'type' => strtoupper(Str::snake($relation)),
                     'target' => $targetEntity,
                 ];
 
@@ -436,22 +442,72 @@ class CypherScopeAdapter
      */
     private function extractFilterFromCalls(array $calls): array
     {
-        $filter = [];
+        $filters = [];
 
         foreach ($calls as $call) {
             $method = $call['method'] ?? '';
+            $args = $call['arguments'] ?? [];
 
-            if ($method === 'where' && ($call['type'] ?? '') === 'basic') {
-                $column = $call['column'] ?? '';
-                $value = $call['value'] ?? '';
+            switch ($method) {
+                case 'where':
+                case 'orWhere':
+                    if (($call['type'] ?? '') === 'basic' && isset($args[0], $args[2])) {
+                        $filters[] = [
+                            'property' => $args[0],
+                            'operator' => $args[1] ?? '=',
+                            'value' => $args[2],
+                            'boolean' => $method === 'orWhere' ? 'or' : 'and',
+                        ];
+                    }
+                    break;
 
-                if ($column && $call['operator'] === '=') {
-                    $filter[$column] = $value;
-                }
+                case 'whereIn':
+                    if (isset($args[0], $args[1]) && is_array($args[1])) {
+                        $filters[] = [
+                            'property' => $args[0],
+                            'operator' => 'IN',
+                            'value' => $args[1],
+                            'boolean' => 'and',
+                        ];
+                    }
+                    break;
+
+                case 'whereBetween':
+                    if (isset($args[0], $args[1]) && is_array($args[1]) && count($args[1]) === 2) {
+                        $filters[] = [
+                            'property' => $args[0],
+                            'operator' => 'BETWEEN',
+                            'value' => $args[1],
+                            'boolean' => 'and',
+                        ];
+                    }
+                    break;
+
+                case 'whereNull':
+                    if (isset($args[0])) {
+                        $filters[] = [
+                            'property' => $args[0],
+                            'operator' => 'IS NULL',
+                            'value' => null,
+                            'boolean' => 'and',
+                        ];
+                    }
+                    break;
+
+                case 'whereNotNull':
+                    if (isset($args[0])) {
+                        $filters[] = [
+                            'property' => $args[0],
+                            'operator' => 'IS NOT NULL',
+                            'value' => null,
+                            'boolean' => 'and',
+                        ];
+                    }
+                    break;
             }
         }
 
-        return $filter;
+        return $filters;
     }
 
     /**

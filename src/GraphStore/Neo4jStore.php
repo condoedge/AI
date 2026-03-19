@@ -74,10 +74,10 @@ class Neo4jStore implements GraphStoreInterface
         // Validate label to prevent injection
         $safeLabel = CypherSanitizer::escapeLabel($label);
 
-        // Use parameter binding instead of string interpolation for security
-        $cypher = "CREATE (n:{$safeLabel}) SET n = \$properties RETURN id(n) as nodeId, n.id as appId";
+        // Use MERGE to ensure idempotency — running ingest twice won't create duplicates
+        $cypher = "MERGE (n:{$safeLabel} {id: \$id}) SET n = \$properties RETURN id(n) as nodeId, n.id as appId";
 
-        $result = $this->query($cypher, ['properties' => $properties]);
+        $result = $this->query($cypher, ['id' => $properties['id'], 'properties' => $properties]);
 
         if (empty($result)) {
             throw new \RuntimeException("Failed to create node with label '{$label}'");

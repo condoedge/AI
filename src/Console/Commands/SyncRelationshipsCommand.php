@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Console\Commands;
 
 use Condoedge\Ai\Domain\Contracts\Nodeable;
-use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Services\BatchDataIngestionService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Symfony\Component\Finder\Finder;
@@ -39,7 +39,8 @@ class SyncRelationshipsCommand extends Command
      */
     protected $signature = 'ai:sync-relationships
                             {--model= : Specific model class to sync (e.g., App\\Models\\User)}
-                            {--chunk=100 : Batch size for processing}
+                            {--from= : Skip models until this one (e.g., InboundEmail or App\\Models\\Messaging\\InboundEmail)}
+                            {--chunk=2000 : Batch size for processing}
                             {--dry-run : Show what would be synced without actually syncing}';
 
     /**
@@ -53,7 +54,7 @@ class SyncRelationshipsCommand extends Command
      * Create a new command instance.
      */
     public function __construct(
-        private DataIngestionServiceInterface $ingestionService
+        private BatchDataIngestionService $ingestionService
     ) {
         parent::__construct();
     }
@@ -72,6 +73,10 @@ class SyncRelationshipsCommand extends Command
         $models = $this->option('model')
             ? [$this->option('model')]
             : $this->findNodeableModels();
+    
+        if ($from = $this->option('from')) {
+            $models = $this->skipModelsUntil($models, $from);
+        }
 
         if (empty($models)) {
             $this->warn('No Nodeable models found.');
@@ -236,5 +241,24 @@ class SyncRelationshipsCommand extends Command
         }
 
         return $models;
+    }
+
+    private function skipModelsUntil(array $models, string $from): array
+    {
+        $skipping = true;
+        $filtered = [];
+
+        foreach ($models as $model) {
+            if ($skipping) {
+                if (str_contains($model, $from)) {
+                    $skipping = false;
+                    $filtered[] = $model;
+                }
+            } else {
+                $filtered[] = $model;
+            }
+        }
+
+        return $filtered;
     }
 }

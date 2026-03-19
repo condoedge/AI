@@ -88,10 +88,9 @@ class QueryRulesSection extends BasePromptSection
     private function formatDataTypeRules(): string
     {
         return "2. DATA TYPE RULES:\n" .
-               "   - Look at example entities to determine if dates are stored as strings or Neo4j dates\n" .
-               "   - If date looks like '2020-01-15' (quoted string), compare as string: property < '2020-01-01'\n" .
-               "   - If date looks like date('2020-01-15'), use date() function: property < date('2020-01-01')\n" .
-               "   - String comparisons work for ISO date format (YYYY-MM-DD)\n\n";
+               "   - Dates stored as STRINGS (e.g., '2024-01-15'): compare as strings using < > = operators\n" .
+               "   - NEVER use date() or datetime() functions unless the EXAMPLE ENTITIES show Neo4j temporal types\n" .
+               "   - Check the EXAMPLE ENTITIES section to see how dates are actually stored\n\n";
     }
 
     private function formatRelationshipRules(): string

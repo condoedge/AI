@@ -77,9 +77,9 @@ class BoltNeo4jStore implements GraphStoreInterface
     {
         $safeLabel = CypherSanitizer::escapeLabel($label);
 
-        $cypher = "CREATE (n:{$safeLabel}) SET n = \$properties RETURN elementId(n) as nodeId, n.id as appId";
+        $cypher = "MERGE (n:{$safeLabel} {id: \$id}) SET n = \$properties RETURN elementId(n) as nodeId, n.id as appId";
 
-        $result = $this->query($cypher, ['properties' => $properties]);
+        $result = $this->query($cypher, ['id' => $properties['id'], 'properties' => $properties]);
 
         if (empty($result)) {
             throw new \RuntimeException("Failed to create node with label '{$label}'");
@@ -128,15 +128,21 @@ class BoltNeo4jStore implements GraphStoreInterface
             MATCH (from:{$safeFromLabel} {id: \$fromId})
             MATCH (to:{$safeToLabel} {id: \$toId})
             MERGE (from)-[r:{$safeType}]->(to)
-            SET r = \$properties
-            RETURN r
         ";
 
-        $result = $this->query($cypher, [
+        $params = [
             'fromId' => $fromId,
             'toId' => $toId,
-            'properties' => $properties,
-        ]);
+        ];
+
+        if (!empty($properties)) {
+            $cypher .= "SET r = \$properties\n";
+            $params['properties'] = $properties;
+        }
+
+        $cypher .= "RETURN r";
+
+        $result = $this->query($cypher, $params);
 
         return !empty($result);
     }

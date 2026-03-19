@@ -77,6 +77,11 @@ class ScopeSemanticMatcher
         $seenScopes = [];
 
         foreach ($results as $result) {
+            // Normalize: Qdrant returns 'payload', but code expects 'metadata'
+            if (!isset($result['metadata']) && isset($result['payload'])) {
+                $result['metadata'] = $result['payload'];
+            }
+
             $score = $result['score'] ?? 0;
 
             if ($score < $threshold) {

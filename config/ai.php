@@ -34,6 +34,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Debug & Logging
+    |--------------------------------------------------------------------------
+    | When debug is true, the AI pipeline logs detailed internals: semantic
+    | scores, threshold decisions, selected entities, prompt content, timing.
+    | When false, only warnings and errors are logged.
+    */
+    'debug' => env('AI_DEBUG', false),
+    'log_channel' => env('AI_LOG_CHANNEL', null),
+
+    /*
+    |--------------------------------------------------------------------------
     | Discovery Configuration
     |--------------------------------------------------------------------------
     |
@@ -295,6 +306,9 @@ return [
     'embedding' => [
         'default' => env('AI_EMBEDDING_PROVIDER', 'openai'), // 'openai' or 'anthropic'
 
+        // Override to force a specific dimension. If null, uses the active provider's dimensions.
+        'vector_size' => env('AI_EMBEDDING_VECTOR_SIZE', null),
+
         'openai' => [
             'api_key' => env('OPENAI_API_KEY'),
             'model' => env('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small'),
@@ -516,7 +530,7 @@ return [
 
         // Similarity threshold for context selection (0.0 - 1.0)
         // Higher = more precise, Lower = more recall
-        'threshold' => (float) env('AI_SEMANTIC_CONTEXT_THRESHOLD', 0.65),
+        'threshold' => (float) env('AI_SEMANTIC_CONTEXT_THRESHOLD', 0.45),
 
         // Maximum number of context items to retrieve
         'top_k' => (int) env('AI_SEMANTIC_CONTEXT_TOP_K', 10),

@@ -19,7 +19,7 @@ class RelationshipsSection extends BasePromptSection
     public function format(string $question, array $context, array $options = []): string
     {
         $schema = $context['graph_schema'] ?? [];
-        $entityConfigs = config('entities', []);
+        $entityConfigs = $this->getRelevantEntityConfigs($context);
 
         if (empty($entityConfigs)) {
             return '';
@@ -80,7 +80,38 @@ class RelationshipsSection extends BasePromptSection
 
     public function shouldInclude(string $question, array $context, array $options = []): bool
     {
-        $entityConfigs = config('entities', []);
-        return !empty($entityConfigs);
+        return !empty($this->getRelevantEntityConfigs($context));
+    }
+
+    /**
+     * Get only entity configs relevant to the current context.
+     * Uses semantic selection if available, falls back to category-based loading.
+     */
+    private function getRelevantEntityConfigs(array $context): array
+    {
+        // If semantic selection identified specific entities, use only those
+        $selectedEntities = $context['selection_info']['selected_entities'] ?? [];
+
+        if (!empty($selectedEntities)) {
+            $allConfigs = config('entities', []);
+            return array_filter($allConfigs, function ($config) use ($selectedEntities) {
+                $label = $config['graph']['label'] ?? '';
+                return in_array($label, $selectedEntities);
+            });
+        }
+
+        // If entity_metadata has detected entities, use those
+        $metadata = $context['entity_metadata'] ?? [];
+        if (!empty($metadata)) {
+            $allConfigs = config('entities', []);
+            $detectedLabels = array_map(fn($m) => $m['label'] ?? '', $metadata);
+            return array_filter($allConfigs, function ($config) use ($detectedLabels) {
+                $label = $config['graph']['label'] ?? '';
+                return in_array($label, $detectedLabels);
+            });
+        }
+
+        // Fallback: load all (but this should be avoided)
+        return config('entities', []);
     }
 }

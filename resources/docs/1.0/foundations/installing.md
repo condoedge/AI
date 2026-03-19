@@ -251,56 +251,44 @@ See: [Configuration Reference](/docs/{{version}}/foundations/configuration#entit
 
 ---
 
-## 9. Bulk Ingest Existing Data (If Any)
+## 9. Run Full Setup
 
-If you have existing data, ingest it into Neo4j + Qdrant:
+After reviewing your entity configuration, run the full pipeline:
 
 ```bash
-php artisan ai:ingest
+php artisan ai:setup
 ```
 
-**What it does:**
-- Finds all Nodeable entities in your database
-- Processes them in batches (default: 100)
-- Creates Qdrant collections automatically
-- Shows progress bar with success/failure counts
-
-**Output:**
-```
-🚀 Bulk Entity Ingestion
-
-Found 3 Nodeable model(s)
-
-Processing: App\Models\Customer
-  Found 150 entities
-  [████████████████] 150/150 (100%) Ingested: 150, Failed: 0
-  ✓ Ingested: 150
-
-✓ Successfully ingested: 150
-✗ Failed: 0
-
-Ingestion complete!
-```
+This runs (in order):
+1. `ai:validate-config` — checks configuration, connections
+2. `ai:ingest-entities` — loads entities into Neo4j + Qdrant
+3. `ai:sync-relationships` — creates relationship edges
+4. `ai:index-context` — builds semantic context index
+5. `ai:index-semantic` — indexes entities for detection
+6. `ai:index-scopes` — indexes scope examples
 
 **Options:**
 ```bash
-# Ingest specific model
-php artisan ai:ingest --model="App\Models\Customer"
+# Clear all stores before ingestion
+php artisan ai:setup --fresh
 
-# Custom batch size
-php artisan ai:ingest --chunk=500
+# Re-index only (no data changes)
+php artisan ai:setup --skip-ingest
 
-# Preview without ingesting
-php artisan ai:ingest --dry-run
+# Also run discover (caution: overwrites config)
+php artisan ai:setup --discover
+
+# Show steps without executing
+php artisan ai:setup --dry-run
 ```
 
-**Note:** This is a **one-time operation** for existing data. New entities automatically sync via auto-sync!
+If a step fails, the command stops and tells you how to resume. Fix the issue and re-run.
 
-See: [Data Ingestion Guide](/docs/{{version}}/usage/data-ingestion#bulk-ingestion-command)
+See: [Artisan Commands](/docs/{{version}}/reference/commands#ai-setup)
 
 ---
 
-## 10. Test Auto-Sync
+## 10. Test Auto-Sync (Optional)
 
 Create a new entity and verify it's automatically ingested:
 

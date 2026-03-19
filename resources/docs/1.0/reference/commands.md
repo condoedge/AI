@@ -40,6 +40,53 @@ php artisan ai:discover --force
 
 ---
 
+### ai:setup
+
+Run the full AI pipeline setup in one command. This orchestrates validation, ingestion, relationship sync, and all indexing steps in the correct order.
+
+```bash
+php artisan ai:setup [options]
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--discover` | Also run `ai:discover` before ingestion (overwrites existing config) | false |
+| `--fresh` | Clear all stores before ingestion | false |
+| `--skip-ingest` | Skip data ingestion (useful for re-indexing only) | false |
+| `--dry-run` | Show what would be executed without running | false |
+
+**Steps executed (in order):**
+
+1. `ai:validate-config` — checks configuration and connections
+2. `ai:ingest-entities` — loads entities into Neo4j + Qdrant
+3. `ai:sync-relationships` — creates relationship edges
+4. `ai:index-context` — builds semantic context index
+5. `ai:index-semantic` — indexes entities for detection
+6. `ai:index-scopes` — indexes scope examples
+
+If any step fails, the command stops and shows how to resume.
+
+**Examples:**
+
+```bash
+# Full setup
+php artisan ai:setup
+
+# Preview steps without executing
+php artisan ai:setup --dry-run
+
+# Fresh ingestion (clear stores first)
+php artisan ai:setup --fresh
+
+# Re-index only (skip data ingestion)
+php artisan ai:setup --skip-ingest
+
+# Include discovery step
+php artisan ai:setup --discover
+```
+
+---
+
 ### ai:diagnose
 
 Diagnose AI package configuration and connectivity. Checks configuration files, Neo4j connectivity, Qdrant connectivity, LLM API, and embedding provider.
@@ -119,6 +166,8 @@ php artisan ai:config:validate
 
 Bulk ingest all Nodeable entities into Neo4j and Qdrant.
 
+> **Note:** This command automatically uses `BatchDataIngestionService` which groups entities by label and writes them via Cypher `UNWIND` operations, reducing thousands of individual queries to a handful of batched writes.
+
 ```bash
 php artisan ai:ingest [options]
 ```
@@ -158,6 +207,8 @@ php artisan ai:ingest --docs
 ### ai:sync-relationships
 
 Synchronize missing relationships in Neo4j. Reconciles relationships that couldn't be created during bulk ingestion because target nodes didn't exist yet.
+
+> **Note:** This command automatically uses batch `UNWIND` operations, grouping relationships by `(fromLabel, toLabel, type)` and writing each group in a single Cypher query for significantly faster execution.
 
 ```bash
 php artisan ai:sync-relationships [options]
@@ -339,18 +390,19 @@ php artisan ai:diagnose
 # 3. Discover entities
 php artisan ai:discover
 
-# 4. Validate configuration
+# 4. Run full pipeline (validate, ingest, sync, index)
+php artisan ai:setup
+```
+
+Or run each step manually:
+
+```bash
 php artisan ai:config:validate
-
-# 5. Ingest existing data
 php artisan ai:ingest
-
-# 6. Sync relationships (if needed)
 php artisan ai:sync-relationships
-
-# 7. Build semantic indexes
-php artisan ai:index-semantic
 php artisan ai:index-context
+php artisan ai:index-semantic
+php artisan ai:index-scopes
 ```
 
 ### After Model Changes
@@ -359,24 +411,22 @@ php artisan ai:index-context
 # Re-discover configuration
 php artisan ai:discover --force
 
-# Validate the new configuration
-php artisan ai:config:validate
+# Re-run setup (skip ingestion if data hasn't changed)
+php artisan ai:setup --skip-ingest
 
-# Rebuild indexes
-php artisan ai:index-semantic --rebuild
-php artisan ai:index-context --force
+# Or rebuild everything
+php artisan ai:setup --fresh
 ```
 
 ### Fresh Re-ingestion
 
 ```bash
-# Re-ingest with fresh stores
+# Full fresh re-ingestion with ai:setup
+php artisan ai:setup --fresh
+
+# Or run manually:
 php artisan ai:ingest --fresh
-
-# Sync relationships
 php artisan ai:sync-relationships
-
-# Rebuild indexes
 php artisan ai:index-semantic --rebuild
 php artisan ai:index-context --force
 ```
@@ -385,10 +435,7 @@ php artisan ai:index-context --force
 
 ```bash
 # In deployment script
-php artisan ai:discover --force
-php artisan ai:config:validate
-php artisan ai:index-semantic --rebuild
-php artisan ai:index-context --force
+php artisan ai:setup --discover --fresh
 php artisan ai:diagnose
 ```
 

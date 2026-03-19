@@ -284,8 +284,11 @@ class DataIngestionService implements DataIngestionServiceInterface
         $graphConfig = $entity->getGraphConfig();
         $vectorConfig = $entity->getVectorConfig();
 
-        // Take snapshot for potential rollback
-        $entitySnapshot = $entity->toArray();
+        // Take snapshot for potential rollback (sanitize for Neo4j compatibility)
+        $entitySnapshot = array_map(
+            fn ($v) => $this->sanitizeForGraph($v),
+            $entity->toArray()
+        );
         $graphSuccess = false;
         $vectorSuccess = false;
 
@@ -921,11 +924,41 @@ class DataIngestionService implements DataIngestionServiceInterface
                     }
                 }
 
+                $value = $this->sanitizeForGraph($value);
+
                 $properties[$propertyName] = $value;
             }
         }
 
         return $properties;
+    }
+
+    /**
+     * Sanitize a value for Neo4j storage.
+     *
+     * Neo4j only supports primitive types (string, int, float, bool, null)
+     * and arrays of primitives. Associative arrays (maps) like translation
+     * fields {fr: "...", en: "..."} must be converted to JSON strings.
+     */
+    private function sanitizeForGraph(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        // Associative arrays (maps) are not supported by Neo4j — JSON-encode them
+        if (!array_is_list($value)) {
+            return json_encode($value, JSON_UNESCAPED_UNICODE);
+        }
+
+        // Sequential arrays: ensure all elements are primitives
+        foreach ($value as $item) {
+            if (is_array($item) || is_object($item)) {
+                return json_encode($value, JSON_UNESCAPED_UNICODE);
+            }
+        }
+
+        return $value;
     }
 
     /**

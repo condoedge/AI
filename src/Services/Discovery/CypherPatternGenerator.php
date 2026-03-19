@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Discovery;
 
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 /**
@@ -189,13 +190,21 @@ class CypherPatternGenerator
         }
 
         // Convert relation name to relationship type (snake_case to SCREAMING_SNAKE_CASE)
-        $relType = $this->relationshipNameToType($relation);
+        $configuredType = $call['rel_type'] ?? null;
+        $relType = $this->relationshipNameToType($relation, $configuredType);
 
         // Generate relationship variable name
         $relVar = strtolower(substr($relation, 0, 1));
 
-        // Build MATCH pattern
-        $matchPattern = "MATCH ({$nodeVar})-[:{$relType}]->({$relVar})";
+        // Determine direction
+        $direction = $call['direction'] ?? 'outgoing';
+
+        // Build MATCH pattern with appropriate direction
+        if ($direction === 'incoming') {
+            $matchPattern = "MATCH ({$nodeVar})<-[:{$relType}]-({$relVar})";
+        } else {
+            $matchPattern = "MATCH ({$nodeVar})-[:{$relType}]->({$relVar})";
+        }
 
         // Add nested conditions if present
         if (!empty($nestedCalls)) {
@@ -235,8 +244,12 @@ class CypherPatternGenerator
 
         $cypherOperator = $this->convertOperator($operator);
 
-        // In Cypher, use date() function to extract date from datetime
-        $condition = "date({$nodeVar}.{$column}) {$cypherOperator} date('{$value}')";
+        // Use string comparison — dates in this system are stored as strings
+        $formattedValue = $value instanceof \DateTimeInterface
+            ? $value->format('Y-m-d')
+            : (string) $value;
+
+        $condition = "{$nodeVar}.{$column} {$cypherOperator} '{$this->escapeString($formattedValue)}'";
 
         return $this->applyBoolean($condition, $boolean);
     }
@@ -261,8 +274,12 @@ class CypherPatternGenerator
 
         $cypherOperator = $this->convertOperator($operator);
 
-        // In Cypher, use time() function to extract time from datetime
-        $condition = "time({$nodeVar}.{$column}) {$cypherOperator} time('{$value}')";
+        // Use string comparison — times in this system are stored as strings
+        $formattedValue = $value instanceof \DateTimeInterface
+            ? $value->format('H:i:s')
+            : (string) $value;
+
+        $condition = "{$nodeVar}.{$column} {$cypherOperator} '{$this->escapeString($formattedValue)}'";
 
         return $this->applyBoolean($condition, $boolean);
     }
@@ -357,6 +374,11 @@ class CypherPatternGenerator
             return (string) $value;
         }
 
+        // Handle Carbon or DateTimeInterface objects — store as string, not Neo4j date()
+        if ($value instanceof \DateTimeInterface) {
+            return "'" . $value->format('Y-m-d') . "'";
+        }
+
         // Handle LIKE operator - convert to CONTAINS with pattern extraction
         if (strtolower($operator) === 'like') {
             $value = $this->convertLikePattern($value);
@@ -393,16 +415,22 @@ class CypherPatternGenerator
     /**
      * Convert relationship name to Cypher relationship type
      *
+     * If a pre-configured type is provided (from RelationshipDiscoverer), it is used directly.
+     * Otherwise, the relation name is converted to SCREAMING_SNAKE_CASE without a prefix,
+     * matching the convention used by RelationshipDiscoverer.
+     *
      * @param string $relation Eloquent relation name (e.g., 'userRoles', 'orders')
-     * @return string Cypher relationship type (e.g., 'HAS_ROLE', 'HAS_ORDER')
+     * @param string|null $configuredType Optional pre-configured relationship type
+     * @return string Cypher relationship type (e.g., 'USER_ROLES', 'ORDERS')
      */
-    private function relationshipNameToType(string $relation): string
+    public function relationshipNameToType(string $relation, ?string $configuredType = null): string
     {
-        // Convert camelCase to snake_case
-        $snakeCase = strtolower(preg_replace('/(?<!^)[A-Z]/', '_$0', $relation));
+        if ($configuredType) {
+            return $configuredType;
+        }
 
-        // Convert to SCREAMING_SNAKE_CASE and prefix with HAS_
-        return 'HAS_' . strtoupper($snakeCase);
+        $snakeCase = Str::snake($relation);
+        return strtoupper($snakeCase);
     }
 
     /**
@@ -434,17 +462,15 @@ class CypherPatternGenerator
         }
 
         $result = [];
-        $pendingOr = false;
 
         foreach ($conditions as $condition) {
             if (str_starts_with($condition, 'OR ')) {
-                // Remove OR prefix and mark as pending
+                // Remove OR prefix and join with OR
                 $condition = substr($condition, 3);
                 if (!empty($result)) {
                     $result[] = 'OR';
                 }
                 $result[] = $condition;
-                $pendingOr = false;
             } else {
                 if (!empty($result)) {
                     $result[] = 'AND';
@@ -484,8 +510,11 @@ class CypherPatternGenerator
 
             if ($type && $target) {
                 $targetVar = strtolower(substr($target, 0, 1));
-                $arrow = $direction === 'incoming' ? '<-' : '-';
-                $query .= "{$arrow}[:{$type}]->({$targetVar}:{$target})";
+                if ($direction === 'incoming') {
+                    $query .= "<-[:{$type}]-({$targetVar}:{$target})";
+                } else {
+                    $query .= "-[:{$type}]->({$targetVar}:{$target})";
+                }
             }
         }
 

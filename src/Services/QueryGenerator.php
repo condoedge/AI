@@ -10,6 +10,7 @@ use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
 use Condoedge\Ai\GraphStore\CypherSanitizer;
+use Condoedge\Ai\Support\AiLogger;
 
 /**
  * Query Generator Service
@@ -87,18 +88,25 @@ class QueryGenerator implements QueryGeneratorInterface
     private RateLimiter $rateLimiter;
 
     /**
+     * Logger instance
+     */
+    private AiLogger $logger;
+
+    /**
      * Constructor
      *
      * @param LlmProviderInterface $llm LLM provider for query generation
      * @param GraphStoreInterface $graphStore Graph store for schema access
      * @param array $config Configuration options
      * @param SemanticPromptBuilder|null $promptBuilder Optional semantic prompt builder
+     * @param AiLogger|null $logger Optional logger instance
      */
     public function __construct(
         private readonly LlmProviderInterface $llm,
         private readonly GraphStoreInterface $graphStore,
         private readonly array $config = [],
-        ?SemanticPromptBuilder $promptBuilder = null
+        ?SemanticPromptBuilder $promptBuilder = null,
+        ?AiLogger $logger = null
     ) {
         // Initialize semantic prompt builder if not provided
         $this->promptBuilder = $promptBuilder ?? new SemanticPromptBuilder(
@@ -107,6 +115,9 @@ class QueryGenerator implements QueryGeneratorInterface
 
         // Initialize rate limiter for LLM API calls
         $this->rateLimiter = RateLimiter::forLlm();
+
+        // Initialize logger
+        $this->logger = $logger ?? app(AiLogger::class);
     }
 
     /**
@@ -120,6 +131,8 @@ class QueryGenerator implements QueryGeneratorInterface
      */
     public function generate(string $question, array $context, array $options = []): array
     {
+        $this->logger->startTimer('query_generation');
+
         // Merge options with defaults
         $temperature = $options['temperature'] ?? $this->config['temperature'] ?? 0.1;
         $maxRetries = $options['max_retries'] ?? $this->config['max_retries'] ?? 3;
@@ -130,12 +143,28 @@ class QueryGenerator implements QueryGeneratorInterface
         if ($this->config['enable_templates'] ?? true) {
             $template = $this->detectTemplate($question);
             if ($template) {
+                $this->logger->debug('query_generator', "Template matched: {$template}", [
+                    'question' => $question,
+                    'template' => $template,
+                ]);
+
                 // generateFromTemplate returns null if schema is unavailable for validation
                 // In that case, fall through to LLM generation
                 $result = $this->generateFromTemplate($question, $template, $context);
                 if ($result !== null) {
+                    $durationMs = $this->logger->stopTimer('query_generation');
+                    $this->logger->info('query_generator', 'Query generated via template', [
+                        'duration_ms' => $durationMs,
+                        'source' => 'template',
+                        'template' => $template,
+                        'confidence' => $result['confidence'],
+                    ]);
                     return $result;
                 }
+            } else {
+                $this->logger->debug('query_generator', 'No template matched for question', [
+                    'question' => $question,
+                ]);
             }
         }
 
@@ -148,6 +177,11 @@ class QueryGenerator implements QueryGeneratorInterface
                 // Build prompt
                 $prompt = $this->buildPrompt($question, $context, $allowWrite, $lastError);
 
+                $this->logger->debug('query_generator', 'Sending prompt to LLM', [
+                    'prompt_size_bytes' => strlen($prompt),
+                    'attempt' => $retryCount + 1,
+                ]);
+
                 // Check rate limit before calling LLM
                 if (!$this->rateLimiter->waitAndAttempt(10)) {
                     throw new QueryGenerationException('Rate limit exceeded for LLM API');
@@ -159,7 +193,18 @@ class QueryGenerator implements QueryGeneratorInterface
                     'max_tokens' => 500,
                 ]);
 
+                $this->logger->debug('query_generator', 'LLM response received', [
+                    'response_size_bytes' => strlen($response ?? ''),
+                    'raw_response' => $response,
+                ]);
+
                 if ($response == 'NO QUERY REQUIRED' || !isset($response) || empty($response)) {
+                    $durationMs = $this->logger->stopTimer('query_generation');
+                    $this->logger->info('query_generator', 'No query required', [
+                        'duration_ms' => $durationMs,
+                        'source' => 'llm',
+                        'confidence' => 1.0,
+                    ]);
                     return [
                         'cypher' => '',
                         'explanation' => 'No query required to answer the question.',
@@ -179,12 +224,28 @@ class QueryGenerator implements QueryGeneratorInterface
                 // Validate
                 $validation = $this->validate($cypher, ['allow_write' => $allowWrite]);
 
+                $this->logger->debug('query_generator', 'Validation result', [
+                    'valid' => $validation['valid'],
+                    'errors' => $validation['errors'] ?? [],
+                    'warnings' => $validation['warnings'],
+                    'complexity' => $validation['complexity'],
+                ]);
+
                 if ($validation['valid']) {
                     // Success!
+                    $confidence = $this->calculateConfidence($cypher, $context);
+                    $durationMs = $this->logger->stopTimer('query_generation');
+                    $this->logger->info('query_generator', 'Query generated via LLM', [
+                        'duration_ms' => $durationMs,
+                        'source' => 'llm',
+                        'confidence' => $confidence,
+                        'retry_count' => $retryCount,
+                        'complexity' => $validation['complexity'],
+                    ]);
                     return [
                         'cypher' => $cypher,
                         'explanation' => $explain ? $this->generateExplanation($cypher, $question) : '',
-                        'confidence' => $this->calculateConfidence($cypher, $context),
+                        'confidence' => $confidence,
                         'warnings' => $validation['warnings'],
                         'metadata' => [
                             'template_used' => null,
@@ -198,13 +259,31 @@ class QueryGenerator implements QueryGeneratorInterface
                 $lastError = implode(', ', $validation['errors']);
                 $retryCount++;
 
+                $this->logger->warning('query_generator', "Retrying query generation (attempt {$retryCount}/{$maxRetries})", [
+                    'retry_number' => $retryCount,
+                    'error' => $lastError,
+                ]);
+
             } catch (\Exception $e) {
                 $lastError = $e->getMessage();
                 $retryCount++;
+
+                $this->logger->warning('query_generator', "Retrying query generation (attempt {$retryCount}/{$maxRetries})", [
+                    'retry_number' => $retryCount,
+                    'error' => $lastError,
+                    'exception_class' => get_class($e),
+                ]);
             }
         }
 
         // All retries exhausted
+        $durationMs = $this->logger->stopTimer('query_generation');
+        $this->logger->error('query_generator', "Failed to generate valid query after {$maxRetries} attempts", [
+            'duration_ms' => $durationMs,
+            'last_error' => $lastError,
+            'max_retries' => $maxRetries,
+        ]);
+
         throw new QueryGenerationException(
             "Failed to generate valid query after {$maxRetries} attempts. Last error: {$lastError}"
         );
@@ -368,12 +447,24 @@ class QueryGenerator implements QueryGeneratorInterface
         // Extract parameters from question
         preg_match($template['pattern'], $question, $matches);
 
-        // Get schema labels for validation
+        // Get valid labels from both Neo4j schema and entity config
         $schema = $context['graph_schema'] ?? [];
         $validLabels = $schema['labels'] ?? [];
 
-        // Security: If schema is empty or missing, fall through to LLM generation
-        // We cannot validate user input without a schema, so template bypass is unsafe
+        // Also include labels from entity config properties (covers entities not yet ingested)
+        $configLabels = array_keys($schema['properties'] ?? []);
+        $validLabels = array_unique(array_merge($validLabels, $configLabels));
+
+        // Also include labels from entity configs if available
+        $entityConfigs = config('entities', []);
+        foreach ($entityConfigs as $config) {
+            $label = $config['graph']['label'] ?? null;
+            if ($label && !in_array($label, $validLabels)) {
+                $validLabels[] = $label;
+            }
+        }
+
+        // Security: If no valid labels at all, fall through to LLM generation
         if (empty($validLabels)) {
             return null;
         }
@@ -466,6 +557,11 @@ class QueryGenerator implements QueryGeneratorInterface
             $prompt = "Explain this Cypher query in simple terms for the question '{$question}':\n\n{$cypher}";
             return $this->llm->complete($prompt, null, ['temperature' => 0.3, 'max_tokens' => 150]);
         } catch (\Exception $e) {
+            $this->logger->error('query_generator', 'Failed to generate explanation', [
+                'error' => $e->getMessage(),
+                'exception_class' => get_class($e),
+                'question' => $question,
+            ]);
             return "Query generated for: {$question}";
         }
     }

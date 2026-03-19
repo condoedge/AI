@@ -85,6 +85,7 @@ use Condoedge\Ai\Contracts\AiAuthAdapterInterface;
 use Condoedge\Ai\Auth\KompoAuthAdapter;
 use Condoedge\Ai\Services\Security\TeamPathResolver;
 use Condoedge\Ai\Services\Security\AiSecurityService;
+use Condoedge\Ai\Support\AiLogger;
 use Condoedge\Utils\Facades\FileModel;
 
 /**
@@ -162,6 +163,9 @@ class AiServiceProvider extends ServiceProvider
             'ai'
         );
 
+        // Register AiLogger (singleton, available to all services)
+        $this->app->singleton(\Condoedge\Ai\Support\AiLogger::class);
+
         // Register Vector Store
         $this->app->singleton(VectorStoreInterface::class, function ($app) {
             $defaultStore = config('ai.vector.default', 'qdrant');
@@ -217,12 +221,24 @@ class AiServiceProvider extends ServiceProvider
         // Alias for easier access
         $this->app->alias(DataIngestionServiceInterface::class, DataIngestionService::class);
 
+        // Register Batch Data Ingestion Service (decorates the base service)
+        $this->app->singleton(\Condoedge\Ai\Services\BatchDataIngestionService::class, function ($app) {
+            return new \Condoedge\Ai\Services\BatchDataIngestionService(
+                inner: $app->make(\Condoedge\Ai\Contracts\DataIngestionServiceInterface::class),
+                vectorStore: $app->make(\Condoedge\Ai\Contracts\VectorStoreInterface::class),
+                graphStore: $app->make(\Condoedge\Ai\Contracts\GraphStoreInterface::class),
+                embeddingProvider: $app->make(\Condoedge\Ai\Contracts\EmbeddingProviderInterface::class),
+                logger: $app->make(\Condoedge\Ai\Support\AiLogger::class),
+            );
+        });
+
         // Register Context Retriever
         $this->app->singleton(ContextRetrieverInterface::class, function ($app) {
             return new ContextRetriever(
                 vectorStore: $app->make(VectorStoreInterface::class),
                 graphStore: $app->make(GraphStoreInterface::class),
                 embeddingProvider: $app->make(EmbeddingProviderInterface::class),
+                logger: $app->make(AiLogger::class),
                 entityConfigs: null, // Load from config
                 scopeMatcher: $app->make(ScopeSemanticMatcher::class),
                 contextSelector: $app->make(SemanticContextSelector::class)
@@ -254,7 +270,8 @@ class AiServiceProvider extends ServiceProvider
                 llm: $app->make(LlmProviderInterface::class),
                 graphStore: $app->make(GraphStoreInterface::class),
                 config: config('ai.query_generation', []),
-                promptBuilder: $app->make(SemanticPromptBuilder::class)
+                promptBuilder: $app->make(SemanticPromptBuilder::class),
+                logger: $app->make(AiLogger::class)
             );
         });
 
@@ -419,6 +436,7 @@ class AiServiceProvider extends ServiceProvider
             return new SemanticContextSelector(
                 vectorStore: $app->make(VectorStoreInterface::class),
                 embeddingProvider: $app->make(EmbeddingProviderInterface::class),
+                logger: $app->make(AiLogger::class),
                 config: config('ai.semantic_context', [])
             );
         });
@@ -688,6 +706,7 @@ class AiServiceProvider extends ServiceProvider
                 \Condoedge\Ai\Console\Commands\IndexScopesCommand::class,
                 \Condoedge\Ai\Console\Commands\IndexContextCommand::class,
                 \Condoedge\Ai\Console\Commands\ValidateConfigCommand::class,
+                \Condoedge\Ai\Console\Commands\SetupCommand::class,
             ]);
         }
 

@@ -31,6 +31,11 @@ class QdrantChunkStore implements ChunkStoreInterface
     private readonly int $vectorSize;
 
     /**
+     * @var bool Whether collection existence has been verified
+     */
+    private bool $collectionVerified = false;
+
+    /**
      * @param VectorStoreInterface $vectorStore
      * @param EmbeddingProviderInterface $embeddingProvider
      * @param string $collection Collection name
@@ -42,8 +47,7 @@ class QdrantChunkStore implements ChunkStoreInterface
         private readonly string $collection = self::DEFAULT_COLLECTION,
         ?int $vectorSize = null
     ) {
-        $this->vectorSize = $vectorSize ?? (int) config('ai.embedding.vector_size', self::DEFAULT_VECTOR_SIZE);
-        $this->ensureCollectionExists();
+        $this->vectorSize = $vectorSize ?? $this->resolveVectorSize();
     }
 
     /**
@@ -62,6 +66,8 @@ class QdrantChunkStore implements ChunkStoreInterface
         if (empty($chunks)) {
             return true;
         }
+
+        $this->ensureCollectionExists();
 
         $points = [];
 
@@ -95,6 +101,8 @@ class QdrantChunkStore implements ChunkStoreInterface
      */
     public function searchByContent(string $query, int $limit = 10, array $filters = []): array
     {
+        $this->ensureCollectionExists();
+
         // Generate embedding for the query
         $queryEmbedding = $this->embeddingProvider->embed($query);
 
@@ -141,6 +149,8 @@ class QdrantChunkStore implements ChunkStoreInterface
      */
     public function searchByFilename(string $filename, int $limit = 10, array $filters = []): array
     {
+        $this->ensureCollectionExists();
+
         // Build filter for filename matching
         $qdrantFilter = $this->buildFilenameFilter($filename, $filters);
 
@@ -255,6 +265,8 @@ class QdrantChunkStore implements ChunkStoreInterface
      */
     public function getFileChunks(int $fileId): array
     {
+        $this->ensureCollectionExists();
+
         // Use count to check if we need to paginate
         $totalCount = $this->vectorStore->count($this->collection, [
             'must' => [
@@ -368,12 +380,16 @@ class QdrantChunkStore implements ChunkStoreInterface
     }
 
     /**
-     * Ensure the collection exists in Qdrant
+     * Ensure the collection exists in Qdrant (lazy - only called when needed)
      *
      * @return void
      */
     private function ensureCollectionExists(): void
     {
+        if ($this->collectionVerified) {
+            return;
+        }
+
         if (!$this->vectorStore->collectionExists($this->collection)) {
             $this->vectorStore->createCollection(
                 $this->collection,
@@ -381,6 +397,24 @@ class QdrantChunkStore implements ChunkStoreInterface
                 'cosine'
             );
         }
+
+        $this->collectionVerified = true;
+    }
+
+    /**
+     * Resolve the vector size from config or active provider dimensions.
+     *
+     * @return int
+     */
+    private function resolveVectorSize(): int
+    {
+        $explicit = config('ai.embedding.vector_size');
+        if ($explicit) {
+            return (int) $explicit;
+        }
+
+        $provider = config('ai.embedding.default', 'openai');
+        return (int) config("ai.embedding.{$provider}.dimensions", self::DEFAULT_VECTOR_SIZE);
     }
 
     /**

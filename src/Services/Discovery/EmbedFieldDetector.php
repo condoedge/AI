@@ -53,11 +53,23 @@ class EmbedFieldDetector
         'password',
         'token',
         'secret',
-        'key',
+        'api_key',
+        'secret_key',
+        'access_key',
         'hash',
         'salt',
         'uuid',
         'guid',
+    ];
+
+    /**
+     * Exact prefix patterns to exclude (banking/credential fields)
+     */
+    private const EXCLUDE_PREFIXES = [
+        'bnc_',
+        'payable_',
+        'stripe_',
+        'two_factor_',
     ];
 
     /**
@@ -108,7 +120,7 @@ class EmbedFieldDetector
         // Also check string columns with text-like names
         foreach ($columnTypes as $column => $type) {
             if ($type === 'string' && !in_array($column, $embedFields)) {
-                if ($this->matchesTextPattern($column)) {
+                if ($this->shouldEmbed($column, $type)) {
                     $embedFields[] = $column;
                 }
             }
@@ -128,9 +140,16 @@ class EmbedFieldDetector
     {
         $columnLower = strtolower($column);
 
-        // Exclude by pattern
+        // Exclude by substring pattern
         foreach (self::EXCLUDE_PATTERNS as $pattern) {
             if (str_contains($columnLower, $pattern)) {
+                return false;
+            }
+        }
+
+        // Exclude by prefix pattern (banking/credential fields)
+        foreach (self::EXCLUDE_PREFIXES as $prefix) {
+            if (str_starts_with($columnLower, $prefix)) {
                 return false;
             }
         }

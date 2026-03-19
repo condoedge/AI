@@ -147,13 +147,13 @@ class CypherSanitizer
      */
     public static function escapeLabel(string $label): string
     {
-        // Validate first
-        $label = self::validateLabel($label);
+        // Validate pattern and length (but allow reserved keywords since backtick quoting handles them)
+        $label = self::validateIdentifierSafe($label, 'label');
 
         // Escape backticks in label (very rare but possible)
         $escaped = str_replace('`', '``', $label);
 
-        // Return with backtick quoting
+        // Return with backtick quoting (makes reserved keywords safe)
         return "`{$escaped}`";
     }
 
@@ -165,13 +165,38 @@ class CypherSanitizer
      */
     public static function escapeRelationshipType(string $type): string
     {
-        // Validate first
-        $type = self::validateRelationshipType($type);
+        // Validate pattern and length (but allow reserved keywords since backtick quoting handles them)
+        $type = self::validateIdentifierSafe($type, 'relationship type');
 
         // Escape backticks
         $escaped = str_replace('`', '``', $type);
 
         // Return with backtick quoting
         return "`{$escaped}`";
+    }
+
+    /**
+     * Validate identifier without rejecting reserved keywords.
+     * Used by escape methods where backtick quoting makes reserved keywords safe.
+     */
+    private static function validateIdentifierSafe(string $identifier, string $type): string
+    {
+        if (empty($identifier)) {
+            throw new CypherInjectionException("Invalid {$type}: cannot be empty");
+        }
+
+        if (strlen($identifier) > self::MAX_IDENTIFIER_LENGTH) {
+            throw new CypherInjectionException(
+                "Invalid {$type}: exceeds maximum length of " . self::MAX_IDENTIFIER_LENGTH
+            );
+        }
+
+        if (!preg_match(self::IDENTIFIER_PATTERN, $identifier)) {
+            throw new CypherInjectionException(
+                "Invalid {$type} '{$identifier}': must contain only alphanumeric characters and underscores"
+            );
+        }
+
+        return $identifier;
     }
 }

@@ -124,24 +124,31 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
             }
         }
 
-        $response = $this->makeApiRequest(['input' => $texts]);
+        // OpenAI supports up to 2048 inputs per request.
+        // Using 2000 to maximize throughput. Reduce if payloads are large (long texts).
+        $batchSize = 2000;
+        $chunks = array_chunk($texts, $batchSize);
+        $allEmbeddings = [];
 
-        if (!isset($response['data']) || !is_array($response['data'])) {
-            throw new RuntimeException('Invalid API response: missing data array');
-        }
+        foreach ($chunks as $chunk) {
+            $response = $this->makeApiRequest(['input' => array_values($chunk)]);
 
-        // Sort by index to match input order
-        usort($response['data'], fn($a, $b) => $a['index'] <=> $b['index']);
-
-        $embeddings = [];
-        foreach ($response['data'] as $item) {
-            if (!isset($item['embedding'])) {
-                throw new RuntimeException('Invalid API response: missing embedding in data item');
+            if (!isset($response['data']) || !is_array($response['data'])) {
+                throw new RuntimeException('Invalid API response: missing data array');
             }
-            $embeddings[] = $item['embedding'];
+
+            // Sort by index to match input order within this chunk
+            usort($response['data'], fn($a, $b) => $a['index'] <=> $b['index']);
+
+            foreach ($response['data'] as $item) {
+                if (!isset($item['embedding'])) {
+                    throw new RuntimeException('Invalid API response: missing embedding in data item');
+                }
+                $allEmbeddings[] = $item['embedding'];
+            }
         }
 
-        return $embeddings;
+        return $allEmbeddings;
     }
 
     /**

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Console\Commands;
 
-use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Services\BatchDataIngestionService;
 use Condoedge\Ai\Contracts\FileProcessorInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
@@ -35,8 +35,9 @@ class IngestEntitiesCommand extends Command
      */
     protected $signature = 'ai:ingest
                             {--model= : Specific model class to ingest (e.g., App\\Models\\Customer)}
+                            {--from= : Skip models until this one (e.g., InboundEmail or App\\Models\\Messaging\\InboundEmail)}
                             {--fresh : Clear all data from stores before ingesting}
-                            {--chunk=100 : Batch size for processing}
+                            {--chunk=2000 : Batch size for processing}
                             {--dry-run : Show what would be ingested without actually ingesting}
                             {--docs : Index physical documentation files from configured paths}';
 
@@ -51,7 +52,7 @@ class IngestEntitiesCommand extends Command
      * Create a new command instance.
      */
     public function __construct(
-        private DataIngestionServiceInterface $ingestionService,
+        private BatchDataIngestionService $ingestionService,
         private GraphStoreInterface $graphStore,
         private VectorStoreInterface $vectorStore
     ) {
@@ -99,14 +100,30 @@ class IngestEntitiesCommand extends Command
 
         $chunkSize = (int) $this->option('chunk');
         $totalIngested = 0;
+        $totalPartial = 0;
         $totalFailed = 0;
         $errors = [];
 
+        // Handle --from flag: skip models until we reach the specified one
+        $fromModel = $this->option('from');
+        $skipping = $fromModel !== null;
+
         // Process each model
         foreach ($models as $modelClass) {
+            if ($skipping) {
+                $shortName = class_basename($modelClass);
+                if ($shortName === $fromModel || $modelClass === $fromModel) {
+                    $skipping = false;
+                } else {
+                    $this->comment("Skipping: {$modelClass} (--from)");
+                    continue;
+                }
+            }
+
             $result = $this->ingestModel($modelClass, $chunkSize);
 
             $totalIngested += $result['ingested'];
+            $totalPartial += $result['partial'];
             $totalFailed += $result['failed'];
 
             if (!empty($result['errors'])) {
@@ -122,6 +139,10 @@ class IngestEntitiesCommand extends Command
             $this->info("✓ DRY RUN - Would ingest {$totalIngested} entities");
         } else {
             $this->info("✓ Successfully ingested: {$totalIngested}");
+
+            if ($totalPartial > 0) {
+                $this->warn("~ Partially ingested: {$totalPartial}");
+            }
 
             if ($totalFailed > 0) {
                 $this->error("✗ Failed: {$totalFailed}");
@@ -154,7 +175,7 @@ class IngestEntitiesCommand extends Command
      *
      * @param string $modelClass Model class name
      * @param int $chunkSize Batch size
-     * @return array{ingested: int, failed: int, errors: array}
+     * @return array{ingested: int, partial: int, failed: int, errors: array}
      */
     private function ingestModel(string $modelClass, int $chunkSize): array
     {
@@ -162,13 +183,13 @@ class IngestEntitiesCommand extends Command
 
         if (!class_exists($modelClass)) {
             $this->error("  ✗ Class not found: {$modelClass}");
-            return ['ingested' => 0, 'failed' => 0, 'errors' => ["Class not found"]];
+            return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => ["Class not found"]];
         }
 
         // Check if model implements Nodeable
         if (!in_array(Nodeable::class, class_implements($modelClass) ?: [])) {
             $this->error("  ✗ Model does not implement Nodeable interface");
-            return ['ingested' => 0, 'failed' => 0, 'errors' => ["Not a Nodeable model"]];
+            return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => ["Not a Nodeable model"]];
         }
 
         // Get total count
@@ -176,19 +197,19 @@ class IngestEntitiesCommand extends Command
             $total = $modelClass::count();
         } catch (\Throwable $e) {
             $this->error("  ✗ Failed to count entities: {$e->getMessage()}");
-            return ['ingested' => 0, 'failed' => 0, 'errors' => [$e->getMessage()]];
+            return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => [$e->getMessage()]];
         }
 
         if ($total === 0) {
             $this->comment("  ⊘ No entities found");
-            return ['ingested' => 0, 'failed' => 0, 'errors' => []];
+            return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => []];
         }
 
         $this->line("  Found {$total} entities");
 
         if ($this->option('dry-run')) {
             $this->comment("  ⊘ Dry run - skipping ingestion");
-            return ['ingested' => $total, 'failed' => 0, 'errors' => []];
+            return ['ingested' => $total, 'partial' => 0, 'failed' => 0, 'errors' => []];
         }
 
         // Process in chunks with progress bar
@@ -199,15 +220,17 @@ class IngestEntitiesCommand extends Command
         $progressBar->start();
 
         $ingested = 0;
+        $partial = 0;
         $failed = 0;
         $errors = [];
 
-        $modelClass::chunk($chunkSize, function ($entities) use (&$ingested, &$failed, &$errors, $progressBar) {
+        $modelClass::chunk($chunkSize, function ($entities) use (&$ingested, &$partial, &$failed, &$errors, $progressBar) {
             try {
                 // Use batch ingestion for efficiency
                 $results = $this->ingestionService->ingestBatch($entities->all());
 
                 $ingested += $results['succeeded'];
+                $partial += $results['partially_succeeded'] ?? 0;
                 $failed += $results['failed'];
 
                 if (!empty($results['errors'])) {
@@ -217,7 +240,7 @@ class IngestEntitiesCommand extends Command
                 }
 
                 $progressBar->advance($entities->count());
-                $progressBar->setMessage("Ingested: {$ingested}, Failed: {$failed}");
+                $progressBar->setMessage("Ingested: {$ingested}, Partial: {$partial}, Failed: {$failed}");
             } catch (\Throwable $e) {
                 $failed += $entities->count();
                 $errors[] = "Batch error: {$e->getMessage()}";
@@ -229,13 +252,16 @@ class IngestEntitiesCommand extends Command
         $this->newLine();
 
         if ($failed > 0) {
-            $this->line("  <fg=yellow>⚠</> Ingested: {$ingested}, Failed: {$failed}");
+            $this->line("  <fg=yellow>⚠</> Ingested: {$ingested}, Partial: {$partial}, Failed: {$failed}");
+        } elseif ($partial > 0) {
+            $this->line("  <fg=yellow>~</> Ingested: {$ingested}, Partial: {$partial}, Failed: {$failed}");
         } else {
             $this->line("  <fg=green>✓</> Ingested: {$ingested}");
         }
 
         return [
             'ingested' => $ingested,
+            'partial' => $partial,
             'failed' => $failed,
             'errors' => $errors,
         ];

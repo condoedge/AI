@@ -9,6 +9,7 @@ use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use Condoedge\Ai\Domain\Traits\ResolvesEntityConfigKey;
+use Condoedge\Ai\Support\AiLogger;
 
 /**
  * ContextRetriever
@@ -105,6 +106,7 @@ class ContextRetriever implements ContextRetrieverInterface
      * @param VectorStoreInterface $vectorStore Vector database for similarity search
      * @param GraphStoreInterface $graphStore Graph database for schema/entity queries
      * @param EmbeddingProviderInterface $embeddingProvider Text-to-vector embedding service
+     * @param AiLogger $logger Logger for tracing and diagnostics
      * @param array|null $entityConfigs Optional entity configurations (defaults to config/entities.php)
      * @param ScopeSemanticMatcher|null $scopeMatcher Optional semantic matcher for scope detection
      * @param SemanticContextSelector|null $contextSelector Optional semantic context selector
@@ -113,6 +115,7 @@ class ContextRetriever implements ContextRetrieverInterface
         private readonly VectorStoreInterface $vectorStore,
         private readonly GraphStoreInterface $graphStore,
         private readonly EmbeddingProviderInterface $embeddingProvider,
+        private readonly AiLogger $logger,
         ?array $entityConfigs = null,
         ?ScopeSemanticMatcher $scopeMatcher = null,
         ?SemanticContextSelector $contextSelector = null
@@ -178,6 +181,9 @@ class ContextRetriever implements ContextRetrieverInterface
      */
     public function retrieveContext(string $question, array $options = []): array
     {
+        $this->logger->startTrace('context_retrieval');
+        $this->logger->startTimer('total');
+
         // Validate input
         if (empty(trim($question))) {
             throw new \InvalidArgumentException('Question cannot be empty');
@@ -226,7 +232,14 @@ class ContextRetriever implements ContextRetrieverInterface
                     'relationships_selected' => count($semanticContext['relationships'] ?? []),
                     'scopes_selected' => count($semanticContext['scopes'] ?? []),
                 ];
+                $this->logger->info('context_retriever', 'Semantic context selected', [
+                    'method' => $semanticContext['selection_method'] ?? 'semantic',
+                    'entity_count' => count($semanticContext['entities'] ?? []),
+                    'scope_count' => count($semanticContext['scopes'] ?? []),
+                ]);
             } catch (\Exception $e) {
+                $this->logger->error('context_retriever', 'Semantic context selection failed: ' . $e->getMessage());
+                $this->logger->fallback('context_retriever', 'semantic_selection', 'full_schema', $e->getMessage());
                 $context['errors'][] = 'Semantic context selection failed: ' . $e->getMessage();
             }
         }
@@ -239,7 +252,13 @@ class ContextRetriever implements ContextRetrieverInterface
                 $limit,
                 $scoreThreshold
             );
+            $topScore = !empty($context['similar_queries']) ? ($context['similar_queries'][0]['score'] ?? 0) : 0;
+            $this->logger->debug('context_retriever', 'Similar queries found', [
+                'count' => count($context['similar_queries']),
+                'top_score' => $topScore,
+            ]);
         } catch (\Exception $e) {
+            $this->logger->error('context_retriever', 'Vector search failed: ' . $e->getMessage());
             $context['errors'][] = 'Vector search failed: ' . $e->getMessage();
         }
 
@@ -255,9 +274,26 @@ class ContextRetriever implements ContextRetrieverInterface
                         $semanticContext
                     );
                 } else {
-                    $context['graph_schema'] = $fullSchema;
+                    // Fallback: use semantic_entities collection to find relevant entities
+                    $relevantLabels = $this->findRelevantEntityLabels($question);
+                    if (!empty($relevantLabels)) {
+                        $context['graph_schema'] = $this->filterSchemaByLabels($fullSchema, $relevantLabels);
+                        $context['selection_info'] = [
+                            'method' => 'semantic_entities_fallback',
+                            'selected_entities' => $relevantLabels,
+                            'entities_selected' => count($relevantLabels),
+                        ];
+                    } else {
+                        $context['graph_schema'] = $fullSchema;
+                    }
                 }
+                $this->logger->debug('context_retriever', 'Schema filtered', [
+                    'labels' => $context['graph_schema']['labels'] ?? [],
+                    'relationships' => $context['graph_schema']['relationships'] ?? [],
+                ]);
             } catch (\Exception $e) {
+                $this->logger->error('context_retriever', 'Schema retrieval failed: ' . $e->getMessage());
+                $this->logger->fallback('context_retriever', 'filtered_schema', 'no_schema', $e->getMessage());
                 $context['errors'][] = 'Schema retrieval failed: ' . $e->getMessage();
             }
         }
@@ -300,8 +336,22 @@ class ContextRetriever implements ContextRetrieverInterface
                 $context['entity_metadata'] = $this->getEntityMetadata($question);
             }
         } catch (\Exception $e) {
+            $this->logger->error('context_retriever', 'Entity metadata retrieval failed: ' . $e->getMessage());
             $context['errors'][] = 'Entity metadata retrieval failed: ' . $e->getMessage();
         }
+
+        // Assess context quality before returning
+        $context['quality'] = $this->assessContextQuality($context);
+
+        $totalMs = $this->logger->stopTimer('total');
+        $this->logger->info('context_retriever', 'Context retrieval complete', [
+            'duration_ms' => $totalMs,
+            'has_similar_queries' => !empty($context['similar_queries']),
+            'has_schema' => !empty($context['graph_schema']),
+            'has_metadata' => !empty($context['entity_metadata']),
+            'errors_count' => count($context['errors']),
+            'quality' => $context['quality']['level'],
+        ]);
 
         return $context;
     }
@@ -840,15 +890,74 @@ class ContextRetriever implements ContextRetrieverInterface
             );
         }
 
-        // Format results for consistent structure
-        return array_map(function ($result) {
+        // Format results for consistent structure, filtering out empty entries
+        return array_values(array_filter(array_map(function ($result) {
+            $question = $result['payload']['question'] ?? $result['metadata']['question'] ?? '';
+            $query = $result['payload']['cypher_query'] ?? $result['payload']['query']
+                ?? $result['metadata']['cypher_query'] ?? $result['metadata']['query'] ?? '';
+
+            if (empty(trim($question)) || empty(trim($query))) {
+                $this->logger->debug('context_retriever', 'similar_query_skipped_empty', [
+                    'has_question' => !empty(trim($question)),
+                    'has_query' => !empty(trim($query)),
+                ]);
+                return null;
+            }
+
             return [
-                'question' => $result['payload']['question'] ?? '',
-                'query' => $result['payload']['cypher_query'] ?? $result['payload']['query'] ?? '',
+                'question' => $question,
+                'query' => $query,
                 'score' => $result['score'] ?? 0.0,
-                'metadata' => $result['payload'] ?? [],
             ];
-        }, $results);
+        }, $results)));
+    }
+
+    /**
+     * Assess the quality of retrieved context
+     *
+     * Evaluates the completeness of the context by checking for the presence
+     * of key components: similar queries, schema, detected entities, and
+     * absence of errors.
+     *
+     * @param array $context The retrieved context to assess
+     * @return array Quality assessment with level, score, max, and details
+     */
+    private function assessContextQuality(array $context): array
+    {
+        $score = 0;
+        $max = 4;
+        $details = [];
+
+        if (!empty($context['similar_queries'])) {
+            $score++;
+            $details[] = 'has_similar_queries';
+        }
+        if (!empty($context['graph_schema']['labels'] ?? [])) {
+            $score++;
+            $details[] = 'has_schema';
+        }
+        if (!empty($context['entity_metadata']['detected_entities'] ?? [])) {
+            $score++;
+            $details[] = 'has_detected_entities';
+        }
+        if (empty($context['errors'])) {
+            $score++;
+            $details[] = 'no_errors';
+        }
+
+        $level = match(true) {
+            $score === $max => 'high',
+            $score >= 2 => 'medium',
+            default => 'low',
+        };
+
+        $this->logger->info('context_retriever', "context_quality: {$level}", [
+            'score' => "{$score}/{$max}",
+            'details' => $details,
+            'errors' => $context['errors'] ?? [],
+        ]);
+
+        return ['level' => $level, 'score' => $score, 'max' => $max, 'details' => $details];
     }
 
     /**
@@ -886,6 +995,7 @@ class ContextRetriever implements ContextRetrieverInterface
             } catch (\Exception $e) {
                 // Continue on error - don't fail entire context retrieval
                 // Individual label failures are acceptable
+                $this->logger->error('context_retriever', "Example retrieval for label '{$label}' failed: " . $e->getMessage());
                 $errors[] = "Example retrieval for label '{$label}' failed: " . $e->getMessage();
             }
         }
@@ -918,6 +1028,108 @@ class ContextRetriever implements ContextRetrieverInterface
         }
 
         return $propertiesByLabel;
+    }
+
+    /**
+     * Find relevant entity labels using the semantic_entities Qdrant collection.
+     * Used as a fallback when context_index is unavailable.
+     */
+    private function findRelevantEntityLabels(string $question): array
+    {
+        try {
+            $embedding = $this->embeddingProvider->embed($question);
+            $results = $this->vectorStore->search('semantic_entities', $embedding, 10);
+
+            $labels = [];
+            foreach ($results as $result) {
+                $label = $result['payload']['label'] ?? $result['payload']['entity']
+                    ?? $result['metadata']['label'] ?? $result['metadata']['entity'] ?? null;
+                if ($label && !in_array($label, $labels)) {
+                    $labels[] = $label;
+                }
+            }
+
+            // Also include related entities from the same category
+            $labels = $this->expandWithRelatedLabels($labels);
+
+            return array_slice($labels, 0, 15); // Cap at 15 entities
+        } catch (\Exception $e) {
+            $this->logger->error('context_retriever', 'findRelevantEntityLabels failed: ' . $e->getMessage());
+            $this->logger->fallback('context_retriever', 'semantic_entity_labels', 'full_schema', $e->getMessage());
+            return []; // Fall back to full schema
+        }
+    }
+
+    /**
+     * Expand matched labels with closely related entities (same category).
+     */
+    private function expandWithRelatedLabels(array $labels): array
+    {
+        $categoryMap = $this->getCategoryMap();
+        $expanded = $labels;
+
+        foreach ($labels as $label) {
+            foreach ($categoryMap as $category => $categoryLabels) {
+                if (in_array($label, $categoryLabels)) {
+                    foreach ($categoryLabels as $relatedLabel) {
+                        if (!in_array($relatedLabel, $expanded)) {
+                            $expanded[] = $relatedLabel;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        return $expanded;
+    }
+
+    /**
+     * Get category map from entity configs (derived from FQCN namespace).
+     */
+    private function getCategoryMap(): array
+    {
+        static $map = null;
+        if ($map !== null) {
+            return $map;
+        }
+
+        $map = [];
+        foreach ($this->entityConfigs as $fqcn => $config) {
+            $parts = explode('\\', $fqcn);
+            $category = (count($parts) > 3) ? $parts[2] : 'General';
+            $label = $config['graph']['label'] ?? class_basename($fqcn);
+            $map[$category][] = $label;
+        }
+
+        return $map;
+    }
+
+    /**
+     * Filter schema to only include specific labels.
+     */
+    private function filterSchemaByLabels(array $schema, array $labels): array
+    {
+        $filtered = $schema;
+
+        // Filter properties to only include matched labels
+        if (!empty($filtered['properties'])) {
+            $filtered['properties'] = array_filter(
+                $filtered['properties'],
+                fn($label) => in_array($label, $labels),
+                ARRAY_FILTER_USE_KEY
+            );
+        }
+
+        // Filter labels list
+        if (!empty($filtered['labels'])) {
+            $filtered['labels'] = array_values(array_filter(
+                $filtered['labels'],
+                fn($label) => in_array($label, $labels)
+            ));
+        }
+
+        return $filtered;
     }
 
     /**
@@ -996,6 +1208,7 @@ class ContextRetriever implements ContextRetrieverInterface
                     'relationships_selected' => count($semanticContext['relationships'] ?? []),
                 ];
             } catch (\Exception $e) {
+                $this->logger->error('context_retriever', 'Semantic context selection failed (minimal): ' . $e->getMessage());
                 $context['errors'][] = 'Semantic context selection failed: ' . $e->getMessage();
                 // For minimal context, we fail fast if semantic selection isn't available
                 return $context;
@@ -1014,6 +1227,7 @@ class ContextRetriever implements ContextRetrieverInterface
                 $options['scoreThreshold']
             );
         } catch (\Exception $e) {
+            $this->logger->error('context_retriever', 'Vector search failed (minimal): ' . $e->getMessage());
             $context['errors'][] = 'Vector search failed: ' . $e->getMessage();
         }
 
@@ -1023,6 +1237,7 @@ class ContextRetriever implements ContextRetrieverInterface
                 $fullSchema = $this->getGraphSchema();
                 $context['graph_schema'] = $this->filterSchemaByRelevance($fullSchema, $semanticContext);
             } catch (\Exception $e) {
+                $this->logger->error('context_retriever', 'Schema retrieval failed (minimal): ' . $e->getMessage());
                 $context['errors'][] = 'Schema retrieval failed: ' . $e->getMessage();
             }
         }
@@ -1036,6 +1251,7 @@ class ContextRetriever implements ContextRetrieverInterface
                 );
             }
         } catch (\Exception $e) {
+            $this->logger->error('context_retriever', 'Entity metadata retrieval failed (minimal): ' . $e->getMessage());
             $context['errors'][] = 'Entity metadata retrieval failed: ' . $e->getMessage();
         }
 
@@ -1281,6 +1497,7 @@ class ContextRetriever implements ContextRetrieverInterface
                 $confidence['selection_method'] = 'semantic';
 
             } catch (\Exception $e) {
+                $this->logger->error('context_retriever', 'Context confidence calculation failed: ' . $e->getMessage());
                 $confidence['error'] = $e->getMessage();
                 $confidence['selection_method'] = 'failed';
             }

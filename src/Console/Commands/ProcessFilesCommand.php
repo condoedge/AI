@@ -36,7 +36,7 @@ class ProcessFilesCommand extends Command
      * @var string
      */
     protected $signature = 'ai:process-files
-                            {--model=Condoedge\\File\\Models\\File : File model class to process}
+                            {--model=Condoedge\\Utils\\Facades\\FileModel : File model class to process}
                             {--force : Reprocess all files, even if already processed}
                             {--chunk=50 : Batch size for processing}
                             {--types= : Comma-separated list of file extensions to process (e.g., pdf,docx,txt)}
@@ -84,7 +84,7 @@ class ProcessFilesCommand extends Command
         }
 
         // Check if table exists
-        $model = new $modelClass();
+        $model = $modelClass::newInstance();
         if (!$model->getConnection()->getSchemaBuilder()->hasTable($model->getTable())) {
             $this->error("Table does not exist: {$model->getTable()}");
             return self::FAILURE;
@@ -148,10 +148,10 @@ class ProcessFilesCommand extends Command
         }
 
         // Confirm if large number of files
-        if ($total > 100 && !$this->confirm("Process {$total} files? This may take a while.", true)) {
-            $this->warn('Processing cancelled.');
-            return self::SUCCESS;
-        }
+        // if ($total > 100 && !$this->confirm("Process {$total} files? This may take a while.", true)) {
+        //     $this->warn('Processing cancelled.');
+        //     return self::SUCCESS;
+        // }
 
         $chunkSize = (int) $this->option('chunk');
         $processed = 0;

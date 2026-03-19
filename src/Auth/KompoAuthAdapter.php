@@ -7,8 +7,12 @@ namespace Condoedge\Ai\Auth;
 
 use Condoedge\Ai\Contracts\AiAuthAdapterInterface;
 
+use Kompo\Auth\Models\Teams\Permission;
+
 /**
  * Kompo Auth adapter for AI security.
+ * 
+ * It must be used just if kompo/auth installed
  */
 class KompoAuthAdapter implements AiAuthAdapterInterface
 {
@@ -65,6 +69,24 @@ class KompoAuthAdapter implements AiAuthAdapterInterface
     public function isEnabled(): bool
     {
         return config('ai.security.enabled', true) && !globalSecurityBypass();
+    }
+
+    
+    public function checkIfPermissionsExist($user, string $entity): bool
+    {
+        $permissionChain = config('ai.security.permission_chain', [
+            '{Entity}.AiRetrieving',
+            '{Entity}',
+        ]);
+
+        while ($pattern = array_shift($permissionChain)) {
+            $permission = str_replace('{Entity}', $entity, $pattern);
+            if (Permission::findByKey($permission) !== null) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

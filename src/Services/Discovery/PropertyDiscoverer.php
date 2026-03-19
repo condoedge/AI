@@ -185,13 +185,21 @@ class PropertyDiscoverer
      */
     private function enhanceWithSchema(array $properties, string $table): array
     {
-        // Get indexed columns (likely important)
-        $indexedColumns = $this->schema->getIndexedColumns($table);
-        $properties = array_merge($properties, $indexedColumns);
+        // Get ALL columns from schema - this catches columns missed by $fillable/$casts
+        // (e.g., when model uses $guarded instead of $fillable)
+        try {
+            $allColumns = $this->schema->getColumnTypes($table);
+            if (!empty($allColumns)) {
+                $properties = array_merge($properties, array_keys($allColumns));
+            }
+        } catch (\Throwable $e) {
+            // Fall back to indexed + FK columns only
+            $indexedColumns = $this->schema->getIndexedColumns($table);
+            $properties = array_merge($properties, $indexedColumns);
 
-        // Get foreign key columns
-        $foreignKeys = $this->schema->getForeignKeys($table);
-        $properties = array_merge($properties, array_keys($foreignKeys));
+            $foreignKeys = $this->schema->getForeignKeys($table);
+            $properties = array_merge($properties, array_keys($foreignKeys));
+        }
 
         return array_unique($properties);
     }

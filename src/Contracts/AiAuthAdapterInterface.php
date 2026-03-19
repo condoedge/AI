@@ -34,4 +34,12 @@ interface AiAuthAdapterInterface
      * Check if security is enabled.
      */
     public function isEnabled(): bool;
+
+    /**
+     * Check if the permissions system is available.
+     * If false, AiSecurityService will skip permission checks and team filtering.
+     *
+     * @return bool
+     */
+    public function checkIfPermissionsExist($user, string $entity): bool;
 }

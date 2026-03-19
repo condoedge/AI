@@ -134,6 +134,71 @@ php artisan ai:index-context --rebuild
 
 ---
 
+## Entity Expansion Through Relationships
+
+When an entity is selected by semantic search, the system automatically checks its configured relationships and includes connected entities that meet a relaxed threshold. This prevents missing context for cross-entity queries.
+
+**How it works:**
+
+1. A directly matched entity (e.g., `Customer` at score 0.92) is selected.
+2. The system looks at `Customer`'s configured relationships (e.g., `PLACED_ORDER` &rarr; `Order`).
+3. Connected entities are included with a reduced score (`parent_score * 0.6`).
+4. The reduced score must still meet 80% of the threshold to be included.
+
+**Example:** With a threshold of 0.65, a Customer matched at 0.92 would expand to include Order at score 0.55 (0.92 * 0.6 = 0.55, which is >= 0.65 * 0.8 = 0.52).
+
+This expansion is logged in debug mode:
+
+```
+[AI] semantic_selector: entity_expanded {"from":"Customer","to":"Order","via":"PLACED_ORDER","score":0.552}
+```
+
+Entities already selected by direct match are not duplicated.
+
+---
+
+## Property Matching
+
+When a property matches the question semantically (e.g., the question mentions "email" and `Customer.email` is indexed), the owning entity is automatically included in context with a slightly reduced score (property score * 0.9).
+
+This means questions like "find customers by email" will correctly select the Customer entity even if the entity name itself does not appear in the question.
+
+---
+
+## Context Quality Indicator
+
+Every context retrieval assesses completeness and returns a quality object in the result:
+
+```php
+$context = $retriever->getContext("How many active customers?");
+
+// $context['quality'] contains:
+[
+    'level' => 'high',     // high, medium, or low
+    'score' => '4/4',
+    'details' => ['has_similar_queries', 'has_schema', 'has_detected_entities', 'no_errors'],
+]
+```
+
+Quality criteria:
+- **has_similar_queries** — vector search found relevant past queries
+- **has_schema** — graph schema labels were retrieved
+- **has_detected_entities** — at least one entity was detected for the question
+- **no_errors** — no errors occurred during retrieval
+
+Quality levels:
+- **high** (4/4) — all context sources working
+- **medium** (2-3/4) — some degradation, results may be less accurate
+- **low** (0-1/4) — significant context missing, consider re-indexing
+
+The quality level is always logged regardless of debug mode:
+
+```
+[AI] context_retriever: context_quality: high {"score":"4/4","details":[...]}
+```
+
+---
+
 ## Using Context Selection
 
 ### Automatic (Default)
@@ -303,16 +368,16 @@ $context = $retriever->getContextWithBudget($question, $maxContextTokens);
 
 ## Fallback Behavior
 
-When context selection fails:
+When context selection fails, the system follows a logged fallback chain:
 
-```php
-// If semantic search returns no results
-// OR similarity scores are too low
-// System falls back to:
+1. **Semantic search** (vector similarity) &mdash; primary method
+2. **Keyword matching** &mdash; if the semantic index is empty or unavailable
+3. **Full schema** &mdash; last resort, sends all context to the LLM
 
-1. Entity mentioned explicitly in question
-2. Default entities (if configured)
-3. All entities (last resort)
+Every fallback decision is logged as a warning, so degradation is never silent:
+
+```
+[AI] semantic_selector: fallback: vector_search → keyword_matching {"reason":"semantic index not available"}
 ```
 
 ### Configure Fallback
@@ -324,6 +389,8 @@ When context selection fails:
     'min_context_items' => 1,     // Minimum items to return
 ],
 ```
+
+Enable `AI_DEBUG=true` to see the full selection details when diagnosing fallback issues. See: [Debugging the AI Pipeline](/docs/{{version}}/advanced/debugging)
 
 ---
 
@@ -349,20 +416,22 @@ When context selection fails:
 
 ## Debugging
 
+Enable debug mode to see full selection details:
+
+```env
+AI_DEBUG=true
+```
+
 ### View Selected Context
 
-```php
-// Enable debug mode
-$context = $retriever->getMinimalContext($question, [
-    'debug' => true,
-]);
+With debug mode on, every selection is logged:
 
-// Log shows:
-// [Context] Question: "How many active customers?"
-// [Context] Selected entities: Customer (0.92)
-// [Context] Selected scopes: active (0.88)
-// [Context] Excluded entities: Order (0.45), Product (0.32), ...
-// [Context] Token reduction: 8000 → 850 (89.4%)
+```
+[AI] semantic_selector: vector search completed {"result_count":12,"threshold":0.65}
+[AI] semantic_selector: result below threshold, rejected {"type":"entity","entity":"Product","score":0.42,"threshold":0.65}
+[AI] semantic_selector: entity_expanded {"from":"Customer","to":"Order","via":"PLACED_ORDER","score":0.552}
+[AI] semantic_selector: final selection summary {"entities":{"Customer":0.92,"Order":0.552},"relationships":["Customer-PLACED_ORDER-Order"],"scopes":{"active":0.88}}
+[AI] context_retriever: context_quality: high {"score":"4/4","details":["has_similar_queries","has_schema","has_detected_entities","no_errors"]}
 ```
 
 ### Check Index Status
@@ -381,6 +450,8 @@ php artisan ai:index-context --stats
 # - Scopes: 16
 # Collection size: 2.4 MB
 ```
+
+For a full guide on tracing and diagnosing pipeline issues, see: [Debugging the AI Pipeline](/docs/{{version}}/advanced/debugging)
 
 ---
 
@@ -426,6 +497,7 @@ Better descriptions improve matching:
 
 ## Related Documentation
 
+- [Debugging the AI Pipeline](/docs/{{version}}/advanced/debugging) - Tracing and diagnostics
 - [Semantic Matching](/docs/{{version}}/advanced/semantic-matching) - Fuzzy text matching
 - [Context Retrieval & RAG](/docs/{{version}}/usage/context-retrieval) - Full RAG system
 - [Entity Configuration](/docs/{{version}}/configuration/entities) - Entity setup
