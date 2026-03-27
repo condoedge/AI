@@ -29,8 +29,8 @@ use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\FileChunkerInterface;
 use Condoedge\Ai\Contracts\ChunkStoreInterface;
-use Condoedge\Ai\Contracts\FileExtractorInterface;
 use Condoedge\Ai\Contracts\FileProcessorInterface;
+use Condoedge\Ai\Contracts\PdfParserInterface;
 use Condoedge\Ai\Services\SemanticChunker;
 use Condoedge\Ai\Services\QdrantChunkStore;
 use Condoedge\Ai\Services\FileExtractorRegistry;
@@ -38,6 +38,7 @@ use Condoedge\Ai\Services\FileProcessor;
 use Condoedge\Ai\Services\FileSearchService;
 use Condoedge\Ai\Services\Extractors\TextExtractor;
 use Condoedge\Ai\Services\Extractors\MarkdownExtractor;
+use Condoedge\Ai\Services\Extractors\OcrPdfParser;
 use Condoedge\Ai\Services\Extractors\PdfExtractor;
 use Condoedge\Ai\Services\Extractors\DocxExtractor;
 use Condoedge\Ai\Services\PatternLibrary;
@@ -46,6 +47,7 @@ use Condoedge\Ai\Services\SemanticMatcher;
 use Condoedge\Ai\Services\SemanticIndexer;
 use Condoedge\Ai\Services\ScopeSemanticMatcher;
 use Condoedge\Ai\Services\SemanticContextSelector;
+use Condoedge\Ai\Services\QueryUnderstandingService;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use Condoedge\Ai\Services\Chat\AiChatService;
 use Condoedge\Ai\Services\Chat\RegenerateMessageService;
@@ -191,11 +193,14 @@ class AiServiceProvider extends ServiceProvider
         $this->app->singleton(EmbeddingProviderInterface::class, function ($app) {
             $defaultProvider = config('ai.embedding.default', 'openai');
 
-            return match ($defaultProvider) {
+            $provider = match ($defaultProvider) {
                 'openai' => new OpenAiEmbeddingProvider(config('ai.embedding.openai')),
                 'anthropic' => new AnthropicEmbeddingProvider(config('ai.embedding.anthropic')),
                 default => throw new \RuntimeException("Unsupported embedding provider: {$defaultProvider}")
             };
+
+            // Wrap with memoization: same text is embedded only once per request
+            return new \Condoedge\Ai\EmbeddingProviders\MemoizedEmbeddingProvider($provider);
         });
 
         // Register LLM Provider
@@ -234,7 +239,7 @@ class AiServiceProvider extends ServiceProvider
 
         // Register Context Retriever
         $this->app->singleton(ContextRetrieverInterface::class, function ($app) {
-            return new ContextRetriever(
+            $retriever = new ContextRetriever(
                 vectorStore: $app->make(VectorStoreInterface::class),
                 graphStore: $app->make(GraphStoreInterface::class),
                 embeddingProvider: $app->make(EmbeddingProviderInterface::class),
@@ -243,6 +248,13 @@ class AiServiceProvider extends ServiceProvider
                 scopeMatcher: $app->make(ScopeSemanticMatcher::class),
                 contextSelector: $app->make(SemanticContextSelector::class)
             );
+
+            // Wire Query Understanding service
+            if (config('ai.query_understanding.enabled', true)) {
+                $retriever->setQueryUnderstanding($app->make(QueryUnderstandingService::class));
+            }
+
+            return $retriever;
         });
 
         // Alias for easier access
@@ -314,6 +326,10 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
+        $this->app->singleton(PdfParserInterface::class, function ($app) {
+            return new OcrPdfParser();
+        });
+
         // Register File Extractor Registry
         $this->app->singleton(FileExtractorRegistry::class, function ($app) {
             $registry = new FileExtractorRegistry();
@@ -322,7 +338,7 @@ class AiServiceProvider extends ServiceProvider
             $registry->registerMany([
                 new TextExtractor(),
                 new MarkdownExtractor(),
-                new PdfExtractor(),
+                new PdfExtractor($app->make(PdfParserInterface::class)),
                 new DocxExtractor(),
             ]);
 
@@ -440,6 +456,15 @@ class AiServiceProvider extends ServiceProvider
                 config: config('ai.semantic_context', [])
             );
         });
+
+        // Register QueryUnderstandingService
+        $this->app->singleton(QueryUnderstandingService::class, function ($app) {
+            return new QueryUnderstandingService(
+                llm: $app->make(LlmProviderInterface::class),
+                logger: $app->make(AiLogger::class),
+                config: config('ai.query_understanding', [])
+            );
+        });
     }
 
     /**
@@ -507,6 +532,13 @@ class AiServiceProvider extends ServiceProvider
                 embedFields: $app->make(EmbedFieldDetector::class),
                 traversalGenerator: $app->make(TraversalScopeGenerator::class),
                 inheritanceResolver: $app->make(InheritanceResolver::class)
+            );
+        });
+
+        // Register AiConfigEnhancer
+        $this->app->singleton(\Condoedge\Ai\Services\Discovery\AiConfigEnhancer::class, function ($app) {
+            return new \Condoedge\Ai\Services\Discovery\AiConfigEnhancer(
+                llm: $app->make(LlmProviderInterface::class)
             );
         });
     }
@@ -707,6 +739,9 @@ class AiServiceProvider extends ServiceProvider
                 \Condoedge\Ai\Console\Commands\IndexContextCommand::class,
                 \Condoedge\Ai\Console\Commands\ValidateConfigCommand::class,
                 \Condoedge\Ai\Console\Commands\SetupCommand::class,
+                \Condoedge\Ai\Console\Commands\TestQuestionCommand::class,
+                \Condoedge\Ai\Console\Commands\EnhanceConfigCommand::class,
+                \Condoedge\Ai\Console\Commands\TestConversationCommand::class,
             ]);
         }
 
@@ -849,6 +884,8 @@ class AiServiceProvider extends ServiceProvider
             KompoAuthAdapter::class,
             TeamPathResolver::class,
             AiSecurityService::class,
+            QueryUnderstandingService::class,
+            \Condoedge\Ai\Services\Discovery\AiConfigEnhancer::class,
         ];
     }
 }

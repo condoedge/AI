@@ -88,7 +88,7 @@ class ExampleEntitiesSection extends BasePromptSection
         if (is_string($value)) {
             // Check for date pattern
             if (preg_match('/^\d{4}-\d{2}-\d{2}/', $value)) {
-                return "'{$value}' (string date — compare as: property < '{$value}')";
+                return "'{$value}' (string date — compare with string operators: =, <, >, <=, >=)";
             }
             // Truncate long strings
             if (strlen($value) > 50) {

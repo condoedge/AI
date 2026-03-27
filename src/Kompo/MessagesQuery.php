@@ -499,7 +499,7 @@ class MessagesQuery extends Query
             _Button(__('ai.chat.start-new'))->icon('plus')
                 ->class('px-6 py-3 bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white rounded-xl shadow-lg hover:shadow-xl transition-all')
                 ->selfPost('createConversation')
-                ->refresh(),
+                ->refresh(AiChatPanel::ID),
         )->id('chat-empty-state')->class('flex flex-col items-center justify-center flex-1 py-8');
     }
 

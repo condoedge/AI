@@ -65,7 +65,7 @@ class SemanticChunker implements FileChunkerInterface
         }
 
         // If content is smaller than chunk size, return as single chunk
-        if (strlen($content) <= $chunkSize) {
+        if (mb_strlen($content, 'UTF-8') <= $chunkSize) {
             return [$content];
         }
 
@@ -167,14 +167,14 @@ class SemanticChunker implements FileChunkerInterface
     private function chunkByCharacters(string $content, int $chunkSize, int $overlap): array
     {
         $chunks = [];
-        $length = strlen($content);
+        $length = mb_strlen($content, 'UTF-8');
         $position = 0;
 
         // Ensure overlap doesn't exceed chunk size minus 1 (need to move forward)
         $overlap = min($overlap, $chunkSize - 1);
 
         while ($position < $length) {
-            $chunk = substr($content, $position, $chunkSize);
+            $chunk = mb_substr($content, $position, $chunkSize, 'UTF-8');
             $chunks[] = $chunk;
             $position += $chunkSize - $overlap;
         }

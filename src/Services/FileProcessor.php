@@ -240,7 +240,7 @@ class FileProcessor implements FileProcessorInterface
         $required = ['id', 'name', 'path'];
 
         foreach ($required as $property) {
-            if (!property_exists($file, $property)) {
+            if (!isset($file->$property)) {
                 throw new \InvalidArgumentException(
                     "File object must have '{$property}' property"
                 );

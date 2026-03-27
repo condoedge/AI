@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\Services\AiManager;
+
 /**
  * SimilarQueriesSection
  *
  * Shows similar past queries for few-shot learning.
  * The LLM can learn patterns from successful past queries.
+ * Stored queries are parameterized ($currentUserId) and get
+ * deparameterized with the actual current user's ID before display.
  * Priority: 50
  */
 class SimilarQueriesSection extends BasePromptSection
@@ -45,6 +49,9 @@ class SimilarQueriesSection extends BasePromptSection
             if (empty($q) || empty($cypher)) {
                 continue;
             }
+
+            // Replace $currentUserId/$currentTeamId with actual values
+            $cypher = AiManager::deparameterizeCypher($cypher);
 
             $similarity = round($score * 100);
             $output .= "Example " . ($index + 1) . " ({$similarity}% similar):\n";

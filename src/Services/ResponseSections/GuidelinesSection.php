@@ -111,6 +111,7 @@ class GuidelinesSection extends BaseResponseSection
 
         $output = "Task: Answer the user's question based on the data.\n\n";
         $output .= "Guidelines:\n";
+        $output .= "- ALWAYS respond in the SAME LANGUAGE the user used in their question. If the question is in French, answer in French. If English, answer in English.\n";
         $output .= "- " . ($this->stylePrompts[$style] ?? $this->stylePrompts['friendly']) . "\n";
         $output .= "- Start with a direct answer to the question\n";
         $output .= "- Use specific data from the results\n";

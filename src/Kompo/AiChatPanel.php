@@ -95,9 +95,11 @@ class AiChatPanel extends Form
     {
         return _Rows(
             $this->sidebarHeader(),
-            new ConversationListQuery([
-                'selected_id' => $this->selectedConversationId,
-            ]),
+            _Panel(
+                new ConversationListQuery([
+                    'selected_id' => $this->selectedConversationId,
+                ]),
+            )->id('conversation-list-panel'),
             $this->sidebarFooter(),
         )->class('w-80 border-r border-gray-200/70 bg-gradient-to-b from-gray-50 via-white to-gray-50/80 flex flex-col backdrop-blur-sm');
     }

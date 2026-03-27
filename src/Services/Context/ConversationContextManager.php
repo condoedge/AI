@@ -33,8 +33,9 @@ class ConversationContextManager
         string $question,
         array $schema
     ): array {
-        // Extract entities from the new question
-        $extraction = $this->entityExtractor->extractFromQuestion($question, $schema);
+        // Extract entities from the new question (with alias matching for multilingual)
+        $entityConfigs = config('entities', []);
+        $extraction = $this->entityExtractor->extractFromQuestion($question, $schema, $entityConfigs);
 
         // Check if this is a follow-up
         $isFollowUp = $this->referenceResolver->isFollowUp($question);
@@ -104,7 +105,9 @@ class ConversationContextManager
         $newEntities = array_unique(array_merge($currentEntities, $cypherEntities['entities']));
 
         $focusedEntity = $conversation->getFocusedEntity();
-        if ($focusedEntity === null && !empty($cypherEntities['entities'])) {
+        // Always update focused entity from Cypher when a query was executed.
+        // The entity actually queried is the real focus, not the previous turn's entity.
+        if (!empty($cypherEntities['entities'])) {
             $focusedEntity = $cypherEntities['entities'][0];
         }
 

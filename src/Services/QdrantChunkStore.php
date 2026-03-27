@@ -263,7 +263,7 @@ class QdrantChunkStore implements ChunkStoreInterface
     /**
      * {@inheritdoc}
      */
-    public function getFileChunks(int $fileId): array
+    public function getFileChunks(int|string $fileId): array
     {
         $this->ensureCollectionExists();
 
@@ -317,7 +317,7 @@ class QdrantChunkStore implements ChunkStoreInterface
     /**
      * {@inheritdoc}
      */
-    public function deleteFileChunks(int $fileId): bool
+    public function deleteFileChunks(int|string $fileId): bool
     {
         // Get all chunk IDs for this file
         $chunks = $this->getFileChunks($fileId);
@@ -344,7 +344,7 @@ class QdrantChunkStore implements ChunkStoreInterface
     /**
      * {@inheritdoc}
      */
-    public function hasFileChunks(int $fileId): bool
+    public function hasFileChunks(int|string $fileId): bool
     {
         $count = $this->vectorStore->count($this->collection, [
             'file_id' => $fileId

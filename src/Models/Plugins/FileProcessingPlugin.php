@@ -30,19 +30,38 @@ class FileProcessingPlugin extends ModelPlugin
     {
         $modelClass = $this->modelClass;
 
+        // All the file indexing happens in background since sometimes we run ocr and parsing that can take too much
+
         // Event 1: File Created - Sync to both Neo4j and Qdrant
         $modelClass::created(function ($file) {
-            $this->handleFileCreated($file);
+            dispatch(function () use ($file) {
+                $this->handleFileCreated($file);
+            });
         });
 
         // Event 2: File Updated - Reprocess if path changed
         $modelClass::updated(function ($file) {
-            $this->handleFileUpdated($file);
+            dispatch(function () use ($file) {
+                $this->handleFileUpdated($file);
+            });
+        });
+
+        // Both cases (creating and updating) through save
+        $modelClass::saved(function ($file) {
+            dispatch(function () use ($file) {
+                if ($file->wasRecentlyCreated) {
+                    $this->handleFileCreated($file);
+                } elseif ($file->isDirty('path')) {
+                    $this->handleFileUpdated($file);
+                }
+            });
         });
 
         // Event 3: File Deleting - Remove from both stores
         $modelClass::deleting(function ($file) {
-            $this->handleFileDeleting($file);
+            dispatch(function () use ($file) {
+                 $this->handleFileDeleting($file);
+            });
         });
     }
 
@@ -240,7 +259,7 @@ class FileProcessingPlugin extends ModelPlugin
         }
 
         // Check if file exists on disk
-        if (!$file->link) {
+        if (!$file->path) {
             return false;
         }
 

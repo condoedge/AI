@@ -283,6 +283,9 @@ class ChatMessageForm extends Form
 
     protected function sendingMessageActions()
     {
+        $refreshActionWrap = $this->conversationId ? fn($e) => $e->refresh(MessagesQuery::ID)
+            : fn($e) => $e->refresh([AiChatPanel::ID]); 
+
         return fn($e) => $e
             // 1. Show placeholder immediately (client-side)
             // Note: precreateMessagePlaceholder() also hides welcome/empty state
@@ -298,9 +301,8 @@ class ChatMessageForm extends Form
             }')
             // 2. Send to server, response goes to hidden staging panel
             // 3. JS processes staging content and moves to display area
-            && $e->selfPost('sendMessageAndGetResponse')
-                ->withAllFormValues()
-                ->refresh(MessagesQuery::ID);
+            && $refreshActionWrap($e->selfPost('sendMessageAndGetResponse')
+                ->withAllFormValues());
     }
 
     public function editMessage($id)

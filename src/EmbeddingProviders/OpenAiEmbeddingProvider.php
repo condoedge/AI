@@ -124,9 +124,10 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
             }
         }
 
-        // OpenAI supports up to 2048 inputs per request.
-        // Using 2000 to maximize throughput. Reduce if payloads are large (long texts).
-        $batchSize = 2000;
+        // Adaptive batch size: use large batches for short texts (entity ingestion)
+        // and smaller batches for long texts (PDF chunks) to avoid payload size limits.
+        $avgLength = array_sum(array_map('strlen', $texts)) / count($texts);
+        $batchSize = $avgLength > 500 ? 50 : 2000;
         $chunks = array_chunk($texts, $batchSize);
         $allEmbeddings = [];
 
@@ -197,12 +198,20 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
     {
         $payload['model'] = $this->model;
 
+        $jsonBody = json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE);
+
+        if ($jsonBody === false) {
+            throw new RuntimeException(
+                'Failed to encode embedding payload as JSON: ' . json_last_error_msg()
+            );
+        }
+
         $ch = curl_init(self::API_ENDPOINT);
 
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => json_encode($payload),
+            CURLOPT_POSTFIELDS => $jsonBody,
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
                 'Authorization: Bearer ' . $this->apiKey,

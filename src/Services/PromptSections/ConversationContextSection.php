@@ -138,9 +138,12 @@ class ConversationContextSection extends BasePromptSection
         }
 
         // Follow-up hint (enhanced instructions)
-        $output .= "\n**Instructions:** Use the above context to understand follow-up questions. ";
-        $output .= "If user references 'those', 'them', 'the same', etc., use the previous results/filter. ";
-        $output .= "If user asks about 'the file', 'that file', etc., refer to the files referenced above.\n";
+        $output .= "\n**Instructions for using conversation context:**\n";
+        $output .= "- If the user references 'those', 'them', 'the same', 'it', use the previous results/filter.\n";
+        $output .= "- If the user asks 'what about X?' or 'and the Y?', modify the previous query for entity X/Y.\n";
+        $output .= "- If the user asks about a DIFFERENT topic/entity than the current focus, generate a FRESH query for that entity. Do NOT force the previous entity into the new query.\n";
+        $output .= "- If the user asks for an aggregation ('total amount', 'sum', 'average') of previous results, reuse the previous query pattern but change the RETURN clause.\n";
+        $output .= "- If the user asks about 'the file', 'that file', refer to the files referenced above.\n";
 
         return $output;
     }

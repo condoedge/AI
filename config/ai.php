@@ -537,6 +537,74 @@ return [
 
         // Vector dimensions (should match embedding provider)
         'dimension' => (int) env('AI_SEMANTIC_CONTEXT_DIMENSION', 1536),
+
+        // Score assigned to the conversation's focused entity when force-included
+        // in follow-up queries. Lower = less dominant when user switches topics.
+        'conversation_focus_score' => (float) env('AI_SEMANTIC_CONTEXT_CONVERSATION_FOCUS_SCORE', 0.55),
+
+        // Score assigned to entities injected by Query Understanding.
+        // Should be high enough to ensure they're included in context.
+        'qu_entity_score' => (float) env('AI_SEMANTIC_CONTEXT_QU_ENTITY_SCORE', 0.8),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | User Entity Paths
+    |--------------------------------------------------------------------------
+    |
+    | Defines how the authenticated user relates to different entities.
+    | When users ask about "my X" or "I", these paths tell the LLM how to
+    | traverse the graph from the current user to the target entity.
+    |
+    | Each path defines:
+    | - description: Human-readable explanation
+    | - cypher: The MATCH pattern to find the user's entities
+    | - entities: Labels involved in the path (auto-included in context)
+    | - relationships: Relationship types involved (auto-included in context)
+    |
+    | Example:
+    |   'Unit' => [
+    |       'description' => 'User units via Contact and ContactUnit',
+    |       'cypher' => 'MATCH (c:Contact {user_id: $userId})-[:CONTACT_UNITS]->(cu:ContactUnit)-[:UNIT]->(n:Unit) WHERE cu.sold_at IS NULL',
+    |       'entities' => ['Contact', 'ContactUnit', 'Unit'],
+    |       'relationships' => ['CONTACT_UNITS', 'UNIT'],
+    |   ],
+    |
+    */
+    'user_entity_paths' => [
+        // Override in your app's config/ai.php to define paths
+        // See CondoEdge config for examples
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Query Understanding
+    |--------------------------------------------------------------------------
+    |
+    | Pre-processes natural language questions before semantic selection to
+    | improve entity matching. Uses a fast LLM call to identify entity types,
+    | person names, property concepts, and rewrite the query for better
+    | semantic matching.
+    |
+    | This layer runs BEFORE semantic context selection and helps resolve
+    | ambiguous references like person names, role-based terms, and
+    | domain-specific vocabulary that embedding search alone may miss.
+    |
+    */
+    'query_understanding' => [
+        // Enable query understanding pre-processing
+        'enabled' => env('AI_QUERY_UNDERSTANDING_ENABLED', true),
+
+        // Confidence threshold: QU only runs when semantic selection's top entity
+        // score is below this value. Higher = QU runs more often. Lower = QU runs rarely.
+        // Set to 1.0 to always run QU. Set to 0.0 to never run QU.
+        'confidence_threshold' => (float) env('AI_QUERY_UNDERSTANDING_CONFIDENCE', 0.55),
+
+        // Maximum tokens for the QU LLM response
+        'max_tokens' => (int) env('AI_QUERY_UNDERSTANDING_MAX_TOKENS', 500),
+
+        // Temperature for QU LLM call (0.0 = deterministic)
+        'temperature' => (float) env('AI_QUERY_UNDERSTANDING_TEMPERATURE', 0.0),
     ],
 
     /*
@@ -912,6 +980,7 @@ return [
         \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
         \Condoedge\Ai\Services\PromptSections\GenericContextSection::class,
         \Condoedge\Ai\Services\PromptSections\CurrentUserContextSection::class,
+        \Condoedge\Ai\Services\PromptSections\NameResolutionSection::class,
         \Condoedge\Ai\Services\PromptSections\SchemaSection::class,
         \Condoedge\Ai\Services\PromptSections\RelationshipsSection::class,
         \Condoedge\Ai\Services\PromptSections\ExampleEntitiesSection::class,

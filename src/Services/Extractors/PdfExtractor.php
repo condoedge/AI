@@ -3,22 +3,25 @@
 namespace Condoedge\Ai\Services\Extractors;
 
 use Condoedge\Ai\Contracts\FileExtractorInterface;
+use Condoedge\Ai\Contracts\PdfParserInterface;
 use Smalot\PdfParser\Parser;
 
 /**
  * PDF file extractor
  *
- * Extracts text content from PDF files using smalot/pdfparser
+ * Extracts text content from PDF files.
  */
 class PdfExtractor implements FileExtractorInterface
 {
     /**
-     * @param Parser|null $parser PDF parser instance
+     * @param PdfParserInterface|null $parser PDF text parser
      */
     public function __construct(
-        private ?Parser $parser = null
+        private ?PdfParserInterface $parser = null,
+        private ?Parser $metadataParser = null
     ) {
-        $this->parser = $parser ?? new Parser();
+        $this->parser = $parser ?? new OcrPdfParser();
+        $this->metadataParser = $metadataParser ?? new Parser();
     }
 
     /**
@@ -35,8 +38,7 @@ class PdfExtractor implements FileExtractorInterface
         }
 
         try {
-            $pdf = $this->parser->parseFile($filePath);
-            $text = $pdf->getText();
+            $text = $this->parser->extractText($filePath);
 
             // Clean up extracted text
             $text = $this->cleanExtractedText($text);
@@ -77,7 +79,7 @@ class PdfExtractor implements FileExtractorInterface
         }
 
         try {
-            $pdf = $this->parser->parseFile($filePath);
+            $pdf = $this->metadataParser->parseFile($filePath);
             $details = $pdf->getDetails();
             $pages = $pdf->getPages();
 
@@ -95,7 +97,7 @@ class PdfExtractor implements FileExtractorInterface
             ];
 
             // Count approximate words
-            $text = $pdf->getText();
+            $text = $this->parser->extractText($filePath);
             $metadata['word_count'] = str_word_count($text);
             $metadata['character_count'] = strlen($text);
 
@@ -116,6 +118,12 @@ class PdfExtractor implements FileExtractorInterface
      */
     private function cleanExtractedText(string $text): string
     {
+        // Ensure valid UTF-8 — PDF parsers can produce invalid byte sequences
+        // from non-Unicode font encodings (WinAnsiEncoding, custom ToUnicode maps)
+        if (!mb_check_encoding($text, 'UTF-8')) {
+            $text = mb_convert_encoding($text, 'UTF-8', 'UTF-8');
+        }
+
         // Normalize line endings
         $text = str_replace(["\r\n", "\r"], "\n", $text);
 

@@ -217,6 +217,19 @@ class SemanticContextSelector
             $threshold
         );
 
+        // Expand through user entity paths when possessive language detected (from QU or fallback)
+        $isPossessive = $options['query_understanding']['is_possessive']
+            ?? $options['is_possessive']
+            ?? false;
+        if ($isPossessive) {
+            $this->expandThroughUserEntityPaths(
+                $selectedEntities,
+                $selectedRelationships,
+                $seenEntities,
+                $entityConfigs
+            );
+        }
+
         // Sort by score
         uasort($selectedEntities, fn($a, $b) => ($b['score'] ?? 0) <=> ($a['score'] ?? 0));
         uasort($selectedRelationships, fn($a, $b) => ($b['score'] ?? 0) <=> ($a['score'] ?? 0));
@@ -227,6 +240,10 @@ class SemanticContextSelector
             'relationships' => array_keys($selectedRelationships),
             'scopes' => array_map(fn($s) => $s['score'], $selectedScopes),
         ]);
+
+        // Limit scopes to top 3 by score to avoid overwhelming the LLM
+        $maxScopes = (int) config('ai.scope_matching.top_k', 3);
+        $selectedScopes = array_slice($selectedScopes, 0, $maxScopes, true);
 
         return [
             'entities' => $selectedEntities,
@@ -367,6 +384,19 @@ class SemanticContextSelector
                     'type' => 'entity',
                     'entity' => $entityName,
                     'text' => $aliasText,
+                ],
+            ];
+        }
+
+        // Index entity-level examples (question-style text that matches queries better)
+        foreach ($metadata['examples'] ?? [] as $example) {
+            $points[] = [
+                'id' => md5("entity_example:{$entityName}:{$example}"),
+                'text' => $example,
+                'metadata' => [
+                    'type' => 'entity',
+                    'entity' => $entityName,
+                    'text' => $example,
                 ],
             ];
         }
@@ -617,6 +647,79 @@ class SemanticContextSelector
         }
 
         $selectedEntities = array_merge($selectedEntities, $newEntities);
+    }
+
+    /**
+     * Expand context with entities from user_entity_paths when possessive language is detected.
+     * This ensures that when a user asks "my unit", the Contact, ContactUnit entities
+     * needed for the traversal are included in the context.
+     */
+    private function expandThroughUserEntityPaths(
+        array &$selectedEntities,
+        array &$selectedRelationships,
+        array &$seenEntities,
+        array $entityConfigs
+    ): void {
+        $paths = config('ai.user_entity_paths', []);
+
+        if (empty($paths)) {
+            return;
+        }
+
+        // For each selected entity, check if there's a user entity path for it
+        $entitiesToAdd = [];
+        foreach ($selectedEntities as $entityName => $entityInfo) {
+            $shortName = class_basename($entityName);
+
+            if (!isset($paths[$shortName])) {
+                continue;
+            }
+
+            $pathConfig = $paths[$shortName];
+            $pathEntities = $pathConfig['entities'] ?? [];
+            $pathRelationships = $pathConfig['relationships'] ?? [];
+
+            // Add all entities from the path
+            foreach ($pathEntities as $pathEntityLabel) {
+                if (isset($seenEntities[$pathEntityLabel])) {
+                    continue;
+                }
+
+                $fullName = $this->findFullEntityName($pathEntityLabel, $entityConfigs);
+                if (!$fullName) {
+                    continue;
+                }
+
+                $seenEntities[$pathEntityLabel] = true;
+                $seenEntities[$fullName] = true;
+                $entitiesToAdd[$fullName] = [
+                    'score' => $entityInfo['score'] ?? 0.5,
+                    'matched_text' => "User ownership path to {$shortName}",
+                    'config' => $entityConfigs[$fullName] ?? null,
+                ];
+
+                $this->logger->debug('semantic_selector', 'entity_added_via_user_path', [
+                    'entity' => $pathEntityLabel,
+                    'target' => $shortName,
+                ]);
+            }
+
+            // Add relationships from the path
+            foreach ($pathRelationships as $relType) {
+                $relKey = "user_path_{$relType}";
+                if (!isset($selectedRelationships[$relKey])) {
+                    $selectedRelationships[$relKey] = [
+                        'score' => $entityInfo['score'] ?? 0.5,
+                        'type' => $relType,
+                        'from_entity' => '',
+                        'to_entity' => '',
+                        'direction' => 'outgoing',
+                    ];
+                }
+            }
+        }
+
+        $selectedEntities = array_merge($selectedEntities, $entitiesToAdd);
     }
 
     /**

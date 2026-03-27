@@ -95,6 +95,11 @@ class ContextRetriever implements ContextRetrieverInterface
     private ?SemanticContextSelector $contextSelector = null;
 
     /**
+     * Query understanding service for pre-processing questions
+     */
+    private ?QueryUnderstandingService $queryUnderstanding = null;
+
+    /**
      * Create context retriever with injected dependencies
      *
      * All dependencies are interfaces to ensure:
@@ -147,6 +152,18 @@ class ContextRetriever implements ContextRetrieverInterface
     public function setContextSelector(SemanticContextSelector $contextSelector): self
     {
         $this->contextSelector = $contextSelector;
+        return $this;
+    }
+
+    /**
+     * Set the query understanding service
+     *
+     * @param QueryUnderstandingService $qu
+     * @return self
+     */
+    public function setQueryUnderstanding(QueryUnderstandingService $qu): self
+    {
+        $this->queryUnderstanding = $qu;
         return $this;
     }
 
@@ -208,8 +225,15 @@ class ContextRetriever implements ContextRetrieverInterface
             'selection_info' => [],
         ];
 
-        // Try semantic context selection first (if available and enabled)
+        // =====================================================================
+        // STEP 0: Semantic context selection (fast — embedding + vector search)
+        // =====================================================================
         $semanticContext = null;
+        $quResult = QueryUnderstandingService::emptyResult($question);
+
+        // Extract focused entity from conversation context for follow-up queries
+        $conversationFocusedEntity = $options['conversation_context']['focused_entity'] ?? null;
+
         if ($useSemanticSelection && $this->contextSelector !== null) {
             try {
                 $semanticContext = $this->contextSelector->selectRelevantContext(
@@ -218,8 +242,67 @@ class ContextRetriever implements ContextRetrieverInterface
                     [
                         'threshold' => config('ai.semantic_context.threshold', 0.65),
                         'top_k' => config('ai.semantic_context.top_k', 10),
+                        'is_possessive' => $quResult['is_possessive'] ?? false,
                     ]
                 );
+
+                // Force-include the conversation's focused entity so follow-up questions
+                // maintain entity context even when the question doesn't mention the entity
+                if ($conversationFocusedEntity) {
+                    $focusFullName = $this->findFullEntityName($conversationFocusedEntity, $this->entityConfigs);
+                    if ($focusFullName && !isset($semanticContext['entities'][$focusFullName])) {
+                        $semanticContext['entities'][$focusFullName] = [
+                            'score' => config('ai.semantic_context.conversation_focus_score', 0.55),
+                            'matched_text' => "Conversation focus: '{$conversationFocusedEntity}'",
+                            'config' => $this->entityConfigs[$focusFullName] ?? null,
+                        ];
+                    }
+                }
+
+                // Check confidence: if semantic selection returned few entities or low scores,
+                // escalate to Query Understanding for deeper analysis
+                $entityCount = count($semanticContext['entities'] ?? []);
+                $topScore = 0;
+                foreach ($semanticContext['entities'] ?? [] as $info) {
+                    $topScore = max($topScore, $info['score'] ?? 0);
+                }
+
+                // QU only when semantic selection is truly struggling:
+                // - No entities found, OR
+                // - Very few entities (0-1) AND low confidence scores
+                // If expansion already gave us multiple entities, trust those.
+                $quThreshold = config('ai.query_understanding.confidence_threshold', 0.55);
+                $needsQU = $this->queryUnderstanding !== null
+                    && ($entityCount === 0 || ($entityCount <= 1 && $topScore < $quThreshold));
+
+                if ($needsQU) {
+                    $this->logger->info('context_retriever', 'Low confidence, escalating to Query Understanding', [
+                        'entity_count' => $entityCount,
+                        'top_score' => round($topScore, 4),
+                        'threshold' => $quThreshold,
+                    ]);
+
+                    try {
+                        $entityCatalog = QueryUnderstandingService::buildEntityCatalog($this->entityConfigs);
+                        $quResult = $this->queryUnderstanding->analyze($question, $entityCatalog);
+
+                        // Merge QU entity_types into semantic selection
+                        foreach ($quResult['entity_types'] ?? [] as $label) {
+                            $fullName = $this->findFullEntityName($label, $this->entityConfigs);
+                            if ($fullName && !isset($semanticContext['entities'][$fullName])) {
+                                $semanticContext['entities'][$fullName] = [
+                                    'score' => config('ai.semantic_context.qu_entity_score', 0.8),
+                                    'matched_text' => "Query Understanding: '{$label}'",
+                                    'config' => $this->entityConfigs[$fullName] ?? null,
+                                ];
+                            }
+                        }
+                    } catch (\Throwable $e) {
+                        $this->logger->error('context_retriever', 'Query understanding failed: ' . $e->getMessage());
+                        $context['errors'][] = 'Query understanding failed: ' . $e->getMessage();
+                    }
+                }
+
                 // Extract selected entity labels (short names)
                 $selectedEntities = array_map(
                     fn($entityName) => class_basename($entityName),
@@ -231,11 +314,13 @@ class ContextRetriever implements ContextRetrieverInterface
                     'entities_selected' => count($semanticContext['entities'] ?? []),
                     'relationships_selected' => count($semanticContext['relationships'] ?? []),
                     'scopes_selected' => count($semanticContext['scopes'] ?? []),
+                    'qu_used' => $needsQU ?? false,
                 ];
                 $this->logger->info('context_retriever', 'Semantic context selected', [
                     'method' => $semanticContext['selection_method'] ?? 'semantic',
                     'entity_count' => count($semanticContext['entities'] ?? []),
                     'scope_count' => count($semanticContext['scopes'] ?? []),
+                    'qu_used' => $needsQU ?? false,
                 ]);
             } catch (\Exception $e) {
                 $this->logger->error('context_retriever', 'Semantic context selection failed: ' . $e->getMessage());
@@ -287,6 +372,10 @@ class ContextRetriever implements ContextRetrieverInterface
                         $context['graph_schema'] = $fullSchema;
                     }
                 }
+                // Always include the full relationship types list so RelationshipsSection
+                // can validate that relationship types actually exist in Neo4j
+                $context['graph_schema']['all_relationship_types'] = $fullSchema['relationships'] ?? [];
+
                 $this->logger->debug('context_retriever', 'Schema filtered', [
                     'labels' => $context['graph_schema']['labels'] ?? [],
                     'relationships' => $context['graph_schema']['relationships'] ?? [],
@@ -338,6 +427,17 @@ class ContextRetriever implements ContextRetrieverInterface
         } catch (\Exception $e) {
             $this->logger->error('context_retriever', 'Entity metadata retrieval failed: ' . $e->getMessage());
             $context['errors'][] = 'Entity metadata retrieval failed: ' . $e->getMessage();
+        }
+
+        // 5. Add Query Understanding results to context for prompt sections
+        if (!empty($quResult['person_names'])) {
+            $context['resolved_names'] = $quResult['person_names'];
+        }
+        if (!empty($quResult['property_concepts'])) {
+            $context['property_concepts'] = $quResult['property_concepts'];
+        }
+        if (!empty($quResult['entity_types']) || !empty($quResult['person_names']) || !empty($quResult['property_concepts'])) {
+            $context['query_understanding'] = $quResult;
         }
 
         // Assess context quality before returning
@@ -463,12 +563,16 @@ class ContextRetriever implements ContextRetrieverInterface
             }
         }
 
-        // Process selected scopes
+        // Process scopes: first from semantic selection, then entity-aware matching.
+        // Semantic selection scopes come from the context_index (cross-entity),
+        // but we also need to check scopes on the SELECTED entities specifically,
+        // matching the question against their scope examples for higher accuracy.
+
+        // Step 1: Semantic selection scopes (from context_index)
         foreach ($semanticContext['scopes'] ?? [] as $scopeName => $scopeInfo) {
             $entityName = $scopeInfo['entity'] ?? '';
             $fullEntityName = $this->findFullEntityName($entityName, $this->entityConfigs);
 
-            // Get scope config from entity configs
             $scopeConfig = [];
             if ($fullEntityName && isset($this->entityConfigs[$fullEntityName]['metadata']['scopes'][$scopeName])) {
                 $scopeConfig = $this->entityConfigs[$fullEntityName]['metadata']['scopes'][$scopeName];
@@ -484,7 +588,6 @@ class ContextRetriever implements ContextRetrieverInterface
                 $fullEntityName ?: $entityName
             );
 
-            // Ensure the entity is in detected list
             if ($fullEntityName && !in_array($fullEntityName, $detectedEntities)) {
                 $detectedEntities[] = $fullEntityName;
                 if (isset($this->entityConfigs[$fullEntityName]['metadata'])) {
@@ -492,6 +595,10 @@ class ContextRetriever implements ContextRetrieverInterface
                 }
             }
         }
+
+        // Note: Entity-aware scope matching was removed to avoid hardcoded stop word lists.
+        // Scope matching relies on the semantic context_index and scope_examples collections.
+        // The QU layer helps by identifying entity types, which filters scopes to relevant entities.
 
         return [
             'detected_entities' => array_values(array_unique($detectedEntities)),
@@ -1042,9 +1149,14 @@ class ContextRetriever implements ContextRetrieverInterface
 
             $labels = [];
             foreach ($results as $result) {
-                $label = $result['payload']['label'] ?? $result['payload']['entity']
+                $raw = $result['payload']['label'] ?? $result['payload']['entity']
                     ?? $result['metadata']['label'] ?? $result['metadata']['entity'] ?? null;
-                if ($label && !in_array($label, $labels)) {
+                if (!$raw) {
+                    continue;
+                }
+                // Normalize: if FQCN (App\Models\Team), extract short name (Team)
+                $label = class_basename($raw);
+                if (!in_array($label, $labels)) {
                     $labels[] = $label;
                 }
             }

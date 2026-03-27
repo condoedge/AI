@@ -457,9 +457,13 @@ class AiManager
             $generation = $this->queryGenerator->generate($question, $context, $options);
 
             if (isset($generation['cypher']) && $generation['cypher']) {
+                // Parameterize user-specific values before storing as reusable examples.
+                // This prevents user A's query from leaking data to user B.
+                $storedCypher = $this->parameterizeCypher($generation['cypher']);
+
                 $this->storeQuery(
                     question: $question,
-                    cypherQuery: $generation['cypher'],
+                    cypherQuery: $storedCypher,
                     metadata: [
                         'confidence' => $generation['confidence'],
                         'generated_at' => now()->toIso8601String(),
@@ -842,6 +846,96 @@ class AiManager
     }
 
     // =========================================================================
+    // Query Parameterization (security: prevent user ID leakage in stored queries)
+    // =========================================================================
+
+    /**
+     * Replace user-specific values with placeholders before storing queries.
+     * Prevents user A's data from leaking to user B via similar queries.
+     *
+     * Uses config('ai.query_parameters') for project-specific fields.
+     * Default: user_id → $currentUserId, team_id → $currentTeamId
+     */
+    private function parameterizeCypher(string $cypher): string
+    {
+        foreach ($this->getQueryParameters() as $param) {
+            $value = $param['value'];
+            if ($value === null) {
+                continue;
+            }
+
+            $field = $param['field'];
+            $placeholder = $param['placeholder'];
+            $quotedValue = preg_quote((string) $value, '/');
+
+            // Property syntax: {field: value}
+            $cypher = preg_replace(
+                '/\b' . preg_quote($field, '/') . '\s*:\s*' . $quotedValue . '\b/',
+                $field . ': ' . $placeholder,
+                $cypher
+            );
+            // WHERE syntax: x.field = value
+            $cypher = preg_replace(
+                '/(\b' . preg_quote($field, '/') . '\s*=\s*)' . $quotedValue . '\b/',
+                '${1}' . $placeholder,
+                $cypher
+            );
+        }
+
+        return $cypher;
+    }
+
+    /**
+     * Replace placeholders with actual current user values when serving similar queries.
+     */
+    public static function deparameterizeCypher(string $cypher): string
+    {
+        foreach (static::resolveQueryParameters() as $param) {
+            $value = $param['value'];
+            if ($value === null) {
+                continue;
+            }
+            $cypher = str_replace($param['placeholder'], (string) $value, $cypher);
+        }
+
+        return $cypher;
+    }
+
+    /**
+     * Get configurable query parameters for parameterization.
+     * Projects can add custom fields via config('ai.query_parameters').
+     *
+     * Each entry: ['field' => 'user_id', 'placeholder' => '$currentUserId', 'resolver' => fn() => auth()->id()]
+     */
+    private function getQueryParameters(): array
+    {
+        return static::resolveQueryParameters();
+    }
+
+    private static function resolveQueryParameters(): array
+    {
+        // Built-in parameters
+        $params = [
+            ['field' => 'user_id', 'placeholder' => '$currentUserId', 'value' => auth()->id()],
+            ['field' => 'team_id', 'placeholder' => '$currentTeamId', 'value' => function_exists('currentTeamId') ? currentTeamId() : null],
+        ];
+
+        // Project-specific parameters from config
+        foreach (config('ai.query_parameters', []) as $custom) {
+            if (!empty($custom['field']) && !empty($custom['placeholder'])) {
+                $value = is_callable($custom['resolver'] ?? null) ? ($custom['resolver'])() : ($custom['value'] ?? null);
+                $params[] = [
+                    'field' => $custom['field'],
+                    'placeholder' => $custom['placeholder'],
+                    'value' => $value,
+                ];
+            }
+        }
+
+        return $params;
+    }
+
+    // =========================================================================
     // File Context Methods
     // =========================================================================
 
@@ -852,7 +946,7 @@ class AiManager
      * @param mixed $user The user to check access for
      * @return array File context array or empty if unavailable
      */
-    protected function retrieveFileContext(string $question, mixed $user): array
+    public function retrieveFileContext(string $question, mixed $user): array
     {
         if ($this->fileContextProvider === null) {
             return [];

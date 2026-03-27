@@ -650,12 +650,22 @@ class QueryExecutor implements QueryExecutorInterface
 
     /**
      * Extract primary entity (label) from Cypher query.
-     * Looks for patterns like (n:Invoice), (i:Invoice), MATCH (n:Invoice)
+     * Prioritizes the entity in the RETURN clause, falls back to first MATCH entity.
      */
     private function extractPrimaryEntity(string $query): ?string
     {
-        // Match patterns like (n:Invoice) or (invoice:Invoice)
-        if (preg_match('/\(\s*\w+\s*:\s*(\w+)\s*\)/i', $query, $matches)) {
+        // First, try to find the entity being RETURNED (this is the entity the user wants)
+        // Pattern: RETURN alias -> find what label that alias maps to
+        if (preg_match('/\bRETURN\s+(?:DISTINCT\s+)?(\w+)/i', $query, $returnMatch)) {
+            $returnAlias = $returnMatch[1];
+            // Find the label for this alias: (alias:Label) or (alias:`Label`) or (alias:Label {props})
+            if (preg_match('/\(\s*' . preg_quote($returnAlias, '/') . '\s*:\s*`?(\w+)`?\s*[{)]/i', $query, $labelMatch)) {
+                return $labelMatch[1];
+            }
+        }
+
+        // Fallback: match first (alias:Entity) pattern — handles backtick-quoted labels too
+        if (preg_match('/\(\s*\w+\s*:\s*`?(\w+)`?\s*[{)]/i', $query, $matches)) {
             return $matches[1];
         }
         return null;
@@ -667,8 +677,8 @@ class QueryExecutor implements QueryExecutorInterface
      */
     private function extractEntityAlias(string $query, string $entity): string
     {
-        // Match (alias:Entity)
-        if (preg_match('/\(\s*(\w+)\s*:\s*' . preg_quote($entity, '/') . '\s*\)/i', $query, $matches)) {
+        // Match (alias:Entity) or (alias:`Entity`) or (alias:Entity {props})
+        if (preg_match('/\(\s*(\w+)\s*:\s*`?' . preg_quote($entity, '/') . '`?\s*[{)]/i', $query, $matches)) {
             return $matches[1];
         }
         return strtolower(substr($entity, 0, 1));
@@ -684,29 +694,48 @@ class QueryExecutor implements QueryExecutorInterface
 
     /**
      * Inject team filter into Cypher query.
-     * Inserts WHERE clause after MATCH but before RETURN/WITH.
+     *
+     * Strategy depends on filter type:
+     * - MATCH-based filter (multi-hop): insert before RETURN (all vars in scope)
+     * - Simple WHERE filter: append condition to the LAST WHERE with AND,
+     *   or add new WHERE before RETURN if no WHERE exists.
+     *
+     * Using the LAST WHERE is critical for multi-MATCH queries where the
+     * filter variable (e.g., c.team_id) is only defined in a later MATCH.
      */
     private function injectTeamFilter(string $query, string $filter): string
     {
-        // If filter already has WHERE, we need to use AND
-        $hasWhere = preg_match('/\bWHERE\b/i', $query);
-
-        if ($hasWhere) {
-            // Replace first WHERE with WHERE (filter) AND
-            // Extract just the condition part from filter (remove "WHERE" prefix)
-            $condition = preg_replace('/^\s*WHERE\s+/i', '', $filter);
+        // MATCH-based filter: insert entire MATCH+WHERE block before RETURN
+        if (preg_match('/\bMATCH\b/i', $filter)) {
             return preg_replace(
-                '/\bWHERE\b/i',
-                'WHERE (' . $condition . ') AND ',
+                '/\b(RETURN|ORDER)\b/i',
+                $filter . ' $1',
                 $query,
                 1
             );
         }
 
-        // No WHERE exists - insert filter before RETURN/WITH/ORDER
+        // Simple WHERE filter: extract condition and merge
+        $condition = preg_replace('/^\s*WHERE\s+/i', '', $filter);
+
+        // Find the LAST WHERE in the query and append with AND
+        $lastWherePos = strripos($query, 'WHERE');
+        if ($lastWherePos !== false) {
+            // Find where this WHERE clause ends (before RETURN/MATCH/ORDER or end)
+            $afterWhere = substr($query, $lastWherePos);
+            // Insert AND condition at the end of the last WHERE block, before RETURN
+            return preg_replace(
+                '/\b(RETURN|ORDER)\b/i',
+                'AND ' . $condition . ' $1',
+                $query,
+                1
+            );
+        }
+
+        // No WHERE exists: add new WHERE before RETURN
         return preg_replace(
-            '/\b(RETURN|WITH|ORDER)\b/i',
-            $filter . ' $1',
+            '/\b(RETURN|ORDER)\b/i',
+            'WHERE ' . $condition . ' $1',
             $query,
             1
         );

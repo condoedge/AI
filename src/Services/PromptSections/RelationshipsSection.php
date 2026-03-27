@@ -25,21 +25,31 @@ class RelationshipsSection extends BasePromptSection
             return '';
         }
 
+        // Use the FULL Neo4j relationship types list (not the filtered semantic subset)
+        // This ensures we only show relationships that actually exist in the graph
+        $validRelTypes = $schema['all_relationship_types'] ?? $schema['relationships'] ?? [];
+
         $output = $this->header('ENTITY RELATIONSHIPS (with directions)');
-        $output .= "IMPORTANT: Use these EXACT directions in your queries!\n\n";
+        $output .= "CRITICAL: Use ONLY these relationship types and directions. Do NOT invent relationship types.\n\n";
 
         $hasRelationships = false;
+        $shown = []; // Track what we've shown to avoid duplicates
 
         foreach ($entityConfigs as $entityName => $config) {
             $graphConfig = $config['graph'] ?? [];
             $relationships = $graphConfig['relationships'] ?? [];
 
-            // Filter to only show relationships that exist in schema
-            if (!empty($schema['relationships'])) {
-                $relationships = array_filter($relationships, function ($rel) use ($schema) {
-                    return in_array($rel['type'] ?? '', $schema['relationships']);
+            // STRICT filter: only show relationships whose type actually exists in Neo4j
+            if (!empty($validRelTypes)) {
+                $relationships = array_filter($relationships, function ($rel) use ($validRelTypes) {
+                    return in_array($rel['type'] ?? '', $validRelTypes);
                 });
             }
+
+            // Skip pivot relationships and relationships without direction
+            $relationships = array_filter($relationships, function ($rel) {
+                return empty($rel['pivot']);
+            });
 
             if (empty($relationships)) {
                 continue;
@@ -52,17 +62,18 @@ class RelationshipsSection extends BasePromptSection
             foreach ($relationships as $rel) {
                 $type = $rel['type'] ?? 'RELATED_TO';
                 $targetLabel = $rel['target_label'] ?? 'Unknown';
-                $foreignKey = $rel['foreign_key'] ?? 'id';
                 $direction = $rel['direction'] ?? 'outgoing';
-                $pivot = $rel['pivot'] ?? false;
                 $description = $rel['description'] ?? '';
 
-                if ($pivot) {
-                    // Skip pivot/junction table relationships for clarity
+                // Avoid showing the same relationship twice from different entities
+                $relSignature = $direction === 'incoming'
+                    ? "{$targetLabel}-{$type}->{$label}"
+                    : "{$label}-{$type}->{$targetLabel}";
+                if (isset($shown[$relSignature])) {
                     continue;
                 }
+                $shown[$relSignature] = true;
 
-                // Show the relationship pattern with direction
                 if ($direction === 'incoming') {
                     $output .= "  ({$label})<-[:{$type}]-({$targetLabel})\n";
                     $output .= "    Cypher: MATCH (x:{$label})<-[:{$type}]-(y:{$targetLabel})\n";
@@ -70,8 +81,10 @@ class RelationshipsSection extends BasePromptSection
                     $output .= "  ({$label})-[:{$type}]->({$targetLabel})\n";
                     $output .= "    Cypher: MATCH (x:{$label})-[:{$type}]->(y:{$targetLabel})\n";
                 }
-                $output .= "    Foreign key: {$foreignKey}\n\n";
-                $output .= !empty($description) ? "    Description: {$description}\n\n" : '';
+                if (!empty($description)) {
+                    $output .= "    Description: {$description}\n";
+                }
+                $output .= "\n";
             }
         }
 
@@ -89,29 +102,28 @@ class RelationshipsSection extends BasePromptSection
      */
     private function getRelevantEntityConfigs(array $context): array
     {
+        $allConfigs = config('entities', []);
+
         // If semantic selection identified specific entities, use only those
         $selectedEntities = $context['selection_info']['selected_entities'] ?? [];
-
         if (!empty($selectedEntities)) {
-            $allConfigs = config('entities', []);
             return array_filter($allConfigs, function ($config) use ($selectedEntities) {
                 $label = $config['graph']['label'] ?? '';
                 return in_array($label, $selectedEntities);
             });
         }
 
-        // If entity_metadata has detected entities, use those
+        // If entity_metadata has detected entities, resolve them to configs
         $metadata = $context['entity_metadata'] ?? [];
-        if (!empty($metadata)) {
-            $allConfigs = config('entities', []);
-            $detectedLabels = array_map(fn($m) => $m['label'] ?? '', $metadata);
-            return array_filter($allConfigs, function ($config) use ($detectedLabels) {
+        $detectedEntities = $metadata['detected_entities'] ?? [];
+        if (!empty($detectedEntities)) {
+            return array_filter($allConfigs, function ($config, $fqcn) use ($detectedEntities) {
                 $label = $config['graph']['label'] ?? '';
-                return in_array($label, $detectedLabels);
-            });
+                return in_array($fqcn, $detectedEntities) || in_array($label, $detectedEntities);
+            }, ARRAY_FILTER_USE_BOTH);
         }
 
         // Fallback: load all (but this should be avoided)
-        return config('entities', []);
+        return $allConfigs;
     }
 }

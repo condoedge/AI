@@ -103,9 +103,9 @@ class DetectedScopesSection extends BasePromptSection
     {
         $output = '';
 
-        // If we have a cypher_pattern directly, show it
+        // If we have a cypher_pattern directly, show it with strong emphasis
         if (!empty($scope['cypher_pattern'])) {
-            $output .= "CYPHER PATTERN:\n  {$scope['cypher_pattern']}\n\n";
+            $output .= ">>> USE THIS EXACT CYPHER PATTERN:\n  {$scope['cypher_pattern']}\n\n";
         }
 
         // If spec is empty, return what we have
@@ -210,9 +210,9 @@ class DetectedScopesSection extends BasePromptSection
     {
         $output = '';
 
-        // Show cypher_pattern if available
+        // Show cypher_pattern if available — with strong emphasis
         if (!empty($scope['cypher_pattern'])) {
-            $output .= "CYPHER PATTERN:\n  {$scope['cypher_pattern']}\n\n";
+            $output .= ">>> USE THIS EXACT CYPHER PATTERN IN YOUR WHERE CLAUSE:\n  {$scope['cypher_pattern']}\n\n";
         }
 
         if (empty($filter)) {

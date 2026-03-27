@@ -109,29 +109,59 @@ class TeamPathResolver
     }
 
     /**
-     * Resolve parent path like 'invoice.team_id'.
+     * Resolve parent path like 'union.team_id' or multi-hop 'unit.union.team_id'.
      */
     private function resolveParentPath(string $entity, string $alias, string $path, array $teamIds): ?array
     {
-        [$parentKey, $column] = explode('.', $path, 2);
-        $parentEntity = ucfirst($parentKey);
+        $parts = explode('.', $path);
+        $finalColumn = array_pop($parts); // e.g., 'team_id'
 
-        // Find relationship to parent
-        $configKey = $this->getEntityConfigKey($entity);
-        $relationships = config("entities.{$configKey}.graph.relationships", []);
-        $parentRel = collect($relationships)
-            ->first(fn($r) => ($r['target_label'] ?? null) === $parentEntity);
-
-        if (!$parentRel) {
+        if (empty($parts)) {
             return null;
         }
 
-        $parentAlias = strtolower(substr($parentEntity, 0, 1));
         $teamIdList = implode(', ', $teamIds);
+
+        // Build relationship chain for multi-hop paths
+        $matchChain = '';
+        $currentEntity = $entity;
+        $currentAlias = $alias;
+        $lastAlias = '';
+        $usedAliases = [$alias => true];
+
+        foreach ($parts as $i => $parentKey) {
+            $parentEntity = ucfirst($parentKey);
+
+            // Find relationship from current entity to parent entity
+            $configKey = $this->getEntityConfigKey($currentEntity);
+            $relationships = config("entities.{$configKey}.graph.relationships", []);
+
+            $parentRel = collect($relationships)
+                ->first(fn($r) => ($r['target_label'] ?? null) === $parentEntity);
+
+            if (!$parentRel) {
+                return null;
+            }
+
+            // Generate unique alias
+            $parentAlias = strtolower(substr($parentEntity, 0, 1));
+            $suffix = 0;
+            while (isset($usedAliases[$parentAlias])) {
+                $suffix++;
+                $parentAlias = strtolower(substr($parentEntity, 0, 1)) . $suffix;
+            }
+            $usedAliases[$parentAlias] = true;
+
+            $matchChain .= "MATCH ({$currentAlias})-[:{$parentRel['type']}]->({$parentAlias}:{$parentEntity}) ";
+
+            $currentEntity = $parentEntity;
+            $currentAlias = $parentAlias;
+            $lastAlias = $parentAlias;
+        }
 
         return [
             'type' => 'parent',
-            'filter' => "MATCH ({$alias})-[:{$parentRel['type']}]->({$parentAlias}:{$parentEntity}) WHERE {$parentAlias}.{$column} IN [{$teamIdList}]",
+            'filter' => "{$matchChain}WHERE {$lastAlias}.{$finalColumn} IN [{$teamIdList}]",
         ];
     }
 }

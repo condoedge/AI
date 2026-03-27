@@ -44,18 +44,18 @@ interface ChunkStoreInterface
     /**
      * Get all chunks for a specific file
      *
-     * @param int $fileId The file ID
+     * @param int|string $fileId The file ID (int for database files, string for physical files)
      * @return array Array of FileChunk objects
      */
-    public function getFileChunks(int $fileId): array;
+    public function getFileChunks(int|string $fileId): array;
 
     /**
      * Delete all chunks for a specific file
      *
-     * @param int $fileId The file ID
+     * @param int|string $fileId The file ID (int for database files, string for physical files)
      * @return bool True if successful
      */
-    public function deleteFileChunks(int $fileId): bool;
+    public function deleteFileChunks(int|string $fileId): bool;
 
     /**
      * Get the total number of chunks stored
@@ -68,10 +68,10 @@ interface ChunkStoreInterface
     /**
      * Check if chunks exist for a specific file
      *
-     * @param int $fileId The file ID
+     * @param int|string $fileId The file ID (int for database files, string for physical files)
      * @return bool
      */
-    public function hasFileChunks(int $fileId): bool;
+    public function hasFileChunks(int|string $fileId): bool;
 
     /**
      * Get a specific chunk by its vector ID

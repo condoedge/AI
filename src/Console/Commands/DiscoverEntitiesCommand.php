@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Console\Commands;
 
+use Condoedge\Ai\Services\Discovery\AiConfigEnhancer;
+use Condoedge\Ai\Services\Discovery\CodeExplorer;
+use Condoedge\Ai\Services\Discovery\DataExplorer;
+use Condoedge\Ai\Services\Discovery\LangExplorer;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
@@ -28,7 +32,8 @@ class DiscoverEntitiesCommand extends Command
     protected $signature = 'ai:discover
                             {--model= : Specific model class to discover}
                             {--force : Overwrite existing configuration}
-                            {--dry-run : Show what would be generated without writing}';
+                            {--dry-run : Show what would be generated without writing}
+                            {--enhance : Use AI to generate rich descriptions, aliases, and scopes}';
 
     protected $description = 'Discover Nodeable entities and generate config/entities.php';
 
@@ -81,6 +86,44 @@ class DiscoverEntitiesCommand extends Command
         }
 
         $this->newLine();
+
+        // AI Enhancement (single-pass, no feedback loop — use ai:enhance for iterative)
+        if ($this->option('enhance') && !empty($configurations)) {
+            $this->info('Running AI enhancement (single pass)...');
+            $this->comment('  For iterative improvement with test feedback, run: php artisan ai:enhance');
+            $this->newLine();
+
+            $enhancer = app(AiConfigEnhancer::class);
+            $codeExplorer = new CodeExplorer();
+            $dataExplorer = new DataExplorer();
+            $langExplorer = new LangExplorer();
+
+            foreach ($configurations as $modelClass => &$config) {
+                try {
+                    $codeContext = $codeExplorer->explore($modelClass, base_path());
+
+                    foreach ($config['graph']['relationships'] ?? [] as $rel) {
+                        $relatedModel = $rel['related_model'] ?? null;
+                        if ($relatedModel && class_exists($relatedModel)) {
+                            $codeContext['related_models'][$relatedModel] =
+                                $codeExplorer->readRelatedModel($relatedModel);
+                        }
+                    }
+
+                    $dataContext = $dataExplorer->explore($modelClass);
+                    $langContext = $langExplorer->explore($codeContext['forms'] ?? [], base_path());
+                    $config = $enhancer->enhance($modelClass, $config, $codeContext, $dataContext, $langContext);
+
+                    $this->line("  <fg=green>✓</> " . class_basename($modelClass));
+                } catch (\Throwable $e) {
+                    $this->line("  <fg=red>✗</> " . class_basename($modelClass) . ": " . $e->getMessage());
+                    $errors[$modelClass] = 'Enhancement failed: ' . $e->getMessage();
+                }
+            }
+            unset($config);
+
+            $this->newLine();
+        }
 
         if (empty($configurations)) {
             $this->warn('No configurations to write.');

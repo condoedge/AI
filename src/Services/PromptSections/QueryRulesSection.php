@@ -89,8 +89,9 @@ class QueryRulesSection extends BasePromptSection
     {
         return "2. DATA TYPE RULES:\n" .
                "   - Dates stored as STRINGS (e.g., '2024-01-15'): compare as strings using < > = operators\n" .
-               "   - NEVER use date() or datetime() functions unless the EXAMPLE ENTITIES show Neo4j temporal types\n" .
-               "   - Check the EXAMPLE ENTITIES section to see how dates are actually stored\n\n";
+               "   - For relative date comparisons (today, now, current), use toString(date()) — this returns today's date as a string\n" .
+               "   - NEVER hardcode specific dates — use toString(date()) for 'today', 'current', 'upcoming', 'past', etc.\n" .
+               "   - EXCEPTION: If a DETECTED BUSINESS CONCEPT provides a CYPHER PATTERN, use that pattern EXACTLY as written\n\n";
     }
 
     private function formatRelationshipRules(): string
@@ -105,9 +106,12 @@ class QueryRulesSection extends BasePromptSection
     private function formatBusinessRules(): string
     {
         return "4. BUSINESS RULES:\n" .
-               "   - Respect all business rules from detected concepts\n" .
+               "   - CRITICAL: If a DETECTED BUSINESS CONCEPT above has a CYPHER PATTERN, you MUST use it in your WHERE clause\n" .
+               "   - Check the EXAMPLE ENTITIES to determine the data type of status/role/type fields — some are integers, some are strings\n" .
+               "   - Check the DETECTED ENTITIES section for enum value mappings before filtering on status/role/type fields\n" .
                "   - Apply filters exactly as specified in scope definitions\n" .
-               "   - Use DISTINCT when specified to avoid duplicates\n\n";
+               "   - Use DISTINCT when specified to avoid duplicates\n" .
+               "   - When returning entity data, JOIN to related entities to get human-readable names (e.g., JOIN Contact for BoardMember)\n\n";
     }
 
     private function formatBestPractices(): string

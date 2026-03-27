@@ -34,14 +34,14 @@ class QueryGenerator implements QueryGeneratorInterface
      */
     private array $templates = [
         'list_all' => [
-            'pattern' => '/^(show|list|get|display|find)\s+all\s+(\w+)/i',
+            'pattern' => '/^(show|list|get|display|find)\s+all\s+(\w+)\s*[?.!]?$/i',
             'cypher' => 'MATCH (n:{label}) RETURN n LIMIT 100',
             'description' => 'List all entities of a type',
             'example_question' => 'Show all customers',
             'example_cypher' => 'MATCH (n:Customer) RETURN n LIMIT 100'
         ],
         'count' => [
-            'pattern' => '/^(how many|count|number of)\s+(\w+)/i',
+            'pattern' => '/^(how many|count|number of)\s+(\w+)\s*(are there|do we have|exist|total)?\s*[?.!]?$/i',
             'cypher' => 'MATCH (n:{label}) RETURN count(n) as count',
             'description' => 'Count entities of a type',
             'example_question' => 'How many orders?',
@@ -139,8 +139,21 @@ class QueryGenerator implements QueryGeneratorInterface
         $allowWrite = $options['allow_write'] ?? $this->config['allow_write_operations'] ?? false;
         $explain = $options['explain'] ?? false;
 
-        // Check if templates are enabled
-        if ($this->config['enable_templates'] ?? true) {
+        // Check if templates are enabled.
+        // Skip templates only when HIGH-CONFIDENCE scopes are detected — these indicate
+        // the question has filtering conditions (e.g., "unpaid", "expired", "open") that
+        // templates can't handle. Low-confidence scope matches (< 0.7) are noise and
+        // should NOT prevent simple template queries like "How many units?".
+        $scopeBypassThreshold = $this->config['scope_bypass_threshold'] ?? 0.7;
+        $hasDetectedScopes = false;
+        foreach ($context['entity_metadata']['detected_scopes'] ?? [] as $scope) {
+            if (($scope['match_score'] ?? 0) >= $scopeBypassThreshold) {
+                $hasDetectedScopes = true;
+                break;
+            }
+        }
+
+        if (($this->config['enable_templates'] ?? true) && !$hasDetectedScopes) {
             $template = $this->detectTemplate($question);
             if ($template) {
                 $this->logger->debug('query_generator', "Template matched: {$template}", [
@@ -148,8 +161,6 @@ class QueryGenerator implements QueryGeneratorInterface
                     'template' => $template,
                 ]);
 
-                // generateFromTemplate returns null if schema is unavailable for validation
-                // In that case, fall through to LLM generation
                 $result = $this->generateFromTemplate($question, $template, $context);
                 if ($result !== null) {
                     $durationMs = $this->logger->stopTimer('query_generation');
@@ -166,6 +177,10 @@ class QueryGenerator implements QueryGeneratorInterface
                     'question' => $question,
                 ]);
             }
+        } elseif ($hasDetectedScopes) {
+            $this->logger->debug('query_generator', 'Templates skipped (scopes detected)', [
+                'scope_count' => count($context['entity_metadata']['detected_scopes']),
+            ]);
         }
 
         // Try LLM generation with retries
@@ -273,6 +288,13 @@ class QueryGenerator implements QueryGeneratorInterface
                     'error' => $lastError,
                     'exception_class' => get_class($e),
                 ]);
+
+                // Exponential backoff for rate limit errors
+                if (stripos($lastError, 'rate limit') !== false && $retryCount < $maxRetries) {
+                    $waitSeconds = pow(2, $retryCount); // 2s, 4s, 8s
+                    $this->logger->debug('query_generator', "Backing off {$waitSeconds}s for rate limit");
+                    sleep($waitSeconds);
+                }
             }
         }
 
@@ -309,9 +331,9 @@ class QueryGenerator implements QueryGeneratorInterface
         $errors = [];
         $warnings = [];
 
-        // Check for dangerous operations
+        // Check for dangerous operations (word boundary match to avoid false positives like "deleted_at")
         foreach ($this->dangerousKeywords as $keyword) {
-            if (stripos($cypherQuery, $keyword) !== false && !$allowWrite) {
+            if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/i', $cypherQuery) && !$allowWrite) {
                 $errors[] = "Query contains forbidden keyword: {$keyword}";
             }
         }
@@ -332,10 +354,10 @@ class QueryGenerator implements QueryGeneratorInterface
             $warnings[] = "Query complexity ({$complexity}) exceeds threshold ({$maxComplexity})";
         }
 
-        // Determine if read-only
+        // Determine if read-only (word boundary match to avoid false positives)
         $isReadOnly = true;
         foreach ($this->dangerousKeywords as $keyword) {
-            if (stripos($cypherQuery, $keyword) !== false) {
+            if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/i', $cypherQuery)) {
                 $isReadOnly = false;
                 break;
             }
