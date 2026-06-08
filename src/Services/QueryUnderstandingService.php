@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\LlmProviderInterface;
+use Condoedge\Ai\DTOs\QueryUnderstandingResult;
 use Condoedge\Ai\Support\AiLogger;
 
 /**
@@ -36,22 +37,10 @@ class QueryUnderstandingService
      *
      * @param string $question  The user's natural language question
      * @param array  $entityCatalog  Compact catalog built from entity configs (see buildEntityCatalog)
-     * @return array Structured result with keys:
-     *               - entity_types: string[] entity labels likely relevant
-     *               - person_names: string[] person/contact names mentioned
-     *               - property_concepts: string[] property concepts the query is about
-     *               - search_query: string rewritten query for better embedding search
-     *               - intent: string one of count|list|lookup|aggregate|compare|other
+     * @return QueryUnderstandingResult Structured result with entity types, person names, intent, etc.
      */
-    public function analyze(string $question, array $entityCatalog): array
+    public function analyze(string $question, array $entityCatalog): QueryUnderstandingResult
     {
-        $empty = self::emptyResult();
-
-        if (!($this->config['enabled'] ?? true)) {
-            $this->logger->debug('query_understanding', 'Skipped (disabled by config)');
-            return $empty;
-        }
-
         $this->logger->startTimer('query_understanding');
 
         try {
@@ -67,10 +56,11 @@ class QueryUnderstandingService
             $ms = $this->logger->stopTimer('query_understanding');
             $this->logger->info('query_understanding', 'Analysis complete', [
                 'duration_ms' => $ms,
-                'entity_types' => $result['entity_types'],
-                'person_names' => $result['person_names'],
-                'property_concepts' => $result['property_concepts'],
-                'intent' => $result['intent'],
+                'entity_types' => $result->entityTypes,
+                'person_names' => $result->personNames,
+                'property_concepts' => $result->propertyConcepts,
+                'intent' => $result->intent,
+                'question_type' => $result->questionType,
             ]);
 
             return $result;
@@ -80,7 +70,7 @@ class QueryUnderstandingService
                 'error' => $e->getMessage(),
             ]);
 
-            return $empty;
+            return QueryUnderstandingResult::empty($question);
         }
     }
 
@@ -120,35 +110,6 @@ class QueryUnderstandingService
     }
 
     /**
-     * Return an empty/default result for graceful degradation.
-     *
-     * @return array
-     */
-    /**
-     * Empty result for when QU doesn't run.
-     * Uses a minimal possessive fallback so user_entity_paths still work.
-     */
-    public static function emptyResult(string $question = ''): array
-    {
-        return [
-            'entity_types' => [],
-            'person_names' => [],
-            'property_concepts' => [],
-            'search_query' => '',
-            'is_possessive' => $question !== '' && self::looksLikePossessive($question),
-            'intent' => 'other',
-        ];
-    }
-
-    /**
-     * Minimal possessive check — fallback only when QU LLM doesn't run.
-     */
-    private static function looksLikePossessive(string $question): bool
-    {
-        return (bool) preg_match('/\b(my|mine|i\s+have|i\s+own|belong.*to\s+me)\b/i', $question);
-    }
-
-    /**
      * Build the chat messages for the LLM call.
      */
     private function buildMessages(string $question, array $entityCatalog): array
@@ -168,8 +129,10 @@ TASK: Given the user's question, return a JSON object with exactly these keys:
 - "search_query": a rewritten version of the question optimized for semantic search against entity descriptions. Remove filler words, expand abbreviations, use domain terminology.
 - "is_possessive": boolean, true if the user is asking about THEIR OWN data ("my unit", "my invoices", "do I have", "am I", etc.)
 - "intent": one of: "count", "list", "lookup", "aggregate", "compare", "other"
+- "question_type": one of "data_query" (needs database/graph lookup), "knowledge_query" (needs file/document content — rules, regulations, policies, "can I do X?"), "hybrid" (needs both data and documents)
 - "clarified_question": "Usually the concrete asking of the user hides a more abstract context and intent. If the question is "How many parking spaces do I have?" the clarified_question might be "How many parking space entities are related to the person entity representing me in the graph?" This is meant to clarify the underlying data relationships and intent in a way that can help with debugging and prompt engineering. Keep it concise.
 But also it could have a base significance. let's say the user asks "Can i tear down a wall in my apartment?" the clarified question might be "What are the rules and regulations regarding modifying a residential unit in my building, more specifically tearing down a wall, and how do they apply to me as a tenant?"
+- "search_tags": array of EXACTLY 10 keyword tags for searching documents and files. CRITICAL: You MUST return exactly 10 tags. Include: (1) literal terms from the question, (2) domain-specific synonyms that would appear in legal/regulatory documents, (3) the broader category or domain the question belongs to (e.g., "co-ownership" for condo questions), (4) French translations of key terms, (5) related technical terms. For "Can I tear down a wall?" you MUST produce tags like: ["wall", "structural modification", "renovation", "common portions", "private portions", "co-ownership", "alteration", "building work", "mur", "copropriété"]. Think: what words would appear in a legal document, regulation, or building rule that answers this question?
 
 Rules:
 - Only use entity labels from the AVAILABLE ENTITY TYPES list.
@@ -214,18 +177,21 @@ PROMPT;
     /**
      * Normalize the LLM response into the expected structure.
      */
-    private function normalizeResponse(object|array $response): array
+    private function normalizeResponse(object|array $response): QueryUnderstandingResult
     {
         $data = is_object($response) ? (array) $response : $response;
 
-        return [
-            'entity_types' => $this->ensureStringArray($data['entity_types'] ?? []),
-            'person_names' => $this->ensureStringArray($data['person_names'] ?? []),
-            'property_concepts' => $this->ensureStringArray($data['property_concepts'] ?? []),
-            'search_query' => is_string($data['search_query'] ?? null) ? $data['search_query'] : '',
-            'is_possessive' => (bool) ($data['is_possessive'] ?? false),
-            'intent' => $this->normalizeIntent($data['intent'] ?? 'other'),
-        ];
+        return new QueryUnderstandingResult(
+            entityTypes: $this->ensureStringArray($data['entity_types'] ?? []),
+            personNames: $this->ensureStringArray($data['person_names'] ?? []),
+            propertyConcepts: $this->ensureStringArray($data['property_concepts'] ?? []),
+            searchQuery: is_string($data['search_query'] ?? null) ? $data['search_query'] : '',
+            isPossessive: (bool) ($data['is_possessive'] ?? false),
+            intent: $this->normalizeIntent($data['intent'] ?? 'other'),
+            questionType: $this->normalizeQuestionType($data['question_type'] ?? 'hybrid'),
+            clarifiedQuestion: is_string($data['clarified_question'] ?? null) ? $data['clarified_question'] : '',
+            searchTags: $this->ensureStringArray($data['search_tags'] ?? []),
+        );
     }
 
     /**
@@ -256,5 +222,20 @@ PROMPT;
         $normalized = strtolower(trim($intent));
 
         return in_array($normalized, $valid, true) ? $normalized : 'other';
+    }
+
+    /**
+     * Normalize question type to one of the known values.
+     */
+    private function normalizeQuestionType(mixed $type): string
+    {
+        if (!is_string($type)) {
+            return 'hybrid';
+        }
+
+        $valid = ['data_query', 'knowledge_query', 'hybrid'];
+        $normalized = strtolower(trim($type));
+
+        return in_array($normalized, $valid, true) ? $normalized : 'hybrid';
     }
 }

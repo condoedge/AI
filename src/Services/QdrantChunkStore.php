@@ -31,9 +31,9 @@ class QdrantChunkStore implements ChunkStoreInterface
     private readonly int $vectorSize;
 
     /**
-     * @var bool Whether collection existence has been verified
+     * @var array<string,bool> Collections whose existence/index has been verified
      */
-    private bool $collectionVerified = false;
+    private array $verifiedCollections = [];
 
     /**
      * @param VectorStoreInterface $vectorStore
@@ -53,21 +53,22 @@ class QdrantChunkStore implements ChunkStoreInterface
     /**
      * {@inheritdoc}
      */
-    public function storeChunk(FileChunk $chunk): bool
+    public function storeChunk(FileChunk $chunk, ?string $collection = null): bool
     {
-        return $this->storeChunks([$chunk]);
+        return $this->storeChunks([$chunk], $collection);
     }
 
     /**
      * {@inheritdoc}
      */
-    public function storeChunks(array $chunks): bool
+    public function storeChunks(array $chunks, ?string $collection = null): bool
     {
         if (empty($chunks)) {
             return true;
         }
 
-        $this->ensureCollectionExists();
+        $target = $this->resolveCollection($collection);
+        $this->ensureCollectionExists($target);
 
         $points = [];
 
@@ -93,15 +94,16 @@ class QdrantChunkStore implements ChunkStoreInterface
             ];
         }
 
-        return $this->vectorStore->upsert($this->collection, $points);
+        return $this->vectorStore->upsert($target, $points);
     }
 
     /**
      * {@inheritdoc}
      */
-    public function searchByContent(string $query, int $limit = 10, array $filters = []): array
+    public function searchByContent(string $query, int $limit = 10, array $filters = [], ?string $collection = null): array
     {
-        $this->ensureCollectionExists();
+        $target = $this->resolveCollection($collection);
+        $this->ensureCollectionExists($target);
 
         // Generate embedding for the query
         $queryEmbedding = $this->embeddingProvider->embed($query);
@@ -114,7 +116,7 @@ class QdrantChunkStore implements ChunkStoreInterface
 
         // Search vector store
         $results = $this->vectorStore->search(
-            $this->collection,
+            $target,
             $queryEmbedding,
             $limit,
             $qdrantFilter,
@@ -147,37 +149,123 @@ class QdrantChunkStore implements ChunkStoreInterface
     /**
      * {@inheritdoc}
      */
-    public function searchByFilename(string $filename, int $limit = 10, array $filters = []): array
+    public function searchByFilename(string $filename, int $limit = 10, array $filters = [], ?string $collection = null): array
     {
-        $this->ensureCollectionExists();
+        $target = $this->resolveCollection($collection);
+        $this->ensureCollectionExists($target);
 
-        // Build filter for filename matching
+        // Return early for empty filenames to avoid matching all files.
+        if (trim($filename) === '') {
+            return [];
+        }
+
+        // Build filter for filename matching (uses Qdrant text match:{text}).
         $qdrantFilter = $this->buildFilenameFilter($filename, $filters);
 
-        if (empty($qdrantFilter)) {
+        // PRIMARY: indexed text-match path. Wrapped so a missing/absent payload
+        // index (or any Qdrant error) degrades to the scroll fallback below
+        // instead of throwing and wiping all file context (FILE-2).
+        try {
+            if (empty($qdrantFilter)) {
+                return [];
+            }
+
+            // Count matching points
+            $totalCount = $this->vectorStore->count($target, $qdrantFilter);
+
+            if ($totalCount === 0) {
+                return [];
+            }
+
+            // Use search with filter and dummy vector (similar to getFileChunks approach)
+            // We need a higher limit to account for multiple chunks per file
+            // Cap the request limit to prevent memory issues when totalCount is very high
+            // Absolute cap of 500 ensures large caller limits don't cause memory issues
+            $requestLimit = min(max($limit * 3, 100), $totalCount, 500);
+            $results = $this->vectorStore->search(
+                $target,
+                array_fill(0, $this->vectorSize, 0.0), // Dummy vector for filter-only search
+                $requestLimit,
+                $qdrantFilter,
+                0.0 // No score threshold for filename search
+            );
+
+            return $this->buildFilenameResults($results, $filename, $limit);
+        } catch (\Throwable $e) {
+            // FALLBACK: scroll the collection (optionally narrowed by file_id) and
+            // perform a case-insensitive substring match on file_name in PHP. This
+            // works even when the file_name full-text payload index is missing.
+            return $this->searchByFilenameFallback($filename, $limit, $filters, $target);
+        }
+    }
+
+    /**
+     * Filename search fallback using scroll + PHP substring matching.
+     *
+     * Used when the indexed text-match path is unavailable (e.g. the file_name
+     * payload index does not exist). Pulls points via scroll and filters by a
+     * case-insensitive substring match on file_name. Never throws — returns an
+     * empty array if even the scroll fails.
+     *
+     * @param string $filename
+     * @param int $limit
+     * @param array $filters
+     * @param string $collection Target collection to scroll
+     * @return array
+     */
+    private function searchByFilenameFallback(string $filename, int $limit, array $filters, string $collection): array
+    {
+        // Only constrain by file_id in the scroll filter (file_name can't be
+        // reliably filtered server-side without the index — that's the whole point).
+        $scrollFilter = [];
+        if (isset($filters['file_id'])) {
+            $scrollFilter = [
+                'must' => [
+                    ['key' => 'file_id', 'match' => ['value' => $filters['file_id']]],
+                ],
+            ];
+        }
+
+        try {
+            // Pull a bounded page of points; cap to protect memory.
+            $scrollLimit = min(max($limit * 20, 200), 1000);
+            $points = $this->vectorStore->scroll($collection, $scrollFilter, $scrollLimit);
+        } catch (\Throwable $e) {
             return [];
         }
 
-        // Count matching points
-        $totalCount = $this->vectorStore->count($this->collection, $qdrantFilter);
+        $needle = strtolower(trim($filename));
 
-        if ($totalCount === 0) {
-            return [];
+        // Keep only points whose file_name contains the search term.
+        $matching = [];
+        foreach ($points as $point) {
+            $storedFilename = $point['payload']['file_name'] ?? null;
+            if ($storedFilename === null) {
+                continue;
+            }
+
+            if (str_contains(strtolower($storedFilename), $needle)) {
+                $matching[] = $point;
+            }
         }
 
-        // Use search with filter and dummy vector (similar to getFileChunks approach)
-        // We need a higher limit to account for multiple chunks per file
-        // Cap the request limit to prevent memory issues when totalCount is very high
-        // Absolute cap of 500 ensures large caller limits don't cause memory issues
-        $requestLimit = min(max($limit * 3, 100), $totalCount, 500);
-        $results = $this->vectorStore->search(
-            $this->collection,
-            array_fill(0, $this->vectorSize, 0.0), // Dummy vector for filter-only search
-            $requestLimit,
-            $qdrantFilter,
-            0.0 // No score threshold for filename search
-        );
+        return $this->buildFilenameResults($matching, $filename, $limit);
+    }
 
+    /**
+     * Build deduplicated filename-search results from raw vector-store points.
+     *
+     * Groups by file_id (one entry per file), scores by match quality
+     * (exact = 1.0, partial = 0.85), enforces the limit, and sorts exact
+     * matches first. Shared by the indexed and fallback filename paths.
+     *
+     * @param array $results Raw points (each with a 'payload')
+     * @param string $filename Original search term
+     * @param int $limit Max unique files to return
+     * @return array
+     */
+    private function buildFilenameResults(array $results, string $filename, int $limit): array
+    {
         // Group by file_id and return unique files
         $seenFiles = [];
         $output = [];
@@ -263,12 +351,13 @@ class QdrantChunkStore implements ChunkStoreInterface
     /**
      * {@inheritdoc}
      */
-    public function getFileChunks(int|string $fileId): array
+    public function getFileChunks(int|string $fileId, ?string $collection = null): array
     {
-        $this->ensureCollectionExists();
+        $target = $this->resolveCollection($collection);
+        $this->ensureCollectionExists($target);
 
         // Use count to check if we need to paginate
-        $totalCount = $this->vectorStore->count($this->collection, [
+        $totalCount = $this->vectorStore->count($target, [
             'must' => [
                 ['key' => 'file_id', 'match' => ['value' => $fileId]],
             ],
@@ -280,7 +369,7 @@ class QdrantChunkStore implements ChunkStoreInterface
 
         // Search with file_id filter and high limit
         $results = $this->vectorStore->search(
-            $this->collection,
+            $target,
             array_fill(0, $this->vectorSize, 0.0), // Dummy vector for filter-only search
             $totalCount,
             [
@@ -317,10 +406,12 @@ class QdrantChunkStore implements ChunkStoreInterface
     /**
      * {@inheritdoc}
      */
-    public function deleteFileChunks(int|string $fileId): bool
+    public function deleteFileChunks(int|string $fileId, ?string $collection = null): bool
     {
+        $target = $this->resolveCollection($collection);
+
         // Get all chunk IDs for this file
-        $chunks = $this->getFileChunks($fileId);
+        $chunks = $this->getFileChunks($fileId, $target);
 
         if (empty($chunks)) {
             return true;
@@ -328,7 +419,7 @@ class QdrantChunkStore implements ChunkStoreInterface
 
         $ids = array_map(fn($chunk) => $chunk->getVectorId(), $chunks);
 
-        return $this->vectorStore->deletePoints($this->collection, $ids);
+        return $this->vectorStore->deletePoints($target, $ids);
     }
 
     /**
@@ -344,9 +435,11 @@ class QdrantChunkStore implements ChunkStoreInterface
     /**
      * {@inheritdoc}
      */
-    public function hasFileChunks(int|string $fileId): bool
+    public function hasFileChunks(int|string $fileId, ?string $collection = null): bool
     {
-        $count = $this->vectorStore->count($this->collection, [
+        $target = $this->resolveCollection($collection);
+
+        $count = $this->vectorStore->count($target, [
             'file_id' => $fileId
         ]);
 
@@ -380,25 +473,53 @@ class QdrantChunkStore implements ChunkStoreInterface
     }
 
     /**
-     * Ensure the collection exists in Qdrant (lazy - only called when needed)
+     * Resolve the collection to operate on for a given call.
      *
+     * A null override resolves to the bound (default) collection, preserving the
+     * single-collection behavior. A non-null value routes the call to that
+     * collection (e.g. 'documentation_chunks' for physical docs).
+     *
+     * @param string|null $collection
+     * @return string
+     */
+    private function resolveCollection(?string $collection): string
+    {
+        $resolved = $collection !== null && trim($collection) !== '' ? $collection : $this->collection;
+
+        return $resolved;
+    }
+
+    /**
+     * Ensure a collection exists in Qdrant (lazy - only called when needed).
+     *
+     * Verification is tracked per collection so multiple collections (e.g.
+     * file_chunks + documentation_chunks) can be used by the same store.
+     *
+     * @param string|null $collection Collection to verify (defaults to bound collection)
      * @return void
      */
-    private function ensureCollectionExists(): void
+    private function ensureCollectionExists(?string $collection = null): void
     {
-        if ($this->collectionVerified) {
+        $target = $this->resolveCollection($collection);
+
+        if (!empty($this->verifiedCollections[$target])) {
             return;
         }
 
-        if (!$this->vectorStore->collectionExists($this->collection)) {
+        if (!$this->vectorStore->collectionExists($target)) {
             $this->vectorStore->createCollection(
-                $this->collection,
+                $target,
                 $this->vectorSize,
                 'cosine'
             );
         }
 
-        $this->collectionVerified = true;
+        // Best-effort: ensure the file_name full-text index exists even for
+        // collections created before this path (createCollection also does this
+        // for fresh collections). Never throws.
+        $this->vectorStore->ensurePayloadIndex($target, 'file_name', 'text');
+
+        $this->verifiedCollections[$target] = true;
     }
 
     /**

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * ProjectContextSection
  *
@@ -47,7 +49,7 @@ class ProjectContextSection extends BasePromptSection
         return $this;
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
         $projectConfig = $this->customContext ?? config('ai.project', []);
 
@@ -80,7 +82,7 @@ class ProjectContextSection extends BasePromptSection
         return $output;
     }
 
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
         $projectConfig = $this->customContext ?? config('ai.project', []);
         return !empty($projectConfig);

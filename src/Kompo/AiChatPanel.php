@@ -9,7 +9,6 @@ use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
-use Condoedge\Ai\Kompo\Traits\HasMessageActions;
 use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
 use Condoedge\Ai\Kompo\Modals\ChatHelpModal;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
@@ -35,7 +34,7 @@ use Illuminate\Support\Facades\Log;
  */
 class AiChatPanel extends Form
 {
-    use HasChatSettings, HasChatTheme, HasAvatars, HasMethodsAsProperties, HasConversationCreation, HasMessageActions;
+    use HasChatSettings, HasChatTheme, HasAvatars, HasMethodsAsProperties, HasConversationCreation;
 
     public $style = 'max-height: 95vh; width: 100vw;';
 
@@ -76,12 +75,6 @@ class AiChatPanel extends Form
     {
         return _Flex(
             _Rows(
-                // Hidden staging panel for server response - stable location outside Query
-                _Panel(
-                    // We need this temp hidden because if not it won't exist the panel itself
-                    _Hidden(),
-                )->id('temp-message-staging')->class('opacity-0 absolute top-0'),
-
                 _Hidden()->onLoad->run('() => {' . $this->js() . '}'),
             ),
 

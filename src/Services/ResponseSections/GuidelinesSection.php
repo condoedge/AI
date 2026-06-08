@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * GuidelinesSection
  *
@@ -98,7 +100,7 @@ class GuidelinesSection extends BaseResponseSection
         return $this;
     }
 
-    public function format(array $context, array $options = []): string
+    public function format(PipelineContext $context, array $options = []): string
     {
         $style = $options['style'] ?? config('ai.response_generation.default_style', 'friendly');
         $format = $options['format'] ?? 'text';
@@ -117,27 +119,11 @@ class GuidelinesSection extends BaseResponseSection
         $output .= "- Use specific data from the results\n";
         $output .= "- Keep response under {$maxLength} words\n";
 
-        // Style-specific guidelines
-        if (in_array($style, ['minimal', 'concise', 'friendly'])) {
-            $output .= "- Do NOT explain how you found the answer\n";
-            $output .= "- Do NOT mention the query or database\n";
-            $output .= "- Do NOT include execution time or performance metrics\n";
-            $output .= "- Do NOT mention the project name or system name\n";
-            $output .= "- Do NOT say things like 'The query returned...' or 'This was obtained by...'\n";
-            $output .= "- Speak directly to the user as if you just know the answer\n";
-        }
-
-        // Config-based restrictions (for detailed style)
-        if ($style === 'detailed') {
-            if ($hideTechnical) {
-                $output .= "- Do NOT reference the Cypher query or database structure\n";
-            }
-            if ($hideStats) {
-                $output .= "- Do NOT mention execution time or query performance\n";
-            }
-            if ($hideProjectInfo) {
-                $output .= "- Do NOT mention the project name or system architecture\n";
-            }
+        // The "don't reveal how you got it" rule is stated ONCE here (it used to be
+        // repeated across the style block, the detailed config block, and a separate avoid list).
+        // It applies to every style except 'technical', which may surface those details.
+        if ($style !== 'technical' && $this->shouldHideMechanics($style, $hideTechnical, $hideStats, $hideProjectInfo)) {
+            $output .= "- Do NOT reveal how you found the answer: no query/database references, no execution time or performance metrics, no project/system name, and no phrases like \"The query returned\" or \"This was obtained by\". Speak directly as if you simply know the answer.\n";
         }
 
         // Format-specific guidelines
@@ -147,11 +133,10 @@ class GuidelinesSection extends BaseResponseSection
             $output .= "- Structure response as JSON with 'summary' and 'details' keys\n";
         }
 
-        // Things to avoid
-        $allAvoid = array_merge($this->avoidGuidelines, $this->getDefaultAvoid($style));
-        if (!empty($allAvoid)) {
+        // Things to avoid (custom only — the built-in mechanics rule above is not repeated here)
+        if (!empty($this->avoidGuidelines)) {
             $output .= "\nDo NOT include:\n";
-            foreach (array_unique($allAvoid) as $avoid) {
+            foreach (array_unique($this->avoidGuidelines) as $avoid) {
                 $output .= "- {$avoid}\n";
             }
         }
@@ -168,6 +153,25 @@ class GuidelinesSection extends BaseResponseSection
     }
 
     /**
+     * Whether the "don't reveal mechanics" rule applies for this style.
+     *
+     * Terse styles (minimal/concise/friendly) always hide mechanics. The 'detailed'
+     * style honors the config toggles. 'technical' is excluded by the caller.
+     */
+    private function shouldHideMechanics(string $style, bool $hideTechnical, bool $hideStats, bool $hideProjectInfo): bool
+    {
+        if (in_array($style, ['minimal', 'concise', 'friendly'], true)) {
+            return true;
+        }
+
+        if ($style === 'detailed') {
+            return $hideTechnical || $hideStats || $hideProjectInfo;
+        }
+
+        return true;
+    }
+
+    /**
      * Get appropriate max length for style
      */
     private function getMaxLengthForStyle(string $style): int
@@ -180,31 +184,5 @@ class GuidelinesSection extends BaseResponseSection
             'technical' => 300,
             default => 100,
         };
-    }
-
-    /**
-     * Get default things to avoid based on style
-     */
-    private function getDefaultAvoid(string $style): array
-    {
-        $baseAvoid = [
-            'Query execution time or milliseconds',
-            'Technical implementation details',
-            'Database or query language references',
-            'Project or system architecture descriptions',
-            'Phrases like "The query returned" or "was obtained by"',
-        ];
-
-        if (in_array($style, ['minimal', 'concise'])) {
-            $baseAvoid[] = 'Any explanation or context';
-            $baseAvoid[] = 'Phrases like "Based on the data" or "According to"';
-        }
-
-        if ($style === 'technical') {
-            // Technical style can include everything
-            return [];
-        }
-
-        return $baseAvoid;
     }
 }

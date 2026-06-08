@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Contracts;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * Query Generator Interface
  *
@@ -16,10 +18,7 @@ interface QueryGeneratorInterface
      * Generate a Cypher query from natural language question
      *
      * @param string $question Natural language question
-     * @param array $context RAG context with keys:
-     *                       - similar_queries: Array of similar past queries
-     *                       - graph_schema: Graph structure (labels, relationships, properties)
-     *                       - relevant_entities: Example entities for reference
+     * @param PipelineContext $context Pipeline context with similar queries, graph schema, entities, etc.
      * @param array $options Optional parameters:
      *                       - temperature: LLM temperature (default: 0.1 for consistency)
      *                       - max_retries: Max retry attempts if validation fails (default: 3)
@@ -33,7 +32,7 @@ interface QueryGeneratorInterface
      *               - metadata: Additional metadata (template used, retry count, etc.)
      * @throws \RuntimeException If query generation fails after retries
      */
-    public function generate(string $question, array $context, array $options = []): array;
+    public function generate(string $question, PipelineContext $context, array $options = []): array;
 
     /**
      * Validate a Cypher query for syntax and safety

@@ -3,6 +3,7 @@
 namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
+use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
@@ -10,9 +11,6 @@ use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Kompo\Traits\HasFilePreview;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
-use Condoedge\Ai\Services\Chat\RegenerateMessageService;
-use Condoedge\Ai\Services\Chat\SendMessageService;
-use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Condoedge\Ai\Services\Response\ContentLinkProcessor;
 use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
 use Condoedge\Utils\Facades\FileModel;
@@ -167,27 +165,6 @@ class MessagesQuery extends Query
         // 3. Loads older pages when scrolling to top
         return $this->conversation->messages()
             ->orderBy('created_at', 'desc');
-    }
-
-    /**
-     * Get only the latest messages (for partial refresh)
-     */
-    public function getLatestMessages()
-    {
-        $lastKnownId = request('last_message_id');
-
-        $newMessages = $this->conversation?->messages()
-            ->when($lastKnownId, fn($q) => $q->where('id', '>', $lastKnownId))
-            ->orderBy('created_at')
-            ->get();
-
-        if ($newMessages->isEmpty()) {
-            return null;
-        }
-
-        return _Rows(
-            ...$newMessages->map(fn($msg) => $this->render($msg))->toArray()
-        );
     }
 
     public function render($message)
@@ -550,6 +527,14 @@ class MessagesQuery extends Query
         }
     }
 
+    /**
+     * Regenerate the assistant answer attached to $id.
+     *
+     * The refresh button lives on the ASSISTANT bubble, so $id is an assistant message; we
+     * resolve the user message it answered (the most recent user message before it) and route
+     * the turn through ChatPresenter::handleRegenerate (which owns truncation + the security
+     * gate via RegenerateAnswerUseCase). The panel ->refresh() then re-renders from the DB.
+     */
     public function regenerate($id)
     {
         if (!$this->conversation) {
@@ -561,13 +546,23 @@ class MessagesQuery extends Query
             return;
         }
 
+        // The refresh button is on the assistant bubble; resolve the user message it answered.
+        $userMessage = $this->conversation->messages()
+            ->where('id', '<', $message->id)
+            ->where('role', 'user')
+            ->orderByDesc('id')
+            ->first();
+
+        if (!$userMessage) {
+            return;
+        }
+
         try {
-            $service = app(RegenerateMessageService::class);
-            $service->regenerateFromAssistantMessage(
+            app(ChatPresenter::class)->handleRegenerate(
                 $this->conversation,
-                $message,
+                $userMessage,
+                $this->settings()->responseStyle(),
                 auth()->user(),
-                ['style' => $this->settings()->responseStyle()]
             );
         } catch (\Throwable $e) {
             \Log::error('Regenerate failed: ' . $e->getMessage());
@@ -585,16 +580,12 @@ class MessagesQuery extends Query
             return;
         }
 
-        $service = app(SendMessageService::class);
-
         try {
-            $service->sendMessage(
-                conversation: $this->conversation,
-                message: $question,
-                options: [
-                    'user' => auth()->user(),
-                    'style' => $this->settings()->responseStyle(),
-                ]
+            app(ChatPresenter::class)->handleSend(
+                $this->conversation,
+                $question,
+                $this->settings()->responseStyle(),
+                auth()->user(),
             );
         } catch (\Throwable $e) {
             \Log::error('Suggestion question failed: ' . $e->getMessage());
@@ -612,36 +603,6 @@ class MessagesQuery extends Query
     }
 
     // ========== HELPERS ==========
-
-    /**
-     * Handle entity action link click
-     */
-    public function entityActionLink($entityType, $entityId, $actionKey)
-    {
-        $discovery = app(EntityAutoDiscovery::class);
-        $resolver = $discovery->getEntityActionResolver($entityType, $actionKey);
-
-        if (!$resolver) {
-            return _Html(__('ai.action.not-configured'))->class('text-red-500 p-4');
-        }
-
-        return $resolver($entityId);
-    }
-
-    /**
-     * Handle generic action link click
-     */
-    public function genericActionLink($actionKey)
-    {
-        $discovery = app(EntityAutoDiscovery::class);
-        $resolver = $discovery->getGenericActionResolver($actionKey);
-
-        if (!$resolver) {
-            return _Html(__('ai.action.not-configured'))->class('text-red-500 p-4');
-        }
-
-        return $resolver();
-    }
 
     protected function renderMarkdown(string $text): string
     {

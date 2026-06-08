@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Contracts;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * ResponseSectionInterface
  *
@@ -57,18 +59,18 @@ interface ResponseSectionInterface extends SectionModuleInterface
     /**
      * Format this section of the prompt
      *
-     * @param array $context Context array with question, data, stats, etc.
+     * @param PipelineContext $context Pipeline context with question, data, stats, etc.
      * @param array $options Additional options (style, format, etc.)
      * @return string Formatted section content (empty string to skip)
      */
-    public function format(array $context, array $options = []): string;
+    public function format(PipelineContext $context, array $options = []): string;
 
     /**
      * Check if this section should be included
      *
-     * @param array $context Context array
+     * @param PipelineContext $context Pipeline context
      * @param array $options Additional options
      * @return bool True to include, false to skip
      */
-    public function shouldInclude(array $context, array $options = []): bool;
+    public function shouldInclude(PipelineContext $context, array $options = []): bool;
 }

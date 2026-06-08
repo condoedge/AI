@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * ResponseConversationContextSection
  *
@@ -21,9 +23,9 @@ class ResponseConversationContextSection extends BaseResponseSection
     /**
      * Only include when there's conversation context with useful data
      */
-    public function shouldInclude(array $context, array $options = []): bool
+    public function shouldInclude(PipelineContext $context, array $options = []): bool
     {
-        $conversationContext = $context['conversation_context'] ?? [];
+        $conversationContext = $context->conversationContext;
 
         return !empty($conversationContext['last_referenced_files'])
             || !empty($conversationContext['last_result_sample'])
@@ -33,9 +35,9 @@ class ResponseConversationContextSection extends BaseResponseSection
     /**
      * Format the conversation context for the response prompt
      */
-    public function format(array $context, array $options = []): string
+    public function format(PipelineContext $context, array $options = []): string
     {
-        $conversationContext = $context['conversation_context'] ?? [];
+        $conversationContext = $context->conversationContext;
 
         if (empty($conversationContext)) {
             return '';

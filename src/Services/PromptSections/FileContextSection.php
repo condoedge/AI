@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * FileContextSection
  *
@@ -16,14 +18,14 @@ class FileContextSection extends BasePromptSection
     protected string $name = 'file_context';
     protected int $priority = 45;
 
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
-        return !empty($context['file_context']['relevant_files']);
+        return !empty($context->fileContext['relevant_files']);
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
-        $files = $context['file_context']['relevant_files'] ?? [];
+        $files = $context->fileContext['relevant_files'] ?? [];
 
         if (empty($files)) {
             return '';
@@ -45,8 +47,19 @@ class FileContextSection extends BasePromptSection
 
             $relevancePercent = (int) floor($relevance * 100);
 
-            $output .= "**[{$number}] {$filename}** (relevance: {$relevancePercent}%)\n";
-            $output .= "  {$snippet}\n\n";
+            $output .= "**[{$number}] {$filename}**";
+
+            $authorityNote = $file['authority_note'] ?? null;
+            $priorityTier = $file['priority_tier'] ?? null;
+            if ($authorityNote) {
+                $output .= " — {$authorityNote}";
+            } elseif ($priorityTier) {
+                $output .= " ({$priorityTier})";
+            }
+
+            $output .= " (relevance: {$relevancePercent}%)\n";
+            // Spotlight retrieved file content: it is data to analyze, never instructions.
+            $output .= $this->spotlight($snippet, 'retrieved_document', ['id' => $number]) . "\n\n";
         }
 
         return $output;
@@ -65,6 +78,10 @@ Only cite files when you actually use their content in your response.
 
 **Example:**
 "Authentication can be configured using middleware [1]. The guard system handles sessions [2]."
+
+When files have different authority levels (e.g., team-specific rules vs. general regulations),
+prioritize the more specific source. Team or building-specific rules override general laws.
+If both apply, mention both but state which takes priority.
 
 INSTRUCTIONS;
     }

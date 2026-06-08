@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * TaskInstructionsSection
  *
@@ -32,7 +34,7 @@ class TaskInstructionsSection extends BasePromptSection
         return $this;
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
         $output = $this->header('YOUR TASK');
 

@@ -29,33 +29,37 @@ interface FileProcessorInterface
      * Reprocess a file (delete existing chunks and reprocess)
      *
      * @param object $file File model instance
+     * @param string|null $collection Optional collection override (defaults to the bound collection)
      * @return ProcessingResult
      */
-    public function reprocessFile(object $file): ProcessingResult;
+    public function reprocessFile(object $file, ?string $collection = null): ProcessingResult;
 
     /**
      * Remove all chunks for a file from storage
      *
      * @param object $file File model instance
+     * @param string|null $collection Optional collection override (defaults to the bound collection)
      * @return bool True if successful
      */
-    public function removeFile(object $file): bool;
+    public function removeFile(object $file, ?string $collection = null): bool;
 
     /**
      * Check if a file has been processed
      *
      * @param object $file File model instance
+     * @param string|null $collection Optional collection override (defaults to the bound collection)
      * @return bool
      */
-    public function isProcessed(object $file): bool;
+    public function isProcessed(object $file, ?string $collection = null): bool;
 
     /**
      * Get processing statistics for a file
      *
      * @param object $file File model instance
+     * @param string|null $collection Optional collection override (defaults to the bound collection)
      * @return array Statistics (chunk_count, total_size, etc.)
      */
-    public function getFileStats(object $file): array;
+    public function getFileStats(object $file, ?string $collection = null): array;
 
     /**
      * Check if a file type is supported for processing

@@ -6,20 +6,22 @@ namespace Condoedge\Ai\Services\Chat;
 
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
+use Condoedge\Ai\Services\Chat\UseCases\RegenerateAnswerUseCase;
 use Illuminate\Contracts\Auth\Authenticatable;
 
 /**
- * Service for regenerating AI responses from a specific message.
+ * Thin guard in front of RegenerateAnswerUseCase.
  *
- * Unlike askWithConversation(), this service:
- * 1. Deletes all messages AFTER the target user message
- * 2. Does NOT create a duplicate user message
- * 3. Only generates a new assistant response
+ * This service only resolves which user message to regenerate from (directly, or by
+ * walking back from an assistant message) and enforces the role preconditions. The actual
+ * truncate + regenerate flow lives in RegenerateAnswerUseCase (the single home of that rule).
+ *
+ * It returns the legacy array shape so existing Kompo callers keep working unchanged.
  */
 class RegenerateMessageService
 {
     public function __construct(
-        private readonly AiChatService $chatService
+        private readonly RegenerateAnswerUseCase $regenerateAnswerUseCase
     ) {}
 
     /**
@@ -39,21 +41,22 @@ class RegenerateMessageService
         ?Authenticatable $user = null,
         array $options = []
     ): array {
-        if ($userMessage->role !== 'user') {
-            throw new \InvalidArgumentException('Can only regenerate from user messages');
-        }
-
-        // Delete all messages after this user message (using ID for reliable ordering)
-        $conversation->messages()
-            ->where('id', '>', $userMessage->id)
-            ->delete();
-
-        // Regenerate without creating duplicate user message
-        return $this->chatService->regenerateResponse(
-            $conversation,
-            $userMessage,
-            array_merge($options, ['user' => $user])
+        // Trailing-message truncation + regeneration is owned by the use case.
+        $result = $this->regenerateAnswerUseCase->execute(
+            conversation: $conversation,
+            userMessage: $userMessage,
+            style: $options['style'] ?? 'friendly',
+            user: $user,
+            allowAnonymous: $options['allow_anonymous'] ?? false,
         );
+
+        return [
+            'answer' => $result->answer,
+            'data' => $result->data,
+            'suggestions' => $result->suggestions,
+            'sources' => $result->sources,
+            'cypher_query' => $result->cypher,
+        ];
     }
 
     /**

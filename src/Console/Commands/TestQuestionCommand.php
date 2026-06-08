@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Console\Commands;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\Facades\AI;
 use Illuminate\Console\Command;
 
@@ -60,7 +63,7 @@ class TestQuestionCommand extends Command
         $this->info("Context retrieved in {$contextMs}ms");
 
         // Show selection info
-        $selectionInfo = $context['selection_info'] ?? [];
+        $selectionInfo = $context->selectionInfo;
         if (!empty($selectionInfo)) {
             $this->info("Selection method: " . ($selectionInfo['method'] ?? 'unknown'));
             $this->info("Selected entities: " . implode(', ', $selectionInfo['selected_entities'] ?? []));
@@ -70,11 +73,11 @@ class TestQuestionCommand extends Command
         }
 
         // Show quality
-        $quality = $context['quality'] ?? [];
+        $quality = $context->quality;
         $this->info("Context quality: " . ($quality['level'] ?? 'unknown') . " ({$quality['score']}/{$quality['max']})");
 
         // Show detected entities
-        $entityMeta = $context['entity_metadata'] ?? [];
+        $entityMeta = $context->entityMetadata;
         $detected = $entityMeta['detected_entities'] ?? [];
         $this->info("Detected entities: " . (empty($detected) ? 'NONE' : implode(', ', array_map('class_basename', $detected))));
 
@@ -84,67 +87,140 @@ class TestQuestionCommand extends Command
         }
 
         // Show schema info
-        $schema = $context['graph_schema'] ?? [];
+        $schema = $context->graphSchema;
         $this->info("Schema labels: " . implode(', ', $schema['labels'] ?? []));
 
-        if (!empty($context['errors'])) {
-            $this->warn("Context errors: " . implode('; ', $context['errors']));
+        if (!empty($context->errors)) {
+            $this->warn("Context errors: " . implode('; ', $context->errors));
         }
 
         if ($showDebug) {
             // Show Query Understanding results
-            $quResult = $context['query_understanding'] ?? null;
-            if ($quResult) {
-                $this->newLine();
-                $this->comment('Query Understanding:');
-                $this->line('  Entity types: ' . (empty($quResult['entity_types']) ? 'NONE' : implode(', ', $quResult['entity_types'])));
-                $this->line('  Person names: ' . (empty($quResult['person_names']) ? 'NONE' : implode(', ', $quResult['person_names'])));
-                $this->line('  Property concepts: ' . (empty($quResult['property_concepts']) ? 'NONE' : implode(', ', $quResult['property_concepts'])));
-                $this->line('  Search query: ' . ($quResult['search_query'] ?: 'N/A'));
-                $this->line('  Intent: ' . ($quResult['intent'] ?? 'N/A'));
-            } else {
-                $this->newLine();
-                $this->comment('Query Understanding: not available (disabled or failed)');
+            $qu = $context->qu;
+            $this->newLine();
+            $this->comment('Query Understanding:');
+            $this->line('  Entity types: ' . (empty($qu->entityTypes) ? 'NONE' : implode(', ', $qu->entityTypes)));
+            $this->line('  Person names: ' . (empty($qu->personNames) ? 'NONE' : implode(', ', $qu->personNames)));
+            $this->line('  Property concepts: ' . (empty($qu->propertyConcepts) ? 'NONE' : implode(', ', $qu->propertyConcepts)));
+            $this->line('  Search query: ' . ($qu->searchQuery ?: 'N/A'));
+            $this->line('  Intent: ' . ($qu->intent ?: 'N/A'));
+            $this->line('  Question type: ' . ($qu->questionType ?: 'N/A'));
+            if ($qu->clarifiedQuestion) {
+                $this->line('  Clarified question: ' . $qu->clarifiedQuestion);
+            }
+            if (!empty($qu->searchTags)) {
+                $this->line('  Search tags: ' . implode(', ', $qu->searchTags));
             }
 
             // Show similar queries
             $this->newLine();
             $this->comment('Similar queries:');
-            foreach ($context['similar_queries'] ?? [] as $sq) {
+            foreach ($context->similarQueries as $sq) {
                 $this->line(sprintf("  [%.2f] %s → %s", $sq['score'], $sq['question'], substr($sq['query'], 0, 80)));
             }
 
             // Show relevant entities sample
             $this->newLine();
             $this->comment('Example entities:');
-            foreach ($context['relevant_entities'] ?? [] as $label => $entities) {
+            foreach ($context->relevantEntities as $label => $entities) {
                 $this->line("  {$label}: " . count($entities) . " examples");
             }
         }
 
-        // Step 2: Query generation
+        // Step 2: Query generation (skip for knowledge-only questions)
         $this->newLine();
         $this->comment('--- Step 2: Query Generation ---');
-        $queryStart = microtime(true);
 
-        try {
-            $queryResult = AI::generateQuery($question, $context, ['user' => $user]);
-        } catch (\Throwable $e) {
-            $this->error("Query generation failed: {$e->getMessage()}");
-            return 1;
+        $queryResult = ['cypher' => null, 'confidence' => 0, 'warnings' => [], 'explanation' => '', 'metadata' => []];
+        $execMs = 0;
+        $executionResult = ['data' => [], 'metadata' => []];
+
+        // Retrieve file context BEFORE query decision — try all queries and merge results
+        $fileContext = [];
+        if (config('ai.file_context.enabled', true)) {
+            $searchQueries = array_filter(array_unique([
+                $context->qu->searchQuery,
+                $question,
+                $context->qu->clarifiedQuestion,
+            ]));
+
+            if (!empty($context->qu->searchTags)) {
+                $searchQueries[] = implode(' ', $context->qu->searchTags);
+            }
+
+            $allFiles = [];
+            foreach ($searchQueries as $searchQuery) {
+                try {
+                    $result = AI::retrieveFileContext($searchQuery, $user);
+                    $found = count($result['relevant_files'] ?? []);
+                    if ($showDebug) {
+                        $this->line("  File search [{$found} files]: \"" . substr($searchQuery, 0, 70) . '"');
+                    }
+                    foreach ($result['relevant_files'] ?? [] as $file) {
+                        $fileId = $file['file_id'] ?? $file['filename'] ?? '';
+                        if (!isset($allFiles[$fileId]) || ($file['relevance'] ?? 0) > ($allFiles[$fileId]['relevance'] ?? 0)) {
+                            $allFiles[$fileId] = $file;
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    if ($showDebug) {
+                        $this->warn("  File search failed: {$e->getMessage()}");
+                    }
+                }
+            }
+
+            if (!empty($allFiles)) {
+                $files = array_values($allFiles);
+                usort($files, fn($a, $b) => ($b['priority_score'] ?? $b['relevance'] ?? 0) <=> ($a['priority_score'] ?? $a['relevance'] ?? 0));
+                $fileContext = [
+                    'relevant_files' => $files,
+                    'file_count' => count($files),
+                    'has_physical' => collect($files)->contains('source', 'physical'),
+                    'has_database' => collect($files)->contains(fn($f) => ($f['source'] ?? '') !== 'physical'),
+                ];
+            }
         }
 
-        $queryMs = round((microtime(true) - $queryStart) * 1000);
-        $this->info("Query generated in {$queryMs}ms");
+        if ($showDebug && !empty($fileContext['relevant_files'])) {
+            $this->comment('File context:');
+            foreach ($fileContext['relevant_files'] as $f) {
+                $tierInfo = isset($f['authority_note']) ? " [{$f['authority_note']}]" : '';
+                $this->line(sprintf("  [%.2f] %s%s: %s", $f['relevance'], $f['filename'], $tierInfo, substr($f['snippet'], 0, 80)));
+            }
+        }
+
+        $hasFileContext = !empty($fileContext['relevant_files']);
+        $isKnowledgeQuery = $context->qu->questionType === 'knowledge_query';
+
+        $queryMs = 0;
+
+        if ($isKnowledgeQuery) {
+            $this->info('Question type: knowledge_query — skipping Cypher generation.');
+            if (!$hasFileContext) {
+                $this->warn('No file context found — response will be limited. Run `ai:ingest --docs` to index documentation.');
+            }
+            $queryResult['confidence'] = 1.0;
+            $queryResult['metadata'] = ['source' => 'file_context', 'question_type' => 'knowledge_query'];
+        } else {
+            $queryStart = microtime(true);
+
+            try {
+                $queryResult = AI::generateQuery($question, $context, ['user' => $user]);
+            } catch (\Throwable $e) {
+                $this->error("Query generation failed: {$e->getMessage()}");
+                return 1;
+            }
+
+            $queryMs = round((microtime(true) - $queryStart) * 1000);
+            $this->info("Query generated in {$queryMs}ms");
+        }
+
         $this->info("Cypher: " . ($queryResult['cypher'] ?? 'NULL'));
         $this->info("Confidence: " . ($queryResult['confidence'] ?? 0));
 
         if (!empty($queryResult['warnings'])) {
             $this->warn("Warnings: " . implode('; ', $queryResult['warnings']));
         }
-
-        $execMs = 0;
-        $executionResult = ['data' => [], 'metadata' => []];
 
         if (empty($queryResult['cypher'])) {
             $this->comment('No Cypher query needed (LLM will answer from context/files).');
@@ -184,28 +260,29 @@ class TestQuestionCommand extends Command
         $respStart = microtime(true);
 
         try {
-            // Retrieve file context for response generation
-            $fileContext = [];
-            if (config('ai.file_context.enabled', true)) {
-                try {
-                    $fileContext = AI::retrieveFileContext($question, $user);
-                } catch (\Throwable $e) {
-                    if ($showDebug) {
-                        $this->warn("File context retrieval failed: {$e->getMessage()}");
-                    }
-                }
-            }
+            // File context already retrieved in Step 2
 
-            if ($showDebug && !empty($fileContext['relevant_files'])) {
-                $this->comment('File context:');
-                foreach ($fileContext['relevant_files'] as $f) {
-                    $this->line(sprintf("  [%.2f] %s: %s", $f['relevance'], $f['filename'], substr($f['snippet'], 0, 80)));
-                }
-            }
+            // Build PipelineContext for response generation
+            $pipelineCtx = new PipelineContext();
+            $pipelineCtx->question = $question;
+            $pipelineCtx->fileContext = $fileContext;
+            $pipelineCtx->queryResult = new QueryGenerationResult(
+                cypher: $queryResult['cypher'] ?? null,
+                explanation: $queryResult['explanation'] ?? '',
+                confidence: (float) ($queryResult['confidence'] ?? 0.0),
+                warnings: $queryResult['warnings'] ?? [],
+                metadata: $queryResult['metadata'] ?? [],
+            );
+            $pipelineCtx->executionResult = new QueryExecutionResult(
+                success: !empty($executionResult['data']) || empty($executionResult['errors'] ?? []),
+                data: $executionResult['data'] ?? [],
+                stats: $executionResult['stats'] ?? [],
+                metadata: $executionResult['metadata'] ?? [],
+                errors: $executionResult['errors'] ?? [],
+            );
 
-            $response = AI::generateResponse($question, $executionResult, $queryResult['cypher'] ?? '', [
+            $response = AI::generateResponse($pipelineCtx, [
                 'user' => $user,
-                'file_context' => $fileContext,
             ]);
         } catch (\Throwable $e) {
             $this->error("Response generation failed: {$e->getMessage()}");

@@ -7,6 +7,7 @@ namespace Condoedge\Ai\Services;
 use Condoedge\Ai\Contracts\QueryGeneratorInterface;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
 use Condoedge\Ai\GraphStore\CypherSanitizer;
@@ -124,12 +125,12 @@ class QueryGenerator implements QueryGeneratorInterface
      * Generate a Cypher query from natural language question
      *
      * @param string $question Natural language question
-     * @param array $context RAG context (similar_queries, graph_schema, relevant_entities)
+     * @param PipelineContext $context Pipeline context with schema, metadata, and detected scopes
      * @param array $options Optional parameters
      * @return array Result with cypher, explanation, confidence, warnings, metadata
      * @throws QueryGenerationException If generation fails after retries
      */
-    public function generate(string $question, array $context, array $options = []): array
+    public function generate(string $question, PipelineContext $context, array $options = []): array
     {
         $this->logger->startTimer('query_generation');
 
@@ -146,7 +147,7 @@ class QueryGenerator implements QueryGeneratorInterface
         // should NOT prevent simple template queries like "How many units?".
         $scopeBypassThreshold = $this->config['scope_bypass_threshold'] ?? 0.7;
         $hasDetectedScopes = false;
-        foreach ($context['entity_metadata']['detected_scopes'] ?? [] as $scope) {
+        foreach ($context->entityMetadata['detected_scopes'] ?? [] as $scope) {
             if (($scope['match_score'] ?? 0) >= $scopeBypassThreshold) {
                 $hasDetectedScopes = true;
                 break;
@@ -179,7 +180,7 @@ class QueryGenerator implements QueryGeneratorInterface
             }
         } elseif ($hasDetectedScopes) {
             $this->logger->debug('query_generator', 'Templates skipped (scopes detected)', [
-                'scope_count' => count($context['entity_metadata']['detected_scopes']),
+                'scope_count' => count($context->entityMetadata['detected_scopes'] ?? []),
             ]);
         }
 
@@ -189,11 +190,12 @@ class QueryGenerator implements QueryGeneratorInterface
 
         while ($retryCount < $maxRetries) {
             try {
-                // Build prompt
-                $prompt = $this->buildPrompt($question, $context, $allowWrite, $lastError);
+                // Build prompt, split into system (identity + static rules) and user.
+                ['system' => $systemPrompt, 'user' => $userPrompt] =
+                    $this->buildPrompts($question, $context, $allowWrite, $lastError);
 
                 $this->logger->debug('query_generator', 'Sending prompt to LLM', [
-                    'prompt_size_bytes' => strlen($prompt),
+                    'prompt_size_bytes' => strlen($systemPrompt) + strlen($userPrompt),
                     'attempt' => $retryCount + 1,
                 ]);
 
@@ -202,8 +204,8 @@ class QueryGenerator implements QueryGeneratorInterface
                     throw new QueryGenerationException('Rate limit exceeded for LLM API');
                 }
 
-                // Call LLM
-                $response = $this->llm->complete($prompt, null, [
+                // Call LLM — identity/static rules in the real system role.
+                $response = $this->llm->complete($userPrompt, $systemPrompt !== '' ? $systemPrompt : null, [
                     'temperature' => $temperature,
                     'max_tokens' => 500,
                 ]);
@@ -458,11 +460,11 @@ class QueryGenerator implements QueryGeneratorInterface
      *
      * @param string $question Original question
      * @param string $templateName Template name
-     * @param array $context RAG context
+     * @param PipelineContext $context Pipeline context
      * @return array|null Generation result, or null to fall through to LLM
      * @throws \InvalidArgumentException If label is not in schema
      */
-    private function generateFromTemplate(string $question, string $templateName, array $context): ?array
+    private function generateFromTemplate(string $question, string $templateName, PipelineContext $context): ?array
     {
         $template = $this->templates[$templateName];
 
@@ -470,7 +472,7 @@ class QueryGenerator implements QueryGeneratorInterface
         preg_match($template['pattern'], $question, $matches);
 
         // Get valid labels from both Neo4j schema and entity config
-        $schema = $context['graph_schema'] ?? [];
+        $schema = $context->graphSchema;
         $validLabels = $schema['labels'] ?? [];
 
         // Also include labels from entity config properties (covers entities not yet ingested)
@@ -521,15 +523,15 @@ class QueryGenerator implements QueryGeneratorInterface
     }
 
     /**
-     * Build prompt for LLM
+     * Build the LLM prompt split by role (system / user).
      *
      * @param string $question User question
-     * @param array $context RAG context
+     * @param PipelineContext $context Pipeline context
      * @param bool $allowWrite Allow write operations
      * @param string|null $previousError Previous error for retry
-     * @return string Prompt
+     * @return array{system: string, user: string}
      */
-    private function buildPrompt(string $question, array $context, bool $allowWrite, ?string $previousError): string
+    private function buildPrompts(string $question, PipelineContext $context, bool $allowWrite, ?string $previousError): array
     {
         // Always use SemanticPromptBuilder for consistent, high-quality prompts
         // It handles all context types including project metadata, entity metadata, scopes, etc.
@@ -537,16 +539,16 @@ class QueryGenerator implements QueryGeneratorInterface
             throw new \RuntimeException('SemanticPromptBuilder not initialized');
         }
 
-        $prompt = $this->promptBuilder->buildPrompt($question, $context, $allowWrite);
+        $prompts = $this->promptBuilder->buildPrompts($question, $context, $allowWrite);
 
-        // Add retry context if needed
+        // Add retry context to the user message if needed (it concerns this attempt's data).
         if ($previousError) {
-            $prompt .= "\n\nPrevious attempt failed with error: {$previousError}\n";
-            $prompt .= "Please fix the error and regenerate the query.\n\n";
-            $prompt .= "CYPHER QUERY:";
+            $prompts['user'] .= "\n\nPrevious attempt failed with error: {$previousError}\n";
+            $prompts['user'] .= "Please fix the error and regenerate the query.\n\n";
+            $prompts['user'] .= "CYPHER QUERY:";
         }
 
-        return $prompt;
+        return $prompts;
     }
 
     /**
@@ -592,16 +594,16 @@ class QueryGenerator implements QueryGeneratorInterface
      * Calculate confidence score
      *
      * @param string $cypher Generated query
-     * @param array $context RAG context
+     * @param PipelineContext $context Pipeline context
      * @return float Confidence score (0-1)
      */
-    private function calculateConfidence(string $cypher, array $context): float
+    private function calculateConfidence(string $cypher, PipelineContext $context): float
     {
         $confidence = 0.5; // Base confidence
 
         // Boost if schema labels are referenced
-        if (!empty($context['graph_schema']['labels'])) {
-            foreach ($context['graph_schema']['labels'] as $label) {
+        if (!empty($context->graphSchema['labels'])) {
+            foreach ($context->graphSchema['labels'] as $label) {
                 if (stripos($cypher, $label) !== false) {
                     $confidence += 0.1;
                 }

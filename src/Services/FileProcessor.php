@@ -44,8 +44,14 @@ class FileProcessor implements FileProcessorInterface
             // Validate file object
             $this->validateFileObject($file);
 
+            // Resolve the target collection for this call. Null => the chunk
+            // store's bound collection (e.g. file_chunks). The docs ingest path
+            // passes 'documentation_chunks' so physical docs land in their own
+            // collection (B4).
+            $collection = $options['collection'] ?? null;
+
             // Check if already processed and not forcing reprocess
-            if (!($options['force'] ?? false) && $this->isProcessed($file)) {
+            if (!($options['force'] ?? false) && $this->isProcessed($file, $collection)) {
                 return ProcessingResult::failure(
                     $file->id,
                     "File already processed. Use 'force' option to reprocess.",
@@ -115,8 +121,8 @@ class FileProcessor implements FileProcessorInterface
                 $text
             );
 
-            // Step 5: Store chunks
-            $storeSuccess = $this->chunkStore->storeChunks($fileChunks);
+            // Step 5: Store chunks (routed to the requested collection if given)
+            $storeSuccess = $this->chunkStore->storeChunks($fileChunks, $collection);
 
             if (!$storeSuccess) {
                 return ProcessingResult::failure(
@@ -153,43 +159,43 @@ class FileProcessor implements FileProcessorInterface
     /**
      * {@inheritdoc}
      */
-    public function reprocessFile(object $file): ProcessingResult
+    public function reprocessFile(object $file, ?string $collection = null): ProcessingResult
     {
-        // First remove existing chunks
-        $this->removeFile($file);
+        // First remove existing chunks (from the same collection)
+        $this->removeFile($file, $collection);
 
-        // Then process with force option
-        return $this->processFile($file, ['force' => true]);
+        // Then process with force option, preserving the target collection
+        return $this->processFile($file, ['force' => true, 'collection' => $collection]);
     }
 
     /**
      * {@inheritdoc}
      */
-    public function removeFile(object $file): bool
+    public function removeFile(object $file, ?string $collection = null): bool
     {
         $this->validateFileObject($file);
 
-        return $this->chunkStore->deleteFileChunks($file->id);
+        return $this->chunkStore->deleteFileChunks($file->id, $collection);
     }
 
     /**
      * {@inheritdoc}
      */
-    public function isProcessed(object $file): bool
+    public function isProcessed(object $file, ?string $collection = null): bool
     {
         $this->validateFileObject($file);
 
-        return $this->chunkStore->hasFileChunks($file->id);
+        return $this->chunkStore->hasFileChunks($file->id, $collection);
     }
 
     /**
      * {@inheritdoc}
      */
-    public function getFileStats(object $file): array
+    public function getFileStats(object $file, ?string $collection = null): array
     {
         $this->validateFileObject($file);
 
-        $chunks = $this->chunkStore->getFileChunks($file->id);
+        $chunks = $this->chunkStore->getFileChunks($file->id, $collection);
 
         if (empty($chunks)) {
             return [

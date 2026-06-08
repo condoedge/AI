@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * EntityActionAwarenessSection
  *
@@ -21,7 +23,7 @@ class EntityActionAwarenessSection extends BasePromptSection
     /**
      * Include when there are entity actions or generic actions configured
      */
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
         $entityActions = config('ai.entity_actions', []);
         $genericActions = config('ai.generic_actions', []);
@@ -29,7 +31,7 @@ class EntityActionAwarenessSection extends BasePromptSection
         return !empty($entityActions) || !empty($genericActions);
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
         $output = $this->header('ACTION REQUESTS - IMPORTANT');
 
@@ -75,7 +77,7 @@ class EntityActionAwarenessSection extends BasePromptSection
         }
 
         // Check if conversation context has entity IDs
-        $conversationContext = $context['conversation_context'] ?? [];
+        $conversationContext = $context->conversationContext;
         $lastResults = $conversationContext['last_result_sample'] ?? [];
         $focusedEntity = $conversationContext['focused_entity'] ?? null;
 

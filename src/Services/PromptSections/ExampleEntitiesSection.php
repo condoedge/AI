@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * ExampleEntitiesSection
  *
@@ -20,10 +22,10 @@ class ExampleEntitiesSection extends BasePromptSection
     protected string $name = 'example_entities';
     protected int $priority = 40;
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
-        $entities = $context['relevant_entities'] ?? [];
-        $selectionInfo = $context['selection_info'] ?? [];
+        $entities = $context->relevantEntities;
+        $selectionInfo = $context->selectionInfo;
 
         if (empty($entities)) {
             return '';
@@ -104,8 +106,8 @@ class ExampleEntitiesSection extends BasePromptSection
         return (string) $value;
     }
 
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
-        return !empty($context['relevant_entities']);
+        return !empty($context->relevantEntities);
     }
 }

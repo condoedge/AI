@@ -5,21 +5,23 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Chat;
 
 use Condoedge\Ai\Models\AiConversation;
+use Condoedge\Ai\Services\Chat\Inputs\AskQuestionInput;
+use Condoedge\Ai\Services\Chat\UseCases\AskQuestionUseCase;
 
 /**
- * SendMessageService - Handles sending messages in AI chat conversations.
+ * SendMessageService - Thin guard in front of AskQuestionUseCase.
  *
- * This service provides a clean interface for sending messages that:
+ * This service only:
  * 1. Validates the message is not empty
- * 2. Delegates to AiChatService for processing and persistence
+ * 2. Delegates orchestration to AskQuestionUseCase (the single home of chat-turn logic)
  *
- * This replaces the anti-pattern of using request()->merge() to manipulate
- * global request state before instantiating form classes.
+ * It returns the legacy array shape so existing Kompo callers keep working unchanged
+ * during the migration; the use case is the source of truth for behavior.
  */
 class SendMessageService
 {
     public function __construct(
-        private readonly AiChatService $aiChatService
+        private readonly AskQuestionUseCase $askQuestionUseCase
     ) {}
 
     /**
@@ -45,10 +47,20 @@ class SendMessageService
             throw new \InvalidArgumentException('Message cannot be empty');
         }
 
-        return $this->aiChatService->askWithConversation(
+        $result = $this->askQuestionUseCase->execute(new AskQuestionInput(
             question: $message,
             conversation: $conversation,
-            options: $options
-        );
+            style: $options['style'] ?? 'friendly',
+            user: $options['user'] ?? null,
+            allowAnonymous: $options['allow_anonymous'] ?? false,
+        ));
+
+        return [
+            'answer' => $result->answer,
+            'data' => $result->data,
+            'suggestions' => $result->suggestions,
+            'sources' => $result->sources,
+            'cypher_query' => $result->cypher,
+        ];
     }
 }

@@ -40,9 +40,85 @@ class QdrantStore implements VectorStoreInterface
                 ]
             ]);
 
-            return isset($response['result']) && $response['result'] === true;
+            $created = isset($response['result']) && $response['result'] === true;
+
+            // Create a full-text payload index on file_name so filename/substring
+            // matches (match:{text}) are efficient and reliable. Best-effort: a
+            // failure here must never abort collection creation.
+            if ($created) {
+                $this->ensurePayloadIndex($name, 'file_name', 'text');
+            }
+
+            return $created;
         } catch (\Exception $e) {
             throw new \RuntimeException("Failed to create collection '{$name}': " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Ensure a payload field index exists on a collection.
+     *
+     * Creates a Qdrant payload index (PUT /collections/{c}/index) for the given
+     * field. A full-text ('text') schema enables match:{text} substring search on
+     * string payloads such as file_name. Best-effort: any failure is swallowed so
+     * callers never break when the index already exists or cannot be created.
+     *
+     * @param string $collection Collection name
+     * @param string $field Payload field to index
+     * @param string $schema Field schema: 'text', 'keyword', 'integer', etc.
+     * @return bool True if the index was created/confirmed, false on failure
+     */
+    public function ensurePayloadIndex(string $collection, string $field, string $schema = 'keyword'): bool
+    {
+        try {
+            $this->request('PUT', "/collections/{$collection}/index", [
+                'field_name' => $field,
+                'field_schema' => $schema,
+            ]);
+
+            return true;
+        } catch (\Exception $e) {
+            // Index creation is best-effort. The collection is still usable for
+            // exact-value filters and (degraded) scroll-based filename search.
+            return false;
+        }
+    }
+
+    /**
+     * Scroll (page) through points in a collection, optionally filtered.
+     *
+     * Unlike search(), scroll does not require a query vector — it iterates over
+     * stored points by payload filter. Used as a fallback for filename search when
+     * a full-text payload index is unavailable.
+     *
+     * @param string $collection Collection name
+     * @param array $filter Optional payload filter (simple or pre-built Qdrant format)
+     * @param int $limit Maximum number of points to return
+     * @param bool $withPayload Whether to include payloads
+     * @return array Array of points (each with 'id' and 'payload')
+     */
+    public function scroll(
+        string $collection,
+        array $filter = [],
+        int $limit = 100,
+        bool $withPayload = true
+    ): array {
+        try {
+            $payload = [
+                'limit' => $limit,
+                'with_payload' => $withPayload,
+                'with_vector' => false,
+            ];
+
+            if (!empty($filter)) {
+                $payload['filter'] = $this->buildFilter($filter);
+            }
+
+            $response = $this->request('POST', "/collections/{$collection}/points/scroll", $payload);
+
+            return $response['result']['points'] ?? [];
+        } catch (\Exception $e) {
+            throw new \RuntimeException("Failed to scroll points in collection '{$collection}': " . $e->getMessage());
         }
     }
 

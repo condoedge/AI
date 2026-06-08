@@ -7,6 +7,11 @@ namespace Condoedge\Ai\Services;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use Condoedge\Ai\Domain\Traits\ResolvesEntityConfigKey;
+use Condoedge\Ai\DTOs\SelectedEntity;
+use Condoedge\Ai\DTOs\SelectedRelationship;
+use Condoedge\Ai\DTOs\SelectedScope;
+use Condoedge\Ai\DTOs\SemanticSelectionResult;
+use Condoedge\Ai\DTOs\VectorSearchResult;
 use Condoedge\Ai\Support\AiLogger;
 
 /**
@@ -58,7 +63,7 @@ class SemanticContextSelector
         string $question,
         array $entityConfigs,
         array $options = []
-    ): array {
+    ): SemanticSelectionResult {
         $threshold = $options['threshold'] ?? self::DEFAULT_THRESHOLD;
         $topK = $options['top_k'] ?? self::DEFAULT_TOP_K;
         $collectionName = $this->config['collection'] ?? $this->collectionName;
@@ -93,115 +98,90 @@ class SemanticContextSelector
         $seenEntities = [];
         $seenRelationships = [];
 
-        foreach ($results as $result) {
-            // Normalize: Qdrant returns 'payload', but code expects 'metadata'
-            if (!isset($result['metadata']) && isset($result['payload'])) {
-                $result['metadata'] = $result['payload'];
-            }
+        foreach ($results as $rawResult) {
+            $result = new VectorSearchResult($rawResult);
 
-            $score = $result['score'] ?? 0;
-
-            if ($score < $threshold) {
+            if ($result->score < $threshold) {
                 $this->logger->debug('semantic_selector', 'result below threshold, rejected', [
-                    'type' => $result['metadata']['type'] ?? 'unknown',
-                    'entity' => $result['metadata']['entity'] ?? $result['metadata']['relationship_key'] ?? 'unknown',
-                    'score' => $score,
+                    'type' => $result->type,
+                    'entity' => $result->entityName ?? $result->relationshipKey,
+                    'score' => $result->score,
                     'threshold' => $threshold,
                 ]);
                 continue;
             }
 
-            $type = $result['metadata']['type'] ?? 'unknown';
-            $entityName = $result['metadata']['entity'] ?? null;
-
-            switch ($type) {
+            switch ($result->type) {
                 case 'entity':
-                    if ($entityName && !isset($seenEntities[$entityName])) {
-                        $seenEntities[$entityName] = true;
-                        $selectedEntities[$entityName] = [
-                            'score' => $score,
-                            'matched_text' => $result['metadata']['text'] ?? '',
-                            'config' => $entityConfigs[$entityName] ?? null,
-                        ];
+                    if ($result->entityName && !isset($seenEntities[$result->entityName])) {
+                        $seenEntities[$result->entityName] = true;
+                        $selectedEntities[$result->entityName] = new SelectedEntity(
+                            score: $result->score,
+                            matchedText: $result->text,
+                            config: $entityConfigs[$result->entityName] ?? null,
+                        );
                     }
                     break;
 
                 case 'relationship':
-                    $relKey = $result['metadata']['relationship_key'] ?? '';
-                    if ($relKey && !isset($seenRelationships[$relKey])) {
-                        $seenRelationships[$relKey] = true;
-                        $selectedRelationships[$relKey] = [
-                            'score' => $score,
-                            'from_entity' => $result['metadata']['from_entity'] ?? '',
-                            'to_entity' => $result['metadata']['to_entity'] ?? '',
-                            'type' => $result['metadata']['relationship_type'] ?? '',
-                            'foreign_key' => $result['metadata']['foreign_key'] ?? null,
-                            'direction' => $result['metadata']['direction'] ?? 'outgoing',
-                        ];
+                    if ($result->relationshipKey && !isset($seenRelationships[$result->relationshipKey])) {
+                        $seenRelationships[$result->relationshipKey] = true;
+                        $selectedRelationships[$result->relationshipKey] = new SelectedRelationship(
+                            score: $result->score,
+                            fromEntity: $result->fromEntity,
+                            toEntity: $result->toEntity,
+                            type: $result->relationshipType,
+                            foreignKey: $result->foreignKey,
+                            direction: $result->direction,
+                        );
 
                         // Also include related entities
-                        $fromEntity = $result['metadata']['from_entity'] ?? null;
-                        $toEntity = $result['metadata']['to_entity'] ?? null;
-
-                        if ($fromEntity && !isset($seenEntities[$fromEntity])) {
-                            $fullName = $this->findFullEntityName($fromEntity, $entityConfigs);
-                            if ($fullName) {
-                                $seenEntities[$fullName] = true;
-                                $selectedEntities[$fullName] = [
-                                    'score' => $score * 0.8, // Lower score for indirect match
-                                    'matched_text' => "Related via {$relKey}",
-                                    'config' => $entityConfigs[$fullName] ?? null,
-                                ];
-                            }
-                        }
-
-                        if ($toEntity && !isset($seenEntities[$toEntity])) {
-                            $fullName = $this->findFullEntityName($toEntity, $entityConfigs);
-                            if ($fullName) {
-                                $seenEntities[$fullName] = true;
-                                $selectedEntities[$fullName] = [
-                                    'score' => $score * 0.8,
-                                    'matched_text' => "Related via {$relKey}",
-                                    'config' => $entityConfigs[$fullName] ?? null,
-                                ];
+                        foreach ([$result->fromEntity, $result->toEntity] as $relatedEntity) {
+                            if ($relatedEntity && !isset($seenEntities[$relatedEntity])) {
+                                $fullName = $this->findFullEntityName($relatedEntity, $entityConfigs);
+                                if ($fullName) {
+                                    $seenEntities[$fullName] = true;
+                                    $selectedEntities[$fullName] = new SelectedEntity(
+                                        score: $result->score * 0.8,
+                                        matchedText: "Related via {$result->relationshipKey}",
+                                        config: $entityConfigs[$fullName] ?? null,
+                                    );
+                                }
                             }
                         }
                     }
                     break;
 
                 case 'scope':
-                    $scopeKey = $result['metadata']['scope_key'] ?? '';
-                    if ($scopeKey && $entityName) {
-                        $selectedScopes[$scopeKey] = [
-                            'score' => $score,
-                            'entity' => $entityName,
-                            'matched_text' => $result['metadata']['text'] ?? '',
-                        ];
+                    if ($result->scopeKey && $result->entityName) {
+                        $selectedScopes[$result->scopeKey] = new SelectedScope(
+                            score: $result->score,
+                            entity: $result->entityName,
+                            matchedText: $result->text,
+                        );
 
-                        // Ensure the entity is included
-                        $fullName = $this->findFullEntityName($entityName, $entityConfigs);
+                        $fullName = $this->findFullEntityName($result->entityName, $entityConfigs);
                         if ($fullName && !isset($seenEntities[$fullName])) {
                             $seenEntities[$fullName] = true;
-                            $selectedEntities[$fullName] = [
-                                'score' => $score,
-                                'matched_text' => "Has scope {$scopeKey}",
-                                'config' => $entityConfigs[$fullName] ?? null,
-                            ];
+                            $selectedEntities[$fullName] = new SelectedEntity(
+                                score: $result->score,
+                                matchedText: "Has scope {$result->scopeKey}",
+                                config: $entityConfigs[$fullName] ?? null,
+                            );
                         }
                     }
                     break;
 
                 case 'property':
-                    $propertyName = $result['metadata']['property'] ?? null;
-                    if ($entityName && $propertyName) {
-                        $fullName = $this->findFullEntityName($entityName, $entityConfigs);
+                    if ($result->entityName && $result->property) {
+                        $fullName = $this->findFullEntityName($result->entityName, $entityConfigs);
                         if ($fullName && !isset($seenEntities[$fullName])) {
                             $seenEntities[$fullName] = true;
-                            $selectedEntities[$fullName] = [
-                                'score' => $score * 0.9,
-                                'matched_text' => "Has property {$propertyName}",
-                                'config' => $entityConfigs[$fullName] ?? null,
-                            ];
+                            $selectedEntities[$fullName] = new SelectedEntity(
+                                score: $result->score * 0.9,
+                                matchedText: "Has property {$result->property}",
+                                config: $entityConfigs[$fullName] ?? null,
+                            );
                         }
                     }
                     break;
@@ -231,26 +211,26 @@ class SemanticContextSelector
         }
 
         // Sort by score
-        uasort($selectedEntities, fn($a, $b) => ($b['score'] ?? 0) <=> ($a['score'] ?? 0));
-        uasort($selectedRelationships, fn($a, $b) => ($b['score'] ?? 0) <=> ($a['score'] ?? 0));
-        uasort($selectedScopes, fn($a, $b) => ($b['score'] ?? 0) <=> ($a['score'] ?? 0));
+        uasort($selectedEntities, fn($a, $b) => ($b->score) <=> ($a->score));
+        uasort($selectedRelationships, fn($a, $b) => ($b->score) <=> ($a->score));
+        uasort($selectedScopes, fn($a, $b) => ($b->score) <=> ($a->score));
 
         $this->logger->debug('semantic_selector', 'final selection summary', [
-            'entities' => array_map(fn($e) => $e['score'], $selectedEntities),
+            'entities' => array_map(fn($e) => $e->score, $selectedEntities),
             'relationships' => array_keys($selectedRelationships),
-            'scopes' => array_map(fn($s) => $s['score'], $selectedScopes),
+            'scopes' => array_map(fn($s) => $s->score, $selectedScopes),
         ]);
 
         // Limit scopes to top 3 by score to avoid overwhelming the LLM
         $maxScopes = (int) config('ai.scope_matching.top_k', 3);
         $selectedScopes = array_slice($selectedScopes, 0, $maxScopes, true);
 
-        return [
-            'entities' => $selectedEntities,
-            'relationships' => $selectedRelationships,
-            'scopes' => $selectedScopes,
-            'selection_method' => 'semantic',
-        ];
+        return new SemanticSelectionResult(
+            entities: $selectedEntities,
+            relationships: $selectedRelationships,
+            scopes: $selectedScopes,
+            selectionMethod: 'semantic',
+        );
     }
 
     /**
@@ -530,7 +510,7 @@ class SemanticContextSelector
     /**
      * Keyword-based selection fallback
      */
-    private function keywordBasedSelection(string $question, array $entityConfigs): array
+    private function keywordBasedSelection(string $question, array $entityConfigs): SemanticSelectionResult
     {
         $questionLower = strtolower($question);
         $selectedEntities = [];
@@ -563,20 +543,20 @@ class SemanticContextSelector
 
                 if (stripos($question, $scopeName) !== false) {
                     $isRelevant = true;
-                    $selectedScopes[$scopeName] = [
-                        'score' => 0.5,
-                        'entity' => $shortName,
-                        'matched_text' => $scopeName,
-                    ];
+                    $selectedScopes[$scopeName] = new SelectedScope(
+                        score: 0.5,
+                        entity: $shortName,
+                        matchedText: $scopeName,
+                    );
                 }
             }
 
             if ($isRelevant) {
-                $selectedEntities[$entityName] = [
-                    'score' => 0.5,
-                    'matched_text' => 'keyword match',
-                    'config' => $config,
-                ];
+                $selectedEntities[$entityName] = new SelectedEntity(
+                    score: 0.5,
+                    matchedText: 'keyword match',
+                    config: $config,
+                );
 
                 // Include relationships for this entity
                 foreach ($config['relationships'] ?? [] as $relName => $relConfig) {
@@ -585,24 +565,24 @@ class SemanticContextSelector
                     $targetShort = class_basename($targetEntity);
                     $relKey = "{$shortName}-{$relType}-{$targetShort}";
 
-                    $selectedRelationships[$relKey] = [
-                        'score' => 0.4,
-                        'from_entity' => $shortName,
-                        'to_entity' => $targetShort,
-                        'type' => $relType,
-                        'foreign_key' => $relConfig['foreign_key'] ?? null,
-                        'direction' => $relConfig['direction'] ?? 'outgoing',
-                    ];
+                    $selectedRelationships[$relKey] = new SelectedRelationship(
+                        score: 0.4,
+                        fromEntity: $shortName,
+                        toEntity: $targetShort,
+                        type: $relType,
+                        foreignKey: $relConfig['foreign_key'] ?? null,
+                        direction: $relConfig['direction'] ?? 'outgoing',
+                    );
                 }
             }
         }
 
-        return [
-            'entities' => $selectedEntities,
-            'relationships' => $selectedRelationships,
-            'scopes' => $selectedScopes,
-            'selection_method' => 'keyword',
-        ];
+        return new SemanticSelectionResult(
+            entities: $selectedEntities,
+            relationships: $selectedRelationships,
+            scopes: $selectedScopes,
+            selectionMethod: 'keyword',
+        );
     }
 
     /**
@@ -627,14 +607,14 @@ class SemanticContextSelector
                 $targetEntity = $relConfig['target_label'] ?? null;
                 if (!$targetEntity || isset($seenEntities[$targetEntity])) continue;
 
-                $score = ($entityInfo['score'] ?? 0) * 0.6;
+                $score = $entityInfo->score * 0.6;
                 if ($score >= $threshold * 0.8) {
                     $seenEntities[$targetEntity] = true;
-                    $newEntities[$targetEntity] = [
-                        'score' => $score,
-                        'matched_text' => "Connected to " . class_basename($entityName) . " via " . ($relConfig['type'] ?? 'relationship'),
-                        'config' => $entityConfigs[$targetEntity] ?? null,
-                    ];
+                    $newEntities[$targetEntity] = new SelectedEntity(
+                        score: $score,
+                        matchedText: "Connected to " . class_basename($entityName) . " via " . ($relConfig['type'] ?? 'relationship'),
+                        config: $entityConfigs[$targetEntity] ?? null,
+                    );
 
                     $this->logger->debug('semantic_selector', 'entity_expanded', [
                         'from' => class_basename($entityName),
@@ -692,11 +672,11 @@ class SemanticContextSelector
 
                 $seenEntities[$pathEntityLabel] = true;
                 $seenEntities[$fullName] = true;
-                $entitiesToAdd[$fullName] = [
-                    'score' => $entityInfo['score'] ?? 0.5,
-                    'matched_text' => "User ownership path to {$shortName}",
-                    'config' => $entityConfigs[$fullName] ?? null,
-                ];
+                $entitiesToAdd[$fullName] = new SelectedEntity(
+                    score: $entityInfo->score,
+                    matchedText: "User ownership path to {$shortName}",
+                    config: $entityConfigs[$fullName] ?? null,
+                );
 
                 $this->logger->debug('semantic_selector', 'entity_added_via_user_path', [
                     'entity' => $pathEntityLabel,
@@ -708,13 +688,13 @@ class SemanticContextSelector
             foreach ($pathRelationships as $relType) {
                 $relKey = "user_path_{$relType}";
                 if (!isset($selectedRelationships[$relKey])) {
-                    $selectedRelationships[$relKey] = [
-                        'score' => $entityInfo['score'] ?? 0.5,
-                        'type' => $relType,
-                        'from_entity' => '',
-                        'to_entity' => '',
-                        'direction' => 'outgoing',
-                    ];
+                    $selectedRelationships[$relKey] = new SelectedRelationship(
+                        score: $entityInfo->score,
+                        fromEntity: '',
+                        toEntity: '',
+                        type: $relType,
+                        direction: 'outgoing',
+                    );
                 }
             }
         }

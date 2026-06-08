@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * StatisticsSection
  *
@@ -15,10 +17,10 @@ class StatisticsSection extends BaseResponseSection
     protected string $name = 'statistics';
     protected int $priority = 60;
 
-    public function format(array $context, array $options = []): string
+    public function format(PipelineContext $context, array $options = []): string
     {
-        $stats = $context['stats'] ?? [];
-        $data = $context['data'] ?? [];
+        $stats = $context->executionResult->stats;
+        $data = $context->executionResult->data;
 
         if (empty($stats) && empty($data)) {
             return '';
@@ -36,8 +38,8 @@ class StatisticsSection extends BaseResponseSection
         return $output . "\n";
     }
 
-    public function shouldInclude(array $context, array $options = []): bool
+    public function shouldInclude(PipelineContext $context, array $options = []): bool
     {
-        return !empty($context['stats']) || !empty($context['data']);
+        return !empty($context->executionResult->stats) || !empty($context->executionResult->data);
     }
 }

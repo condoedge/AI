@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * RelationshipsSection
  *
@@ -16,9 +18,9 @@ class RelationshipsSection extends BasePromptSection
     protected string $name = 'relationships';
     protected int $priority = 30;
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
-        $schema = $context['graph_schema'] ?? [];
+        $schema = $context->graphSchema;
         $entityConfigs = $this->getRelevantEntityConfigs($context);
 
         if (empty($entityConfigs)) {
@@ -91,7 +93,7 @@ class RelationshipsSection extends BasePromptSection
         return $hasRelationships ? $output : '';
     }
 
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
         return !empty($this->getRelevantEntityConfigs($context));
     }
@@ -100,12 +102,12 @@ class RelationshipsSection extends BasePromptSection
      * Get only entity configs relevant to the current context.
      * Uses semantic selection if available, falls back to category-based loading.
      */
-    private function getRelevantEntityConfigs(array $context): array
+    private function getRelevantEntityConfigs(PipelineContext $context): array
     {
         $allConfigs = config('entities', []);
 
         // If semantic selection identified specific entities, use only those
-        $selectedEntities = $context['selection_info']['selected_entities'] ?? [];
+        $selectedEntities = $context->selectionInfo['selected_entities'] ?? [];
         if (!empty($selectedEntities)) {
             return array_filter($allConfigs, function ($config) use ($selectedEntities) {
                 $label = $config['graph']['label'] ?? '';
@@ -114,7 +116,7 @@ class RelationshipsSection extends BasePromptSection
         }
 
         // If entity_metadata has detected entities, resolve them to configs
-        $metadata = $context['entity_metadata'] ?? [];
+        $metadata = $context->entityMetadata;
         $detectedEntities = $metadata['detected_entities'] ?? [];
         if (!empty($detectedEntities)) {
             return array_filter($allConfigs, function ($config, $fqcn) use ($detectedEntities) {

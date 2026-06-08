@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * DetectedScopesSection
  *
@@ -16,9 +18,9 @@ class DetectedScopesSection extends BasePromptSection
     protected string $name = 'detected_scopes';
     protected int $priority = 65;
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
-        $entityMetadata = $context['entity_metadata'] ?? [];
+        $entityMetadata = $context->entityMetadata;
         $scopes = $entityMetadata['detected_scopes'] ?? [];
 
         if (empty($scopes)) {
@@ -260,9 +262,9 @@ class DetectedScopesSection extends BasePromptSection
         return $output;
     }
 
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
-        $entityMetadata = $context['entity_metadata'] ?? [];
+        $entityMetadata = $context->entityMetadata;
         return !empty($entityMetadata['detected_scopes']);
     }
 }

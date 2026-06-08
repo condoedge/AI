@@ -4,22 +4,24 @@
 namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
+use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Kompo\Traits\HasFilePreview;
-use Condoedge\Ai\Kompo\Traits\HasMessageActions;
-use Condoedge\Ai\Kompo\Traits\HasStagedMessageRendering;
-use Condoedge\Ai\Models\AiMessage;
-use Condoedge\Ai\Services\Chat\SendMessageService;
 use Condoedge\Utils\Kompo\Common\Form;
 
 /**
  * Chat Message Form - Input form for sending messages in the chat.
  *
  * After submitting, refreshes the parent panel to show the new message.
+ *
+ * Orchestration (security gate, context, persistence, RAG, error mapping) lives in
+ * ChatPresenter + the Phase 1 use cases; this component only collects request input, shows
+ * the optimistic placeholder, calls the presenter, and lets the panel refresh re-render the
+ * messages from the DB.
  *
  * Usage:
  *   new ChatMessageForm(null, [
@@ -29,7 +31,7 @@ use Condoedge\Utils\Kompo\Common\Form;
  */
 class ChatMessageForm extends Form
 {
-    use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation, HasFilePreview, HasMessageActions, HasStagedMessageRendering;
+    use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation, HasFilePreview;
 
     public $id = 'chat-message-form';
     public $class = 'w-full';
@@ -117,22 +119,6 @@ class ChatMessageForm extends Form
     }
 
     /**
-     * Set loading message placeholder.
-     *
-     * Now handled by client-side ChatMessageInjector for instant visual feedback.
-     * This method is kept for backwards compatibility.
-     *
-     * @deprecated Use client-side precreateMessagePlaceholder() instead
-     * @return null
-     */
-    public function setLoadingMessage()
-    {
-        // Now handled by client-side ChatMessageInjector
-        // This method is kept for backwards compatibility
-        return null;
-    }
-
-    /**
      * Ensure a conversation exists, creating one if needed.
      *
      * This allows users to start typing immediately without clicking "New Conversation".
@@ -151,59 +137,15 @@ class ChatMessageForm extends Form
     }
 
     /**
-     * Send message and return rendered messages for injection (no full refresh)
-     * This follows the auth package's placeholder injection pattern
+     * Server endpoint the live UI posts to (see sendingMessageActions()).
+     *
+     * The optimistic user bubble is already shown client-side via precreateMessagePlaceholder();
+     * this only needs to run the turn so the subsequent ->refresh(MessagesQuery::ID) re-renders
+     * the persisted messages from the DB. No HTML is returned — the panel refresh owns rendering.
      */
     public function sendMessageAndGetResponse()
     {
-        $message = trim(request('message') ?? '');
-        $style = request('style') ?? $this->responseStyle;
-
-        if (empty($message)) {
-            return _Html('')->class('hidden'); // Return empty if no message
-        }
-
-        // Auto-create conversation if needed (allows typing without clicking "New")
-        $this->ensureConversation();
-
-        $service = app(SendMessageService::class);
-
-        try {
-            $service->sendMessage(
-                conversation: $this->conversation,
-                message: $message,
-                options: [
-                    'style' => $style,
-                    'user' => auth()->user(),
-                ]
-            );
-
-            // Get the user message that was just created (for JS to set data-message-id)
-            $userMessage = $this->conversation->messages()
-                ->where('role', 'user')
-                ->orderBy('created_at', 'desc')
-                ->first();
-
-            // Get the assistant response (user bubble is already shown as placeholder)
-            $assistantMessage = $this->conversation->messages()
-                ->where('role', 'assistant')
-                ->orderBy('created_at', 'desc')
-                ->first();
-
-            if (!$assistantMessage) {
-                return _Html('')->class('hidden');
-            }
-        } catch (\Throwable $e) {
-            \Log::error('Chat message failed: ' . $e->getMessage(), [
-                'conversation_id' => $this->conversation->id,
-                'exception' => $e,
-            ]);
-
-            // Return error message bubble
-            return _Rows(
-                _Html(__('ai.chat.error-message'))->class('text-red-500 text-sm p-4 bg-red-50 rounded-lg')
-            );
-        }
+        return $this->sendMessage();
     }
 
     public function sendMessage(?string $message = null)
@@ -215,37 +157,39 @@ class ChatMessageForm extends Form
             return;
         }
 
-        // Auto-create conversation if needed (allows typing without clicking "New")
-        $this->ensureConversation();
-
-        $service = app(SendMessageService::class);
+        // Auto-create conversation if needed (allows typing without clicking "New").
+        $conversation = $this->ensureConversation();
 
         try {
-            // SendMessageService handles:
-            // - Message validation
-            // - Delegating to AiChatService which manages:
-            //   - Storing user message with context metadata
-            //   - Processing through ConversationContextManager
-            //   - Storing assistant response with all metadata
-            //   - Error handling and error message storage
-            $service->sendMessage(
-                conversation: $this->conversation,
-                message: $message,
-                options: [
-                    'style' => $style,
-                    'user' => auth()->user(), // SECURITY: Pass authenticated user for file access control
-                ]
+            // The presenter is the single Kompo<->app seam: it runs AskQuestionUseCase
+            // (security gate, context, persistence, RAG, assistant-message storage) and returns
+            // a ChatTurnResult. The user/assistant messages are persisted by the use case and
+            // re-rendered by the panel refresh that follows this post.
+            $result = app(ChatPresenter::class)->handleSend(
+                $conversation,
+                $message,
+                $style,
+                auth()->user(),
             );
 
-            // Response is already stored by the service
-            // The conversation will be refreshed via the panel refresh triggered by the button click
+            // Soft failure (injection refusal, AI/DB error): the use case already recorded a
+            // visible assistant message in the conversation, so the refresh surfaces it. Log the
+            // friendly-error key for traceability without changing the visible flow.
+            if ($result->failed()) {
+                \Log::warning('Chat message failed: ' . $result->error, [
+                    'conversation_id' => $conversation->id,
+                ]);
+            }
         } catch (\InvalidArgumentException $e) {
-            // Empty message - silently ignore as UI should prevent this
+            // Empty/invalid message - silently ignore as the UI should prevent this.
             \Log::debug('Chat message validation failed: ' . $e->getMessage());
         } catch (\Throwable $e) {
-            // Log unexpected errors - the service stores error messages in conversation
+            // Unexpected/programmer error escaped the use case's own handling. Map it to a
+            // user-facing key by exception type and log; the panel refresh re-renders whatever
+            // is persisted.
             \Log::error('Chat message failed: ' . $e->getMessage(), [
-                'conversation_id' => $this->conversation->id,
+                'conversation_id' => $conversation->id,
+                'friendly_error' => app(ChatPresenter::class)->friendlyError($e),
                 'exception' => $e,
             ]);
         }
@@ -284,7 +228,7 @@ class ChatMessageForm extends Form
     protected function sendingMessageActions()
     {
         $refreshActionWrap = $this->conversationId ? fn($e) => $e->refresh(MessagesQuery::ID)
-            : fn($e) => $e->refresh([AiChatPanel::ID]); 
+            : fn($e) => $e->refresh([AiChatPanel::ID]);
 
         return fn($e) => $e
             // 1. Show placeholder immediately (client-side)
@@ -299,8 +243,8 @@ class ChatMessageForm extends Form
                     input.dispatchEvent(new Event("input", { bubbles: true }));
                 }
             }')
-            // 2. Send to server, response goes to hidden staging panel
-            // 3. JS processes staging content and moves to display area
+            // 2. Send to server (runs the chat turn via the presenter)
+            // 3. Refresh the messages panel to render the persisted user + assistant messages
             && $refreshActionWrap($e->selfPost('sendMessageAndGetResponse')
                 ->withAllFormValues());
     }

@@ -64,11 +64,13 @@ class FileAccessResolver implements FileAccessResolverInterface
             return $resolver($user);
         }
 
-        // Try accessibleBy macro (registered via FileAccessScopePlugin)
+        // Try the accessibleBy scope/macro on the CONFIGURED File model.
+        // Using config('ai.file_context.file_model') (e.g. App\Models\File) keeps the
+        // authorization model and the indexed model the same class.
         try {
-            return FileModel::query()->accessibleBy($user)->pluck('id')->toArray();
+            return $this->fileModelQuery()->accessibleBy($user)->pluck('id')->toArray();
         } catch (\Throwable $e) {
-            \Log::debug("FileAccessResolver: accessibleBy macro failed, using fallback", [
+            \Log::debug("FileAccessResolver: accessibleBy failed, using fallback", [
                 'error' => $e->getMessage(),
                 'user_id' => $user->id ?? null,
             ]);
@@ -86,7 +88,7 @@ class FileAccessResolver implements FileAccessResolverInterface
      */
     protected function getFallbackAccessibleFileIds(mixed $user): array
     {
-        $query = FileModel::query();
+        $query = $this->fileModelQuery();
         $userId = $user->id ?? $user->getKey();
         $useUserFilter = config('ai.file_context.fallback_filters.use_user_filter', true);
         $useTeamFilter = config('ai.file_context.fallback_filters.use_team_filter', true);
@@ -110,6 +112,27 @@ class FileAccessResolver implements FileAccessResolverInterface
         });
 
         return $query->pluck('id')->toArray();
+    }
+
+    /**
+     * Resolve a query builder for the configured File model.
+     *
+     * Prefers config('ai.file_context.file_model') (e.g. App\Models\File) so the
+     * authorization scope (accessibleBy / scopeAccessibleBy) runs against the same
+     * class that is indexed. Falls back to the condoedge/utils FileModel facade
+     * for backwards compatibility when no model class is configured.
+     *
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    protected function fileModelQuery()
+    {
+        $modelClass = config('ai.file_context.file_model');
+
+        if (is_string($modelClass) && $modelClass !== '' && class_exists($modelClass)) {
+            return $modelClass::query();
+        }
+
+        return FileModel::query();
     }
 
     /**

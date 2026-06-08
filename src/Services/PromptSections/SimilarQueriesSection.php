@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\AiManager;
 
 /**
@@ -31,9 +32,9 @@ class SimilarQueriesSection extends BasePromptSection
         return $this;
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
-        $queries = $context['similar_queries'] ?? [];
+        $queries = $context->similarQueries;
 
         if (empty($queries)) {
             return '';
@@ -62,8 +63,8 @@ class SimilarQueriesSection extends BasePromptSection
         return $output;
     }
 
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
-        return !empty($context['similar_queries']);
+        return !empty($context->similarQueries);
     }
 }

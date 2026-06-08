@@ -16,17 +16,19 @@ interface ChunkStoreInterface
      * Store a single file chunk
      *
      * @param FileChunk $chunk The chunk to store
+     * @param string|null $collection Optional collection override (defaults to the bound collection)
      * @return bool True if successful
      */
-    public function storeChunk(FileChunk $chunk): bool;
+    public function storeChunk(FileChunk $chunk, ?string $collection = null): bool;
 
     /**
      * Store multiple file chunks in batch
      *
      * @param array $chunks Array of FileChunk objects
+     * @param string|null $collection Optional collection override (defaults to the bound collection)
      * @return bool True if successful
      */
-    public function storeChunks(array $chunks): bool;
+    public function storeChunks(array $chunks, ?string $collection = null): bool;
 
     /**
      * Search for chunks by content similarity
@@ -37,25 +39,28 @@ interface ChunkStoreInterface
      *   - file_id: Filter by specific file ID
      *   - file_types: Array of file extensions to include
      *   - min_score: Minimum similarity score (0.0 to 1.0)
+     * @param string|null $collection Optional collection override (defaults to the bound collection)
      * @return array Array of search results with 'chunk' and 'score' keys
      */
-    public function searchByContent(string $query, int $limit = 10, array $filters = []): array;
+    public function searchByContent(string $query, int $limit = 10, array $filters = [], ?string $collection = null): array;
 
     /**
      * Get all chunks for a specific file
      *
      * @param int|string $fileId The file ID (int for database files, string for physical files)
+     * @param string|null $collection Optional collection override (defaults to the bound collection)
      * @return array Array of FileChunk objects
      */
-    public function getFileChunks(int|string $fileId): array;
+    public function getFileChunks(int|string $fileId, ?string $collection = null): array;
 
     /**
      * Delete all chunks for a specific file
      *
      * @param int|string $fileId The file ID (int for database files, string for physical files)
+     * @param string|null $collection Optional collection override (defaults to the bound collection)
      * @return bool True if successful
      */
-    public function deleteFileChunks(int|string $fileId): bool;
+    public function deleteFileChunks(int|string $fileId, ?string $collection = null): bool;
 
     /**
      * Get the total number of chunks stored
@@ -69,9 +74,10 @@ interface ChunkStoreInterface
      * Check if chunks exist for a specific file
      *
      * @param int|string $fileId The file ID (int for database files, string for physical files)
+     * @param string|null $collection Optional collection override (defaults to the bound collection)
      * @return bool
      */
-    public function hasFileChunks(int|string $fileId): bool;
+    public function hasFileChunks(int|string $fileId, ?string $collection = null): bool;
 
     /**
      * Get a specific chunk by its vector ID
@@ -87,7 +93,8 @@ interface ChunkStoreInterface
      * @param string $filename The filename to search for (exact or partial match)
      * @param int $limit Maximum number of results
      * @param array $filters Optional filters (same as searchByContent)
+     * @param string|null $collection Optional collection override (defaults to the bound collection)
      * @return array Array of search results with 'chunk' and 'score' keys
      */
-    public function searchByFilename(string $filename, int $limit = 10, array $filters = []): array;
+    public function searchByFilename(string $filename, int $limit = 10, array $filters = [], ?string $collection = null): array;
 }

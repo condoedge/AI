@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * QueryInfoSection
  *
@@ -26,13 +28,13 @@ class QueryInfoSection extends BaseResponseSection
         return $this;
     }
 
-    public function format(array $context, array $options = []): string
+    public function format(PipelineContext $context, array $options = []): string
     {
         if (!$this->includeQuery) {
             return '';
         }
 
-        $cypher = $context['cypher'] ?? '';
+        $cypher = $context->queryResult->cypher;
 
         if (empty($cypher)) {
             return '';
@@ -41,8 +43,8 @@ class QueryInfoSection extends BaseResponseSection
         return "Query Executed:\n{$cypher}\n\n";
     }
 
-    public function shouldInclude(array $context, array $options = []): bool
+    public function shouldInclude(PipelineContext $context, array $options = []): bool
     {
-        return $this->includeQuery && !empty($context['cypher']);
+        return $this->includeQuery && !empty($context->queryResult->cypher);
     }
 }

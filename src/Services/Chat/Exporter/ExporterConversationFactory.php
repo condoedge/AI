@@ -22,6 +22,6 @@ class ExporterConversationFactory
         }
 
         $class = $this->types[$type];
-        return new $class();
+        return app()->make($class);
     }
 }

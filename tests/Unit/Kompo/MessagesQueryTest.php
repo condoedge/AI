@@ -3,8 +3,9 @@
 namespace Condoedge\Ai\Tests\Unit\Kompo;
 
 use Condoedge\Ai\Kompo\MessagesQuery;
+use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
 use Condoedge\Ai\Models\AiConversation;
-use Condoedge\Ai\Services\Chat\RegenerateMessageService;
+use Condoedge\Ai\Services\Chat\Results\ChatTurnResult;
 use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Orchestra\Testbench\TestCase;
@@ -13,8 +14,10 @@ use Mockery;
 /**
  * Tests for MessagesQuery::regenerate() method.
  *
- * These tests verify that the regenerate() method properly delegates
- * to RegenerateMessageService instead of the old inline implementation.
+ * These tests verify that the regenerate() method routes through ChatPresenter
+ * (the single Kompo<->app seam) instead of the old inline / legacy-service implementation.
+ * The refresh button lives on the assistant bubble, so regenerate() resolves the user
+ * message that the assistant answered and hands it to ChatPresenter::handleRegenerate.
  */
 class MessagesQueryTest extends TestCase
 {
@@ -86,14 +89,12 @@ class MessagesQueryTest extends TestCase
     }
 
     /**
-     * Test that regenerate method calls RegenerateMessageService.regenerateFromAssistantMessage.
-     *
-     * This test uses a subclass to bypass Kompo initialization while testing
-     * the actual regenerate() method implementation.
+     * Test that regenerate() routes through ChatPresenter::handleRegenerate, resolving the
+     * USER message that the clicked assistant message answered.
      *
      * @test
      */
-    public function regenerate_uses_regenerate_service(): void
+    public function regenerate_routes_through_presenter_with_resolved_user_message(): void
     {
         // Create conversation with messages
         $conversation = AiConversation::create(['user_id' => $this->user->id]);
@@ -108,19 +109,20 @@ class MessagesQueryTest extends TestCase
             'created_at' => now(),
         ]);
 
-        // Mock the service
-        $mockService = Mockery::mock(RegenerateMessageService::class);
-        $mockService->shouldReceive('regenerateFromAssistantMessage')
+        // Mock the presenter: handleRegenerate must receive the conversation + the resolved
+        // user message (not the assistant message), the style, and the acting user.
+        $mockPresenter = Mockery::mock(ChatPresenter::class);
+        $mockPresenter->shouldReceive('handleRegenerate')
             ->once()
             ->with(
                 Mockery::on(fn($c) => $c->id === $conversation->id),
-                Mockery::on(fn($m) => $m->id === $assistantMsg->id),
+                Mockery::on(fn($m) => $m->id === $userMsg->id && $m->role === 'user'),
+                'friendly',
                 Mockery::on(fn($u) => $u->id === $this->user->id),
-                Mockery::any()
             )
-            ->andReturn(['answer' => 'New answer']);
+            ->andReturn(new ChatTurnResult(answer: 'New answer'));
 
-        $this->app->instance(RegenerateMessageService::class, $mockService);
+        $this->app->instance(ChatPresenter::class, $mockPresenter);
 
         // Create mock settings
         $mockSettings = $this->createMockSettings();
@@ -128,12 +130,10 @@ class MessagesQueryTest extends TestCase
         // Create a testable subclass that bypasses Kompo initialization
         $query = new TestableMessagesQuery($conversation, $mockSettings);
 
-        // Call the regenerate method
+        // Call the regenerate method with the ASSISTANT message id
         $query->regenerate($assistantMsg->id);
 
-        // Explicit assertion - Mockery will verify the expectation in tearDown
-        // but we add this to avoid "risky test" warning
-        $this->assertTrue(true, 'Service was called (verified by Mockery)');
+        $this->assertTrue(true, 'Presenter was called (verified by Mockery)');
     }
 
     /**
@@ -143,11 +143,11 @@ class MessagesQueryTest extends TestCase
      */
     public function regenerate_returns_early_when_no_conversation(): void
     {
-        // Mock the service - should NOT be called
-        $mockService = Mockery::mock(RegenerateMessageService::class);
-        $mockService->shouldNotReceive('regenerateFromAssistantMessage');
+        // Mock the presenter - should NOT be called
+        $mockPresenter = Mockery::mock(ChatPresenter::class);
+        $mockPresenter->shouldNotReceive('handleRegenerate');
 
-        $this->app->instance(RegenerateMessageService::class, $mockService);
+        $this->app->instance(ChatPresenter::class, $mockPresenter);
 
         // Create a testable subclass with null conversation
         $query = new TestableMessagesQuery(null, null);
@@ -155,12 +155,12 @@ class MessagesQueryTest extends TestCase
         // Call the regenerate method
         $query->regenerate(999);
 
-        // No error, and the service was not called (verified by Mockery shouldNotReceive)
+        // No error, and the presenter was not called (verified by Mockery shouldNotReceive)
         $this->assertTrue(true);
     }
 
     /**
-     * Test that regenerate returns early for user messages.
+     * Test that regenerate returns early for user messages (refresh button is assistant-only).
      *
      * @test
      */
@@ -172,11 +172,11 @@ class MessagesQueryTest extends TestCase
             'content' => 'Test question',
         ]);
 
-        // Mock the service - should NOT be called for user messages
-        $mockService = Mockery::mock(RegenerateMessageService::class);
-        $mockService->shouldNotReceive('regenerateFromAssistantMessage');
+        // Mock the presenter - should NOT be called for user messages
+        $mockPresenter = Mockery::mock(ChatPresenter::class);
+        $mockPresenter->shouldNotReceive('handleRegenerate');
 
-        $this->app->instance(RegenerateMessageService::class, $mockService);
+        $this->app->instance(ChatPresenter::class, $mockPresenter);
 
         // Create a testable subclass
         $query = new TestableMessagesQuery($conversation, null);
@@ -184,7 +184,7 @@ class MessagesQueryTest extends TestCase
         // Call the regenerate method with a user message ID
         $query->regenerate($userMsg->id);
 
-        // No error, and the service was not called
+        // No error, and the presenter was not called
         $this->assertTrue(true);
     }
 
@@ -197,11 +197,11 @@ class MessagesQueryTest extends TestCase
     {
         $conversation = AiConversation::create(['user_id' => $this->user->id]);
 
-        // Mock the service - should NOT be called for nonexistent messages
-        $mockService = Mockery::mock(RegenerateMessageService::class);
-        $mockService->shouldNotReceive('regenerateFromAssistantMessage');
+        // Mock the presenter - should NOT be called for nonexistent messages
+        $mockPresenter = Mockery::mock(ChatPresenter::class);
+        $mockPresenter->shouldNotReceive('handleRegenerate');
 
-        $this->app->instance(RegenerateMessageService::class, $mockService);
+        $this->app->instance(ChatPresenter::class, $mockPresenter);
 
         // Create a testable subclass
         $query = new TestableMessagesQuery($conversation, null);
@@ -209,7 +209,7 @@ class MessagesQueryTest extends TestCase
         // Call the regenerate method with a nonexistent message ID
         $query->regenerate(99999);
 
-        // No error, and the service was not called
+        // No error, and the presenter was not called
         $this->assertTrue(true);
     }
 }

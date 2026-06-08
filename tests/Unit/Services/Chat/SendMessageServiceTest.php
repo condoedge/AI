@@ -2,9 +2,11 @@
 
 namespace Condoedge\Ai\Tests\Unit\Services\Chat;
 
-use Condoedge\Ai\Services\Chat\SendMessageService;
-use Condoedge\Ai\Services\Chat\AiChatService;
 use Condoedge\Ai\Models\AiConversation;
+use Condoedge\Ai\Services\Chat\Inputs\AskQuestionInput;
+use Condoedge\Ai\Services\Chat\Results\ChatTurnResult;
+use Condoedge\Ai\Services\Chat\SendMessageService;
+use Condoedge\Ai\Services\Chat\UseCases\AskQuestionUseCase;
 use Orchestra\Testbench\TestCase;
 use Mockery;
 
@@ -32,128 +34,116 @@ class SendMessageServiceTest extends TestCase
     }
 
     /** @test */
-    public function it_calls_ai_chat_service_with_conversation_and_message(): void
+    public function it_delegates_to_ask_question_use_case_and_maps_result_to_array(): void
     {
-        // Arrange
         $conversation = Mockery::mock(AiConversation::class);
         $conversation->shouldReceive('getAttribute')->with('id')->andReturn(1);
 
-        $expectedResponse = [
-            'answer' => 'Test response',
-            'data' => [],
-            'suggestions' => [],
-            'sources' => [],
-            'cypher_query' => null,
-        ];
+        $result = new ChatTurnResult(
+            answer: 'Test response',
+            data: [['x' => 1]],
+            suggestions: ['Tell me more'],
+            sources: [],
+            cypher: 'MATCH (n) RETURN n',
+        );
 
-        $aiChatService = Mockery::mock(AiChatService::class);
-        $aiChatService->shouldReceive('askWithConversation')
+        $useCase = Mockery::mock(AskQuestionUseCase::class);
+        $useCase->shouldReceive('execute')
             ->once()
-            ->with('Test message', $conversation, [])
-            ->andReturn($expectedResponse);
+            ->with(Mockery::on(function (AskQuestionInput $input) use ($conversation) {
+                return $input->question === 'Test message'
+                    && $input->conversation === $conversation
+                    && $input->style === 'friendly';
+            }))
+            ->andReturn($result);
 
-        $service = new SendMessageService($aiChatService);
+        $service = new SendMessageService($useCase);
 
-        // Act
-        $result = $service->sendMessage(
+        $response = $service->sendMessage(
             conversation: $conversation,
             message: 'Test message'
         );
 
-        // Assert
-        $this->assertIsArray($result);
-        $this->assertEquals($expectedResponse, $result);
+        $this->assertSame([
+            'answer' => 'Test response',
+            'data' => [['x' => 1]],
+            'suggestions' => ['Tell me more'],
+            'sources' => [],
+            'cypher_query' => 'MATCH (n) RETURN n',
+        ], $response);
     }
 
     /** @test */
-    public function it_passes_options_to_ai_chat_service(): void
+    public function it_passes_style_and_user_options_through_the_input(): void
     {
-        // Arrange
         $conversation = Mockery::mock(AiConversation::class);
         $conversation->shouldReceive('getAttribute')->with('id')->andReturn(1);
 
-        $options = ['user' => (object) ['id' => 123], 'style' => 'professional'];
+        $user = (object) ['id' => 123];
 
-        $aiChatService = Mockery::mock(AiChatService::class);
-        $aiChatService->shouldReceive('askWithConversation')
+        $useCase = Mockery::mock(AskQuestionUseCase::class);
+        $useCase->shouldReceive('execute')
             ->once()
-            ->with('Hello', $conversation, $options)
-            ->andReturn(['answer' => 'Hi']);
+            ->with(Mockery::on(function (AskQuestionInput $input) use ($user) {
+                return $input->style === 'professional' && $input->user === $user;
+            }))
+            ->andReturn(new ChatTurnResult(answer: 'Hi'));
 
-        $service = new SendMessageService($aiChatService);
+        $service = new SendMessageService($useCase);
 
-        // Act
-        $result = $service->sendMessage(
+        $response = $service->sendMessage(
             conversation: $conversation,
             message: 'Hello',
-            options: $options
+            options: ['user' => $user, 'style' => 'professional']
         );
 
-        // Assert
-        $this->assertEquals(['answer' => 'Hi'], $result);
+        $this->assertSame('Hi', $response['answer']);
     }
 
     /** @test */
     public function it_throws_exception_for_empty_message(): void
     {
-        // Arrange
         $conversation = Mockery::mock(AiConversation::class);
-        $aiChatService = Mockery::mock(AiChatService::class);
+        $useCase = Mockery::mock(AskQuestionUseCase::class);
+        $useCase->shouldNotReceive('execute');
 
-        // AiChatService should NOT be called for empty messages
-        $aiChatService->shouldNotReceive('askWithConversation');
+        $service = new SendMessageService($useCase);
 
-        $service = new SendMessageService($aiChatService);
-
-        // Assert & Act
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('Message cannot be empty');
 
-        $service->sendMessage(
-            conversation: $conversation,
-            message: ''
-        );
+        $service->sendMessage(conversation: $conversation, message: '');
     }
 
     /** @test */
     public function it_throws_exception_for_whitespace_only_message(): void
     {
-        // Arrange
         $conversation = Mockery::mock(AiConversation::class);
-        $aiChatService = Mockery::mock(AiChatService::class);
+        $useCase = Mockery::mock(AskQuestionUseCase::class);
+        $useCase->shouldNotReceive('execute');
 
-        $aiChatService->shouldNotReceive('askWithConversation');
+        $service = new SendMessageService($useCase);
 
-        $service = new SendMessageService($aiChatService);
-
-        // Assert & Act
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('Message cannot be empty');
 
-        $service->sendMessage(
-            conversation: $conversation,
-            message: '   '
-        );
+        $service->sendMessage(conversation: $conversation, message: '   ');
     }
 
     /** @test */
     public function it_does_not_use_request_global(): void
     {
-        // This test ensures we don't rely on request() global
         $this->assertEmpty(request()->all());
 
         $conversation = Mockery::mock(AiConversation::class);
         $conversation->shouldReceive('getAttribute')->with('id')->andReturn(1);
 
-        $aiChatService = Mockery::mock(AiChatService::class);
-        $aiChatService->shouldReceive('askWithConversation')->andReturn([
-            'answer' => 'Response',
-        ]);
+        $useCase = Mockery::mock(AskQuestionUseCase::class);
+        $useCase->shouldReceive('execute')->andReturn(new ChatTurnResult(answer: 'Response'));
 
-        $service = new SendMessageService($aiChatService);
+        $service = new SendMessageService($useCase);
         $service->sendMessage($conversation, 'Test');
 
-        // Request should still be empty - we didn't pollute it
         $this->assertEmpty(request()->all());
     }
 }

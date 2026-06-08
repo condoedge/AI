@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * ResponseTaskSection
  *
@@ -26,7 +28,7 @@ class ResponseTaskSection extends BaseResponseSection
         return $this;
     }
 
-    public function format(array $context, array $options = []): string
+    public function format(PipelineContext $context, array $options = []): string
     {
         if ($this->customTask !== null) {
             return $this->customTask;

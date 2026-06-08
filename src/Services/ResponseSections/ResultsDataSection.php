@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * ResultsDataSection
  *
@@ -26,9 +28,9 @@ class ResultsDataSection extends BaseResponseSection
         return $this;
     }
 
-    public function format(array $context, array $options = []): string
+    public function format(PipelineContext $context, array $options = []): string
     {
-        $data = $context['data'] ?? [];
+        $data = $context->executionResult->data;
 
         if (empty($data)) {
             return "Results: No data returned\n\n";
@@ -39,7 +41,9 @@ class ResultsDataSection extends BaseResponseSection
             ? array_slice($data, 0, $this->maxItems)
             : $data;
 
-        $output = "Results:\n" . json_encode($displayData, JSON_PRETTY_PRINT) . "\n\n";
+        $output = "Results:\n"
+            . $this->spotlight(json_encode($displayData, JSON_PRETTY_PRINT), 'retrieved_document', ['id' => 'results'])
+            . "\n\n";
 
         if (count($data) > $this->maxItems) {
             $remaining = count($data) - $this->maxItems;

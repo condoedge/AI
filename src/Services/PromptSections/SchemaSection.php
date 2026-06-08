@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * SchemaSection
  *
@@ -15,9 +17,9 @@ class SchemaSection extends BasePromptSection
     protected string $name = 'schema';
     protected int $priority = 20;
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
-        $schema = $context['graph_schema'] ?? [];
+        $schema = $context->graphSchema;
 
         if (empty($schema)) {
             return $this->header('GRAPH SCHEMA') . "No schema information available.\n\n";

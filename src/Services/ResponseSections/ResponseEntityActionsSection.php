@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 
 /**
@@ -21,11 +22,20 @@ use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
  * 2. Current response data
  *
  * Priority 55 places this after data (50) but before statistics (60).
+ *
+ * Style-aware: this section is pure action-link (entity://) INSTRUCTIONS, which
+ * contradict the 'minimal'/'concise' styles ("ONLY the direct answer, no extra
+ * words"). It is suppressed entirely for those styles.
  */
 class ResponseEntityActionsSection extends BaseResponseSection
 {
     protected string $name = 'entity_actions';
     protected int $priority = 55;
+
+    /**
+     * Styles that want just the answer; action-link instructions don't apply.
+     */
+    private const TERSE_STYLES = ['minimal', 'concise'];
 
     private ?EntityAutoDiscovery $discovery = null;
 
@@ -36,10 +46,16 @@ class ResponseEntityActionsSection extends BaseResponseSection
     }
 
     /**
-     * Include when there are entity types with actions OR generic actions
+     * Include when there are entity types with actions OR generic actions,
+     * but never for terse styles where action links would be unwanted noise.
      */
-    public function shouldInclude(array $context, array $options = []): bool
+    public function shouldInclude(PipelineContext $context, array $options = []): bool
     {
+        // Terse styles ask for just the answer; action-link instructions contradict that.
+        if ($this->isTerseStyle($options)) {
+            return false;
+        }
+
         // Get entity types from all sources
         $entityTypes = $this->resolveEntityTypes($context);
 
@@ -54,7 +70,7 @@ class ResponseEntityActionsSection extends BaseResponseSection
         return !empty($genericActions);
     }
 
-    public function format(array $context, array $options = []): string
+    public function format(PipelineContext $context, array $options = []): string
     {
         $output = $this->header('Action Links');
         $output .= "You can include clickable action links in your response using Markdown syntax.\n\n";
@@ -119,14 +135,24 @@ class ResponseEntityActionsSection extends BaseResponseSection
     }
 
     /**
+     * Whether the requested style wants just the answer (no action links).
+     */
+    private function isTerseStyle(array $options): bool
+    {
+        $style = $options['style'] ?? config('ai.response_generation.default_style', 'friendly');
+
+        return in_array($style, self::TERSE_STYLES, true);
+    }
+
+    /**
      * Resolve entity types from multiple sources (priority order)
      */
-    private function resolveEntityTypes(array $context): array
+    private function resolveEntityTypes(PipelineContext $context): array
     {
         $types = [];
 
         // 1. Conversation context focused_entity (most reliable)
-        $conversationContext = $context['conversation_context'] ?? [];
+        $conversationContext = $context->conversationContext;
         if (!empty($conversationContext['focused_entity'])) {
             $types[] = $conversationContext['focused_entity'];
         }
@@ -137,7 +163,7 @@ class ResponseEntityActionsSection extends BaseResponseSection
         }
 
         // 3. Parse from Cypher query (fallback)
-        $cypher = $context['cypher'] ?? '';
+        $cypher = $context->queryResult->cypher ?? '';
         if ($cypher) {
             $cypherLabels = $this->extractLabelsFromCypher($cypher);
             $types = array_merge($types, $cypherLabels);
@@ -149,13 +175,13 @@ class ResponseEntityActionsSection extends BaseResponseSection
     /**
      * Resolve entity data (IDs and names) from multiple sources
      */
-    private function resolveEntityData(array $context): array
+    private function resolveEntityData(PipelineContext $context): array
     {
         // 1. Current response data
-        $currentData = $context['data'] ?? [];
+        $currentData = $context->executionResult->data;
 
         // 2. Conversation context last_result_sample (for NO QUERY cases)
-        $conversationContext = $context['conversation_context'] ?? [];
+        $conversationContext = $context->conversationContext;
         $lastResults = $conversationContext['last_result_sample'] ?? [];
 
         // Prefer current data if available, otherwise use conversation context

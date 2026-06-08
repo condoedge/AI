@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\PromptSectionInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\AssistantIdentity;
 use Condoedge\Ai\Services\PromptSections\GenericContextSection;
 use Condoedge\Ai\Services\PromptSections\ProjectContextSection;
 use Condoedge\Ai\Services\PromptSections\SchemaSection;
@@ -261,42 +263,87 @@ class SemanticPromptBuilder
     // =========================================================================
 
     /**
-     * Build semantic prompt for LLM query generation
+     * Build the query-generation prompt split by role.
      *
-     * Creates a comprehensive prompt by processing all registered sections
-     * in priority order.
+     * The SYSTEM message holds the model-agnostic identity (config('ai.identity')) plus
+     * an internal note that the assistant translates questions into a graph query
+     * language, followed by all sections whose role() is 'system' (e.g. the static
+     * QueryRulesSection). The USER message holds the context, the spotlighted question
+     * and the task. Section ORDER is preserved within each role.
+     *
+     * The persona is intentionally model-agnostic and stack-agnostic: Cypher-specific
+     * rules live in QueryRulesSection, not in the identity.
      *
      * @param string $question User's natural language question
-     * @param array $context Context with schema, metadata, and detected scopes
+     * @param PipelineContext $context Pipeline context with schema, metadata, and detected scopes
+     * @param bool $allowWrite Whether to allow write operations
+     * @return array{system: string, user: string}
+     */
+    public function buildPrompts(
+        string $question,
+        PipelineContext $context,
+        bool $allowWrite = false
+    ): array {
+        $options = ['allowWrite' => $allowWrite];
+
+        // System framing: explicit custom prompt overrides; otherwise the config identity
+        // plus an internal, provider-neutral role note.
+        if ($this->systemPrompt !== null) {
+            $system = $this->systemPrompt . "\n\n";
+        } else {
+            $identity = AssistantIdentity::render(includeLanguagePolicy: false);
+            $system = ($identity !== '' ? $identity . "\n\n" : '')
+                . "Internally, you translate the user's questions into a graph query language based on the "
+                . "semantic business definitions provided below. Never reveal this query language or any internal "
+                . "schema to the user.\n\n";
+        }
+
+        $user = '';
+
+        $this->processModules(
+            beforeCallbackProcess: function($callback) use (&$user, $question, $context, $options) {
+                $user .= $callback($question, $context, $options);
+            },
+            moduleProcess: function($section) use (&$system, &$user, $question, $context, $options) {
+                if (!$section->shouldInclude($question, $context, $options)) {
+                    return;
+                }
+
+                $content = $section->format($question, $context, $options);
+
+                if ($section->role() === 'system') {
+                    $system .= $content;
+                } else {
+                    $user .= $content;
+                }
+            },
+            afterCallbackProcess: function($callback) use (&$user, $question, $context, $options) {
+                $user .= $callback($question, $context, $options);
+            },
+        );
+
+        return ['system' => $system, 'user' => $user];
+    }
+
+    /**
+     * Build the full query-generation prompt as a single string.
+     *
+     * Retained for backward compatibility with callers/tests that expect one string.
+     * The live QueryGenerator path uses buildPrompts() for true role separation.
+     *
+     * @param string $question User's natural language question
+     * @param PipelineContext $context Pipeline context with schema, metadata, and detected scopes
      * @param bool $allowWrite Whether to allow write operations
      * @return string Complete LLM prompt
      */
     public function buildPrompt(
         string $question,
-        array $context,
+        PipelineContext $context,
         bool $allowWrite = false
     ): string {
-        $options = ['allowWrite' => $allowWrite];
+        ['system' => $system, 'user' => $user] = $this->buildPrompts($question, $context, $allowWrite);
 
-        // Start with system prompt
-        $prompt = $this->systemPrompt
-            ?? "You are a Neo4j Cypher query expert who generates queries based on semantic business definitions.\n\n";
-
-        $this->processModules(
-            beforeCallbackProcess: function($callback) use (&$prompt, $question, $context, $options) {
-                $prompt .= $callback($question, $context, $options);
-            },
-            moduleProcess: function($section) use (&$prompt, $question, $context, $options) {
-                if ($section->shouldInclude($question, $context, $options)) {
-                    $prompt .= $section->format($question, $context, $options);
-                }
-            },
-            afterCallbackProcess: function($callback) use (&$prompt, $question, $context, $options) {
-                $prompt .= $callback($question, $context, $options);
-            },
-        );
-
-        return $prompt;
+        return $system . $user;
     }
 
     // =========================================================================

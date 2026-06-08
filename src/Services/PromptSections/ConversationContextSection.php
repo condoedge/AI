@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * ConversationContextSection
  *
@@ -21,9 +23,9 @@ class ConversationContextSection extends BasePromptSection
     /**
      * Only include when there's actual conversation context
      */
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
-        $conversationContext = $context['conversation_context'] ?? [];
+        $conversationContext = $context->conversationContext;
 
         // Need at least one of these context elements to be useful
         return !empty($conversationContext['focused_entity'])
@@ -41,9 +43,9 @@ class ConversationContextSection extends BasePromptSection
      * - Build upon previous queries
      * - Resolve pronouns like "those", "them", "the same"
      */
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
-        $conversationContext = $context['conversation_context'] ?? [];
+        $conversationContext = $context->conversationContext;
 
         if (empty($conversationContext)) {
             return '';

@@ -1,27 +1,22 @@
 /**
  * Chat Scroll Manager
  *
- * Handles reverse scroll pagination for chat messages.
- * - Loads older messages when scrolling UP (to top)
- * - Maintains scroll position when new messages are loaded
- * - Smooth scroll to bottom for new messages
+ * Scrolls the chat messages container to the bottom on load and after refresh.
+ *
+ * Older-message pagination is handled by Kompo's built-in Scroll pagination
+ * (MessagesQuery: paginationType='Scroll', topPagination=true) — this manager only
+ * owns the "snap to newest message" behavior.
  */
 class ChatScrollManager {
-    static SCROLL_THRESHOLD = 100;
-
     constructor(containerId) {
         this.containerId = containerId;
         this.container = null;
-        this.boundHandleScroll = null;
-        this.isLoadingMore = false;
-        this.previousScrollHeight = 0;
         this.init();
     }
 
     init() {
         this.waitForContainer().then(container => {
             this.container = container;
-            this.setupScrollListener();
             this.scrollToBottom(false);
         }).catch(err => {
             console.warn('ChatScrollManager:', err.message);
@@ -47,34 +42,6 @@ class ChatScrollManager {
         });
     }
 
-    setupScrollListener() {
-        this.boundHandleScroll = this.handleScroll.bind(this);
-        this.container.addEventListener('scroll', this.boundHandleScroll);
-    }
-
-    handleScroll() {
-        if (this.container.scrollTop < ChatScrollManager.SCROLL_THRESHOLD && !this.isLoadingMore) {
-            this.loadOlderMessages();
-        }
-    }
-
-    loadOlderMessages() {
-        this.previousScrollHeight = this.container.scrollHeight;
-        this.isLoadingMore = true;
-
-        const event = new CustomEvent('chat-load-older', {
-            detail: { containerId: this.containerId }
-        });
-        document.dispatchEvent(event);
-    }
-
-    onMessagesLoaded() {
-        const newScrollHeight = this.container.scrollHeight;
-        const scrollDiff = newScrollHeight - this.previousScrollHeight;
-        this.container.scrollTop = scrollDiff;
-        this.isLoadingMore = false;
-    }
-
     scrollToBottom(smooth = true) {
         if (!this.container) return;
 
@@ -86,28 +53,8 @@ class ChatScrollManager {
         }, 100);
     }
 
-    addNewMessage(messageHtml, isUser = false) {
-        const placeholder = document.createElement('div');
-        placeholder.setAttribute('data-new-message', 'true');
-        placeholder.innerHTML = messageHtml;
-
-        const loadingPanel = document.getElementById('temp-message-loading');
-        if (loadingPanel) {
-            loadingPanel.parentNode.insertBefore(placeholder, loadingPanel);
-        } else {
-            this.container.appendChild(placeholder);
-        }
-
-        this.scrollToBottom(true);
-    }
-
     destroy() {
-        if (this.container && this.boundHandleScroll) {
-            this.container.removeEventListener('scroll', this.boundHandleScroll);
-        }
         this.container = null;
-        this.boundHandleScroll = null;
-        this.isLoadingMore = false;
     }
 }
 
@@ -133,11 +80,4 @@ function initChatScroll() {
 // Re-initialize after Kompo refreshes
 document.addEventListener('kompo:mounted', () => {
     initChatScroll();
-});
-
-// Handle loading completion
-document.addEventListener('chat-messages-loaded', () => {
-    if (window.chatScrollManager) {
-        window.chatScrollManager.onMessagesLoaded();
-    }
 });

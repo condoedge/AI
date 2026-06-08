@@ -7,6 +7,7 @@ namespace Condoedge\Ai;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 use Condoedge\Ai\Services\AiManager;
+use Condoedge\Ai\Services\LlmResolver;
 use Condoedge\Ai\Services\DataIngestionService;
 use Condoedge\Ai\Services\ContextRetriever;
 use Condoedge\Ai\Services\QueryGenerator;
@@ -214,6 +215,14 @@ class AiServiceProvider extends ServiceProvider
             };
         });
 
+        // Register LLM Resolver (per-role model selection)
+        $this->app->singleton(LlmResolver::class, function ($app) {
+            return new LlmResolver(
+                defaultProvider: $app->make(LlmProviderInterface::class),
+                roleConfig: config('ai.llm_roles', [])
+            );
+        });
+
         // Register Data Ingestion Service
         $this->app->singleton(DataIngestionServiceInterface::class, function ($app) {
             return new DataIngestionService(
@@ -362,7 +371,8 @@ class AiServiceProvider extends ServiceProvider
         $this->app->singleton('file-search', function ($app) {
             return new FileSearchService(
                 chunkStore: $app->make(ChunkStoreInterface::class),
-                graphStore: $app->make(GraphStoreInterface::class)
+                graphStore: $app->make(GraphStoreInterface::class),
+                additionalCollections: $this->resolveAdditionalSearchCollections()
             );
         });
 
@@ -460,7 +470,7 @@ class AiServiceProvider extends ServiceProvider
         // Register QueryUnderstandingService
         $this->app->singleton(QueryUnderstandingService::class, function ($app) {
             return new QueryUnderstandingService(
-                llm: $app->make(LlmProviderInterface::class),
+                llm: $app->make(LlmResolver::class)->forRole('query_understanding'),
                 logger: $app->make(AiLogger::class),
                 config: config('ai.query_understanding', [])
             );
@@ -562,12 +572,9 @@ class AiServiceProvider extends ServiceProvider
         // Alias for easier access
         $this->app->alias(AiChatServiceInterface::class, AiChatService::class);
 
-        // Register Regenerate Message Service
-        $this->app->singleton(RegenerateMessageService::class, function ($app) {
-            return new RegenerateMessageService(
-                $app->make(AiChatService::class)
-            );
-        });
+        // Register Regenerate Message Service (thin guard over RegenerateAnswerUseCase;
+        // the use case is container-autowired, so let the container resolve dependencies).
+        $this->app->singleton(RegenerateMessageService::class);
     }
 
     /**
@@ -603,11 +610,19 @@ class AiServiceProvider extends ServiceProvider
         // Physical file indexer
         $this->app->singleton(PhysicalFileIndexer::class);
 
+        // File context enricher (override in project service provider for priority logic)
+        $this->app->singleton(
+            \Condoedge\Ai\Contracts\FileContextEnricherInterface::class,
+            \Condoedge\Ai\Services\Context\DefaultFileContextEnricher::class
+        );
+
         // File context provider
         $this->app->singleton(FileContextProvider::class, function ($app) {
             return new FileContextProvider(
                 $app->make(FileSearchService::class),
-                $app->make(FileAccessResolverInterface::class)
+                $app->make(FileAccessResolverInterface::class),
+                null,
+                $app->make(\Condoedge\Ai\Contracts\FileContextEnricherInterface::class)
             );
         });
 
@@ -823,6 +838,38 @@ class AiServiceProvider extends ServiceProvider
     }
 
     /**
+     * Resolve the additional collections that file search should union into its
+     * results alongside the primary file_chunks collection.
+     *
+     * By default this includes the physical/documentation collection so local
+     * docs ingested via `ai:ingest --docs` are returned by content/filename
+     * search (B4). An explicit `ai.file_context.search_collections` list, when
+     * configured, takes precedence. The primary collection is always excluded.
+     *
+     * @return array<string>
+     */
+    protected function resolveAdditionalSearchCollections(): array
+    {
+        $primary = config('ai.file_processing.collection', 'file_chunks');
+
+        $configured = config('ai.file_context.search_collections');
+
+        if (is_array($configured)) {
+            $collections = $configured;
+        } else {
+            // Default: also search the physical docs collection.
+            $physical = config('ai.file_context.physical_collection', 'documentation_chunks');
+            $collections = $physical ? [$physical] : [];
+        }
+
+        // Exclude the primary collection (already searched) and any empties.
+        return array_values(array_filter(
+            array_unique($collections),
+            fn ($c) => is_string($c) && trim($c) !== '' && $c !== $primary
+        ));
+    }
+
+    /**
      * Get the services provided by the provider
      *
      * @return array
@@ -834,6 +881,7 @@ class AiServiceProvider extends ServiceProvider
             GraphStoreInterface::class,
             EmbeddingProviderInterface::class,
             LlmProviderInterface::class,
+            LlmResolver::class,
             DataIngestionServiceInterface::class,
             DataIngestionService::class,
             ContextRetrieverInterface::class,

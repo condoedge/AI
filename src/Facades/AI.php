@@ -54,7 +54,7 @@ use Illuminate\Support\Facades\Facade;
  * $answer = AI::ask("How many customers do we have?");
  *
  * // Response Generation
- * $response = AI::generateResponse("How many teams?", $queryResult, "MATCH (n:Team) RETURN count(n)");
+ * $response = AI::generateResponse($pipelineContext);
  * $insights = AI::extractInsights($queryResult);
  * $charts = AI::suggestVisualizations($queryResult, "MATCH (n) RETURN n");
  *
@@ -92,7 +92,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static array ingestBatch(array $entities)
  * @method static bool remove(\Condoedge\Ai\Domain\Contracts\Nodeable $entity)
  * @method static array sync(\Condoedge\Ai\Domain\Contracts\Nodeable $entity)
- * @method static array retrieveContext(string $question, array $options = [])
+ * @method static \Condoedge\Ai\DTOs\PipelineContext retrieveContext(string $question, array $options = [])
  * @method static array searchSimilar(string $question, array $options = [])
  * @method static array getSchema()
  * @method static array getExampleEntities(array $labels, int $limit = 3)
@@ -109,7 +109,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static string getLlmProvider()
  * @method static int getLlmMaxTokens()
  * @method static int countTokens(string $text)
- * @method static array generateQuery(string $question, array $context = [], array $options = [])
+ * @method static array generateQuery(string $question, ?\Condoedge\Ai\DTOs\PipelineContext $context = null, array $options = [])
  * @method static array validateQuery(string $cypherQuery, array $options = [])
  * @method static string sanitizeQuery(string $cypherQuery)
  * @method static array getQueryTemplates()
@@ -121,7 +121,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static array explainQuery(string $cypherQuery, array $parameters = [])
  * @method static bool testQuery(string $cypherQuery)
  * @method static array ask(string $question, array $options = [])
- * @method static array generateResponse(string $originalQuestion, array $queryResult, string $cypherQuery, array $options = [])
+ * @method static array generateResponse(\Condoedge\Ai\DTOs\PipelineContext $context, array $options = [])
  * @method static array extractInsights(array $queryResult)
  * @method static array suggestVisualizations(array $queryResult, string $cypherQuery)
  * @method static array answerQuestion(string $question, array $options = [])

@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Context;
 
 use Condoedge\Ai\Contracts\FileAccessResolverInterface;
+use Condoedge\Ai\Contracts\FileContextEnricherInterface;
 use Condoedge\Ai\Services\FileSearchService;
+use Illuminate\Support\Facades\Log;
 
 /**
  * File Context Provider
@@ -37,18 +39,26 @@ class FileContextProvider
     private readonly FilenameExtractor $filenameExtractor;
 
     /**
+     * The file context enricher instance
+     */
+    private readonly FileContextEnricherInterface $enricher;
+
+    /**
      * Create a new FileContextProvider instance
      *
      * @param FileSearchService $searchService Service for searching file content
      * @param FileAccessResolverInterface $accessResolver Service for resolving file access
      * @param FilenameExtractor|null $filenameExtractor Service for extracting filenames from queries
+     * @param FileContextEnricherInterface|null $enricher Service for enriching file results with priority/annotations
      */
     public function __construct(
         private readonly FileSearchService $searchService,
         private readonly FileAccessResolverInterface $accessResolver,
-        ?FilenameExtractor $filenameExtractor = null
+        ?FilenameExtractor $filenameExtractor = null,
+        ?FileContextEnricherInterface $enricher = null
     ) {
         $this->filenameExtractor = $filenameExtractor ?? new FilenameExtractor();
+        $this->enricher = $enricher ?? new DefaultFileContextEnricher();
     }
 
     /**
@@ -91,13 +101,24 @@ class FileContextProvider
         // Step 2: Search by filename (if references found)
         // Note: Sequential searches are acceptable for typical use (1-2 filenames per query).
         // For queries with many filenames, consider adding batch search to FileSearchService.
+        //
+        // ISOLATION (B2): the filename sub-search is wrapped independently so a
+        // filename-search failure degrades to content-only rather than aborting the
+        // whole method. Each filename is also isolated from the others.
         $filenameResults = [];
         foreach ($extractedFilenames as $filename) {
-            $results = $this->searchService->searchByFilename($filename, [
-                'limit' => $maxReferences,
-                'include_relationships' => false,
-            ]);
-            $filenameResults = array_merge($filenameResults, $results);
+            try {
+                $results = $this->searchService->searchByFilename($filename, [
+                    'limit' => $maxReferences,
+                    'include_relationships' => false,
+                ]);
+                $filenameResults = array_merge($filenameResults, $results);
+            } catch (\Throwable $e) {
+                Log::debug('FileContextProvider: filename sub-search failed, continuing', [
+                    'filename' => $filename,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         // Step 3: Enhance query with conversation context for follow-up questions
@@ -105,10 +126,22 @@ class FileContextProvider
         $enhancedQuery = $this->enhanceQueryWithContext($question, $conversationContext);
 
         // Step 4: Search by content (semantic search)
-        $contentResults = $this->searchService->searchByContent($enhancedQuery, [
-            'limit' => $maxReferences * 3,
-            'include_relationships' => false,
-        ]);
+        //
+        // ISOLATION (B2): the content sub-search is wrapped independently so a
+        // content-search failure degrades to filename-only rather than aborting.
+        // min_score is forwarded (B3) so weak chunks are cut early in Qdrant.
+        $contentResults = [];
+        try {
+            $contentResults = $this->searchService->searchByContent($enhancedQuery, [
+                'limit' => $maxReferences * 3,
+                'min_score' => $minScore,
+                'include_relationships' => false,
+            ]);
+        } catch (\Throwable $e) {
+            Log::debug('FileContextProvider: content sub-search failed, continuing', [
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         // Step 5: Combine results, filename matches first
         $combinedResults = $this->combineSearchResults($filenameResults, $contentResults);
@@ -158,7 +191,7 @@ class FileContextProvider
         $filteredResults = array_slice($filteredResults, 0, $maxReferences);
 
         // Transform to standard format
-        return array_map(function ($result) use ($snippetLength) {
+        $transformedResults = array_map(function ($result) use ($snippetLength) {
             $chunk = $result['best_chunk'];
             $fileId = $result['file_id'];
             $source = $this->accessResolver->isPhysicalFile($fileId) ? 'physical' : 'database';
@@ -177,6 +210,18 @@ class FileContextProvider
                 'match_type' => $result['match_type'] ?? 'content',
             ];
         }, $filteredResults);
+
+        // Apply project-specific enrichment (priority tiers, annotations, etc.)
+        $transformedResults = $this->enricher->enrich($transformedResults, $question, $user);
+
+        // Re-sort by priority_score if enricher added it, otherwise keep relevance order
+        usort($transformedResults, function ($a, $b) {
+            $aPriority = $a['priority_score'] ?? $a['relevance'];
+            $bPriority = $b['priority_score'] ?? $b['relevance'];
+            return $bPriority <=> $aPriority;
+        });
+
+        return $transformedResults;
     }
 
     /**

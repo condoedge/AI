@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\PatternLibrary;
 
 /**
@@ -24,7 +25,7 @@ class PatternLibrarySection extends BasePromptSection
         $this->patternLibrary = $patternLibrary;
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
         $patterns = $this->patternLibrary->getAllPatterns();
 
@@ -50,7 +51,7 @@ class PatternLibrarySection extends BasePromptSection
         return $output;
     }
 
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
         return !empty($this->patternLibrary->getAllPatterns());
     }

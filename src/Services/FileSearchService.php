@@ -19,13 +19,30 @@ use Illuminate\Database\Eloquent\Model;
 class FileSearchService
 {
     /**
+     * Additional collections to union into content/filename search alongside the
+     * chunk store's bound (primary) collection. Used so physical/documentation
+     * docs (e.g. 'documentation_chunks') are returned by content search (B4).
+     *
+     * @var array<string>
+     */
+    private readonly array $additionalCollections;
+
+    /**
      * @param ChunkStoreInterface $chunkStore
      * @param GraphStoreInterface $graphStore
+     * @param array<string> $additionalCollections Extra collections to also search
      */
     public function __construct(
         private readonly ChunkStoreInterface $chunkStore,
-        private readonly GraphStoreInterface $graphStore
-    ) {}
+        private readonly GraphStoreInterface $graphStore,
+        array $additionalCollections = []
+    ) {
+        // Normalize: unique, non-empty strings.
+        $this->additionalCollections = array_values(array_unique(array_filter(
+            $additionalCollections,
+            fn ($c) => is_string($c) && trim($c) !== ''
+        )));
+    }
 
     /**
      * Search files by content similarity
@@ -56,15 +73,32 @@ class FileSearchService
             $filters['min_score'] = $options['min_score'];
         }
 
-        // Search Qdrant for chunks (get more than limit to account for grouping)
+        // Search Qdrant for chunks (get more than limit to account for grouping).
+        // Primary collection uses the bound collection (no override); any
+        // additional collections (e.g. documentation_chunks) are unioned in (B4).
         $chunks = $this->chunkStore->searchByContent($query, $limit * 3, $filters);
+
+        foreach ($this->additionalCollections as $collection) {
+            try {
+                $extra = $this->chunkStore->searchByContent($query, $limit * 3, $filters, $collection);
+                $chunks = array_merge($chunks, $extra);
+            } catch (\Throwable $e) {
+                // A failing secondary collection must not break primary results.
+                continue;
+            }
+        }
 
         // Group chunks by file and calculate aggregate scores
         $fileGroups = collect($chunks)->groupBy(fn($result) => $result['chunk']->fileId);
 
         $results = [];
         foreach ($fileGroups as $fileId => $fileChunks) {
-            // Calculate average score for this file
+            // Score each file by its BEST chunk (max), not the average. Averaging
+            // dilutes a strong, on-topic chunk with weaker ones and drops files
+            // that are genuinely relevant (e.g. chunks [0.8, 0.2, 0.2, 0.2]
+            // averaged to ~0.35 fell under a 0.4 threshold). Best-chunk scoring
+            // keeps such files. The average is preserved as metadata.
+            $maxScore = collect($fileChunks)->max('score');
             $avgScore = collect($fileChunks)->avg('score');
 
             // Get best matching chunk for preview
@@ -72,7 +106,8 @@ class FileSearchService
 
             $results[] = [
                 'file_id' => $fileId,
-                'score' => $avgScore,
+                'score' => $maxScore,
+                'avg_score' => $avgScore,
                 'chunk_count' => count($fileChunks),
                 'best_chunk' => $bestChunk['chunk'],
                 'chunks' => array_map(fn($r) => $r['chunk'], $fileChunks->toArray()),
@@ -131,8 +166,19 @@ class FileSearchService
             $filters['file_id'] = $options['file_id'];
         }
 
-        // Search chunk store by filename
+        // Search chunk store by filename (primary collection), then union any
+        // additional collections (e.g. documentation_chunks) so physical docs are
+        // found by explicit filename references too (B4).
         $chunks = $this->chunkStore->searchByFilename($filename, $limit * 2, $filters);
+
+        foreach ($this->additionalCollections as $collection) {
+            try {
+                $extra = $this->chunkStore->searchByFilename($filename, $limit * 2, $filters, $collection);
+                $chunks = array_merge($chunks, $extra);
+            } catch (\Throwable $e) {
+                continue;
+            }
+        }
 
         if (empty($chunks)) {
             return [];

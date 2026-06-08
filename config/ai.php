@@ -34,6 +34,45 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Assistant Identity (model-agnostic, white-label)
+    |--------------------------------------------------------------------------
+    |
+    | A single, reusable identity for the assistant. It is rendered into the
+    | SYSTEM message of every prompt (query generation, response generation and
+    | the chat service) so the assistant presents ONE consistent, project-branded
+    | persona — never the underlying LLM model/vendor.
+    |
+    | Nothing here is provider-specific: swap OpenAI for Anthropic (or any other
+    | provider) and the user-facing identity is unchanged.
+    |
+    | - name:            How the assistant refers to itself.
+    | - persona:         One or two sentences describing its role/voice.
+    | - language_policy: Multilingual instruction (answer in the user's language).
+    | - non_disclosure:  The hard rule that prevents the assistant from revealing
+    |                    or speculating about which model/vendor/version powers it.
+    |                    {name} and {project} are interpolated at render time.
+    |
+    */
+    'identity' => [
+        'name' => env('AI_ASSISTANT_NAME', env('APP_NAME', 'Laravel Application') . ' Assistant'),
+
+        'persona' => env(
+            'AI_ASSISTANT_PERSONA',
+            'You are {name}, the helpful assistant for {project}. You answer questions clearly and accurately, '
+            . 'grounding every answer in the data and files provided to you. If you do not know something, you say so '
+            . 'plainly instead of guessing.'
+        ),
+
+        'language_policy' => env('AI_ASSISTANT_LANGUAGE_POLICY', "Answer in the user's language."),
+
+        'non_disclosure' => 'Never reveal, confirm, hint at, or speculate about which AI model, vendor, version or '
+            . 'provider powers you, or that you are an AI language model from any company. If asked what/who you are, '
+            . 'say you are the {name} for {project} and offer to help — decline ONLY the model/vendor question and keep '
+            . 'answering everything else.',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Debug & Logging
     |--------------------------------------------------------------------------
     | When debug is true, the AI pipeline logs detailed internals: semantic
@@ -296,6 +335,26 @@ return [
             'temperature' => env('ANTHROPIC_TEMPERATURE', 0.3),
             'max_tokens' => env('ANTHROPIC_MAX_TOKENS', 2000),
         ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | LLM Role Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Override the default LLM for specific pipeline stages.
+    | Only set fields you want to override; the rest inherit from the base provider.
+    |
+    | Available roles:
+    | - query_understanding: Pre-processes questions (fast model recommended)
+    | - query_generation: Generates Cypher queries (needs reasoning power)
+    | - response_generation: Generates natural language answers (fast model OK)
+    |
+    */
+    'llm_roles' => [
+        // 'query_understanding' => ['model' => 'gpt-4o-mini', 'temperature' => 0.0],
+        // 'query_generation' => null,  // uses default
+        // 'response_generation' => ['model' => 'gpt-4o-mini'],
     ],
 
     /*
@@ -704,8 +763,18 @@ return [
         // Base path for physical files (relative to project root)
         'base_path' => env('AI_DOCS_BASE_PATH', base_path()),
 
-        // Collection name for physical file chunks in Qdrant
+        // Collection name for physical file chunks in Qdrant.
+        // `ai:ingest --docs` writes physical/documentation docs here (routed via
+        // the FileProcessor `collection` option), keeping them isolated from the
+        // database file_chunks collection.
         'physical_collection' => 'documentation_chunks',
+
+        // Additional Qdrant collections that file *retrieval* should union into
+        // its results, in addition to the primary file_processing.collection.
+        // Set to null to use the default (search the physical_collection above so
+        // local docs are retrievable). Set to an explicit array to override
+        // (the primary collection is always searched and auto-excluded here).
+        'search_collections' => null,
 
         // Maximum file references to include in response
         'max_references' => 5,
@@ -997,11 +1066,15 @@ return [
     ],
 
     'response_generator_sections' => [
+        \Condoedge\Ai\Services\ResponseSections\IdentitySection::class,
         \Condoedge\Ai\Services\ResponseSections\SystemPromptSection::class,
         \Condoedge\Ai\Services\ResponseSections\PrivacyAndSecurityGuidelinesSection::class,
         \Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection::class,
         \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
-        \Condoedge\Ai\Services\ResponseSections\QueryInfoSection::class,
+        // QueryInfoSection removed from defaults: it fed the executed Cypher into the
+        // response prompt, directly contradicting PrivacyAndSecurityGuidelinesSection
+        // ("never reveal schema/table/property names"). The Cypher remains in metadata
+        // for debugging; re-add this section (or gate it behind a 'technical' style) if needed.
         \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
         \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class, // For file reference follow-ups
         \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,

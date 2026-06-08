@@ -518,22 +518,24 @@ php artisan ai:test-question "What insurance rules apply to my unit?" --user=302
 ## Implementation Order
 
 ```
-Task 1: DTOs                    (no deps)
-Task 2: LlmResolver             (no deps)
+Task 1: DTOs                         (no deps)
+Task 2: LlmResolver                  (no deps)
+Task 8: File enricher interface       (no deps)
    ↓
-Task 3: QU update               (needs 1, 2)
-Task 4: Semantic selector DTO   (needs 1)
+Task 3: QU update                    (needs 1, 2)
+Task 4: Semantic selector DTO        (needs 1)
    ↓
-Task 5: ContextRetriever        (needs 1, 3, 4)
+Task 5: ContextRetriever rewrite     (needs 1, 3, 4)
    ↓
-Task 6: Consumer migration      (needs 1, 5) — biggest task by file count
+Task 6: Decompose ContextRetriever   (needs 5)
+         + AiManager for SRP
    ↓
-Task 7: File enricher           (independent, can start anytime)
+Task 7: Consumer migration           (needs 1, 6) — biggest by file count
    ↓
-Task 8: question_type gating    (needs 5, 6)
+Task 9: question_type gating         (done inside Task 6)
    ↓
-Task 9: CondoEdge specifics     (needs 7, 8)
-Task 10: Verification           (needs all)
+Task 10: CondoEdge specifics          (needs 7, 8)
+Task 11: Verification                 (needs all)
 ```
 
-Parallelizable: Tasks 1 + 2 + 7 can run simultaneously.
+**Parallelizable:** Tasks 1 + 2 + 8 can run simultaneously (no deps between them).

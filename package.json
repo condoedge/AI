@@ -1,0 +1,6 @@
+{
+"scripts": {
+    "translate": "node .github/scripts/generate-translations.js --provider=claude-cli",
+    "translate:dry": "node .github/scripts/generate-translations.js --provider=claude-cli --dry-run"
+  }
+}

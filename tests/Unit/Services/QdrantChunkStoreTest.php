@@ -41,6 +41,13 @@ class QdrantChunkStoreTest extends TestCase
             ->with($this->testCollection)
             ->andReturn(true);
 
+        // ensureCollectionExists() best-effort creates the file_name payload index
+        // on every verification. Allow it to be called any number of times.
+        $this->mockVectorStore
+            ->shouldReceive('ensurePayloadIndex')
+            ->byDefault()
+            ->andReturn(true);
+
         $this->chunkStore = new QdrantChunkStore(
             $this->mockVectorStore,
             $this->mockEmbeddingProvider,

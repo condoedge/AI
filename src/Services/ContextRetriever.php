@@ -9,6 +9,10 @@ use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use Condoedge\Ai\Domain\Traits\ResolvesEntityConfigKey;
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryUnderstandingResult;
+use Condoedge\Ai\DTOs\SelectedEntity;
+use Condoedge\Ai\DTOs\SemanticSelectionResult;
 use Condoedge\Ai\Support\AiLogger;
 
 /**
@@ -189,24 +193,17 @@ class ContextRetriever implements ContextRetrieverInterface
      *                       - scoreThreshold: Minimum similarity score (default: 0.0)
      *                       - useSemanticSelection: Use semantic context selection (default: true)
      *
-     * @return array Context structure with keys:
-     *               - similar_queries: Array of similar Q&A pairs with scores
-     *               - graph_schema: Graph structure (labels, relationships, properties)
-     *               - relevant_entities: Sample entities grouped by label
-     *               - errors: Array of non-fatal error messages (empty if no errors)
-     *               - selection_info: Information about how context was selected
+     * @return PipelineContext Typed context object containing all pipeline data
      */
-    public function retrieveContext(string $question, array $options = []): array
+    public function retrieveContext(string $question, array $options = []): PipelineContext
     {
         $this->logger->startTrace('context_retrieval');
         $this->logger->startTimer('total');
 
-        // Validate input
         if (empty(trim($question))) {
             throw new \InvalidArgumentException('Question cannot be empty');
         }
 
-        // Extract options with defaults
         $collection = $options['collection'] ?? self::DEFAULT_COLLECTION;
         $limit = $options['limit'] ?? self::DEFAULT_LIMIT;
         $includeSchema = $options['includeSchema'] ?? true;
@@ -215,245 +212,179 @@ class ContextRetriever implements ContextRetrieverInterface
         $scoreThreshold = $options['scoreThreshold'] ?? self::DEFAULT_SCORE_THRESHOLD;
         $useSemanticSelection = $options['useSemanticSelection'] ?? true;
 
-        // Initialize context structure
-        $context = [
-            'similar_queries' => [],
-            'graph_schema' => [],
-            'relevant_entities' => [],
-            'entity_metadata' => [],
-            'errors' => [],
-            'selection_info' => [],
-        ];
+        $ctx = new PipelineContext();
 
-        // =====================================================================
-        // STEP 0: Semantic context selection (fast — embedding + vector search)
-        // =====================================================================
-        $semanticContext = null;
-        $quResult = QueryUnderstandingService::emptyResult($question);
+        // STEP 1: Query Understanding (always runs if available)
+        if ($this->queryUnderstanding !== null) {
+            try {
+                $entityCatalog = QueryUnderstandingService::buildEntityCatalog($this->entityConfigs);
+                $ctx->qu = $this->queryUnderstanding->analyze($question, $entityCatalog);
 
-        // Extract focused entity from conversation context for follow-up queries
+                $this->logger->info('context_retriever', 'Query understanding complete', [
+                    'entity_types' => $ctx->qu->entityTypes,
+                    'question_type' => $ctx->qu->questionType,
+                    'intent' => $ctx->qu->intent,
+                    'is_possessive' => $ctx->qu->isPossessive,
+                ]);
+            } catch (\Throwable $e) {
+                $this->logger->error('context_retriever', 'Query understanding failed: ' . $e->getMessage());
+                $ctx->addError('Query understanding failed: ' . $e->getMessage());
+                $ctx->qu = QueryUnderstandingResult::empty($question);
+            }
+        } else {
+            $ctx->qu = QueryUnderstandingResult::empty($question);
+        }
+
+        // STEP 2: Semantic context selection
         $conversationFocusedEntity = $options['conversation_context']['focused_entity'] ?? null;
 
         if ($useSemanticSelection && $this->contextSelector !== null) {
             try {
-                $semanticContext = $this->contextSelector->selectRelevantContext(
+                $ctx->semanticSelection = $this->contextSelector->selectRelevantContext(
                     $question,
                     $this->entityConfigs,
                     [
                         'threshold' => config('ai.semantic_context.threshold', 0.65),
                         'top_k' => config('ai.semantic_context.top_k', 10),
-                        'is_possessive' => $quResult['is_possessive'] ?? false,
+                        'is_possessive' => $ctx->qu->isPossessive,
+                        'query_understanding' => [
+                            'entity_types' => $ctx->qu->entityTypes,
+                            'is_possessive' => $ctx->qu->isPossessive,
+                        ],
                     ]
                 );
 
-                // Force-include the conversation's focused entity so follow-up questions
-                // maintain entity context even when the question doesn't mention the entity
+                // Force-include conversation's focused entity for follow-ups
                 if ($conversationFocusedEntity) {
                     $focusFullName = $this->findFullEntityName($conversationFocusedEntity, $this->entityConfigs);
-                    if ($focusFullName && !isset($semanticContext['entities'][$focusFullName])) {
-                        $semanticContext['entities'][$focusFullName] = [
-                            'score' => config('ai.semantic_context.conversation_focus_score', 0.55),
-                            'matched_text' => "Conversation focus: '{$conversationFocusedEntity}'",
-                            'config' => $this->entityConfigs[$focusFullName] ?? null,
-                        ];
+                    if ($focusFullName && !isset($ctx->semanticSelection->entities[$focusFullName])) {
+                        $ctx->semanticSelection->entities[$focusFullName] = new SelectedEntity(
+                            score: config('ai.semantic_context.conversation_focus_score', 0.55),
+                            matchedText: "Conversation focus: '{$conversationFocusedEntity}'",
+                            config: $this->entityConfigs[$focusFullName] ?? null,
+                        );
                     }
                 }
 
-                // Check confidence: if semantic selection returned few entities or low scores,
-                // escalate to Query Understanding for deeper analysis
-                $entityCount = count($semanticContext['entities'] ?? []);
-                $topScore = 0;
-                foreach ($semanticContext['entities'] ?? [] as $info) {
-                    $topScore = max($topScore, $info['score'] ?? 0);
-                }
-
-                // QU only when semantic selection is truly struggling:
-                // - No entities found, OR
-                // - Very few entities (0-1) AND low confidence scores
-                // If expansion already gave us multiple entities, trust those.
-                $quThreshold = config('ai.query_understanding.confidence_threshold', 0.55);
-                $needsQU = $this->queryUnderstanding !== null
-                    && ($entityCount === 0 || ($entityCount <= 1 && $topScore < $quThreshold));
-
-                if ($needsQU) {
-                    $this->logger->info('context_retriever', 'Low confidence, escalating to Query Understanding', [
-                        'entity_count' => $entityCount,
-                        'top_score' => round($topScore, 4),
-                        'threshold' => $quThreshold,
-                    ]);
-
-                    try {
-                        $entityCatalog = QueryUnderstandingService::buildEntityCatalog($this->entityConfigs);
-                        $quResult = $this->queryUnderstanding->analyze($question, $entityCatalog);
-
-                        // Merge QU entity_types into semantic selection
-                        foreach ($quResult['entity_types'] ?? [] as $label) {
-                            $fullName = $this->findFullEntityName($label, $this->entityConfigs);
-                            if ($fullName && !isset($semanticContext['entities'][$fullName])) {
-                                $semanticContext['entities'][$fullName] = [
-                                    'score' => config('ai.semantic_context.qu_entity_score', 0.8),
-                                    'matched_text' => "Query Understanding: '{$label}'",
-                                    'config' => $this->entityConfigs[$fullName] ?? null,
-                                ];
-                            }
-                        }
-                    } catch (\Throwable $e) {
-                        $this->logger->error('context_retriever', 'Query understanding failed: ' . $e->getMessage());
-                        $context['errors'][] = 'Query understanding failed: ' . $e->getMessage();
+                // Merge QU entity_types into semantic selection
+                foreach ($ctx->qu->entityTypes as $label) {
+                    $fullName = $this->findFullEntityName($label, $this->entityConfigs);
+                    if ($fullName && !isset($ctx->semanticSelection->entities[$fullName])) {
+                        $ctx->semanticSelection->entities[$fullName] = new SelectedEntity(
+                            score: config('ai.semantic_context.qu_entity_score', 0.8),
+                            matchedText: "Query Understanding: '{$label}'",
+                            config: $this->entityConfigs[$fullName] ?? null,
+                        );
                     }
                 }
 
-                // Extract selected entity labels (short names)
+                // Build selection info
                 $selectedEntities = array_map(
                     fn($entityName) => class_basename($entityName),
-                    array_keys($semanticContext['entities'] ?? [])
+                    array_keys($ctx->semanticSelection->entities)
                 );
-                $context['selection_info'] = [
-                    'method' => $semanticContext['selection_method'] ?? 'semantic',
+                $ctx->selectionInfo = [
+                    'method' => $ctx->semanticSelection->selectionMethod,
                     'selected_entities' => $selectedEntities,
-                    'entities_selected' => count($semanticContext['entities'] ?? []),
-                    'relationships_selected' => count($semanticContext['relationships'] ?? []),
-                    'scopes_selected' => count($semanticContext['scopes'] ?? []),
-                    'qu_used' => $needsQU ?? false,
+                    'entities_selected' => count($ctx->semanticSelection->entities),
+                    'relationships_selected' => count($ctx->semanticSelection->relationships),
+                    'scopes_selected' => count($ctx->semanticSelection->scopes),
+                    'qu_used' => true,
                 ];
+
                 $this->logger->info('context_retriever', 'Semantic context selected', [
-                    'method' => $semanticContext['selection_method'] ?? 'semantic',
-                    'entity_count' => count($semanticContext['entities'] ?? []),
-                    'scope_count' => count($semanticContext['scopes'] ?? []),
-                    'qu_used' => $needsQU ?? false,
+                    'method' => $ctx->semanticSelection->selectionMethod,
+                    'entity_count' => count($ctx->semanticSelection->entities),
+                    'scope_count' => count($ctx->semanticSelection->scopes),
                 ]);
             } catch (\Exception $e) {
                 $this->logger->error('context_retriever', 'Semantic context selection failed: ' . $e->getMessage());
                 $this->logger->fallback('context_retriever', 'semantic_selection', 'full_schema', $e->getMessage());
-                $context['errors'][] = 'Semantic context selection failed: ' . $e->getMessage();
+                $ctx->addError('Semantic context selection failed: ' . $e->getMessage());
             }
         }
 
-        // 1. Search for similar queries (graceful degradation on failure)
+        // STEP 3: Similar queries
         try {
-            $context['similar_queries'] = $this->searchSimilarQueries(
-                $question,
-                $collection,
-                $limit,
-                $scoreThreshold
-            );
-            $topScore = !empty($context['similar_queries']) ? ($context['similar_queries'][0]['score'] ?? 0) : 0;
-            $this->logger->debug('context_retriever', 'Similar queries found', [
-                'count' => count($context['similar_queries']),
-                'top_score' => $topScore,
-            ]);
+            $ctx->similarQueries = $this->searchSimilarQueries($question, $collection, $limit, $scoreThreshold);
         } catch (\Exception $e) {
             $this->logger->error('context_retriever', 'Vector search failed: ' . $e->getMessage());
-            $context['errors'][] = 'Vector search failed: ' . $e->getMessage();
+            $ctx->addError('Vector search failed: ' . $e->getMessage());
         }
 
-        // 2. Get graph schema (if requested)
+        // STEP 4: Graph schema
         if ($includeSchema) {
             try {
                 $fullSchema = $this->getGraphSchema();
 
-                // Filter schema based on semantic selection if available
-                if ($semanticContext !== null && !empty($semanticContext['entities'])) {
-                    $context['graph_schema'] = $this->filterSchemaByRelevance(
-                        $fullSchema,
-                        $semanticContext
-                    );
+                if (!empty($ctx->semanticSelection->entities)) {
+                    $ctx->graphSchema = $this->filterSchemaByRelevance($fullSchema, $ctx->semanticSelection);
                 } else {
-                    // Fallback: use semantic_entities collection to find relevant entities
                     $relevantLabels = $this->findRelevantEntityLabels($question);
                     if (!empty($relevantLabels)) {
-                        $context['graph_schema'] = $this->filterSchemaByLabels($fullSchema, $relevantLabels);
-                        $context['selection_info'] = [
+                        $ctx->graphSchema = $this->filterSchemaByLabels($fullSchema, $relevantLabels);
+                        $ctx->selectionInfo = [
                             'method' => 'semantic_entities_fallback',
                             'selected_entities' => $relevantLabels,
                             'entities_selected' => count($relevantLabels),
                         ];
                     } else {
-                        $context['graph_schema'] = $fullSchema;
+                        $ctx->graphSchema = $fullSchema;
                     }
                 }
-                // Always include the full relationship types list so RelationshipsSection
-                // can validate that relationship types actually exist in Neo4j
-                $context['graph_schema']['all_relationship_types'] = $fullSchema['relationships'] ?? [];
-
-                $this->logger->debug('context_retriever', 'Schema filtered', [
-                    'labels' => $context['graph_schema']['labels'] ?? [],
-                    'relationships' => $context['graph_schema']['relationships'] ?? [],
-                ]);
+                $ctx->graphSchema['all_relationship_types'] = $fullSchema['relationships'] ?? [];
             } catch (\Exception $e) {
                 $this->logger->error('context_retriever', 'Schema retrieval failed: ' . $e->getMessage());
-                $this->logger->fallback('context_retriever', 'filtered_schema', 'no_schema', $e->getMessage());
-                $context['errors'][] = 'Schema retrieval failed: ' . $e->getMessage();
+                $ctx->addError('Schema retrieval failed: ' . $e->getMessage());
             }
         }
 
-        // 3. Get example entities (if requested)
+        // STEP 5: Example entities
         if ($includeExamples) {
-            // Use semantic selection to determine which labels to get examples for
             $labelsToQuery = [];
 
-            if ($semanticContext !== null && !empty($semanticContext['entities'])) {
-                // Only get examples for semantically relevant entities
-                foreach ($semanticContext['entities'] as $entityName => $entityInfo) {
-                    $shortName = class_basename($entityName);
-                    $labelsToQuery[] = $shortName;
+            if (!empty($ctx->semanticSelection->entities)) {
+                foreach ($ctx->semanticSelection->entities as $entityName => $entityInfo) {
+                    $labelsToQuery[] = class_basename($entityName);
                 }
-            } elseif (!empty($context['graph_schema']['labels'])) {
-                // Fall back to all labels
-                $labelsToQuery = $context['graph_schema']['labels'];
+            } elseif (!empty($ctx->graphSchema['labels'])) {
+                $labelsToQuery = $ctx->graphSchema['labels'];
             }
 
             if (!empty($labelsToQuery)) {
-                $context['relevant_entities'] = $this->retrieveExampleEntities(
+                $ctx->relevantEntities = $this->retrieveExampleEntities(
                     $labelsToQuery,
                     $examplesPerLabel,
-                    $context['errors']
+                    $ctx->errors
                 );
             }
         }
 
-        // 4. Get entity metadata for detected entities
+        // STEP 6: Entity metadata
         try {
-            if ($semanticContext !== null && !empty($semanticContext['entities'])) {
-                // Use semantic selection results for metadata
-                $context['entity_metadata'] = $this->buildMetadataFromSemanticSelection(
-                    $question,
-                    $semanticContext
-                );
+            if (!empty($ctx->semanticSelection->entities)) {
+                $ctx->entityMetadata = $this->buildMetadataFromSemanticSelection($question, $ctx->semanticSelection);
             } else {
-                // Fall back to string-based detection
-                $context['entity_metadata'] = $this->getEntityMetadata($question);
+                $ctx->entityMetadata = $this->getEntityMetadata($question);
             }
         } catch (\Exception $e) {
             $this->logger->error('context_retriever', 'Entity metadata retrieval failed: ' . $e->getMessage());
-            $context['errors'][] = 'Entity metadata retrieval failed: ' . $e->getMessage();
+            $ctx->addError('Entity metadata retrieval failed: ' . $e->getMessage());
         }
 
-        // 5. Add Query Understanding results to context for prompt sections
-        if (!empty($quResult['person_names'])) {
-            $context['resolved_names'] = $quResult['person_names'];
-        }
-        if (!empty($quResult['property_concepts'])) {
-            $context['property_concepts'] = $quResult['property_concepts'];
-        }
-        if (!empty($quResult['entity_types']) || !empty($quResult['person_names']) || !empty($quResult['property_concepts'])) {
-            $context['query_understanding'] = $quResult;
-        }
-
-        // Assess context quality before returning
-        $context['quality'] = $this->assessContextQuality($context);
+        // STEP 7: Quality assessment
+        $ctx->quality = $this->assessContextQuality($ctx);
 
         $totalMs = $this->logger->stopTimer('total');
         $this->logger->info('context_retriever', 'Context retrieval complete', [
             'duration_ms' => $totalMs,
-            'has_similar_queries' => !empty($context['similar_queries']),
-            'has_schema' => !empty($context['graph_schema']),
-            'has_metadata' => !empty($context['entity_metadata']),
-            'errors_count' => count($context['errors']),
-            'quality' => $context['quality']['level'],
+            'has_similar_queries' => !empty($ctx->similarQueries),
+            'has_schema' => !empty($ctx->graphSchema),
+            'has_metadata' => !empty($ctx->entityMetadata),
+            'errors_count' => count($ctx->errors),
         ]);
 
-        return $context;
+        return $ctx;
     }
 
     /**
@@ -463,10 +394,10 @@ class ContextRetriever implements ContextRetrieverInterface
      * to the question based on semantic matching.
      *
      * @param array $fullSchema Complete graph schema
-     * @param array $semanticContext Semantic selection results
+     * @param SemanticSelectionResult $semanticContext Semantic selection results
      * @return array Filtered schema
      */
-    private function filterSchemaByRelevance(array $fullSchema, array $semanticContext): array
+    private function filterSchemaByRelevance(array $fullSchema, SemanticSelectionResult $semanticContext): array
     {
         $relevantLabels = [];
         $relevantRelationships = [];
@@ -474,7 +405,7 @@ class ContextRetriever implements ContextRetrieverInterface
         $relevantPropertyKeys = [];
 
         // Extract relevant labels from selected entities
-        foreach ($semanticContext['entities'] ?? [] as $entityName => $entityInfo) {
+        foreach ($semanticContext->entities as $entityName => $entityInfo) {
             $shortName = class_basename($entityName);
             $relevantLabels[] = $shortName;
 
@@ -489,26 +420,26 @@ class ContextRetriever implements ContextRetrieverInterface
         }
 
         // Extract relevant relationships
-        foreach ($semanticContext['relationships'] ?? [] as $relKey => $relInfo) {
-            $relevantRelationships[] = $relInfo['type'] ?? $relKey;
+        foreach ($semanticContext->relationships as $relKey => $relInfo) {
+            $relevantRelationships[] = $relInfo->type ?: $relKey;
 
             // Ensure connected entities are included
-            if (!empty($relInfo['from_entity']) && !in_array($relInfo['from_entity'], $relevantLabels)) {
-                $relevantLabels[] = $relInfo['from_entity'];
+            if (!empty($relInfo->fromEntity) && !in_array($relInfo->fromEntity, $relevantLabels)) {
+                $relevantLabels[] = $relInfo->fromEntity;
                 // Also include properties for connected entities
-                if (isset($fullSchema['properties'][$relInfo['from_entity']])) {
-                    $relevantProperties[$relInfo['from_entity']] = $fullSchema['properties'][$relInfo['from_entity']];
-                    foreach ($fullSchema['properties'][$relInfo['from_entity']] as $prop) {
+                if (isset($fullSchema['properties'][$relInfo->fromEntity])) {
+                    $relevantProperties[$relInfo->fromEntity] = $fullSchema['properties'][$relInfo->fromEntity];
+                    foreach ($fullSchema['properties'][$relInfo->fromEntity] as $prop) {
                         $relevantPropertyKeys[] = $prop;
                     }
                 }
             }
-            if (!empty($relInfo['to_entity']) && !in_array($relInfo['to_entity'], $relevantLabels)) {
-                $relevantLabels[] = $relInfo['to_entity'];
+            if (!empty($relInfo->toEntity) && !in_array($relInfo->toEntity, $relevantLabels)) {
+                $relevantLabels[] = $relInfo->toEntity;
                 // Also include properties for connected entities
-                if (isset($fullSchema['properties'][$relInfo['to_entity']])) {
-                    $relevantProperties[$relInfo['to_entity']] = $fullSchema['properties'][$relInfo['to_entity']];
-                    foreach ($fullSchema['properties'][$relInfo['to_entity']] as $prop) {
+                if (isset($fullSchema['properties'][$relInfo->toEntity])) {
+                    $relevantProperties[$relInfo->toEntity] = $fullSchema['properties'][$relInfo->toEntity];
+                    foreach ($fullSchema['properties'][$relInfo->toEntity] as $prop) {
                         $relevantPropertyKeys[] = $prop;
                     }
                 }
@@ -543,21 +474,21 @@ class ContextRetriever implements ContextRetrieverInterface
      * Build metadata from semantic selection results
      *
      * @param string $question User's question
-     * @param array $semanticContext Semantic selection results
+     * @param SemanticSelectionResult $semanticContext Semantic selection results
      * @return array Entity metadata
      */
-    private function buildMetadataFromSemanticSelection(string $question, array $semanticContext): array
+    private function buildMetadataFromSemanticSelection(string $question, SemanticSelectionResult $semanticContext): array
     {
         $detectedEntities = [];
         $detectedScopes = [];
         $entityMetadata = [];
 
         // Process selected entities
-        foreach ($semanticContext['entities'] ?? [] as $entityName => $entityInfo) {
+        foreach ($semanticContext->entities as $entityName => $entityInfo) {
             $detectedEntities[] = $entityName;
 
-            if (!empty($entityInfo['config']['metadata'])) {
-                $entityMetadata[$entityName] = $entityInfo['config']['metadata'];
+            if (!empty($entityInfo->config['metadata'])) {
+                $entityMetadata[$entityName] = $entityInfo->config['metadata'];
             } elseif (isset($this->entityConfigs[$entityName]['metadata'])) {
                 $entityMetadata[$entityName] = $this->entityConfigs[$entityName]['metadata'];
             }
@@ -569,8 +500,8 @@ class ContextRetriever implements ContextRetrieverInterface
         // matching the question against their scope examples for higher accuracy.
 
         // Step 1: Semantic selection scopes (from context_index)
-        foreach ($semanticContext['scopes'] ?? [] as $scopeName => $scopeInfo) {
-            $entityName = $scopeInfo['entity'] ?? '';
+        foreach ($semanticContext->scopes as $scopeName => $scopeInfo) {
+            $entityName = $scopeInfo->entity;
             $fullEntityName = $this->findFullEntityName($entityName, $this->entityConfigs);
 
             $scopeConfig = [];
@@ -581,9 +512,9 @@ class ContextRetriever implements ContextRetrieverInterface
             $detectedScopes[$scopeName] = $this->buildScopeData(
                 $scopeName,
                 array_merge($scopeConfig, [
-                    'match_score' => $scopeInfo['score'] ?? null,
+                    'match_score' => $scopeInfo->score,
                     'match_type' => 'semantic',
-                    'matched_example' => $scopeInfo['matched_text'] ?? null,
+                    'matched_example' => $scopeInfo->matchedText,
                 ]),
                 $fullEntityName ?: $entityName
             );
@@ -1026,28 +957,28 @@ class ContextRetriever implements ContextRetrieverInterface
      * of key components: similar queries, schema, detected entities, and
      * absence of errors.
      *
-     * @param array $context The retrieved context to assess
+     * @param PipelineContext $context The retrieved context to assess
      * @return array Quality assessment with level, score, max, and details
      */
-    private function assessContextQuality(array $context): array
+    private function assessContextQuality(PipelineContext $context): array
     {
         $score = 0;
         $max = 4;
         $details = [];
 
-        if (!empty($context['similar_queries'])) {
+        if (!empty($context->similarQueries)) {
             $score++;
             $details[] = 'has_similar_queries';
         }
-        if (!empty($context['graph_schema']['labels'] ?? [])) {
+        if (!empty($context->graphSchema['labels'] ?? [])) {
             $score++;
             $details[] = 'has_schema';
         }
-        if (!empty($context['entity_metadata']['detected_entities'] ?? [])) {
+        if (!empty($context->entityMetadata['detected_entities'] ?? [])) {
             $score++;
             $details[] = 'has_detected_entities';
         }
-        if (empty($context['errors'])) {
+        if (empty($context->errors)) {
             $score++;
             $details[] = 'no_errors';
         }
@@ -1061,7 +992,7 @@ class ContextRetriever implements ContextRetrieverInterface
         $this->logger->info('context_retriever', "context_quality: {$level}", [
             'score' => "{$score}/{$max}",
             'details' => $details,
-            'errors' => $context['errors'] ?? [],
+            'errors' => $context->errors,
         ]);
 
         return ['level' => $level, 'score' => $score, 'max' => $max, 'details' => $details];
@@ -1296,6 +1227,7 @@ class ContextRetriever implements ContextRetrieverInterface
         ];
 
         // Try semantic context selection first (required for minimal context)
+        /** @var SemanticSelectionResult|null $semanticContext */
         $semanticContext = null;
         if ($this->contextSelector !== null) {
             try {
@@ -1310,14 +1242,14 @@ class ContextRetriever implements ContextRetrieverInterface
                 // Extract selected entity labels (short names)
                 $selectedEntities = array_map(
                     fn($entityName) => class_basename($entityName),
-                    array_keys($semanticContext['entities'] ?? [])
+                    array_keys($semanticContext->entities)
                 );
                 $context['selection_info'] = [
                     'method' => 'semantic',
                     'mode' => 'minimal',
                     'selected_entities' => $selectedEntities,
-                    'entities_selected' => count($semanticContext['entities'] ?? []),
-                    'relationships_selected' => count($semanticContext['relationships'] ?? []),
+                    'entities_selected' => count($semanticContext->entities),
+                    'relationships_selected' => count($semanticContext->relationships),
                 ];
             } catch (\Exception $e) {
                 $this->logger->error('context_retriever', 'Semantic context selection failed (minimal): ' . $e->getMessage());
@@ -1344,7 +1276,7 @@ class ContextRetriever implements ContextRetrieverInterface
         }
 
         // Get minimal schema (only relevant entities and relationships)
-        if ($semanticContext !== null && !empty($semanticContext['entities'])) {
+        if (!empty($semanticContext->entities)) {
             try {
                 $fullSchema = $this->getGraphSchema();
                 $context['graph_schema'] = $this->filterSchemaByRelevance($fullSchema, $semanticContext);
@@ -1356,7 +1288,7 @@ class ContextRetriever implements ContextRetrieverInterface
 
         // Get entity metadata for detected entities only
         try {
-            if ($semanticContext !== null && !empty($semanticContext['entities'])) {
+            if (!empty($semanticContext->entities)) {
                 $context['entity_metadata'] = $this->buildMetadataFromSemanticSelection(
                     $question,
                     $semanticContext
@@ -1397,10 +1329,10 @@ class ContextRetriever implements ContextRetrieverInterface
      * Analyzes the context and returns statistics about what was included/excluded
      * and approximate token usage.
      *
-     * @param array $context Context structure from retrieveContext
+     * @param PipelineContext|array $context Context from retrieveContext (PipelineContext) or legacy array
      * @return array Statistics about the context
      */
-    public function getContextStats(array $context): array
+    public function getContextStats(PipelineContext|array $context): array
     {
         $stats = [
             'token_estimate' => 0,
@@ -1410,49 +1342,55 @@ class ContextRetriever implements ContextRetrieverInterface
             'compression_ratio' => 0,
         ];
 
+        // Support both PipelineContext and legacy array access
+        $similarQueries = $context instanceof PipelineContext ? $context->similarQueries : ($context['similar_queries'] ?? []);
+        $graphSchema = $context instanceof PipelineContext ? $context->graphSchema : ($context['graph_schema'] ?? []);
+        $entityMetadata = $context instanceof PipelineContext ? $context->entityMetadata : ($context['entity_metadata'] ?? []);
+        $relevantEntities = $context instanceof PipelineContext ? $context->relevantEntities : ($context['relevant_entities'] ?? []);
+        $selectionInfo = $context instanceof PipelineContext ? $context->selectionInfo : ($context['selection_info'] ?? []);
+
         // Estimate tokens for similar queries
         $similarQueriesTokens = 0;
-        foreach ($context['similar_queries'] ?? [] as $query) {
+        foreach ($similarQueries as $query) {
             $similarQueriesTokens += $this->estimateTokens($query['question'] ?? '');
             $similarQueriesTokens += $this->estimateTokens($query['query'] ?? '');
         }
         $stats['breakdown']['similar_queries'] = $similarQueriesTokens;
-        $stats['items_included']['similar_queries'] = count($context['similar_queries'] ?? []);
+        $stats['items_included']['similar_queries'] = count($similarQueries);
 
         // Estimate tokens for schema
         $schemaTokens = 0;
-        $schemaTokens += $this->estimateTokens(implode(', ', $context['graph_schema']['labels'] ?? []));
-        $schemaTokens += $this->estimateTokens(implode(', ', $context['graph_schema']['relationships'] ?? []));
-        $schemaTokens += $this->estimateTokens(implode(', ', $context['graph_schema']['propertyKeys'] ?? []));
+        $schemaTokens += $this->estimateTokens(implode(', ', $graphSchema['labels'] ?? []));
+        $schemaTokens += $this->estimateTokens(implode(', ', $graphSchema['relationships'] ?? []));
+        $schemaTokens += $this->estimateTokens(implode(', ', $graphSchema['propertyKeys'] ?? []));
         $stats['breakdown']['graph_schema'] = $schemaTokens;
-        $stats['items_included']['schema_labels'] = count($context['graph_schema']['labels'] ?? []);
-        $stats['items_included']['schema_relationships'] = count($context['graph_schema']['relationships'] ?? []);
-        $stats['items_included']['schema_properties'] = count($context['graph_schema']['propertyKeys'] ?? []);
+        $stats['items_included']['schema_labels'] = count($graphSchema['labels'] ?? []);
+        $stats['items_included']['schema_relationships'] = count($graphSchema['relationships'] ?? []);
+        $stats['items_included']['schema_properties'] = count($graphSchema['propertyKeys'] ?? []);
 
         // Estimate tokens for entity metadata
         $metadataTokens = 0;
-        foreach ($context['entity_metadata']['entity_metadata'] ?? [] as $entityMeta) {
+        foreach ($entityMetadata['entity_metadata'] ?? [] as $entityMeta) {
             $metadataTokens += $this->estimateTokens(json_encode($entityMeta));
         }
         $stats['breakdown']['entity_metadata'] = $metadataTokens;
-        $stats['items_included']['detected_entities'] = count($context['entity_metadata']['detected_entities'] ?? []);
-        $stats['items_included']['detected_scopes'] = count($context['entity_metadata']['detected_scopes'] ?? []);
+        $stats['items_included']['detected_entities'] = count($entityMetadata['detected_entities'] ?? []);
+        $stats['items_included']['detected_scopes'] = count($entityMetadata['detected_scopes'] ?? []);
 
         // Estimate tokens for example entities
         $examplesTokens = 0;
-        foreach ($context['relevant_entities'] ?? [] as $label => $entities) {
+        foreach ($relevantEntities as $label => $entities) {
             foreach ($entities as $entity) {
                 $examplesTokens += $this->estimateTokens(json_encode($entity));
             }
         }
         $stats['breakdown']['example_entities'] = $examplesTokens;
-        $stats['items_included']['example_entities'] = array_sum(array_map('count', $context['relevant_entities'] ?? []));
+        $stats['items_included']['example_entities'] = array_sum(array_map('count', $relevantEntities));
 
         // Total token estimate
         $stats['token_estimate'] = array_sum($stats['breakdown']);
 
         // Calculate compression ratio if semantic selection was used
-        $selectionInfo = $context['selection_info'] ?? [];
         if (!empty($selectionInfo) && ($selectionInfo['method'] ?? '') === 'semantic') {
             // Estimate full context size (all entities)
             $totalEntities = count($this->entityConfigs);
@@ -1577,24 +1515,24 @@ class ContextRetriever implements ContextRetrieverInterface
 
                 // Calculate confidence for entities
                 $entityScores = [];
-                foreach ($semanticContext['entities'] ?? [] as $entityName => $entityInfo) {
-                    $score = $entityInfo['score'] ?? 0;
+                foreach ($semanticContext->entities as $entityName => $entityInfo) {
+                    $score = $entityInfo->score;
                     $entityScores[] = $score;
                     $confidence['components']['entities'][$entityName] = $score;
                 }
 
                 // Calculate confidence for relationships
                 $relationshipScores = [];
-                foreach ($semanticContext['relationships'] ?? [] as $relKey => $relInfo) {
-                    $score = $relInfo['score'] ?? 0;
+                foreach ($semanticContext->relationships as $relKey => $relInfo) {
+                    $score = $relInfo->score;
                     $relationshipScores[] = $score;
                     $confidence['components']['relationships'][$relKey] = $score;
                 }
 
                 // Calculate confidence for scopes
                 $scopeScores = [];
-                foreach ($semanticContext['scopes'] ?? [] as $scopeName => $scopeInfo) {
-                    $score = $scopeInfo['score'] ?? 0;
+                foreach ($semanticContext->scopes as $scopeName => $scopeInfo) {
+                    $score = $scopeInfo->score;
                     $scopeScores[] = $score;
                     $confidence['components']['scopes'][$scopeName] = $score;
                 }

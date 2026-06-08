@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Contracts;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * Response Generator Interface
  *
@@ -13,11 +15,9 @@ namespace Condoedge\Ai\Contracts;
 interface ResponseGeneratorInterface
 {
     /**
-     * Generate natural language response from query results
+     * Generate natural language response from pipeline context
      *
-     * @param string $originalQuestion User's original question
-     * @param array $queryResult Results from QueryExecutor
-     * @param string $cypherQuery The Cypher query that was executed
+     * @param PipelineContext $context Pipeline context containing question, query result, execution data, etc.
      * @param array $options Generation options:
      *                       - format: 'text', 'markdown', 'json' (default: 'text')
      *                       - style: 'concise', 'detailed', 'technical' (default: 'detailed')
@@ -34,9 +34,7 @@ interface ResponseGeneratorInterface
      * @throws \RuntimeException If response generation fails
      */
     public function generate(
-        string $originalQuestion,
-        array $queryResult,
-        ?string $cypherQuery,
+        PipelineContext $context,
         array $options = []
     ): array;
 

@@ -7,6 +7,7 @@ namespace Condoedge\Ai\Services;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\ResponseSectionInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\ResponseSections\SystemPromptSection;
 use Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection;
 use Condoedge\Ai\Services\ResponseSections\ResultsDataSection;
@@ -207,19 +208,15 @@ class ResponseGenerator implements ResponseGeneratorInterface
     // =========================================================================
 
     /**
-     * Generate natural language response from query results
+     * Generate natural language response from pipeline context
      *
-     * @param string $originalQuestion User's original question
-     * @param array $queryResult Results from QueryExecutor
-     * @param string $cypherQuery The Cypher query that was executed
+     * @param PipelineContext $context Pipeline context with question, query result, execution data, etc.
      * @param array $options Generation options
      * @return array Response with answer, insights, visualizations
      * @throws \RuntimeException If response generation fails
      */
     public function generate(
-        string $originalQuestion,
-        array $queryResult,
-        ?string $cypherQuery,
+        PipelineContext $context,
         array $options = []
     ): array {
         // Merge options with defaults
@@ -230,43 +227,33 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $maxLength = $options['max_length'] ?? $this->config['default_max_length'] ?? 500;
         $temperature = $options['temperature'] ?? 0.3;
 
-        // Handle empty results
-        // if (empty($queryResult['data']) && ($queryResult['context'] ?? '') !== 'NO QUERY') {
-        //     return $this->generateEmptyResponse($originalQuestion, $cypherQuery, $options);
-        // }
-
-        // Prepare context for sections
-        $context = [
-            'question' => $originalQuestion,
-            'cypher' => $cypherQuery,
-            'data' => $queryResult['data'],
-            'stats' => $queryResult['stats'] ?? [],
-            'file_context' => $options['file_context'] ?? [],
-            'conversation_context' => $options['conversation_context'] ?? [],
-        ];
-
         $sectionOptions = [
             'format' => $format,
             'style' => $style,
             'max_length' => $maxLength,
         ];
 
-        // Build prompt using section pipeline
-        $prompt = $this->buildPrompt($context, $sectionOptions);
+        // Build prompt using section pipeline, split into a system message
+        // (identity + security policy) and a user message (context + data).
+        ['system' => $systemPrompt, 'user' => $userPrompt] = $this->buildPrompts($context, $sectionOptions);
+
+        $data = $context->executionResult->data;
+        $cypherQuery = $context->queryResult->cypher;
 
         try {
-            // Generate response
-            $answer = $this->llm->complete($prompt, null, [
+            // Generate response — identity/security ride in the real system role,
+            // untrusted context/data stays in the user role.
+            $answer = $this->llm->complete($userPrompt, $systemPrompt !== '' ? $systemPrompt : null, [
                 'temperature' => $temperature,
                 'max_tokens' => $this->calculateMaxTokens($maxLength),
             ]);
 
             // Extract insights
-            $insights = $includeInsights ? $this->extractInsights($queryResult['data']) : [];
+            $insights = $includeInsights ? $this->extractInsights($data) : [];
 
             // Suggest visualizations
             $visualizations = $includeVisualization
-                ? $this->suggestVisualizations($queryResult['data'], $cypherQuery)
+                ? $this->suggestVisualizations($data, $cypherQuery)
                 : [];
 
             return [
@@ -276,8 +263,8 @@ class ResponseGenerator implements ResponseGeneratorInterface
                 'format' => $format,
                 'metadata' => [
                     'style' => $style,
-                    'result_count' => count($queryResult['data']),
-                    'summarized' => count($queryResult['data']) > 10,
+                    'result_count' => count($data),
+                    'summarized' => count($data) > 10,
                 ],
             ];
 
@@ -291,31 +278,63 @@ class ResponseGenerator implements ResponseGeneratorInterface
     }
 
     /**
-     * Build prompt using section pipeline
+     * Build the prompt split by role.
      *
-     * @param array $context Context with question, data, etc.
+     * Each section declares role() => 'system' | 'user'. System sections (identity,
+     * security policy) are concatenated into the system message; everything else into
+     * the user message. Section ORDER is preserved within each role (the pipeline is
+     * still processed in priority order). Before/after callbacks are appended to the
+     * user message to preserve their historical placement.
+     *
+     * @param PipelineContext $context Pipeline context with question, data, etc.
      * @param array $options Options for sections
-     * @return string Complete prompt
+     * @return array{system: string, user: string}
      */
-    public function buildPrompt(array $context, array $options = []): string
+    public function buildPrompts(PipelineContext $context, array $options = []): array
     {
-        $prompt = '';
+        $system = '';
+        $user = '';
 
         $this->processModules(
-            beforeCallbackProcess: function($callback) use (&$prompt, $context, $options) {
-                $prompt .= $callback($context, $options);
+            beforeCallbackProcess: function($callback) use (&$user, $context, $options) {
+                $user .= $callback($context, $options);
             },
-            moduleProcess: function(ResponseSectionInterface $section) use (&$prompt, $context, $options) {
-                if ($section->shouldInclude($context, $options)) {
-                    $prompt .= $section->format($context, $options);
+            moduleProcess: function(ResponseSectionInterface $section) use (&$system, &$user, $context, $options) {
+                if (!$section->shouldInclude($context, $options)) {
+                    return;
+                }
+
+                $content = $section->format($context, $options);
+
+                if ($section->role() === 'system') {
+                    $system .= $content;
+                } else {
+                    $user .= $content;
                 }
             },
-            afterCallbackProcess: function($callback) use (&$prompt, $context, $options) {
-                $prompt .= $callback($context, $options);
+            afterCallbackProcess: function($callback) use (&$user, $context, $options) {
+                $user .= $callback($context, $options);
             }
         );
 
-        return $prompt;
+        return ['system' => $system, 'user' => $user];
+    }
+
+    /**
+     * Build the full prompt as a single string (system + user concatenated).
+     *
+     * Retained for backward compatibility with callers/tests that expect one string.
+     * The live generate() path uses buildPrompts() for true role separation.
+     *
+     * @param PipelineContext $context Pipeline context with question, data, etc.
+     * @param array $options Options for sections
+     * @return string Complete prompt
+     */
+    public function buildPrompt(PipelineContext $context, array $options = []): string
+    {
+        ['system' => $system, 'user' => $user] = $this->buildPrompts($context, $options);
+
+        return $system . $user;
     }
 
     /**

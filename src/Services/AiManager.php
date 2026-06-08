@@ -13,6 +13,9 @@ use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\Services\Context\FileContextProvider;
 use Condoedge\Ai\Services\Response\ResponseFileEnricher;
 use Condoedge\Ai\Services\Response\ResponseEntityEnricher;
@@ -164,9 +167,9 @@ class AiManager
      *                       - includeExamples: Include sample entities (default: true)
      *                       - examplesPerLabel: Examples per label (default: 2)
      *                       - scoreThreshold: Minimum similarity score (default: 0.0)
-     * @return array Context array with keys: similar_queries, graph_schema, relevant_entities, errors
+     * @return PipelineContext Typed context object containing all pipeline data
      */
-    public function retrieveContext(string $question, array $options = []): array
+    public function retrieveContext(string $question, array $options = []): PipelineContext
     {
         return $this->context->retrieveContext($question, $options);
     }
@@ -442,16 +445,16 @@ class AiManager
      * Generate a Cypher query from natural language question
      *
      * @param string $question Natural language question
-     * @param array $context RAG context (use retrieveContext() to get this)
+     * @param PipelineContext|null $context Pipeline context (use retrieveContext() to get this)
      * @param array $options Optional parameters (temperature, max_retries, allow_write, explain)
      * @return array Result with keys: cypher, explanation, confidence, warnings, metadata
      */
-    public function generateQuery(string $question, array $context = [], array $options = []): array
+    public function generateQuery(string $question, ?PipelineContext $context = null, array $options = []): array
     {
         try {
             // If no context provided, retrieve it
-            if (empty($context)) {
-                $context = $this->retrieveContext($question);
+            if ($context === null) {
+                $context = $this->context->retrieveContext($question, $options);
             }
 
             $generation = $this->queryGenerator->generate($question, $context, $options);
@@ -544,14 +547,14 @@ class AiManager
     public function askQuestion(string $question, array $options = []): array
     {
         try {
-            // Step 1: Retrieve context
-            $context = $this->retrieveContext($question);
+            // Step 1: Retrieve context (returns PipelineContext)
+            $ctx = $this->retrieveContext($question);
 
             // Step 2: Generate query
-            $result = $this->generateQuery($question, $context, $options);
+            $result = $this->generateQuery($question, $ctx, $options);
 
             // Add context to result for transparency
-            $result['context'] = $context;
+            $result['context'] = $ctx;
 
             return $result;
 
@@ -567,7 +570,7 @@ class AiManager
                 'confidence' => 0,
                 'warnings' => [__('ai.error.encountered_issue', ['question' => $question])],
                 'metadata' => ['error' => true, 'error_message' => $e->getMessage()],
-                'context' => [],
+                'context' => new PipelineContext(),
             ];
         }
     }
@@ -656,11 +659,11 @@ class AiManager
     public function ask(string $question, array $options = []): array
     {
         try {
-            // Step 1: Retrieve context
-            $context = $this->retrieveContext($question);
+            // Step 1: Retrieve context (returns PipelineContext)
+            $ctx = $this->retrieveContext($question);
 
             // Step 2: Generate query
-            $queryResult = $this->generateQuery($question, $context, $options);
+            $queryResult = $this->generateQuery($question, $ctx, $options);
 
             // Step 3: Execute query
             $executionResult = $this->executeQuery($queryResult['cypher'], [], $options);
@@ -671,7 +674,7 @@ class AiManager
                 'explanation' => $queryResult['explanation'],
                 'data' => $executionResult['data'],
                 'stats' => $executionResult['stats'],
-                'context' => $context,
+                'context' => $ctx,
                 'metadata' => array_merge($queryResult['metadata'], $executionResult['metadata']),
             ];
 
@@ -687,7 +690,7 @@ class AiManager
                 'explanation' => null,
                 'data' => [],
                 'stats' => [],
-                'context' => [],
+                'context' => new PipelineContext(),
                 'metadata' => ['error' => true, 'error_message' => $e->getMessage()],
             ];
         }
@@ -698,21 +701,17 @@ class AiManager
     // =========================================================================
 
     /**
-     * Generate natural language response from query results
+     * Generate natural language response from pipeline context
      *
-     * @param string $originalQuestion User's original question
-     * @param array $queryResult Results from QueryExecutor
-     * @param string $cypherQuery The Cypher query that was executed
+     * @param PipelineContext $context Pipeline context with question, query result, execution data
      * @param array $options Generation options
      * @return array Response with answer, insights, visualizations
      */
     public function generateResponse(
-        string $originalQuestion,
-        array $queryResult,
-        ?string $cypherQuery,
+        PipelineContext $context,
         array $options = []
     ): array {
-        return $this->responseGenerator->generate($originalQuestion, $queryResult, $cypherQuery, $options);
+        return $this->responseGenerator->generate($context, $options);
     }
 
     /**
@@ -741,6 +740,13 @@ class AiManager
     /**
      * Complete pipeline: Question → Context → Query → Execute → Respond
      *
+     * Steps:
+     * 1. Retrieve context (returns PipelineContext DTO with QU + semantic selection)
+     * 2. Merge conversation context if provided
+     * 3. Retrieve file context using clarified question for better matching
+     * 4. Generate and execute Cypher query (or skip for knowledge-only questions)
+     * 5. Build and return final response
+     *
      * @param string $question Natural language question
      * @param array $options Options for all stages
      * @return array Complete response with natural language answer
@@ -748,87 +754,25 @@ class AiManager
     public function answerQuestion(string $question, array $options = []): array
     {
         try {
-            // Step 1: Retrieve context
-            $context = $this->retrieveContext($question, $options);
+            // Step 1: Retrieve context (returns PipelineContext DTO)
+            $ctx = $this->context->retrieveContext($question, $options);
 
-            // Merge conversation context if provided
+            // Step 2: Merge conversation context if provided
             if (!empty($options['conversation_context'])) {
-                $context['conversation_context'] = $options['conversation_context'];
+                $ctx->conversationContext = $options['conversation_context'];
             }
 
-            // Merge file context if enabled
-            if (config('ai.file_context.enabled', true)) {
-                $fileContext = $this->retrieveFileContext($question, $options['user'] ?? null);
-                if (!empty($fileContext)) {
-                    $context['file_context'] = $fileContext;
-                }
-            }
+            // Step 3: Retrieve file context using clarified question for better matching
+            $ctx = $this->retrieveAndSetFileContext($ctx, $question, $options);
 
-            // Step 2: Generate query (context now includes conversation_context and file_context)
-            $queryResult = $this->generateQuery($question, $context, $options);
+            // Step 4: Generate and execute query (or skip for knowledge-only questions)
+            $ctx = $this->generateAndExecute($ctx, $question, $options);
 
-            // Step 3: Execute query
-            $executionResult = $this->executeQuery($queryResult['cypher'], [], $options);
-
-            // Step 3.5: Enrich results with entity action metadata
-            $executionResult = $this->enrichResultsWithEntityActions($executionResult);
-
-            // Step 3.6: SECURITY - Server-side filter of sensitive data
-            $executionResult = $this->filterSensitiveResults($executionResult, $options['user'] ?? null);
-
-            // Step 4: Generate natural language response
-            // Pass both file_context and conversation_context for follow-up awareness
-            $responseResult = $this->generateResponse(
-                $question,
-                $executionResult,
-                $queryResult['cypher'],
-                array_merge($options, [
-                    'file_context' => $context['file_context'] ?? [],
-                    'conversation_context' => $context['conversation_context'] ?? [],
-                ])
-            );
-
-            // Enrich response with file references
-            if (!empty($context['file_context'])) {
-                $responseResult = $this->enrichResponseWithFiles($responseResult, $context['file_context'], $options);
-            }
-
-            // Apply scope clarification only if security filtering was actually applied
-            $answer = $responseResult['answer'];
-            $securityFilterApplied = $executionResult['metadata']['security_filter_applied'] ?? false;
-            $scopeClarified = false;
-
-            if ($securityFilterApplied && config('ai.security.clarify_scope', true)) {
-                $prefix = config('ai.security.scope_prefix', 'Based on your permissions, ');
-                // Only add prefix if answer doesn't already start with it
-                if (!str_starts_with($answer, $prefix)) {
-                    $answer = $prefix . lcfirst($answer);
-                    $scopeClarified = true;
-                }
-            }
-
-            return [
-                'question' => $question,
-                'answer' => $answer,
-                'insights' => $responseResult['insights'],
-                'visualizations' => $responseResult['visualizations'],
-                'cypher' => $queryResult['cypher'],
-                'data' => $executionResult['data'],
-                'stats' => $executionResult['stats'],
-                'referenced_files' => $responseResult['referenced_files'] ?? [],
-                'metadata' => [
-                    'query' => $queryResult['metadata'],
-                    'execution' => $executionResult['metadata'],
-                    'response' => $responseResult['metadata'],
-                    'scope_clarified' => $scopeClarified,
-                    'security_filter_applied' => $securityFilterApplied,
-                ],
-            ];
+            // Step 5: Build and return response
+            return $this->buildFinalResponse($question, $ctx, $options);
 
         } catch (\Throwable $e) {
             \Log::error('Error answering question: ' . $e->getMessage());
-
-            // Generate error response
             $errorResponse = $this->responseGenerator->generateErrorResponse($question, $e, $options);
 
             return [
@@ -843,6 +787,145 @@ class AiManager
                 'metadata' => $errorResponse['metadata'],
             ];
         }
+    }
+
+    /**
+     * Retrieve file context using clarified question for better semantic matching.
+     */
+    private function retrieveAndSetFileContext(PipelineContext $ctx, string $question, array $options): PipelineContext
+    {
+        if (!config('ai.file_context.enabled', true)) {
+            return $ctx;
+        }
+
+        $user = $options['user'] ?? null;
+
+        // Build search queries from QU output — multiple angles for better recall
+        $queries = array_filter(array_unique([
+            $ctx->qu->searchQuery,
+            $question,
+            $ctx->qu->clarifiedQuestion,
+        ]));
+
+        if (!empty($ctx->qu->searchTags)) {
+            $queries[] = implode(' ', $ctx->qu->searchTags);
+        }
+
+        // Try all queries and merge results (different phrasings find different files)
+        $allFiles = [];
+        foreach ($queries as $searchQuery) {
+            $fileContext = $this->retrieveFileContext($searchQuery, $user);
+            foreach ($fileContext['relevant_files'] ?? [] as $file) {
+                $fileId = $file['file_id'] ?? $file['filename'] ?? '';
+                if (!isset($allFiles[$fileId]) || ($file['relevance'] ?? 0) > ($allFiles[$fileId]['relevance'] ?? 0)) {
+                    $allFiles[$fileId] = $file;
+                }
+            }
+        }
+
+        if (!empty($allFiles)) {
+            // Sort by relevance descending
+            $files = array_values($allFiles);
+            usort($files, fn($a, $b) => ($b['priority_score'] ?? $b['relevance'] ?? 0) <=> ($a['priority_score'] ?? $a['relevance'] ?? 0));
+
+            $ctx->fileContext = [
+                'relevant_files' => $files,
+                'file_count' => count($files),
+                'has_physical' => collect($files)->contains('source', 'physical'),
+                'has_database' => collect($files)->contains(fn($f) => ($f['source'] ?? '') !== 'physical'),
+            ];
+        }
+
+        return $ctx;
+    }
+
+    /**
+     * Generate Cypher query and execute it, or skip for knowledge-only questions.
+     */
+    private function generateAndExecute(PipelineContext $ctx, string $question, array $options): PipelineContext
+    {
+        $hasFileContext = !empty($ctx->fileContext['relevant_files'] ?? $ctx->fileContext);
+
+        // Skip Cypher for knowledge queries — no graph data answers "can I do X?"
+        if ($ctx->qu->questionType === 'knowledge_query') {
+            $ctx->queryResult = new QueryGenerationResult(
+                explanation: 'Knowledge query — answered from documents.',
+                confidence: 1.0,
+                metadata: ['source' => 'file_context', 'question_type' => 'knowledge_query'],
+            );
+            $ctx->executionResult = QueryExecutionResult::empty();
+            return $ctx;
+        }
+
+        // Pass the PipelineContext directly to QueryGenerator
+        $queryResult = $this->generateQuery($question, $ctx, $options);
+
+        // Execute the generated query
+        $executionResult = $this->executeQuery($queryResult['cypher'], [], $options);
+        $executionResult = $this->enrichResultsWithEntityActions($executionResult);
+        $executionResult = $this->filterSensitiveResults($executionResult, $options['user'] ?? null);
+
+        // Store results on context as DTOs
+        $ctx->queryResult = new QueryGenerationResult(
+            cypher: $queryResult['cypher'] ?? null,
+            explanation: $queryResult['explanation'] ?? '',
+            confidence: (float) ($queryResult['confidence'] ?? 0.0),
+            warnings: $queryResult['warnings'] ?? [],
+            metadata: $queryResult['metadata'] ?? [],
+        );
+        $ctx->executionResult = new QueryExecutionResult(
+            success: !empty($executionResult['data']) || empty($executionResult['errors']),
+            data: $executionResult['data'] ?? [],
+            stats: $executionResult['stats'] ?? [],
+            metadata: $executionResult['metadata'] ?? [],
+            errors: $executionResult['errors'] ?? [],
+        );
+
+        return $ctx;
+    }
+
+    /**
+     * Build the final response array from the pipeline context.
+     */
+    private function buildFinalResponse(string $question, PipelineContext $ctx, array $options): array
+    {
+        $responseResult = $this->generateResponse($ctx, $options);
+
+        // Enrich response with file references
+        if (!empty($ctx->fileContext)) {
+            $responseResult = $this->enrichResponseWithFiles($responseResult, $ctx->fileContext, $options);
+        }
+
+        // Apply scope clarification
+        $answer = $responseResult['answer'];
+        $securityFilterApplied = $ctx->executionResult->metadata['security_filter_applied'] ?? false;
+        $scopeClarified = false;
+
+        if ($securityFilterApplied && config('ai.security.clarify_scope', true)) {
+            $prefix = config('ai.security.scope_prefix', 'Based on your permissions, ');
+            if (!str_starts_with($answer, $prefix)) {
+                $answer = $prefix . lcfirst($answer);
+                $scopeClarified = true;
+            }
+        }
+
+        return [
+            'question' => $question,
+            'answer' => $answer,
+            'insights' => $responseResult['insights'],
+            'visualizations' => $responseResult['visualizations'],
+            'cypher' => $ctx->queryResult->cypher,
+            'data' => $ctx->executionResult->data,
+            'stats' => $ctx->executionResult->stats,
+            'referenced_files' => $responseResult['referenced_files'] ?? [],
+            'metadata' => [
+                'query' => $ctx->queryResult->metadata,
+                'execution' => $ctx->executionResult->metadata,
+                'response' => $responseResult['metadata'],
+                'scope_clarified' => $scopeClarified,
+                'security_filter_applied' => $securityFilterApplied,
+            ],
+        ];
     }
 
     // =========================================================================

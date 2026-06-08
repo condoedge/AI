@@ -3,20 +3,21 @@
 namespace Condoedge\Ai\Tests\Unit\Kompo\Modals;
 
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
+use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
 use Condoedge\Ai\Models\AiConversation;
-use Condoedge\Ai\Services\Chat\RegenerateMessageService;
+use Condoedge\Ai\Services\Chat\Results\ChatTurnResult;
 use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Orchestra\Testbench\TestCase;
 use Mockery;
 
 /**
- * Tests for EditMessageModal::updateMessage() method.
+ * Tests for EditMessageModal::updateMessageAndGetResponse() method.
  *
- * These tests verify that the updateMessage() method properly:
- * 1. Updates the message content
- * 2. Deletes subsequent messages
- * 3. Calls RegenerateMessageService to regenerate AI response
+ * These tests verify that the save action routes through ChatPresenter::handleEditAndRegenerate
+ * (the single Kompo<->app seam). Content update + trailing-message truncation + regeneration
+ * are owned by EditMessageAndRegenerateUseCase (tested separately); the modal only collects the
+ * request input and delegates.
  */
 class EditMessageModalTest extends TestCase
 {
@@ -90,7 +91,7 @@ class EditMessageModalTest extends TestCase
     /**
      * @test
      */
-    public function test_update_message_triggers_regeneration(): void
+    public function test_save_routes_through_presenter_with_edited_content(): void
     {
         $conversation = AiConversation::create(['user_id' => $this->user->id]);
         $userMsg = $conversation->messages()->create([
@@ -98,90 +99,46 @@ class EditMessageModalTest extends TestCase
             'content' => 'Original question',
             'created_at' => now()->subMinute(),
         ]);
-        $assistantMsg = $conversation->messages()->create([
+        $conversation->messages()->create([
             'role' => 'assistant',
             'content' => 'Original answer',
             'created_at' => now(),
         ]);
 
-        // Mock the regenerate service
-        $mockService = Mockery::mock(RegenerateMessageService::class);
-        $mockService->shouldReceive('regenerateFromMessage')
+        // The presenter must receive the conversation, the edited user message, the new content
+        // (truncation + content update is owned by the use case behind the presenter), the
+        // configured style, and the acting user.
+        $mockPresenter = Mockery::mock(ChatPresenter::class);
+        $mockPresenter->shouldReceive('handleEditAndRegenerate')
             ->once()
             ->with(
                 Mockery::on(fn($c) => $c->id === $conversation->id),
-                Mockery::on(fn($m) => $m->id === $userMsg->id && $m->content === 'Edited question'),
-                Mockery::any(),
-                Mockery::any()
+                Mockery::on(fn($m) => $m->id === $userMsg->id),
+                'Edited question',
+                'friendly',
+                Mockery::on(fn($u) => $u->id === $this->user->id),
             )
-            ->andReturn(['answer' => 'New answer']);
+            ->andReturn(new ChatTurnResult(answer: 'New answer'));
 
-        $this->app->instance(RegenerateMessageService::class, $mockService);
+        $this->app->instance(ChatPresenter::class, $mockPresenter);
 
-        // Mock settings
         $mockSettings = $this->createMockSettings();
         $this->app->instance(ChatSettingsInterface::class, $mockSettings);
 
-        // Simulate request
         request()->merge(['content' => 'Edited question']);
 
-        // Create a testable subclass that bypasses Kompo initialization
         $modal = new TestableEditMessageModal($userMsg, $conversation, $mockSettings);
 
-        $modal->updateMessage();
+        $modal->updateMessageAndGetResponse();
 
-        // Verify the message was updated
-        $this->assertEquals('Edited question', $userMsg->fresh()->content);
-
-        // Service was called (verified by Mockery)
+        // Presenter was called (verified by Mockery)
         $this->assertTrue(true);
     }
 
     /**
      * @test
      */
-    public function test_update_message_deletes_subsequent_messages(): void
-    {
-        $conversation = AiConversation::create(['user_id' => $this->user->id]);
-        $userMsg = $conversation->messages()->create([
-            'role' => 'user',
-            'content' => 'Q1',
-            'created_at' => now()->subMinutes(3),
-        ]);
-        $assistantMsg1 = $conversation->messages()->create([
-            'role' => 'assistant',
-            'content' => 'A1',
-            'created_at' => now()->subMinutes(2),
-        ]);
-        $userMsg2 = $conversation->messages()->create([
-            'role' => 'user',
-            'content' => 'Q2',
-            'created_at' => now()->subMinute(),
-        ]);
-
-        $mockService = Mockery::mock(RegenerateMessageService::class);
-        $mockService->shouldReceive('regenerateFromMessage')->andReturn(['answer' => 'New']);
-        $this->app->instance(RegenerateMessageService::class, $mockService);
-
-        // Mock settings
-        $mockSettings = $this->createMockSettings();
-        $this->app->instance(ChatSettingsInterface::class, $mockSettings);
-
-        request()->merge(['content' => 'Edited Q1']);
-
-        $modal = new TestableEditMessageModal($userMsg, $conversation, $mockSettings);
-
-        $modal->updateMessage();
-
-        // Messages after edited one should be deleted
-        $this->assertDatabaseMissing('ai_messages', ['id' => $assistantMsg1->id]);
-        $this->assertDatabaseMissing('ai_messages', ['id' => $userMsg2->id]);
-    }
-
-    /**
-     * @test
-     */
-    public function test_update_message_does_nothing_with_empty_content(): void
+    public function test_save_does_nothing_with_empty_content(): void
     {
         $conversation = AiConversation::create(['user_id' => $this->user->id]);
         $userMsg = $conversation->messages()->create([
@@ -190,19 +147,18 @@ class EditMessageModalTest extends TestCase
             'created_at' => now(),
         ]);
 
-        // Service should NOT be called
-        $mockService = Mockery::mock(RegenerateMessageService::class);
-        $mockService->shouldNotReceive('regenerateFromMessage');
-        $this->app->instance(RegenerateMessageService::class, $mockService);
+        // Presenter should NOT be called
+        $mockPresenter = Mockery::mock(ChatPresenter::class);
+        $mockPresenter->shouldNotReceive('handleEditAndRegenerate');
+        $this->app->instance(ChatPresenter::class, $mockPresenter);
 
-        // Mock settings
         $mockSettings = $this->createMockSettings();
         $this->app->instance(ChatSettingsInterface::class, $mockSettings);
 
         request()->merge(['content' => '']);
 
         $modal = new TestableEditMessageModal($userMsg, $conversation, $mockSettings);
-        $modal->updateMessage();
+        $modal->updateMessageAndGetResponse();
 
         // Message should NOT be updated
         $this->assertEquals('Original', $userMsg->fresh()->content);
@@ -211,16 +167,15 @@ class EditMessageModalTest extends TestCase
     /**
      * @test
      */
-    public function test_update_message_does_nothing_with_null_message(): void
+    public function test_save_does_nothing_with_null_message(): void
     {
         $conversation = AiConversation::create(['user_id' => $this->user->id]);
 
-        // Service should NOT be called
-        $mockService = Mockery::mock(RegenerateMessageService::class);
-        $mockService->shouldNotReceive('regenerateFromMessage');
-        $this->app->instance(RegenerateMessageService::class, $mockService);
+        // Presenter should NOT be called
+        $mockPresenter = Mockery::mock(ChatPresenter::class);
+        $mockPresenter->shouldNotReceive('handleEditAndRegenerate');
+        $this->app->instance(ChatPresenter::class, $mockPresenter);
 
-        // Mock settings
         $mockSettings = $this->createMockSettings();
         $this->app->instance(ChatSettingsInterface::class, $mockSettings);
 
@@ -228,7 +183,7 @@ class EditMessageModalTest extends TestCase
 
         // Create modal with null message
         $modal = new TestableEditMessageModal(null, $conversation, $mockSettings);
-        $modal->updateMessage();
+        $modal->updateMessageAndGetResponse();
 
         // No error should occur
         $this->assertTrue(true);

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * NameResolutionSection
  *
@@ -23,17 +25,17 @@ class NameResolutionSection extends BasePromptSection
     /**
      * Only include when QU has provided resolved names or property concepts.
      */
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
-        return !empty($context['resolved_names']) || !empty($context['property_concepts']);
+        return !empty($context->qu->personNames) || !empty($context->qu->propertyConcepts);
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
         $output = '';
 
-        $resolvedNames = $context['resolved_names'] ?? [];
-        $propertyConcepts = $context['property_concepts'] ?? [];
+        $resolvedNames = $context->qu->personNames;
+        $propertyConcepts = $context->qu->propertyConcepts;
 
         if (!empty($resolvedNames)) {
             $output .= $this->header('PERSON NAME SEARCH');

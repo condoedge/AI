@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * QueryRulesSection
  *
@@ -21,6 +23,12 @@ class QueryRulesSection extends BasePromptSection
 {
     protected string $name = 'query_rules';
     protected int $priority = 75;
+
+    public function role(): string
+    {
+        // Static, stable Cypher-generation rules belong in the system framing.
+        return 'system';
+    }
 
     /**
      * Custom rules that can be added dynamically
@@ -52,7 +60,7 @@ class QueryRulesSection extends BasePromptSection
         return $this;
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
         $allowWrite = $options['allowWrite'] ?? false;
 

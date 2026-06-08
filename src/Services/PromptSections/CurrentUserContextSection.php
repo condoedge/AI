@@ -4,17 +4,15 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 class CurrentUserContextSection extends BasePromptSection
 {
     protected string $name = 'current_user_context';
     protected int $priority = 17;
 
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
-        if (!empty($context['current_user'])) {
-            return true;
-        }
-
         if (auth()->check()) {
             return true;
         }
@@ -22,7 +20,7 @@ class CurrentUserContextSection extends BasePromptSection
         return false;
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
         $isAuthenticated = auth()->check();
 
@@ -34,7 +32,7 @@ class CurrentUserContextSection extends BasePromptSection
         $output .= "Current team name: " . ($isAuthenticated ? (safeCurrentTeam()?->team_name ?? 'N/A') : 'N/A') . "\n\n";
 
         // Include user entity paths when QU detected possessive language
-        $isPossessive = $context['query_understanding']['is_possessive'] ?? false;
+        $isPossessive = $context->qu->isPossessive;
         if ($isAuthenticated && $isPossessive) {
             $output .= $this->formatUserEntityPaths();
         }

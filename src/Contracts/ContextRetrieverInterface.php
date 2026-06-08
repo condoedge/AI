@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Contracts;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * Context Retriever Interface
  *
@@ -48,37 +50,15 @@ interface ContextRetrieverInterface
      *                       - includeSchema: Include graph schema (default: true)
      *                       - includeExamples: Include sample entities (default: true)
      *
-     * @return array Context structure:
-     *               - similar_queries: Array of similar Q&A pairs with scores
-     *               - graph_schema: Graph structure (labels, relationships, properties)
-     *               - relevant_entities: Sample entities by label
+     * @return PipelineContext Typed context object containing:
+     *               - similarQueries: Array of similar Q&A pairs with scores
+     *               - graphSchema: Graph structure (labels, relationships, properties)
+     *               - relevantEntities: Sample entities by label
+     *               - qu: QueryUnderstandingResult from QU analysis
+     *               - semanticSelection: SemanticSelectionResult from context selection
      *               - errors: Array of non-fatal error messages (if any)
-     *
-     * @example
-     * $context = $retriever->retrieveContext("Show active teams", [
-     *     'collection' => 'customer_questions',
-     *     'limit' => 10,
-     *     'includeSchema' => true,
-     *     'includeExamples' => true
-     * ]);
-     *
-     * // Returns:
-     * [
-     *     'similar_queries' => [
-     *         ['question' => '...', 'query' => '...', 'score' => 0.89],
-     *     ],
-     *     'graph_schema' => [
-     *         'labels' => ['Team', 'Person'],
-     *         'relationships' => ['MEMBER_OF'],
-     *         'properties' => ['id', 'name'],
-     *     ],
-     *     'relevant_entities' => [
-     *         'Team' => [['id' => 1, 'name' => 'Alpha']],
-     *     ],
-     *     'errors' => []
-     * ]
      */
-    public function retrieveContext(string $question, array $options = []): array;
+    public function retrieveContext(string $question, array $options = []): PipelineContext;
 
     /**
      * Search for semantically similar questions in vector store

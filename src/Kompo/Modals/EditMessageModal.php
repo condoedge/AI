@@ -4,14 +4,11 @@
 namespace Condoedge\Ai\Kompo\Modals;
 
 use Condoedge\Ai\Kompo\MessagesQuery;
+use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
-use Condoedge\Ai\Kompo\Traits\HasMessageActions;
-use Condoedge\Ai\Kompo\Traits\HasStagedMessageRendering;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
-use Condoedge\Ai\Kompo\AiChatPanel;
-use Condoedge\Ai\Services\Chat\RegenerateMessageService;
 use Condoedge\Utils\Kompo\Common\Modal;
 
 /**
@@ -19,7 +16,7 @@ use Condoedge\Utils\Kompo\Common\Modal;
  */
 class EditMessageModal extends Modal
 {
-    use HasChatTheme, HasChatSettings, HasMessageActions, HasStagedMessageRendering;
+    use HasChatTheme, HasChatSettings;
 
     protected $_Title = 'ai.edit.title';
     public $class = 'overflow-hidden max-w-2xl rounded-2xl';
@@ -134,121 +131,35 @@ class EditMessageModal extends Modal
         )->class('flex flex-col items-center justify-center p-8');
     }
 
-    public function updateMessage()
-    {
-        $content = trim(request('content') ?? '');
-
-        if (empty($content) || !$this->message) {
-            return;
-        }
-
-        // Update the message content
-        $this->message->update(['content' => $content]);
-
-        // Delete all messages after this one (will be regenerated)
-        // Using ID for reliable ordering (same as RegenerateMessageService)
-        $conversation = $this->message->conversation;
-        $conversation->messages()
-            ->where('id', '>', $this->message->id)
-            ->delete();
-
-        // Regenerate AI response using the service
-        try {
-            $service = app(RegenerateMessageService::class);
-            $service->regenerateFromMessage(
-                $conversation,
-                $this->message->fresh(), // Fresh to get updated content
-                auth()->user(),
-                ['style' => $this->settings()->responseStyle()]
-            );
-        } catch (\Throwable $e) {
-            \Log::error('Edit message regeneration failed: ' . $e->getMessage());
-        }
-    }
-
     /**
-     * Update message and return rendered assistant response for JS injection
-     * Follows the ChatMessageForm pattern with staging panel
+     * Save the edited user message and regenerate the assistant answer.
+     *
+     * The single Kompo<->app seam: routes through ChatPresenter::handleEditAndRegenerate, which
+     * delegates to EditMessageAndRegenerateUseCase (update content + truncate trailing messages +
+     * regenerate, all in one transaction — the use case owns truncation, NOT this component).
+     * No HTML is returned: the live modal's onClick already updated the bubble optimistically and
+     * the subsequent ->refresh(MessagesQuery::ID) re-renders the persisted messages from the DB.
      */
     public function updateMessageAndGetResponse()
     {
         $content = trim(request('content') ?? '');
 
         if (empty($content) || !$this->message) {
-            return _Html('')->class('hidden');
-        }
-
-        // Update the message content
-        $this->message->update(['content' => $content]);
-
-        // Delete all messages after this one
-        $conversation = $this->message->conversation;
-        $conversation->messages()
-            ->where('id', '>', $this->message->id)
-            ->delete();
-
-        // Regenerate AI response using the service
-        try {
-            $service = app(RegenerateMessageService::class);
-            $service->regenerateFromMessage(
-                $conversation,
-                $this->message->fresh(),
-                auth()->user(),
-                ['style' => $this->settings()->responseStyle()]
-            );
-
-            // Get the new assistant response
-            $assistantMessage = $conversation->messages()
-                ->where('role', 'assistant')
-                ->orderBy('created_at', 'desc')
-                ->first();
-
-            if (!$assistantMessage) {
-                return _Html('')->class('hidden');
-            }
-        } catch (\Throwable $e) {
-            \Log::error('Edit message regeneration failed: ' . $e->getMessage());
-            return _Html(__('ai.chat.error-message'))->class('text-red-500 text-sm');
-        }
-    }
-
-    /**
-     * Delete message - just performs the delete, JS handles animation
-     */
-    public function deleteMessageWithAnimation()
-    {
-        if (!$this->message) {
-            return _Html('')->class('hidden');
-        }
-
-        // Delete this message and all subsequent messages
-        $conversation = $this->message->conversation;
-        $conversation->messages()
-            ->where('id', '>=', $this->message->id)
-            ->delete();
-
-        return _Html('deleted')->class('hidden');
-    }
-
-    public function deleteMessage()
-    {
-        if (!$this->message) {
             return;
         }
 
-        // Delete this message and all subsequent messages
-        // Using ID for reliable ordering (same as updateMessage)
         $conversation = $this->message->conversation;
-        $conversation->messages()
-            ->where('id', '>=', $this->message->id)
-            ->delete();
-    }
 
-    /**
-     * Get conversation for action methods (used by HasStagedMessageRendering trait).
-     */
-    protected function getConversationForAction()
-    {
-        return $this->message?->conversation;
+        try {
+            app(ChatPresenter::class)->handleEditAndRegenerate(
+                $conversation,
+                $this->message,
+                $content,
+                $this->settings()->responseStyle(),
+                auth()->user(),
+            );
+        } catch (\Throwable $e) {
+            \Log::error('Edit message regeneration failed: ' . $e->getMessage());
+        }
     }
 }

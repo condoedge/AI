@@ -4,11 +4,19 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * SystemPromptSection
  *
- * The initial system prompt that sets the LLM's role.
- * Priority: 10
+ * Historically this set a hardcoded generic "data analyst" persona. The assistant's
+ * identity now lives in IdentitySection (config('ai.identity'), system role), so by
+ * default this section emits NOTHING — it only contributes if the host app explicitly
+ * sets a custom system prompt via setPrompt(). This keeps a single source of truth for
+ * the persona and avoids the old hardcoded, non-project-branded string.
+ *
+ * Delivered via the system role so any custom prompt frames the turn.
+ * Priority: 10 (after IdentitySection at 5).
  */
 class SystemPromptSection extends BaseResponseSection
 {
@@ -16,6 +24,11 @@ class SystemPromptSection extends BaseResponseSection
     protected int $priority = 10;
 
     private ?string $customPrompt = null;
+
+    public function role(): string
+    {
+        return 'system';
+    }
 
     /**
      * Set a custom system prompt
@@ -26,12 +39,13 @@ class SystemPromptSection extends BaseResponseSection
         return $this;
     }
 
-    public function format(array $context, array $options = []): string
+    public function format(PipelineContext $context, array $options = []): string
     {
         if ($this->customPrompt !== null) {
             return $this->customPrompt . "\n\n";
         }
 
-        return "You are a data analyst who explains query results clearly and accurately.\n\n";
+        // Default persona is provided by IdentitySection (config('ai.identity')).
+        return '';
     }
 }
