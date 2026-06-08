@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Services;
 
+use Condoedge\Ai\Contracts\FileAccessResolverInterface;
 use Condoedge\Ai\Tests\TestCase;
 use Condoedge\Ai\Services\FileSearchService;
+use Condoedge\Ai\Services\Context\FileContextProvider;
+use Condoedge\Ai\Services\Context\FilenameExtractor;
 use Condoedge\Ai\Contracts\ChunkStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\DTOs\FileChunk;
@@ -13,17 +16,22 @@ use Illuminate\Database\Eloquent\Model;
 use Mockery;
 
 /**
- * Cross-collection score normalization + composite file-id tests for
- * FileSearchService::searchByContent (P1 retrieval precision).
+ * Cross-collection relevance tests for FileSearchService::searchByContent and the
+ * threshold gate in FileContextProvider (L5-5 / P0-9).
  *
- * Two failure modes are covered:
- *  1. Bare-id COLLISION: a physical doc and a DB file that share the same bare
- *     numeric id must NOT be merged into one group when they come from different
- *     collections (composite, collection-qualified identity).
- *  2. Cross-collection SCORE-SCALE mismatch: raw cosine scores from different
- *     collections live on different scales; min-max normalization per collection
- *     makes them comparable so a strong match in one collection is not buried
- *     under a mediocre match in another.
+ * The relevance gate and the displayed relevance must be RAW cosine similarity,
+ * never a rank-rescaled value:
+ *  - A weak match from a lone (or all-equal) collection must keep its weak raw
+ *    score, so it is cut by an absolute min_relevance_score gate instead of being
+ *    rescaled to 1.0 and waved through.
+ *  - A strong match must keep its raw score, not be squashed toward 0 by another
+ *    collection's score spread.
+ * When several collections are merged, ordering is done by Reciprocal Rank Fusion
+ * (RRF) — a rank-based fuse that needs no comparable score scale — while each
+ * result's raw similarity is preserved for thresholding and display.
+ *
+ * Composite, collection-qualified identities still keep a physical doc and a DB
+ * file that share a bare numeric id from being merged.
  */
 class FileSearchServiceNormalizationTest extends TestCase
 {
@@ -38,7 +46,7 @@ class FileSearchServiceNormalizationTest extends TestCase
         $this->chunkStore = Mockery::mock(ChunkStoreInterface::class);
         $this->graphStore = Mockery::mock(GraphStoreInterface::class);
 
-        // Union an additional collection so normalization + composite ids engage.
+        // Union an additional collection so cross-collection merge + composite ids engage.
         $this->searchService = new FileSearchService(
             $this->chunkStore,
             $this->graphStore,
@@ -141,65 +149,156 @@ class FileSearchServiceNormalizationTest extends TestCase
     }
 
     /** @test */
-    public function scores_are_min_max_normalized_per_collection_before_merging(): void
+    public function a_lone_weak_collection_match_keeps_its_raw_score_and_is_not_boosted(): void
     {
-        // PRIMARY band is HIGH-cosine [0.70 .. 0.90]; the worst normalizes to 0.0,
-        // the best to 1.0.
+        // PRIMARY: one strong DB match.
         $this->chunkStore
             ->shouldReceive('searchByContent')
             ->once()
             ->with('query', Mockery::type('int'), Mockery::type('array'))
             ->andReturn([
-                $this->chunkResult(1, 'db_high.pdf', 0, 0.90), // -> 1.0
-                $this->chunkResult(2, 'db_low.pdf', 0, 0.70),  // -> 0.0
+                $this->chunkResult(1, 'db_strong.pdf', 0, 0.90),
             ]);
 
-        // ADDITIONAL band is LOW-cosine [0.20 .. 0.40] on a different scale. Its
-        // best (0.40) normalizes to 1.0 — comparable with the primary's best,
-        // even though its raw score (0.40) is below the primary's WORST (0.70).
+        // ADDITIONAL: a single WEAK doc match (raw 0.30, below the 0.4 gate). Being
+        // the lone/all-equal member of its collection it would, under min-max
+        // normalization, be rescaled to 1.0 and wrongly clear the gate. The raw
+        // score must be preserved instead.
         $this->chunkStore
             ->shouldReceive('searchByContent')
             ->once()
             ->with('query', Mockery::type('int'), Mockery::type('array'), 'documentation_chunks')
             ->andReturn([
-                $this->chunkResult(101, 'doc_best.md', 0, 0.40),  // -> 1.0
-                $this->chunkResult(102, 'doc_worst.md', 0, 0.20), // -> 0.0
+                $this->chunkResult(101, 'doc_weak.md', 0, 0.30),
+            ]);
+
+        $this->mockFileModel([1 => 'db_strong.pdf', 101 => 'doc_weak.md']);
+
+        $results = $this->searchService->searchByContent('query', ['limit' => 10]);
+
+        $byFile = collect($results)->keyBy('file_id');
+
+        // Raw similarity is preserved for BOTH — the gate operates on real cosine.
+        $this->assertEqualsWithDelta(0.90, $byFile[1]['score'], 0.0001);
+        $this->assertEqualsWithDelta(0.30, $byFile[101]['score'], 0.0001);
+
+        // The weak doc is NOT boosted to 1.0.
+        $this->assertLessThan(0.4, $byFile[101]['score']);
+    }
+
+    /** @test */
+    public function a_strong_match_is_not_squashed_to_zero_by_another_collections_spread(): void
+    {
+        // PRIMARY: a strong match (0.85) and a weaker one (0.55). Under per-collection
+        // min-max the 0.55 would be forced to 0.0 — losing its real similarity.
+        $this->chunkStore
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->with('query', Mockery::type('int'), Mockery::type('array'))
+            ->andReturn([
+                $this->chunkResult(1, 'db_best.pdf', 0, 0.85),
+                $this->chunkResult(2, 'db_mid.pdf', 0, 0.55),
+            ]);
+
+        // ADDITIONAL: a low-scale doc collection.
+        $this->chunkStore
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->with('query', Mockery::type('int'), Mockery::type('array'), 'documentation_chunks')
+            ->andReturn([
+                $this->chunkResult(101, 'doc_a.md', 0, 0.30),
+                $this->chunkResult(102, 'doc_b.md', 0, 0.20),
             ]);
 
         $this->mockFileModel([
-            1 => 'db_high.pdf',
-            2 => 'db_low.pdf',
-            101 => 'doc_best.md',
-            102 => 'doc_worst.md',
+            1 => 'db_best.pdf',
+            2 => 'db_mid.pdf',
+            101 => 'doc_a.md',
+            102 => 'doc_b.md',
+        ]);
+
+        $results = $this->searchService->searchByContent('query', ['limit' => 10]);
+
+        $byFile = collect($results)->keyBy('file_id');
+
+        // Every raw similarity survives — none is collapsed to 0.0/1.0.
+        $this->assertEqualsWithDelta(0.85, $byFile[1]['score'], 0.0001);
+        $this->assertEqualsWithDelta(0.55, $byFile[2]['score'], 0.0001);  // NOT squashed to 0.0
+        $this->assertEqualsWithDelta(0.30, $byFile[101]['score'], 0.0001);
+        $this->assertEqualsWithDelta(0.20, $byFile[102]['score'], 0.0001);
+
+        // The primary's weaker match (0.55) still clears a 0.4 gate; the doc matches
+        // (0.30/0.20) do not — exactly because the score is raw cosine, not a rank.
+        $this->assertGreaterThan(0.4, $byFile[2]['score']);
+        $this->assertLessThan(0.4, $byFile[101]['score']);
+    }
+
+    /** @test */
+    public function cross_collection_merge_orders_by_reciprocal_rank_fusion(): void
+    {
+        // PRIMARY: two DB matches on a HIGH cosine scale.
+        $this->chunkStore
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->with('query', Mockery::type('int'), Mockery::type('array'))
+            ->andReturn([
+                $this->chunkResult(1, 'db_rank1.pdf', 0, 0.90), // collection rank 1
+                $this->chunkResult(2, 'db_rank2.pdf', 0, 0.70), // collection rank 2
+            ]);
+
+        // ADDITIONAL: two doc matches on a LOWER cosine scale.
+        $this->chunkStore
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->with('query', Mockery::type('int'), Mockery::type('array'), 'documentation_chunks')
+            ->andReturn([
+                $this->chunkResult(101, 'doc_rank1.md', 0, 0.40), // collection rank 1
+                $this->chunkResult(102, 'doc_rank2.md', 0, 0.20), // collection rank 2
+            ]);
+
+        $this->mockFileModel([
+            1 => 'db_rank1.pdf',
+            2 => 'db_rank2.pdf',
+            101 => 'doc_rank1.md',
+            102 => 'doc_rank2.md',
         ]);
 
         $results = $this->searchService->searchByContent('query', ['limit' => 10]);
 
         $this->assertCount(4, $results);
 
-        $byFile = collect($results)->keyBy('file_id');
+        // Each result carries an RRF fusion score used for cross-collection ordering,
+        // distinct from its preserved raw similarity.
+        foreach ($results as $r) {
+            $this->assertArrayHasKey('fusion_score', $r);
+        }
 
-        // Per-collection min-max: top of each band -> 1.0, bottom -> 0.0.
-        $this->assertEqualsWithDelta(1.0, $byFile[1]['score'], 0.0001);   // primary best
-        $this->assertEqualsWithDelta(0.0, $byFile[2]['score'], 0.0001);   // primary worst
-        $this->assertEqualsWithDelta(1.0, $byFile[101]['score'], 0.0001); // additional best
-        $this->assertEqualsWithDelta(0.0, $byFile[102]['score'], 0.0001); // additional worst
-
-        // The doc collection's strong match (raw 0.40) now ranks ABOVE the
-        // primary's weaker match (raw 0.70) — the precise mismatch normalization
-        // is meant to fix. Top two results are the two normalized 1.0s.
-        $topTwo = array_slice(array_column($results, 'file_id'), 0, 2);
+        // RRF fuses by rank, not raw scale: each collection's rank-1 doc must sort
+        // ABOVE each collection's rank-2 doc. The two rank-1 docs (file 1 and 101)
+        // are the top two results even though doc rank-1 raw score (0.40) is far
+        // below the primary's rank-2 raw score (0.70).
+        $order = array_column($results, 'file_id');
+        $topTwo = array_slice($order, 0, 2);
         sort($topTwo);
         $this->assertEquals([1, 101], $topTwo);
+
+        // Within each collection the rank-1 doc outranks the rank-2 doc by fusion.
+        $byFile = collect($results)->keyBy('file_id');
+        $this->assertGreaterThan($byFile[2]['fusion_score'], $byFile[1]['fusion_score']);
+        $this->assertGreaterThan($byFile[102]['fusion_score'], $byFile[101]['fusion_score']);
+
+        // Raw similarity is still the reported relevance for each file.
+        $this->assertEqualsWithDelta(0.90, $byFile[1]['score'], 0.0001);
+        $this->assertEqualsWithDelta(0.40, $byFile[101]['score'], 0.0001);
     }
 
     /** @test */
     public function single_collection_search_leaves_scores_unnormalized(): void
     {
         // Only the primary collection returns results; the additional collection
-        // is empty. With a single contributing source there is nothing to make
-        // comparable, so absolute cosine scores must pass through UNCHANGED
-        // (downstream min_score thresholds depend on this).
+        // is empty. A single contributing source needs no fusion, so absolute
+        // cosine scores pass through UNCHANGED (downstream min_score thresholds
+        // depend on this).
         $this->chunkStore
             ->shouldReceive('searchByContent')
             ->once()
@@ -224,5 +323,63 @@ class FileSearchServiceNormalizationTest extends TestCase
         // Raw scores preserved (NOT rescaled to 1.0/0.0).
         $this->assertEqualsWithDelta(0.83, $byFile[7]['score'], 0.0001);
         $this->assertEqualsWithDelta(0.61, $byFile[8]['score'], 0.0001);
+    }
+
+    /**
+     * End-to-end gate test through FileContextProvider over a REAL FileSearchService.
+     *
+     * Proves the absolute min_relevance_score gate now cuts a weak lone-collection
+     * doc (raw 0.30) while keeping a strong cross-collection match (raw 0.90) —
+     * the precise regression L5-5 caused when the gate ran on rank-normalized scores.
+     *
+     * @test
+     */
+    public function provider_threshold_gate_cuts_weak_lone_collection_doc_on_raw_score(): void
+    {
+        config()->set('ai.file_context.min_relevance_score', 0.4);
+        config()->set('ai.file_context.max_references', 5);
+        config()->set('ai.file_context.snippet_length', 200);
+
+        // PRIMARY: strong DB match.
+        $this->chunkStore
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->with(Mockery::type('string'), Mockery::type('int'), Mockery::type('array'))
+            ->andReturn([
+                $this->chunkResult(1, 'db_strong.pdf', 0, 0.90),
+            ]);
+
+        // ADDITIONAL: lone weak doc match (raw 0.30, below the 0.4 gate).
+        $this->chunkStore
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->with(Mockery::type('string'), Mockery::type('int'), Mockery::type('array'), 'documentation_chunks')
+            ->andReturn([
+                $this->chunkResult(101, 'doc_weak.md', 0, 0.30),
+            ]);
+
+        $this->mockFileModel([1 => 'db_strong.pdf', 101 => 'doc_weak.md']);
+
+        // Access resolver: security off, both ids pass; no filename extraction.
+        $accessResolver = Mockery::mock(FileAccessResolverInterface::class);
+        $accessResolver->shouldReceive('shouldEnforceSecurity')->andReturn(false);
+        $accessResolver->shouldReceive('isPhysicalFile')->andReturn(false);
+        $accessResolver->shouldReceive('filterAccessibleFileIds')->andReturn([1, 101]);
+
+        $filenameExtractor = Mockery::mock(FilenameExtractor::class);
+        $filenameExtractor->shouldReceive('extract')->andReturn([]);
+
+        $provider = new FileContextProvider(
+            $this->searchService,
+            $accessResolver,
+            $filenameExtractor
+        );
+
+        $results = $provider->searchRelevantFiles('query', null);
+
+        // Only the strong match survives the raw 0.4 gate; the weak doc is cut.
+        $this->assertCount(1, $results);
+        $this->assertEquals(1, $results[0]['file_id']);
+        $this->assertEqualsWithDelta(0.90, $results[0]['relevance'], 0.0001);
     }
 }

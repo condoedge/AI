@@ -9,6 +9,10 @@
     "ai.common.offline": "Hors ligne",
     "ai.common.value": "Valeur",
 
+    "ai.actions.confirm": "Confirmer",
+    "ai.actions.cancel": "Annuler",
+    "ai.actions.failed": "L'action n'a pas pu etre effectuee.",
+
     "ai.settings.title": "Parametres du chat",
     "ai.settings.theme": "Theme",
     "ai.settings.theme-description": "Choisissez votre theme de couleur",

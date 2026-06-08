@@ -209,13 +209,21 @@ class QueryExecutor implements QueryExecutorInterface
      */
     public function executeCount(?string $cypherQuery, array $parameters = [], array $options = []): int
     {
-        // Wrap query in count
-        $countQuery = "WITH * MATCH {$cypherQuery} RETURN count(*) as total";
+        $inner = trim($cypherQuery ?? '');
 
-        // Try to extract just the MATCH part for cleaner count query
-        if (preg_match('/^(MATCH\s+.+?)\s+RETURN/i', $cypherQuery, $matches)) {
-            $countQuery = $matches[1] . " RETURN count(*) as total";
+        if ($inner === '') {
+            return 0;
         }
+
+        // Wrap the original query as a subquery and count the rows it yields.
+        // Textual rewriting (e.g. prepending "WITH * MATCH") cannot express every
+        // shape: OPTIONAL MATCH, CALL ... YIELD, leading WITH, and UNION queries
+        // are not simple "MATCH ... RETURN" forms and would produce illegal
+        // Cypher. A CALL subquery counts any read-only query's result rows
+        // regardless of its internal shape, and leaves the inner clauses intact
+        // so execute()'s read-only and team-security rewriting still apply to the
+        // real MATCH inside the braces.
+        $countQuery = "CALL { {$inner} } RETURN count(*) AS total";
 
         try {
             $result = $this->execute($countQuery, $parameters, $options);
@@ -641,12 +649,13 @@ class QueryExecutor implements QueryExecutorInterface
         $entity = $this->extractPrimaryEntity($cypherQuery);
 
         if (!$user) {
-            // No resolvable user. If there is a sensitive entity, this is a
-            // security-relevant gap → fail closed (or bypass with a warning).
-            if ($entity !== null) {
+            // No resolvable user. If the query binds any sensitive node — a
+            // labelled entity OR a label-free node access whose tenancy cannot be
+            // proven — fail closed (or bypass with a warning).
+            if ($entity !== null || $this->queryAccessesNodes($cypherQuery)) {
                 return $this->failClosedOrBypass(
                     $cypherQuery,
-                    $entity,
+                    $entity ?? '(unlabeled)',
                     'no_resolvable_user'
                 );
             }
@@ -655,7 +664,18 @@ class QueryExecutor implements QueryExecutorInterface
         }
 
         if (!$entity) {
-            // No entity to scope (e.g. label introspection / scalar return).
+            // A node-binding query with no extractable label cannot be team-scoped
+            // and must not run unfiltered — tenancy is unprovable → fail closed.
+            if ($this->queryAccessesNodes($cypherQuery)) {
+                return $this->failClosedOrBypass(
+                    $cypherQuery,
+                    '(unlabeled)',
+                    'unlabeled_entity'
+                );
+            }
+
+            // Pure scalar / introspection (e.g. RETURN 1, CALL db.labels()) — no
+            // nodes to scope.
             return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
         }
 
@@ -771,6 +791,15 @@ class QueryExecutor implements QueryExecutorInterface
     }
 
     /**
+     * Whether the query binds graph nodes (a MATCH with a node pattern), as
+     * opposed to a pure scalar/introspection query (e.g. RETURN 1, CALL ...).
+     */
+    private function queryAccessesNodes(string $query): bool
+    {
+        return (bool) preg_match('/\bMATCH\s*\(/i', $query);
+    }
+
+    /**
      * Inject the team filter into a Cypher query, scoping the PRIMARY MATCH of
      * every UNION branch.
      *
@@ -854,7 +883,17 @@ class QueryExecutor implements QueryExecutorInterface
         // with AND; otherwise add a new WHERE. We only consider a WHERE that
         // lives in the head (before the anchor) — a WHERE after RETURN belongs to
         // a different scope.
-        if (preg_match('/\bWHERE\b/i', $head)) {
+        if (preg_match('/\bWHERE\b/i', $head, $wm, PREG_OFFSET_CAPTURE)) {
+            $beforeWhere = substr($head, 0, $wm[0][1]);
+            $existing = trim(substr($head, $wm[0][1] + strlen($wm[0][0])));
+
+            // A top-level OR in the existing predicate must be grouped before the
+            // team filter is AND-appended: `a OR b AND team` binds as
+            // `a OR (b AND team)`, leaving the `a` branch unscoped (cross-tenant leak).
+            if (preg_match('/\bOR\b/i', $existing)) {
+                return rtrim($beforeWhere) . ' WHERE (' . $existing . ') AND ' . $condition . ' ' . $tail;
+            }
+
             return rtrim($head) . ' AND ' . $condition . ' ' . $tail;
         }
 

@@ -82,6 +82,27 @@ class FileAccessResolverModelResolutionTest extends TestCase
 
         $this->assertEqualsCanonicalizing([2, 'physical:/docs/x.md'], $result);
     }
+
+    /** @test */
+    public function it_invokes_the_configured_access_scope_method_name_not_a_hardcoded_literal(): void
+    {
+        // The host configures a non-default scope name. The resolver must call
+        // that exact scope on the model rather than the hardcoded 'accessibleBy'.
+        // The custom scope selects ONLY id 1, while the user_id fallback would
+        // yield [1, 3]; fallback filters are disabled so a wrong (fallback) path
+        // returns [] not [1] — proving the configured scope name is honored.
+        config(['ai.file_context.file_model' => CustomScopeFakeFile::class]);
+        config(['ai.file_context.access_scope' => 'visibleToUser']);
+        config(['ai.file_context.fallback_filters.use_user_filter' => false]);
+        config(['ai.file_context.fallback_filters.use_team_filter' => false]);
+
+        $user = new \stdClass();
+        $user->id = 7;
+
+        $resolver = new FileAccessResolver();
+
+        $this->assertEqualsCanonicalizing([1], $resolver->getAccessibleFileIds($user));
+    }
 }
 
 /**
@@ -97,5 +118,23 @@ class AccessibleByFakeFile extends Model
     public function scopeAccessibleBy($query, $user)
     {
         return $query->where('user_id', $user->id ?? $user->getKey());
+    }
+}
+
+/**
+ * Minimal Eloquent model exposing a non-default scope name (scopeVisibleToUser)
+ * to prove the resolver honors config('ai.file_context.access_scope').
+ */
+class CustomScopeFakeFile extends Model
+{
+    protected $table = 'files';
+    public $timestamps = false;
+    protected $guarded = [];
+
+    public function scopeVisibleToUser($query, $user)
+    {
+        // Deliberately distinct from a user_id filter: selects only id 1 so the
+        // test can prove this exact scope ran (not 'accessibleBy', not fallback).
+        return $query->where('id', 1);
     }
 }

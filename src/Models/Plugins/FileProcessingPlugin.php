@@ -32,21 +32,9 @@ class FileProcessingPlugin extends ModelPlugin
 
         // All the file indexing happens in background since sometimes we run ocr and parsing that can take too much
 
-        // Event 1: File Created - Sync to both Neo4j and Qdrant
-        $modelClass::created(function ($file) {
-            dispatch(function () use ($file) {
-                $this->handleFileCreated($file);
-            });
-        });
-
-        // Event 2: File Updated - Reprocess if path changed
-        $modelClass::updated(function ($file) {
-            dispatch(function () use ($file) {
-                $this->handleFileUpdated($file);
-            });
-        });
-
-        // Both cases (creating and updating) through save
+        // Create and update both flow through a single 'saved' listener so one
+        // save dispatches exactly one processing path. wasRecentlyCreated and
+        // isDirty('path') distinguish the create case from a path replacement.
         $modelClass::saved(function ($file) {
             dispatch(function () use ($file) {
                 if ($file->wasRecentlyCreated) {
@@ -57,7 +45,7 @@ class FileProcessingPlugin extends ModelPlugin
             });
         });
 
-        // Event 3: File Deleting - Remove from both stores
+        // File Deleting - Remove from both stores
         $modelClass::deleting(function ($file) {
             dispatch(function () use ($file) {
                  $this->handleFileDeleting($file);

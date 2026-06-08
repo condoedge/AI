@@ -140,5 +140,8 @@
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "enabledMcpjsonServers": [
+    "code-index"
+  ]
 }

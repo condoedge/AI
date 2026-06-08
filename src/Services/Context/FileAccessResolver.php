@@ -64,16 +64,20 @@ class FileAccessResolver implements FileAccessResolverInterface
             return $resolver($user);
         }
 
-        // Try the accessibleBy scope/macro on the CONFIGURED File model.
+        // Invoke the configured access scope on the CONFIGURED File model.
         // Using config('ai.file_context.file_model') (e.g. App\Models\File) keeps the
-        // authorization model and the indexed model the same class.
-        try {
-            return $this->fileModelQuery()->accessibleBy($user)->pluck('id')->toArray();
-        } catch (\Throwable $e) {
-            \Log::debug("FileAccessResolver: accessibleBy failed, using fallback", [
-                'error' => $e->getMessage(),
-                'user_id' => $user->id ?? null,
-            ]);
+        // authorization model and the indexed model the same class. The scope method
+        // name is config-driven (default 'accessibleBy') so hosts can wire their own.
+        $scope = config('ai.file_context.access_scope', 'accessibleBy');
+        if (is_string($scope) && $scope !== '') {
+            try {
+                return $this->fileModelQuery()->{$scope}($user)->pluck('id')->toArray();
+            } catch (\Throwable $e) {
+                \Log::debug("FileAccessResolver: access scope '{$scope}' failed, using fallback", [
+                    'error' => $e->getMessage(),
+                    'user_id' => $user->id ?? null,
+                ]);
+            }
         }
 
         // Fallback: use user_id and optional team_id filtering

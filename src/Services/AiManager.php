@@ -149,6 +149,21 @@ class AiManager
         return $this->ingestion->sync($entity);
     }
 
+    /**
+     * Reconcile missing relationships for entities whose targets may not have
+     * existed at initial ingestion time.
+     *
+     * Delegates to the ingestion service. Used by RelatedModelSyncObserver to
+     * keep the graph consistent when pivot/related models change.
+     *
+     * @param array $entities Array of Nodeable entities to sync relationships for
+     * @return array Reconciliation summary (see DataIngestionServiceInterface::syncRelationships)
+     */
+    public function syncRelationships(array $entities): array
+    {
+        return $this->ingestion->syncRelationships($entities);
+    }
+
     // =========================================================================
     // Context Retrieval (RAG) Methods
     // =========================================================================
@@ -183,7 +198,11 @@ class AiManager
      */
     public function searchSimilar(string $question, array $options = []): array
     {
-        return $this->context->searchSimilar($question, $options);
+        return $this->context->searchSimilar(
+            $question,
+            $options['collection'] ?? 'questions',
+            $options['limit'] ?? 5
+        );
     }
 
     /**
@@ -205,7 +224,13 @@ class AiManager
      */
     public function getExampleEntities(array $labels, int $limit = 3): array
     {
-        return $this->context->getExampleEntities($labels, $limit);
+        // The retriever fetches examples per label; fan out and key by label.
+        $entitiesByLabel = [];
+        foreach ($labels as $label) {
+            $entitiesByLabel[$label] = $this->context->getExampleEntities($label, $limit);
+        }
+
+        return $entitiesByLabel;
     }
 
     /**

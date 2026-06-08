@@ -237,6 +237,94 @@ class QueryExecutorTest extends TestCase
         $this->assertEquals(42, $count);
     }
 
+    /**
+     * Build a closure that captures the Cypher query the graph store is asked
+     * to run, so the test can assert the generated count query is well-formed.
+     */
+    private function captureQuery(?string &$captured): \Closure
+    {
+        return function ($q) use (&$captured) {
+            $captured = $q;
+            return true;
+        };
+    }
+
+    /**
+     * Asserts a generated count query is structurally valid Cypher: it wraps the
+     * original query in a CALL subquery (so any shape stays legal) and the
+     * count(*) aggregation is the single top-level RETURN that follows it.
+     */
+    private function assertWellFormedCountQuery(string $query, string $inner): void
+    {
+        // The old wrapper prepended "WITH * MATCH" in front of an inner clause,
+        // producing impossible adjacencies like "MATCH OPTIONAL MATCH",
+        // "MATCH CALL" or "MATCH WITH". None of those may appear.
+        $this->assertDoesNotMatchRegularExpression(
+            '/\bMATCH\s+(OPTIONAL\b|CALL\b|WITH\b)/i',
+            $query,
+            "Count query is malformed (illegal clause after MATCH): {$query}"
+        );
+
+        // The original query must survive intact inside a CALL subquery, so any
+        // shape (OPTIONAL MATCH / CALL / leading WITH / UNION) stays valid.
+        $this->assertStringContainsString(
+            "CALL { {$inner} }",
+            $query,
+            "Count query must wrap the original in a CALL subquery: {$query}"
+        );
+
+        // The aggregation must be the OUTER clause, after the subquery's closing
+        // brace — never a second RETURN stacked at the top level.
+        $this->assertMatchesRegularExpression(
+            '/\}\s*RETURN\s+count\(\*\)/i',
+            $query,
+            "Count query must aggregate with count(*) outside the subquery: {$query}"
+        );
+
+        // Exactly one top-level RETURN (the aggregation): the inner query's own
+        // RETURN lives inside the braces and must not be double-counted here.
+        $outer = preg_replace('/CALL\s*\{.*\}/is', '', $query);
+        $this->assertSame(
+            1,
+            preg_match_all('/\bRETURN\b/i', $outer),
+            "Count query must have exactly one top-level RETURN: {$query}"
+        );
+    }
+
+    public function test_executeCount_wraps_optional_match_as_valid_cypher(): void
+    {
+        $captured = null;
+
+        $this->mockGraph->shouldReceive('query')
+            ->once()
+            ->with(Mockery::on($this->captureQuery($captured)), [])
+            ->andReturn([['total' => 7]]);
+
+        $inner = 'OPTIONAL MATCH (n:Customer) RETURN n';
+        $count = $this->executor->executeCount($inner);
+
+        $this->assertEquals(7, $count);
+        $this->assertNotNull($captured);
+        $this->assertWellFormedCountQuery($captured, $inner);
+    }
+
+    public function test_executeCount_wraps_call_query_as_valid_cypher(): void
+    {
+        $captured = null;
+
+        $this->mockGraph->shouldReceive('query')
+            ->once()
+            ->with(Mockery::on($this->captureQuery($captured)), [])
+            ->andReturn([['total' => 3]]);
+
+        $inner = 'CALL db.labels() YIELD label RETURN label';
+        $count = $this->executor->executeCount($inner);
+
+        $this->assertEquals(3, $count);
+        $this->assertNotNull($captured);
+        $this->assertWellFormedCountQuery($captured, $inner);
+    }
+
     // =========================================================================
     // Pagination Tests
     // =========================================================================

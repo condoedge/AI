@@ -340,6 +340,43 @@ class QueryExecutorSecurityTest extends TestCase
     }
 
     /** @test */
+    public function deny_throws_on_label_free_node_access_that_yields_no_entity(): void
+    {
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+
+        $user = (object) ['id' => 7];
+
+        // A query that binds nodes but carries NO :Label yields no extractable
+        // entity; the old code ran it UNFILTERED (cross-tenant read). Tenancy
+        // cannot be proven, so under 'deny' it must fail closed.
+        $security = Mockery::mock(AiSecurityService::class);
+        $this->bindSecurityService($security);
+
+        $this->expectException(SecurityException::class);
+
+        $this->invokeApplySecurityFilter('MATCH (n {id: 1}) RETURN n', ['user' => $user]);
+    }
+
+    /** @test */
+    public function bypass_runs_label_free_node_access_unfiltered(): void
+    {
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'bypass');
+
+        $user = (object) ['id' => 7];
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $this->bindSecurityService($security);
+
+        // Under 'bypass' the legacy fail-open behaviour is preserved (loudly).
+        $result = $this->invokeApplySecurityFilter('MATCH (n {id: 1}) RETURN n', ['user' => $user]);
+
+        $this->assertFalse($result['filter_applied']);
+        $this->assertSame('MATCH (n {id: 1}) RETURN n', $result['query']);
+    }
+
+    /** @test */
     public function team_ids_are_bound_as_parameters_not_spliced(): void
     {
         config()->set('ai.security.enabled', true);
@@ -359,6 +396,23 @@ class QueryExecutorSecurityTest extends TestCase
         $this->assertStringNotContainsString('IN [', $result['query']);
         $this->assertStringContainsString('$ai_team_ids', $result['query']);
         $this->assertSame(['ai_team_ids' => [3, 5]], $result['parameters']);
+    }
+
+    /** @test */
+    public function or_predicate_is_parenthesized_so_team_filter_constrains_both_branches(): void
+    {
+        // `WHERE a OR b` followed by ` AND team` parses as `a OR (b AND team)` —
+        // AND binds tighter than OR — so the `a` branch runs unscoped (cross-tenant
+        // leak). The existing disjunction must be grouped: `WHERE (a OR b) AND team`.
+        $query = 'MATCH (i:Invoice) WHERE i.status = "active" OR i.flagged = true RETURN i';
+        $filter = 'WHERE i.team_id IN $ai_team_ids';
+
+        $result = $this->invokeInjectTeamFilter($query, $filter);
+
+        $this->assertStringContainsString(
+            '(i.status = "active" OR i.flagged = true) AND i.team_id IN $ai_team_ids',
+            $result
+        );
     }
 
     public function tearDown(): void

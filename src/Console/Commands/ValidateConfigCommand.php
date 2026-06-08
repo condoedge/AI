@@ -13,13 +13,13 @@ use Illuminate\Console\Command;
  * Helps developers identify configuration issues before running the AI system.
  *
  * Usage:
- *   php artisan ai:config:validate
+ *   php artisan ai:validate-config
  *
  * @package Condoedge\Ai\Console\Commands
  */
 class ValidateConfigCommand extends Command
 {
-    protected $signature = 'ai:config:validate';
+    protected $signature = 'ai:validate-config';
     protected $description = 'Validate entity configuration';
 
     private array $errors = [];

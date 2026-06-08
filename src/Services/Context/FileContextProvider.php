@@ -186,8 +186,15 @@ class FileContextProvider
             $filteredResults[] = $result;
         }
 
-        // Sort by score descending
-        usort($filteredResults, fn($a, $b) => $b['score'] <=> $a['score']);
+        // Sort by the cross-collection rank-fusion score when FileSearchService
+        // merged collections (fusion_score present), otherwise by raw similarity.
+        // The relevance threshold above still gates on raw 'score', so ordering by
+        // rank fusion never lets a sub-threshold match through.
+        usort($filteredResults, function ($a, $b) {
+            $aRank = $a['fusion_score'] ?? $a['score'];
+            $bRank = $b['fusion_score'] ?? $b['score'];
+            return $bRank <=> $aRank;
+        });
 
         // Re-rank the over-fetched, access-filtered pool for precision BEFORE the
         // final limit. Retrieval over-fetches (content candidates at limit*3 plus

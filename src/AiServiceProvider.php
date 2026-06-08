@@ -707,9 +707,17 @@ class AiServiceProvider extends ServiceProvider
      */
     private function registerSecurityServices(): void
     {
-        // Register Auth Adapter (abstract interface for swappable implementations)
+        // Register Auth Adapter (abstract interface for swappable implementations).
+        // KompoAuthAdapter depends on kompo/auth globals/classes that are not a
+        // dependency of this package; bind it only when kompo/auth is present so
+        // standalone installs fail closed via NullAuthAdapter instead of fataling.
         $this->app->singleton(AiAuthAdapterInterface::class, function ($app) {
-            return new KompoAuthAdapter();
+            if (function_exists('globalSecurityBypass')
+                || class_exists(\Kompo\Auth\Models\Teams\Permission::class)) {
+                return new KompoAuthAdapter();
+            }
+
+            return new \Condoedge\Ai\Auth\NullAuthAdapter();
         });
 
         // Register TeamPathResolver
@@ -962,6 +970,7 @@ class AiServiceProvider extends ServiceProvider
             RegenerateMessageService::class,
             AiAuthAdapterInterface::class,
             KompoAuthAdapter::class,
+            \Condoedge\Ai\Auth\NullAuthAdapter::class,
             TeamPathResolver::class,
             AiSecurityService::class,
             QueryUnderstandingService::class,

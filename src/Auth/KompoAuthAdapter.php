@@ -68,12 +68,28 @@ class KompoAuthAdapter implements AiAuthAdapterInterface
      */
     public function isEnabled(): bool
     {
-        return config('ai.security.enabled', true) && !globalSecurityBypass();
+        if (!config('ai.security.enabled', true)) {
+            return false;
+        }
+
+        // globalSecurityBypass() lives in kompo/auth; a stray call without it
+        // must not fatal. Absent the bypass, security stays enabled (closed).
+        if (function_exists('globalSecurityBypass')) {
+            return !globalSecurityBypass();
+        }
+
+        return true;
     }
 
-    
+
     public function checkIfPermissionsExist($user, string $entity): bool
     {
+        // Without kompo/auth's Permission model we cannot probe existence; stay
+        // on the team-filtering path (true) so access is denied, not skipped.
+        if (!class_exists(Permission::class)) {
+            return true;
+        }
+
         $permissionChain = config('ai.security.permission_chain', [
             '{Entity}.AiRetrieving',
             '{Entity}',

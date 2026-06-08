@@ -21,9 +21,16 @@ class FileSearchService
     /**
      * Sentinel collection key for the chunk store's bound (primary) collection,
      * which is searched without an explicit collection name. Used to qualify
-     * composite file identities and to normalize scores per source collection.
+     * composite file identities and to rank-fuse scores per source collection.
      */
     private const PRIMARY_COLLECTION_KEY = '__primary__';
+
+    /**
+     * Reciprocal Rank Fusion constant. Dampens the contribution of low ranks so a
+     * top-ranked result in any collection dominates; 60 is the value from the
+     * original RRF paper and the de-facto default.
+     */
+    private const RRF_K = 60;
 
     /**
      * Additional collections to union into content/filename search alongside the
@@ -82,21 +89,19 @@ class FileSearchService
 
         // Search Qdrant for chunks (get more than limit to account for grouping).
         // Primary collection uses the bound collection (no override); any
-        // additional collections (e.g. documentation_chunks) are unioned in (B4).
+        // additional collections (e.g. documentation_chunks) are unioned in.
         //
-        // Cross-collection score normalization: raw cosine scores from different
-        // collections are NOT comparable on the same scale (different embedding
-        // distributions / point densities), so a strong match in one collection
-        // could be unfairly out-ranked by a mediocre match in another. When more
-        // than one collection contributes, each collection's result set is min-max
-        // normalized to [0, 1] BEFORE merging so scores are comparable across the
-        // union. Each result is tagged with its source collection so it can be
-        // grouped under a COMPOSITE identity (collection-qualified id) — a physical
-        // doc and a DB file can no longer collide on the same bare numeric id.
-        //
-        // When only the primary collection is searched there is nothing to make
-        // comparable, so scores pass through UNCHANGED — preserving the absolute
-        // cosine scale that downstream min_score thresholds rely on.
+        // Raw cosine scores from different collections are NOT comparable on the
+        // same scale, so when more than one collection contributes, results are
+        // ordered by Reciprocal Rank Fusion (a rank-based fuse that needs no
+        // comparable score scale) rather than by raw score. Crucially, each
+        // result's RAW similarity is preserved as 'score' so downstream absolute
+        // thresholds and the displayed relevance reflect real cosine similarity,
+        // not a rescaled rank — a min-max rescale would boost a lone/weak match to
+        // 1.0 and squash a strong match toward 0. Each result is tagged with its
+        // source collection so it groups under a COMPOSITE identity
+        // (collection-qualified id) and a physical doc and a DB file cannot collide
+        // on the same bare numeric id.
         $buckets = [];
 
         $primary = $this->chunkStore->searchByContent($query, $limit * 3, $filters);
@@ -116,13 +121,13 @@ class FileSearchService
             }
         }
 
-        // Normalize per collection only when unioning multiple collections; a
-        // single source needs no cross-collection rescaling.
-        $normalize = count($buckets) > 1;
+        // Fuse by rank only when unioning multiple collections; a single source
+        // is already on one comparable cosine scale and is ordered by raw score.
+        $fuse = count($buckets) > 1;
 
         $chunks = [];
         foreach ($buckets as $bucket) {
-            $chunks = array_merge($chunks, $normalize ? $this->normalizeScores($bucket) : $bucket);
+            $chunks = array_merge($chunks, $fuse ? $this->assignRankFusion($bucket) : $bucket);
         }
 
         // Group chunks by a COMPOSITE identity (source collection + file id) so a
@@ -132,20 +137,19 @@ class FileSearchService
 
         $results = [];
         foreach ($fileGroups as $compositeKey => $fileChunks) {
-            // Score each file by its BEST chunk (max), not the average. Averaging
-            // dilutes a strong, on-topic chunk with weaker ones and drops files
-            // that are genuinely relevant (e.g. chunks [0.8, 0.2, 0.2, 0.2]
-            // averaged to ~0.35 fell under a 0.4 threshold). Best-chunk scoring
-            // keeps such files. The average is preserved as metadata. Scores here
-            // are the per-collection-normalized scores, so cross-collection
-            // comparison in the final sort is fair.
+            // Score each file by its BEST chunk (max RAW similarity), not the
+            // average. Averaging dilutes a strong, on-topic chunk with weaker ones
+            // and drops files that are genuinely relevant (e.g. chunks
+            // [0.8, 0.2, 0.2, 0.2] averaged to ~0.35 fell under a 0.4 threshold).
+            // 'score' stays RAW cosine so absolute thresholds and the displayed
+            // relevance are real similarities. The average is kept as metadata.
             $maxScore = collect($fileChunks)->max('score');
             $avgScore = collect($fileChunks)->avg('score');
 
             // Get best matching chunk for preview
             $bestChunk = collect($fileChunks)->sortByDesc('score')->first();
 
-            $results[] = [
+            $result = [
                 // Keep the ORIGINAL file id for downstream FileModel loading and
                 // consumers; the composite key is grouping-only.
                 'file_id' => $bestChunk['chunk']->fileId,
@@ -157,11 +161,20 @@ class FileSearchService
                 'best_chunk' => $bestChunk['chunk'],
                 'chunks' => array_map(fn($r) => $r['chunk'], $fileChunks->toArray()),
             ];
+
+            // When fusing collections, the cross-collection ordering key is the sum
+            // of the group's per-chunk RRF contributions (rank-based, scale-free).
+            if ($fuse) {
+                $result['fusion_score'] = (float) collect($fileChunks)->sum('rrf');
+            }
+
+            $results[] = $result;
         }
 
-        // Sort by aggregate score and limit
+        // Order by the rank-fusion score when collections were merged, otherwise by
+        // raw similarity; then limit.
         $results = collect($results)
-            ->sortByDesc('score')
+            ->sortByDesc($fuse ? 'fusion_score' : 'score')
             ->take($limit)
             ->values()
             ->toArray();
@@ -205,32 +218,35 @@ class FileSearchService
     }
 
     /**
-     * Min-max normalize a single collection's scores to [0, 1] within that set.
+     * Assign each result in one collection a Reciprocal Rank Fusion contribution.
      *
-     * Per-collection scaling makes scores comparable across the union of
-     * collections (different collections have different raw cosine distributions).
-     * When all scores in the set are equal (including a single-result set), every
-     * result is treated as fully relevant within its set (normalized to 1.0)
-     * rather than zeroed out. The raw cosine is preserved as 'raw_score'.
+     * Ranking within the collection is by raw score descending (1-based); the
+     * contribution is 1 / (RRF_K + rank). RRF fuses collections by rank rather than
+     * by raw score, so a top-ranked match in any collection ranks highly without
+     * needing a comparable cosine scale across collections. The RAW 'score' is left
+     * untouched so absolute thresholds and the reported relevance stay on the real
+     * cosine scale.
      *
      * @param array $results Tagged results for ONE collection.
-     * @return array Results with a normalized 'score' and preserved 'raw_score'.
+     * @return array Results with an added 'rrf' fusion contribution.
      */
-    private function normalizeScores(array $results): array
+    private function assignRankFusion(array $results): array
     {
         if (empty($results)) {
             return [];
         }
 
-        $scores = array_map(static fn ($r) => (float) ($r['score'] ?? 0.0), $results);
-        $min = min($scores);
-        $max = max($scores);
-        $range = $max - $min;
+        // Stable rank by raw score descending without mutating the input order.
+        $ordered = $results;
+        usort($ordered, static fn ($a, $b) => ($b['score'] ?? 0.0) <=> ($a['score'] ?? 0.0));
+
+        $rrfByKey = new \SplObjectStorage();
+        foreach ($ordered as $rank => $r) {
+            $rrfByKey[$r['chunk']] = 1.0 / (self::RRF_K + $rank + 1);
+        }
 
         foreach ($results as &$r) {
-            $raw = (float) ($r['score'] ?? 0.0);
-            $r['raw_score'] = $raw;
-            $r['score'] = $range > 0.0 ? (($raw - $min) / $range) : 1.0;
+            $r['rrf'] = $rrfByKey[$r['chunk']];
         }
         unset($r);
 
