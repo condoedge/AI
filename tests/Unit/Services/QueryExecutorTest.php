@@ -22,6 +22,13 @@ class QueryExecutorTest extends TestCase
     {
         parent::setUp();
 
+        // These tests exercise execution mechanics (read-only detection, limit
+        // injection, formatting, timeouts) rather than multi-tenant filtering.
+        // Disable the team-security layer so the (now fail-closed) security
+        // posture doesn't short-circuit them. Security behaviour is covered by
+        // QueryExecutorSecurityTest / AiSecurityServiceTest.
+        config()->set('ai.security.enabled', false);
+
         $this->mockGraph = Mockery::mock(GraphStoreInterface::class);
         $this->config = [
             'default_timeout' => 30,

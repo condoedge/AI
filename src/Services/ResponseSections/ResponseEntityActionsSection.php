@@ -126,10 +126,13 @@ class ResponseEntityActionsSection extends BaseResponseSection
             $output .= "\n";
         }
 
-        $output .= "**CRITICAL:** When the user asks for a link, profile, or action listed above:\n";
-        $output .= "- Use the EXACT entity IDs shown above\n";
-        $output .= "- Format: `[Display Text](entity://EntityType/ID/action_key)`\n";
-        $output .= "- Example: `[View John Doe](entity://Person/152463/profile)`\n\n";
+        $output .= "**CRITICAL — IDs ONLY INSIDE ACTION LINKS, NEVER IN PROSE:**\n";
+        $output .= "When the user asks for a link, profile, or action listed above:\n";
+        $output .= "- Use the EXACT entity IDs shown above, but ONLY inside the `entity://` / `action://` link target.\n";
+        $output .= "- NEVER write a raw ID in your prose/sentence text. The ID is an internal identifier and the privacy policy forbids revealing it in plain text; it is allowed only as part of the link URL, which the UI consumes and the user never sees.\n";
+        $output .= "- Format: `[Display Text](entity://EntityType/ID/action_key)` — refer to the entity by NAME in the visible text, ID stays in the link.\n";
+        $output .= "- Example: `[View John Doe](entity://Person/152463/profile)` (the user sees \"View John Doe\", not \"152463\").\n";
+        $output .= "- You may add params after the action key as a query string for default values: `[Open form](action://open_modal?modal=editUnit&amount=450)`.\n\n";
 
         return $output;
     }

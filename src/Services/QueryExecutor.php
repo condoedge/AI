@@ -92,6 +92,12 @@ class QueryExecutor implements QueryExecutorInterface
         $cypherQuery = $securityResult['query'];
         $securityFilterApplied = $securityResult['filter_applied'];
 
+        // Merge bound team-filter parameters (e.g. $ai_team_ids) into the query
+        // parameters. Caller-supplied keys win to avoid silent clobbering.
+        if (!empty($securityResult['parameters'])) {
+            $parameters = array_merge($securityResult['parameters'], $parameters);
+        }
+
         // SECURITY: Enforce rate limiting to prevent DoS via expensive query flooding
         if (!$this->rateLimiter->attempt()) {
             throw new QueryExecutionException(
@@ -596,16 +602,24 @@ class QueryExecutor implements QueryExecutorInterface
     /**
      * Apply security filtering to Cypher query.
      *
+     * FAIL-CLOSED posture (config-gated): when security is enabled and
+     * `ai.security.on_permission_unexistent === 'deny'`, any situation where a
+     * sensitive entity is identified but the team filter cannot be applied
+     * (no resolvable user, or the filter cannot be safely injected into the
+     * query shape) raises a SecurityException instead of running the raw,
+     * cross-tenant query. When set to 'bypass', the legacy fail-OPEN behaviour
+     * is preserved but a warning is logged.
+     *
      * @param string $cypherQuery The query to filter
      * @param array $options Execution options
-     * @return array{query: string, filter_applied: bool}
-     * @throws SecurityException If access denied
+     * @return array{query: string, filter_applied: bool, parameters: array}
+     * @throws SecurityException If access denied / cannot be safely filtered
      */
     private function applySecurityFilter(string $cypherQuery, array $options): array
     {
         // Skip if security filtering disabled in options
         if (($options['skip_security'] ?? false) === true) {
-            return ['query' => $cypherQuery, 'filter_applied' => false];
+            return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
         }
 
         // Get security service
@@ -613,19 +627,36 @@ class QueryExecutor implements QueryExecutorInterface
 
         // Check if security is enabled
         if (!config('ai.security.enabled', true)) {
-            return ['query' => $cypherQuery, 'filter_applied' => false];
+            return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
         }
 
-        // Get current user
-        $user = auth()->user();
-        if (!$user) {
-            return ['query' => $cypherQuery, 'filter_applied' => false];
-        }
+        // Resolve the acting user: prefer the user threaded through the pipeline
+        // ($options['user']) over auth()->user(), because the real user is null
+        // or wrong on CLI / queue / regeneration / impersonation paths.
+        $user = $options['user'] ?? auth()->user();
 
-        // Extract entity from query
+        // Extract entity from query first — only a parseable, sensitive entity
+        // triggers the fail-closed branch (e.g. `RETURN 1` / `CALL db.labels()`
+        // have no entity and are not team-scoped).
         $entity = $this->extractPrimaryEntity($cypherQuery);
+
+        if (!$user) {
+            // No resolvable user. If there is a sensitive entity, this is a
+            // security-relevant gap → fail closed (or bypass with a warning).
+            if ($entity !== null) {
+                return $this->failClosedOrBypass(
+                    $cypherQuery,
+                    $entity,
+                    'no_resolvable_user'
+                );
+            }
+
+            return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
+        }
+
         if (!$entity) {
-            return ['query' => $cypherQuery, 'filter_applied' => false];
+            // No entity to scope (e.g. label introspection / scalar return).
+            return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
         }
 
         $alias = $this->extractEntityAlias($cypherQuery, $entity);
@@ -633,19 +664,66 @@ class QueryExecutor implements QueryExecutorInterface
         // Check for COUNT query with global permission
         if ($this->isCountQuery($cypherQuery)) {
             if ($securityService->shouldSkipTeamFilterForCount($user, $entity)) {
-                return ['query' => $cypherQuery, 'filter_applied' => false];
+                return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
             }
         }
 
-        // Get team filter
-        $teamFilter = $securityService->getTeamFilter($user, $entity, $alias);
+        // Get team filter. AiSecurityService already throws SecurityException
+        // for missing permissions / missing team_path under 'deny'.
+        $teamFiltered = $securityService->getTeamFilterWithParameters($user, $entity, $alias);
+        $teamFilter = $teamFiltered['filter'] ?? null;
+        $parameters = $teamFiltered['parameters'] ?? [];
 
         if ($teamFilter) {
-            $cypherQuery = $this->injectTeamFilter($cypherQuery, $teamFilter);
-            return ['query' => $cypherQuery, 'filter_applied' => true];
+            $injected = $this->injectTeamFilter($cypherQuery, $teamFilter);
+
+            if ($injected === null) {
+                // A sensitive entity needs filtering but the query shape can't be
+                // safely rewritten → never run it unfiltered. Fail closed/bypass.
+                return $this->failClosedOrBypass(
+                    $cypherQuery,
+                    $entity,
+                    'injection_not_applicable'
+                );
+            }
+
+            return ['query' => $injected, 'filter_applied' => true, 'parameters' => $parameters];
         }
 
-        return ['query' => $cypherQuery, 'filter_applied' => false];
+        return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
+    }
+
+    /**
+     * Decide what to do when a sensitive entity cannot be team-filtered.
+     *
+     * 'deny'   → throw SecurityException (fail closed).
+     * 'bypass' → return the unfiltered query but log a warning (fail open).
+     *
+     * @return array{query: string, filter_applied: bool, parameters: array}
+     * @throws SecurityException
+     */
+    private function failClosedOrBypass(string $cypherQuery, string $entity, string $reason): array
+    {
+        $action = config('ai.security.on_permission_unexistent', 'deny');
+
+        if ($action === 'deny') {
+            Log::channel(config('ai.security.log_channel', 'ai-security'))->warning(
+                'AI query blocked: sensitive entity could not be team-filtered',
+                ['entity' => $entity, 'reason' => $reason, 'action' => 'deny']
+            );
+
+            throw new SecurityException(
+                "Cannot verify permissions for {$entity} data"
+            );
+        }
+
+        // 'bypass' — preserve legacy fail-open behaviour, but make it loud.
+        Log::channel(config('ai.security.log_channel', 'ai-security'))->warning(
+            'AI query running UNFILTERED for sensitive entity (security bypass)',
+            ['entity' => $entity, 'reason' => $reason, 'action' => 'bypass']
+        );
+
+        return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
     }
 
     /**
@@ -693,51 +771,93 @@ class QueryExecutor implements QueryExecutorInterface
     }
 
     /**
-     * Inject team filter into Cypher query.
+     * Inject the team filter into a Cypher query, scoping the PRIMARY MATCH of
+     * every UNION branch.
      *
-     * Strategy depends on filter type:
-     * - MATCH-based filter (multi-hop): insert before RETURN (all vars in scope)
-     * - Simple WHERE filter: append condition to the LAST WHERE with AND,
-     *   or add new WHERE before RETURN if no WHERE exists.
+     * The filter MUST land on the primary MATCH — i.e. before the first
+     * `WITH`/`RETURN`/`ORDER` that follows it — because a `WITH` may project the
+     * entity variable away (`MATCH (i:Invoice) WITH i.amount AS amount ...`),
+     * after which the predicate could no longer reference it. Injecting at the
+     * *last* WHERE (the previous behaviour) silently mis-scoped WITH-chains and
+     * UNION branches.
      *
-     * Using the LAST WHERE is critical for multi-MATCH queries where the
-     * filter variable (e.g., c.team_id) is only defined in a later MATCH.
+     * For `UNION` / `UNION ALL` queries, each branch is an independent query
+     * with its own scope, so the filter is applied to every branch.
+     *
+     * @return string|null The rewritten query, or null if the shape cannot be
+     *                     safely filtered (caller then fails closed).
      */
-    private function injectTeamFilter(string $query, string $filter): string
+    private function injectTeamFilter(string $query, string $filter): ?string
     {
-        // MATCH-based filter: insert entire MATCH+WHERE block before RETURN
-        if (preg_match('/\bMATCH\b/i', $filter)) {
-            return preg_replace(
-                '/\b(RETURN|ORDER)\b/i',
-                $filter . ' $1',
-                $query,
-                1
-            );
-        }
-
-        // Simple WHERE filter: extract condition and merge
-        $condition = preg_replace('/^\s*WHERE\s+/i', '', $filter);
-
-        // Find the LAST WHERE in the query and append with AND
-        $lastWherePos = strripos($query, 'WHERE');
-        if ($lastWherePos !== false) {
-            // Find where this WHERE clause ends (before RETURN/MATCH/ORDER or end)
-            $afterWhere = substr($query, $lastWherePos);
-            // Insert AND condition at the end of the last WHERE block, before RETURN
-            return preg_replace(
-                '/\b(RETURN|ORDER)\b/i',
-                'AND ' . $condition . ' $1',
-                $query,
-                1
-            );
-        }
-
-        // No WHERE exists: add new WHERE before RETURN
-        return preg_replace(
-            '/\b(RETURN|ORDER)\b/i',
-            'WHERE ' . $condition . ' $1',
+        // Split on UNION / UNION ALL, keeping the separators so we can rebuild.
+        $parts = preg_split(
+            '/(\bUNION\s+ALL\b|\bUNION\b)/i',
             $query,
-            1
+            -1,
+            PREG_SPLIT_DELIM_CAPTURE
         );
+
+        $rebuilt = '';
+        foreach ($parts as $part) {
+            // Separators (UNION / UNION ALL) pass through untouched.
+            if (preg_match('/^\s*UNION(\s+ALL)?\s*$/i', $part)) {
+                $rebuilt .= $part;
+                continue;
+            }
+
+            // Empty fragments (can occur at split boundaries) pass through.
+            if (trim($part) === '') {
+                $rebuilt .= $part;
+                continue;
+            }
+
+            $branch = $this->injectTeamFilterIntoBranch($part, $filter);
+            if ($branch === null) {
+                return null; // a branch could not be filtered → fail closed
+            }
+            $rebuilt .= $branch;
+        }
+
+        return $rebuilt;
+    }
+
+    /**
+     * Inject the team filter into a single (UNION-free) query branch, on its
+     * PRIMARY MATCH (before the first WITH/RETURN/ORDER anchor).
+     *
+     * @return string|null Rewritten branch, or null if no safe anchor exists.
+     */
+    private function injectTeamFilterIntoBranch(string $branch, string $filter): ?string
+    {
+        // Locate the first clause that closes the primary MATCH scope. The team
+        // predicate must be inserted BEFORE it so the entity variable is still
+        // bound. WITH is included so we filter before the variable is projected.
+        if (!preg_match('/\b(WITH|RETURN|ORDER)\b/i', $branch, $m, PREG_OFFSET_CAPTURE)) {
+            // No RETURN/WITH/ORDER anchor in this branch — cannot safely splice.
+            return null;
+        }
+
+        $anchorPos = $m[0][1];
+        $head = substr($branch, 0, $anchorPos); // up to (not incl.) the anchor
+        $tail = substr($branch, $anchorPos);    // the anchor + rest
+
+        // MATCH-based filter (relationship / parent traversal): splice the whole
+        // MATCH ... WHERE block in before the anchor.
+        if (preg_match('/\bMATCH\b/i', $filter)) {
+            return rtrim($head) . ' ' . trim($filter) . ' ' . $tail;
+        }
+
+        // Simple WHERE filter (direct column).
+        $condition = preg_replace('/^\s*WHERE\s+/i', '', trim($filter));
+
+        // If the primary-MATCH scope (the head) already has its own WHERE, merge
+        // with AND; otherwise add a new WHERE. We only consider a WHERE that
+        // lives in the head (before the anchor) — a WHERE after RETURN belongs to
+        // a different scope.
+        if (preg_match('/\bWHERE\b/i', $head)) {
+            return rtrim($head) . ' AND ' . $condition . ' ' . $tail;
+        }
+
+        return rtrim($head) . ' WHERE ' . $condition . ' ' . $tail;
     }
 }

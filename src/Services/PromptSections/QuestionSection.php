@@ -23,6 +23,15 @@ class QuestionSection extends BasePromptSection
         // Spotlight the untrusted question so the model treats it as data, not instructions.
         $output .= $this->spotlight($question, 'user_question') . "\n\n";
 
+        // Surface the Query-Understanding clarified intent so the Cypher LLM sees the
+        // disambiguated underlying data relationships alongside the raw question.
+        // Only include it when it adds signal (non-empty AND different from the question).
+        $clarified = $context->qu->clarifiedQuestion;
+        if ($clarified !== '' && trim($clarified) !== trim($question)) {
+            // Spotlight: this is derived/untrusted understanding, not an instruction.
+            $output .= $this->spotlight($clarified, 'clarified_intent') . "\n\n";
+        }
+
         return $output;
     }
 }

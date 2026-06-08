@@ -722,33 +722,32 @@ class EntityAutoDiscovery
         return in_array($column, $fillable);
     }
     /**
-     * Get the action resolver for an entity type
+     * Resolve the shared AiActionRegistry (built-ins + config + registered actions).
      *
-     * @deprecated Use getEntityActionResolver() instead
-     * @param string $entityLabel The entity label (e.g., 'Person', 'Unit')
-     * @return \Closure|null The action resolver closure, or null if none configured
+     * Resolved lazily through the container when available so the accessors below surface the
+     * same actions the render pipeline uses, while still degrading to a self-built registry
+     * with SAFE DEFAULTS if DI isn't wired yet (the registry never throws on absent config).
      */
-    public function getActionResolver(string $entityLabel): ?\Closure
+    protected function actionRegistry(): \Condoedge\Ai\Services\Actions\AiActionRegistry
     {
-        // Backwards compatibility: return first action's resolver
-        $entityActions = config('ai.entity_actions', []);
-        $actions = $entityActions[$entityLabel] ?? [];
-        $firstAction = reset($actions);
-
-        // Handle both old format (direct closure) and new format (nested array)
-        if ($firstAction instanceof \Closure) {
-            return $firstAction;
+        if (function_exists('app')) {
+            try {
+                return app(\Condoedge\Ai\Services\Actions\AiActionRegistry::class);
+            } catch (\Throwable $e) {
+                // Fall through to a standalone instance.
+            }
         }
 
-        return $firstAction['action'] ?? null;
+        return new \Condoedge\Ai\Services\Actions\AiActionRegistry();
     }
 
     /**
-     * Get a specific action resolver for an entity type
+     * Get a specific entity action resolver (legacy closure shape: fn($id, $text)).
      *
-     * @param string $entityLabel The entity label (e.g., 'Person')
-     * @param string $actionKey The action key (e.g., 'profile')
-     * @return \Closure|null The action resolver closure, or null if none configured
+     * Retained for backward-compatibility with any caller still expecting a raw closure;
+     * the rendering pipeline itself now goes through the registry/dispatcher.
+     *
+     * @return \Closure|null
      */
     public function getEntityActionResolver(string $entityLabel, string $actionKey): ?\Closure
     {
@@ -757,22 +756,19 @@ class EntityAutoDiscovery
     }
 
     /**
-     * Get all available actions for an entity type
+     * Get all available actions for an entity type (config + registered), including metadata
+     * advertised to the LLM. Sourced from the registry so it stays consistent with rendering.
      *
-     * @param string $entityLabel The entity label
-     * @return array Array of action configs with keys: action_key, aliases, label
+     * @return array Array of ['action_key','aliases','label'].
      */
     public function getEntityActions(string $entityLabel): array
     {
-        $entityActions = config('ai.entity_actions', []);
-        $actions = $entityActions[$entityLabel] ?? [];
-
         $result = [];
-        foreach ($actions as $key => $config) {
+        foreach ($this->actionRegistry()->entityActions($entityLabel) as $action) {
             $result[] = [
-                'action_key' => $key,
-                'aliases' => $config['aliases'] ?? [],
-                'label' => $config['label'] ?? $key,
+                'action_key' => $action->key(),
+                'aliases' => $action->aliases(),
+                'label' => $action->label(),
             ];
         }
 
@@ -780,10 +776,9 @@ class EntityAutoDiscovery
     }
 
     /**
-     * Get a generic action resolver
+     * Get a generic action resolver (legacy closure shape: fn($text)).
      *
-     * @param string $actionKey The action key (e.g., 'settings')
-     * @return \Closure|null The action resolver closure
+     * @return \Closure|null
      */
     public function getGenericActionResolver(string $actionKey): ?\Closure
     {
@@ -792,20 +787,18 @@ class EntityAutoDiscovery
     }
 
     /**
-     * Get all available generic actions
+     * Get all available generic actions (config + built-ins + registered).
      *
-     * @return array Array of action configs
+     * @return array Array of ['action_key','aliases','label'].
      */
     public function getGenericActions(): array
     {
-        $genericActions = config('ai.generic_actions', []);
-
         $result = [];
-        foreach ($genericActions as $key => $config) {
+        foreach ($this->actionRegistry()->genericActions() as $action) {
             $result[] = [
-                'action_key' => $key,
-                'aliases' => $config['aliases'] ?? [],
-                'label' => $config['label'] ?? $key,
+                'action_key' => $action->key(),
+                'aliases' => $action->aliases(),
+                'label' => $action->label(),
             ];
         }
 
@@ -813,12 +806,11 @@ class EntityAutoDiscovery
     }
 
     /**
-     * Check if an entity type has any actions configured
+     * Check if an entity type has any actions configured/registered.
      */
     public function hasEntityActions(string $entityLabel): bool
     {
-        $entityActions = config('ai.entity_actions', []);
-        return !empty($entityActions[$entityLabel]);
+        return !empty($this->actionRegistry()->entityActions($entityLabel));
     }
 
     /**

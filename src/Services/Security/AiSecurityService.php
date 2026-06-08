@@ -30,8 +30,28 @@ class AiSecurityService
      */
     public function getTeamFilter($user, string $entity, string $alias): ?string
     {
+        return $this->getTeamFilterWithParameters($user, $entity, $alias)['filter'];
+    }
+
+    /**
+     * Get team filter together with the bound Cypher parameters.
+     *
+     * The filter references a bound parameter ($ai_team_ids) instead of an
+     * inline `IN [...]` literal; the returned `parameters` map must be merged
+     * into the query parameters by the executor.
+     *
+     * @param mixed $user User model
+     * @param string $entity Entity name
+     * @param string $alias Cypher alias
+     * @return array{filter: string|null, parameters: array<string, mixed>}
+     * @throws SecurityException When access denied
+     */
+    public function getTeamFilterWithParameters($user, string $entity, string $alias): array
+    {
+        $none = ['filter' => null, 'parameters' => []];
+
         if (!$this->authAdapter->isEnabled()) {
-            return null;
+            return $none;
         }
 
         if ($this->authAdapter->checkIfPermissionsExist($user, $entity) === false) {
@@ -44,7 +64,7 @@ class AiSecurityService
             }
 
             // 'bypass' - return null (no filter)
-            return null;
+            return $none;
         }
 
         // Get teams where user has permission
@@ -61,10 +81,13 @@ class AiSecurityService
         $resolved = $this->pathResolver->resolve($entity, $alias, $teamIds);
 
         if ($resolved === null) {
-            return $this->handleMissingTeamPath($user, $entity);
+            return ['filter' => $this->handleMissingTeamPath($user, $entity), 'parameters' => []];
         }
 
-        return $resolved['filter'];
+        return [
+            'filter' => $resolved['filter'],
+            'parameters' => $resolved['parameters'] ?? [],
+        ];
     }
 
     /**

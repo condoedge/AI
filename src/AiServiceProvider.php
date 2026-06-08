@@ -422,6 +422,37 @@ class AiServiceProvider extends ServiceProvider
 
         // Register Security Services
         $this->registerSecurityServices();
+
+        // Register Retrieval (second-stage re-ranking) Services
+        $this->registerRetrievalServices();
+
+        // Register Agentic Action Services
+        $this->registerActionServices();
+    }
+
+    /**
+     * Register retrieval (second-stage re-ranking) services.
+     */
+    private function registerRetrievalServices(): void
+    {
+        $this->app->singleton(\Condoedge\Ai\Services\Retrieval\RerankerInterface::class, function ($app) {
+            if (config('ai.rag.rerank_enabled', false)) {
+                return new \Condoedge\Ai\Services\Retrieval\LlmReranker(
+                    $app->make(LlmProviderInterface::class)
+                );
+            }
+
+            return new \Condoedge\Ai\Services\Retrieval\NullReranker();
+        });
+    }
+
+    /**
+     * Register agentic action services (action registry + dispatcher).
+     */
+    private function registerActionServices(): void
+    {
+        $this->app->singleton(\Condoedge\Ai\Services\Actions\AiActionRegistry::class);
+        $this->app->singleton(\Condoedge\Ai\Services\Actions\ActionDispatcher::class);
     }
 
     /**
@@ -757,6 +788,7 @@ class AiServiceProvider extends ServiceProvider
                 \Condoedge\Ai\Console\Commands\TestQuestionCommand::class,
                 \Condoedge\Ai\Console\Commands\EnhanceConfigCommand::class,
                 \Condoedge\Ai\Console\Commands\TestConversationCommand::class,
+                \Condoedge\Ai\Console\Commands\EvalCommand::class,
             ]);
         }
 

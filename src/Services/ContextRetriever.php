@@ -238,10 +238,16 @@ class ContextRetriever implements ContextRetrieverInterface
         // STEP 2: Semantic context selection
         $conversationFocusedEntity = $options['conversation_context']['focused_entity'] ?? null;
 
+        // Use the Query-Understanding rewrite (when produced) as the retrieval query
+        // for ALL graph/entity grounding — not just file search. The normalized
+        // searchQuery expands abbreviations and strips filler, improving recall on
+        // entity selection, similar-query search, and the entity-label fallback.
+        $retrievalQuery = $this->retrievalQuery($ctx, $question);
+
         if ($useSemanticSelection && $this->contextSelector !== null) {
             try {
                 $ctx->semanticSelection = $this->contextSelector->selectRelevantContext(
-                    $question,
+                    $retrievalQuery,
                     $this->entityConfigs,
                     [
                         'threshold' => config('ai.semantic_context.threshold', 0.65),
@@ -306,7 +312,7 @@ class ContextRetriever implements ContextRetrieverInterface
 
         // STEP 3: Similar queries
         try {
-            $ctx->similarQueries = $this->searchSimilarQueries($question, $collection, $limit, $scoreThreshold);
+            $ctx->similarQueries = $this->searchSimilarQueries($retrievalQuery, $collection, $limit, $scoreThreshold);
         } catch (\Exception $e) {
             $this->logger->error('context_retriever', 'Vector search failed: ' . $e->getMessage());
             $ctx->addError('Vector search failed: ' . $e->getMessage());
@@ -320,7 +326,7 @@ class ContextRetriever implements ContextRetrieverInterface
                 if (!empty($ctx->semanticSelection->entities)) {
                     $ctx->graphSchema = $this->filterSchemaByRelevance($fullSchema, $ctx->semanticSelection);
                 } else {
-                    $relevantLabels = $this->findRelevantEntityLabels($question);
+                    $relevantLabels = $this->findRelevantEntityLabels($retrievalQuery);
                     if (!empty($relevantLabels)) {
                         $ctx->graphSchema = $this->filterSchemaByLabels($fullSchema, $relevantLabels);
                         $ctx->selectionInfo = [
@@ -871,6 +877,23 @@ class ContextRetriever implements ContextRetrieverInterface
         }
 
         return [];
+    }
+
+    /**
+     * Resolve the query string to embed for graph/data grounding.
+     *
+     * Prefers the Query-Understanding rewrite (searchQuery) when it was produced;
+     * otherwise falls back to the raw user question. This is the single source of
+     * truth so entity selection, similar-query search, and the entity-label
+     * fallback all benefit from the normalized rewrite consistently.
+     *
+     * @param PipelineContext $ctx      Pipeline context (carries qu->searchQuery)
+     * @param string          $question Raw user question (fallback)
+     * @return string Query string to embed
+     */
+    private function retrievalQuery(PipelineContext $ctx, string $question): string
+    {
+        return $ctx->qu->searchQuery !== '' ? $ctx->qu->searchQuery : $question;
     }
 
     /**
@@ -1585,5 +1608,79 @@ class ContextRetriever implements ContextRetrieverInterface
             $type = is_array($rel) ? ($rel['type'] ?? '') : $rel;
             return $this->getRelationshipWeight($type) >= $threshold;
         });
+    }
+
+    /**
+     * Compute a real retrieval-confidence signal from a top-k score distribution.
+     *
+     * This is a pure, side-effect-free read of the score distribution intended to
+     * feed a FUTURE rephrase/abstention loop. It does NOT change retrieval
+     * behavior, thresholds, or what is returned by retrieveContext() — callers opt
+     * in by passing the scores they already have (e.g. similar-query scores, file
+     * relevance scores, or semantic-selection scores).
+     *
+     * Confidence blends two cheap, well-understood signals from the top-k scores:
+     *  - strength: the mean of the top-k scores (are matches strong at all?);
+     *  - margin:   the gap between the best and the median (is the top match
+     *              clearly separated, or is everything a flat, ambiguous tie?).
+     *
+     * Both are already in/near [0, 1] for cosine-style scores; the result is
+     * clamped to [0, 1]. An empty distribution yields 0.0.
+     *
+     * @param array<int|float> $scores Top-k relevance scores (any order).
+     * @param int              $k      How many of the top scores to consider (default 5).
+     * @return array{
+     *     overall: float,
+     *     strength: float,
+     *     margin: float,
+     *     top_score: float,
+     *     considered: int
+     * }
+     */
+    public function computeRetrievalConfidence(array $scores, int $k = 5): array
+    {
+        $numeric = array_values(array_filter(
+            array_map(fn ($s) => is_numeric($s) ? (float) $s : null, $scores),
+            fn ($s) => $s !== null
+        ));
+
+        if (empty($numeric)) {
+            return [
+                'overall' => 0.0,
+                'strength' => 0.0,
+                'margin' => 0.0,
+                'top_score' => 0.0,
+                'considered' => 0,
+            ];
+        }
+
+        rsort($numeric);
+        $topK = array_slice($numeric, 0, max(1, $k));
+        $count = count($topK);
+
+        $top = $topK[0];
+        $strength = array_sum($topK) / $count;
+
+        // Median of the considered window.
+        $mid = (int) floor(($count - 1) / 2);
+        $median = ($count % 2 === 1)
+            ? $topK[$mid]
+            : (($topK[$mid] + $topK[$mid + 1]) / 2.0);
+
+        // Separation of the best match from the bulk. Flat distributions (best ~=
+        // median) signal ambiguity; a clear leader signals confidence.
+        $margin = max(0.0, $top - $median);
+
+        // Blend strength (weighted higher) with margin, then clamp.
+        $overall = (0.7 * $strength) + (0.3 * $margin);
+        $overall = max(0.0, min(1.0, $overall));
+
+        return [
+            'overall' => round($overall, 4),
+            'strength' => round($strength, 4),
+            'margin' => round($margin, 4),
+            'top_score' => round($top, 4),
+            'considered' => $count,
+        ];
     }
 }

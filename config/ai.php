@@ -216,8 +216,14 @@ return [
         // 'team_id' = assume direct column
         'default_team_path' => 'auto',
 
-        // When there is no record of the permissions we must select if it must be deny first or bypass
-        'on_permission_unexistent' => 'bypass', // 'deny' or 'bypass'
+        // What to do when an entity has NO permission metadata, no user can be
+        // resolved, or no team filter can be injected for a sensitive entity.
+        //   'deny'   = FAIL CLOSED — block the query (raises SecurityException,
+        //              caught upstream and turned into a safe error answer).
+        //   'bypass' = FAIL OPEN — run the query unfiltered (logs a warning).
+        // 'deny' is the safe multi-tenant default. 'bypass' is the rollout escape
+        // hatch for environments that have not yet configured permission metadata.
+        'on_permission_unexistent' => env('AI_ON_PERMISSION_UNEXISTENT', 'deny'), // 'deny' or 'bypass'
 
         // What to do when no team_path found
         // 'deny' = block query
@@ -349,12 +355,65 @@ return [
     | - query_understanding: Pre-processes questions (fast model recommended)
     | - query_generation: Generates Cypher queries (needs reasoning power)
     | - response_generation: Generates natural language answers (fast model OK)
+    | - eval_judge: Grades answers in `ai:eval` (use a strong, cheap judge at temp 0)
+    | - eval_generator: Phrases eval questions in `ai:eval` (any fast model)
     |
     */
     'llm_roles' => [
         // 'query_understanding' => ['model' => 'gpt-4o-mini', 'temperature' => 0.0],
         // 'query_generation' => null,  // uses default
         // 'response_generation' => ['model' => 'gpt-4o-mini'],
+        // 'eval_judge' => ['model' => 'gpt-4o', 'temperature' => 0.0],     // LLM-as-judge for ai:eval
+        // 'eval_generator' => ['model' => 'gpt-4o-mini', 'temperature' => 0.4], // question phrasing for ai:eval
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Eval Harness (ai:eval)
+    |--------------------------------------------------------------------------
+    |
+    | Configuration for the closed-Q&A eval harness with per-stage failure
+    | attribution. The harness generates label-free questions from this config,
+    | drives them through the real pipeline, grades answers with a reference-free
+    | LLM judge, and attributes failure to one weakest stage.
+    |
+    | - stage_thresholds: minimum average score (0-1) each stage must meet for
+    |                     the run to PASS. Lower a threshold to relax it; the run
+    |                     exits non-zero if any stage average falls below its min.
+    | - row_pass_threshold: a single row's weakest-stage score below this marks
+    |                       the row 'failed' in the report.
+    | - judge: which LLM role + sampling the LLM-as-judge uses (temp 0 = stable).
+    | - generation: how many questions to synthesise per entity/source.
+    | - report_path: where the JSON report is written (null = only print).
+    | - offline_default: when true, ai:eval skips the judge unless --offline is
+    |                    explicitly negated by reachable credentials.
+    |
+    */
+    'eval' => [
+        'stage_thresholds' => [
+            'understanding' => env('AI_EVAL_THRESHOLD_UNDERSTANDING', 0.6),
+            'retrieval' => env('AI_EVAL_THRESHOLD_RETRIEVAL', 0.6),
+            'prompt' => env('AI_EVAL_THRESHOLD_PROMPT', 0.6),
+            'generation' => env('AI_EVAL_THRESHOLD_GENERATION', 0.6),
+        ],
+
+        'row_pass_threshold' => env('AI_EVAL_ROW_PASS_THRESHOLD', 0.6),
+
+        'judge' => [
+            'role' => 'eval_judge',
+            'temperature' => env('AI_EVAL_JUDGE_TEMPERATURE', 0.0),
+            'max_tokens' => env('AI_EVAL_JUDGE_MAX_TOKENS', 800),
+        ],
+
+        'generation' => [
+            'questions_per_entity' => env('AI_EVAL_QUESTIONS_PER_ENTITY', 2),
+            'include_scopes' => env('AI_EVAL_INCLUDE_SCOPES', true),
+            'include_properties' => env('AI_EVAL_INCLUDE_PROPERTIES', true),
+        ],
+
+        'report_path' => env('AI_EVAL_REPORT_PATH', storage_path('app/ai-eval-report.json')),
+
+        'offline_default' => env('AI_EVAL_OFFLINE_DEFAULT', false),
     ],
 
     /*
@@ -474,6 +533,12 @@ return [
         'similarity_threshold' => env('AI_SIMILARITY_THRESHOLD', 0.7),
         'include_schema' => env('AI_INCLUDE_SCHEMA', true),
         'include_examples' => env('AI_INCLUDE_EXAMPLES', true),
+
+        // Second-stage re-ranking of retrieved document candidates for precision.
+        // When true, over-fetched candidates are re-scored by a model-agnostic LLM
+        // reranker (via the configured LLM provider) before the final limit is applied.
+        // When false, a NullReranker passes candidates through unchanged (no cost).
+        'rerank_enabled' => env('AI_RAG_RERANK_ENABLED', false),
     ],
 
     /*

@@ -222,10 +222,16 @@ class MessagesQuery extends Query
         // Get file references for citation linking
         $files = $message->hasFileReferences() ? $message->getReferencedFiles() : [];
 
-        // Process content: strip action links, strip citations, create elements
+        // Process content: strip action links, strip citations, create elements.
+        // We pass the result set so render_table/export_* actions can build tables/exports
+        // from the data without the LLM shipping it through the link.
         $processed = $this->getContentLinkProcessor()->processForDirectRendering(
             $message->content,
-            ['files' => $files]
+            [
+                'files' => $files,
+                'result_set' => $this->messageResultSet($message),
+                'user' => auth()->user(),
+            ]
         );
 
         // Main content (links stripped to plain text)
@@ -600,6 +606,72 @@ class MessagesQuery extends Query
             'message_id' => $id,
             'conversation_id' => $this->conversation?->id,
         ]);
+    }
+
+    /**
+     * Server-side approval round-trip for an APPROVAL-REQUIRED (mutating) action.
+     *
+     * The ApprovalCard's "Confirm" button posts here with the signed pending token. We hand
+     * it to ActionDispatcher::approve(), which RE-DECODES + RE-VERIFIES the token, confirms it
+     * belongs to the current user, RE-RUNS the action's authorize() server-side, and only THEN
+     * executes handle(). A mutating action is NEVER executed during render — only here, after
+     * this explicit confirmation. Forged/stale/unauthorized tokens are rejected with an alert
+     * and nothing is mutated.
+     */
+    public function approveAiAction(string $token)
+    {
+        $result = app(\Condoedge\Ai\Services\Actions\ActionDispatcher::class)->approve($token, [
+            'user' => auth()->user(),
+            'result_set' => [],
+        ]);
+
+        if ($result->isError) {
+            return _Html(e($result->summaryForLlm ?: __('ai.actions.failed')))
+                ->class('mt-2 px-3 py-2 text-sm text-red-600 bg-red-50 rounded-lg');
+        }
+
+        // Successful mutation: surface the action's renderable (often a link/confirmation),
+        // falling back to a brief acknowledgement when the action returns nothing visual.
+        return $result->renderable ?? _Html(e($result->summaryForLlm))
+            ->class('mt-2 px-3 py-2 text-sm text-emerald-700 bg-emerald-50 rounded-lg');
+    }
+
+    /**
+     * Extract a tabular result set for the message, used as render context for
+     * render_table/export_* actions. Prefers the structured response_data table rows, falling
+     * back to the conversation's last_result_sample.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    protected function messageResultSet($message): array
+    {
+        $responseData = $message->response_data ?? null;
+
+        if (is_array($responseData)) {
+            // Structured 'table' shape → list of associative rows keyed by header.
+            if (($responseData['type'] ?? null) === 'table'
+                && !empty($responseData['headers'])
+                && !empty($responseData['rows'])
+            ) {
+                $headers = $responseData['headers'];
+                $rows = [];
+                foreach ($responseData['rows'] as $row) {
+                    $rows[] = array_combine(
+                        $headers,
+                        array_pad(array_slice((array) $row, 0, count($headers)), count($headers), null)
+                    );
+                }
+                return $rows;
+            }
+
+            // Already a list of associative rows.
+            if (isset($responseData[0]) && is_array($responseData[0])) {
+                return $responseData;
+            }
+        }
+
+        $sample = $this->conversation?->metadata['last_result_sample'] ?? [];
+        return is_array($sample) ? $sample : [];
     }
 
     // ========== HELPERS ==========

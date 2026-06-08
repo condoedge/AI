@@ -8,6 +8,7 @@ namespace Condoedge\Ai\Tests\Unit\Services;
 use Condoedge\Ai\Services\QueryExecutor;
 use Condoedge\Ai\Services\Security\AiSecurityService;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Exceptions\SecurityException;
 use Condoedge\Ai\Tests\TestCase;
 use Mockery;
 
@@ -22,6 +23,15 @@ class QueryExecutorSecurityTest extends TestCase
 
         $this->mockGraphStore = Mockery::mock(GraphStoreInterface::class);
         $this->executor = new QueryExecutor($this->mockGraphStore, []);
+    }
+
+    private function invokeInjectTeamFilter(string $query, string $filter): ?string
+    {
+        $reflection = new \ReflectionClass($this->executor);
+        $method = $reflection->getMethod('injectTeamFilter');
+        $method->setAccessible(true);
+
+        return $method->invoke($this->executor, $query, $filter);
     }
 
     /** @test */
@@ -63,32 +73,26 @@ class QueryExecutorSecurityTest extends TestCase
     /** @test */
     public function injects_team_filter_when_no_where_exists(): void
     {
-        $reflection = new \ReflectionClass($this->executor);
-        $method = $reflection->getMethod('injectTeamFilter');
-        $method->setAccessible(true);
-
         $query = 'MATCH (i:Invoice) RETURN i';
-        $filter = 'WHERE i.team_id IN [1, 3, 7]';
+        $filter = 'WHERE i.team_id IN $ai_team_ids';
 
-        $result = $method->invoke($this->executor, $query, $filter);
+        $result = $this->invokeInjectTeamFilter($query, $filter);
 
-        $this->assertStringContainsString('WHERE i.team_id IN [1, 3, 7]', $result);
+        $this->assertStringContainsString('WHERE i.team_id IN $ai_team_ids', $result);
         $this->assertStringContainsString('RETURN i', $result);
+        // Filter must precede RETURN.
+        $this->assertLessThan(strpos($result, 'RETURN i'), strpos($result, 'WHERE i.team_id'));
     }
 
     /** @test */
     public function injects_team_filter_when_where_exists(): void
     {
-        $reflection = new \ReflectionClass($this->executor);
-        $method = $reflection->getMethod('injectTeamFilter');
-        $method->setAccessible(true);
-
         $query = 'MATCH (i:Invoice) WHERE i.status = "active" RETURN i';
-        $filter = 'WHERE i.team_id IN [1, 3, 7]';
+        $filter = 'WHERE i.team_id IN $ai_team_ids';
 
-        $result = $method->invoke($this->executor, $query, $filter);
+        $result = $this->invokeInjectTeamFilter($query, $filter);
 
-        $this->assertStringContainsString('i.team_id IN [1, 3, 7]', $result);
+        $this->assertStringContainsString('i.team_id IN $ai_team_ids', $result);
         $this->assertStringContainsString('i.status = "active"', $result);
         $this->assertStringContainsString('AND', $result);
     }
@@ -96,17 +100,14 @@ class QueryExecutorSecurityTest extends TestCase
     /** @test */
     public function injects_filter_before_with_clause(): void
     {
-        $reflection = new \ReflectionClass($this->executor);
-        $method = $reflection->getMethod('injectTeamFilter');
-        $method->setAccessible(true);
-
+        // The team predicate MUST land on the primary MATCH, i.e. BEFORE the WITH
+        // that may project the entity variable away.
         $query = 'MATCH (i:Invoice) WITH i, i.amount as amount RETURN amount';
-        $filter = 'WHERE i.team_id IN [1, 2]';
+        $filter = 'WHERE i.team_id IN $ai_team_ids';
 
-        $result = $method->invoke($this->executor, $query, $filter);
+        $result = $this->invokeInjectTeamFilter($query, $filter);
 
-        $this->assertStringContainsString('WHERE i.team_id IN [1, 2]', $result);
-        // Filter should appear before WITH
+        $this->assertStringContainsString('WHERE i.team_id IN $ai_team_ids', $result);
         $filterPos = strpos($result, 'WHERE i.team_id');
         $withPos = strpos($result, 'WITH i');
         $this->assertLessThan($withPos, $filterPos);
@@ -115,20 +116,84 @@ class QueryExecutorSecurityTest extends TestCase
     /** @test */
     public function injects_filter_before_order_clause(): void
     {
-        $reflection = new \ReflectionClass($this->executor);
-        $method = $reflection->getMethod('injectTeamFilter');
-        $method->setAccessible(true);
-
         $query = 'MATCH (i:Invoice) ORDER BY i.created_at RETURN i';
-        $filter = 'WHERE i.team_id IN [1, 2]';
+        $filter = 'WHERE i.team_id IN $ai_team_ids';
 
-        $result = $method->invoke($this->executor, $query, $filter);
+        $result = $this->invokeInjectTeamFilter($query, $filter);
 
-        $this->assertStringContainsString('WHERE i.team_id IN [1, 2]', $result);
-        // Filter should appear before ORDER
+        $this->assertStringContainsString('WHERE i.team_id IN $ai_team_ids', $result);
         $filterPos = strpos($result, 'WHERE i.team_id');
         $orderPos = strpos($result, 'ORDER BY');
         $this->assertLessThan($orderPos, $filterPos);
+    }
+
+    /** @test */
+    public function injects_filter_into_every_union_branch(): void
+    {
+        $query = 'MATCH (i:Invoice) RETURN i UNION MATCH (i:Invoice) WHERE i.paid = true RETURN i';
+        $filter = 'WHERE i.team_id IN $ai_team_ids';
+
+        $result = $this->invokeInjectTeamFilter($query, $filter);
+
+        // Both branches must be scoped.
+        $this->assertEquals(2, substr_count($result, 'i.team_id IN $ai_team_ids'));
+        // UNION keyword preserved.
+        $this->assertStringContainsString('UNION', $result);
+        // First branch (no pre-existing WHERE) → standalone WHERE before its RETURN.
+        $this->assertStringContainsString('MATCH (i:Invoice) WHERE i.team_id IN $ai_team_ids RETURN i', $result);
+        // Second branch (pre-existing WHERE) → merged with AND.
+        $this->assertStringContainsString('i.paid = true AND i.team_id IN $ai_team_ids', $result);
+    }
+
+    /** @test */
+    public function injects_filter_into_every_union_all_branch(): void
+    {
+        $query = 'MATCH (i:Invoice) RETURN i UNION ALL MATCH (i:Invoice) RETURN i';
+        $filter = 'WHERE i.team_id IN $ai_team_ids';
+
+        $result = $this->invokeInjectTeamFilter($query, $filter);
+
+        $this->assertEquals(2, substr_count($result, 'i.team_id IN $ai_team_ids'));
+        $this->assertStringContainsString('UNION ALL', $result);
+    }
+
+    /** @test */
+    public function injects_match_based_filter_before_with_on_primary_match(): void
+    {
+        // Relationship-style filter (MATCH ... WHERE ...) must splice in before
+        // the WITH that closes the primary MATCH scope.
+        $query = 'MATCH (i:Invoice) WITH i RETURN i';
+        $filter = 'MATCH (i)-[:BELONGS_TO]->(t:Team) WHERE t.id IN $ai_team_ids';
+
+        $result = $this->invokeInjectTeamFilter($query, $filter);
+
+        $this->assertNotNull($result);
+        $filterPos = strpos($result, '[:BELONGS_TO]');
+        $withPos = strpos($result, 'WITH i');
+        $this->assertLessThan($withPos, $filterPos);
+    }
+
+    /** @test */
+    public function injects_filter_into_multi_match_query(): void
+    {
+        $query = 'MATCH (i:Invoice) MATCH (i)-[:HAS]->(li:LineItem) RETURN i, li';
+        $filter = 'WHERE i.team_id IN $ai_team_ids';
+
+        $result = $this->invokeInjectTeamFilter($query, $filter);
+
+        // Predicate references the primary entity (i) and precedes the RETURN.
+        $this->assertStringContainsString('i.team_id IN $ai_team_ids', $result);
+        $this->assertLessThan(strpos($result, 'RETURN'), strpos($result, 'i.team_id'));
+    }
+
+    /** @test */
+    public function inject_returns_null_when_branch_has_no_safe_anchor(): void
+    {
+        // No RETURN / WITH / ORDER anchor → cannot safely splice → null (caller
+        // then fails closed instead of running unfiltered).
+        $result = $this->invokeInjectTeamFilter('MATCH (i:Invoice)', 'WHERE i.team_id IN $ai_team_ids');
+
+        $this->assertNull($result);
     }
 
     /** @test */
@@ -138,7 +203,6 @@ class QueryExecutorSecurityTest extends TestCase
         $method = $reflection->getMethod('extractEntityAlias');
         $method->setAccessible(true);
 
-        // When entity is not found, return lowercase first letter
         $result = $method->invoke($this->executor, 'MATCH (x:OtherEntity)', 'Invoice');
         $this->assertEquals('i', $result);
 
@@ -155,5 +219,151 @@ class QueryExecutorSecurityTest extends TestCase
 
         $this->assertNull($method->invoke($this->executor, 'RETURN 1'));
         $this->assertNull($method->invoke($this->executor, 'CALL db.labels()'));
+    }
+
+    // =========================================================================
+    // Fail-closed / user-threading behaviour (P0-5)
+    // =========================================================================
+
+    /**
+     * Build a QueryExecutor whose applySecurityFilter we can drive, with the
+     * AiSecurityService swapped for a mock in the container.
+     */
+    private function bindSecurityService(AiSecurityService $service): void
+    {
+        $this->app->instance(AiSecurityService::class, $service);
+    }
+
+    private function invokeApplySecurityFilter(string $query, array $options): array
+    {
+        $reflection = new \ReflectionClass($this->executor);
+        $method = $reflection->getMethod('applySecurityFilter');
+        $method->setAccessible(true);
+
+        return $method->invoke($this->executor, $query, $options);
+    }
+
+    /** @test */
+    public function uses_threaded_options_user_over_null_auth_user(): void
+    {
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+
+        // auth()->user() is null in this unit context. The THREADED user must be
+        // the one passed to the security service.
+        $threadedUser = (object) ['id' => 99];
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $security->shouldReceive('shouldSkipTeamFilterForCount')->andReturn(false);
+        $security->shouldReceive('getTeamFilterWithParameters')
+            ->once()
+            ->with($threadedUser, 'Invoice', Mockery::any())
+            ->andReturn(['filter' => 'WHERE i.team_id IN $ai_team_ids', 'parameters' => ['ai_team_ids' => [1, 2]]]);
+        $this->bindSecurityService($security);
+
+        $result = $this->invokeApplySecurityFilter(
+            'MATCH (i:Invoice) RETURN i',
+            ['user' => $threadedUser]
+        );
+
+        $this->assertTrue($result['filter_applied']);
+        $this->assertStringContainsString('i.team_id IN $ai_team_ids', $result['query']);
+        $this->assertSame(['ai_team_ids' => [1, 2]], $result['parameters']);
+    }
+
+    /** @test */
+    public function deny_throws_when_sensitive_entity_and_no_resolvable_user(): void
+    {
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+
+        // No user threaded, no auth user → fail closed for a sensitive entity.
+        $security = Mockery::mock(AiSecurityService::class);
+        $this->bindSecurityService($security);
+
+        $this->expectException(SecurityException::class);
+
+        $this->invokeApplySecurityFilter('MATCH (i:Invoice) RETURN i', []);
+    }
+
+    /** @test */
+    public function bypass_runs_unfiltered_when_no_resolvable_user(): void
+    {
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'bypass');
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $this->bindSecurityService($security);
+
+        $result = $this->invokeApplySecurityFilter('MATCH (i:Invoice) RETURN i', []);
+
+        // Fail-open preserved under 'bypass': unfiltered, no filter applied.
+        $this->assertFalse($result['filter_applied']);
+        $this->assertSame('MATCH (i:Invoice) RETURN i', $result['query']);
+    }
+
+    /** @test */
+    public function deny_throws_when_query_shape_cannot_be_filtered(): void
+    {
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+
+        $user = (object) ['id' => 7];
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $security->shouldReceive('shouldSkipTeamFilterForCount')->andReturn(false);
+        $security->shouldReceive('getTeamFilterWithParameters')
+            ->andReturn(['filter' => 'WHERE i.team_id IN $ai_team_ids', 'parameters' => ['ai_team_ids' => [1]]]);
+        $this->bindSecurityService($security);
+
+        $this->expectException(SecurityException::class);
+
+        // No RETURN/WITH/ORDER anchor → injection impossible → fail closed.
+        $this->invokeApplySecurityFilter('MATCH (i:Invoice)', ['user' => $user]);
+    }
+
+    /** @test */
+    public function no_entity_query_is_not_subject_to_fail_closed(): void
+    {
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $this->bindSecurityService($security);
+
+        // A scalar / introspection query has no sensitive entity, so even with
+        // no user and 'deny' it must NOT throw.
+        $result = $this->invokeApplySecurityFilter('RETURN 1', []);
+
+        $this->assertFalse($result['filter_applied']);
+        $this->assertSame('RETURN 1', $result['query']);
+    }
+
+    /** @test */
+    public function team_ids_are_bound_as_parameters_not_spliced(): void
+    {
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+
+        $user = (object) ['id' => 7];
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $security->shouldReceive('shouldSkipTeamFilterForCount')->andReturn(false);
+        $security->shouldReceive('getTeamFilterWithParameters')
+            ->andReturn(['filter' => 'WHERE i.team_id IN $ai_team_ids', 'parameters' => ['ai_team_ids' => [3, 5]]]);
+        $this->bindSecurityService($security);
+
+        $result = $this->invokeApplySecurityFilter('MATCH (i:Invoice) RETURN i', ['user' => $user]);
+
+        // No inline list literal; IDs travel as bound parameters.
+        $this->assertStringNotContainsString('IN [', $result['query']);
+        $this->assertStringContainsString('$ai_team_ids', $result['query']);
+        $this->assertSame(['ai_team_ids' => [3, 5]], $result['parameters']);
+    }
+
+    public function tearDown(): void
+    {
+        Mockery::close();
+        parent::tearDown();
     }
 }

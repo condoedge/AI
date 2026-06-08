@@ -7,6 +7,8 @@ namespace Condoedge\Ai\Services\Context;
 use Condoedge\Ai\Contracts\FileAccessResolverInterface;
 use Condoedge\Ai\Contracts\FileContextEnricherInterface;
 use Condoedge\Ai\Services\FileSearchService;
+use Condoedge\Ai\Services\Retrieval\NullReranker;
+use Condoedge\Ai\Services\Retrieval\RerankerInterface;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -187,8 +189,17 @@ class FileContextProvider
         // Sort by score descending
         usort($filteredResults, fn($a, $b) => $b['score'] <=> $a['score']);
 
-        // Limit results
-        $filteredResults = array_slice($filteredResults, 0, $maxReferences);
+        // Re-rank the over-fetched, access-filtered pool for precision BEFORE the
+        // final limit. Retrieval over-fetches (content candidates at limit*3 plus
+        // filename matches), so the genuinely-best document is often present but
+        // ranked below the top-$maxReferences by raw cosine alone. A reranker
+        // re-orders by (query, snippet) relevance and returns the top-$maxReferences.
+        //
+        // Safe-by-default: gated OFF via config (default false), and resolved with
+        // a NullReranker fallback when no concrete reranker is bound. The reranker
+        // contract guarantees it never throws and falls back to input order, so a
+        // disabled/unbound/failing reranker reduces to the prior array_slice().
+        $filteredResults = $this->rerankResults($question, $filteredResults, $maxReferences);
 
         // Transform to standard format
         $transformedResults = array_map(function ($result) use ($snippetLength) {
@@ -297,6 +308,82 @@ class FileContextProvider
             'has_physical' => $hasPhysical,
             'has_database' => $hasDatabase,
         ];
+    }
+
+    /**
+     * Re-rank the candidate pool for precision and return the top $limit.
+     *
+     * Pluggable and skippable by design:
+     *  - Gated on config('ai.rag.rerank_enabled', false) — default OFF, read with
+     *    a default so it is safe before the key exists in config.
+     *  - Resolved via app(RerankerInterface::class) with a NullReranker fallback
+     *    when the binding is absent (so it is safe before DI is wired).
+     *  - The RerankerInterface contract guarantees the reranker never throws and
+     *    degrades to input order, so when disabled/unbound/failing this is exactly
+     *    equivalent to the prior `array_slice($filteredResults, 0, $limit)`.
+     *
+     * Candidate text for scoring is the best chunk's content (the same snippet
+     * surfaced to the user), falling back to the filename.
+     *
+     * @param string $query   The user's question used as the reranking query.
+     * @param array  $results The access-filtered, score-sorted candidate pool.
+     * @param int    $limit   Maximum references to keep.
+     * @return array Top-$limit results.
+     */
+    private function rerankResults(string $query, array $results, int $limit): array
+    {
+        if (empty($results)) {
+            return [];
+        }
+
+        $enabled = (bool) config('ai.rag.rerank_enabled', false);
+
+        if (!$enabled) {
+            // Preserve the prior behavior exactly: top-$limit by score.
+            return array_slice($results, 0, $limit);
+        }
+
+        $reranker = $this->resolveReranker();
+
+        $textOf = function (array $result): string {
+            $chunk = $result['best_chunk'] ?? null;
+            $content = is_object($chunk) && isset($chunk->content) ? (string) $chunk->content : '';
+            if ($content === '') {
+                $content = (string) ($result['filename'] ?? ($chunk->fileName ?? ''));
+            }
+            return $content;
+        };
+
+        try {
+            return $reranker->rerank($query, $results, $textOf, $limit);
+        } catch (\Throwable $e) {
+            // Defensive: the contract forbids throwing, but never let reranking
+            // break retrieval — fall back to the score-sorted top-$limit.
+            Log::debug('FileContextProvider: reranker failed, using score order', [
+                'error' => $e->getMessage(),
+            ]);
+            return array_slice($results, 0, $limit);
+        }
+    }
+
+    /**
+     * Resolve the active reranker from the container, defaulting to a NullReranker
+     * when no concrete RerankerInterface is bound (safe before DI wiring exists).
+     */
+    private function resolveReranker(): RerankerInterface
+    {
+        try {
+            if (function_exists('app') && app()->bound(RerankerInterface::class)) {
+                $resolved = app(RerankerInterface::class);
+                if ($resolved instanceof RerankerInterface) {
+                    return $resolved;
+                }
+            }
+        } catch (\Throwable $e) {
+            // Fall through to the null reranker.
+        }
+
+        return new NullReranker();
     }
 
     /**

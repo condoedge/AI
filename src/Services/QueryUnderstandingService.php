@@ -51,7 +51,7 @@ class QueryUnderstandingService
                 'temperature' => $this->config['temperature'] ?? 0.0,
             ]);
 
-            $result = $this->normalizeResponse($response);
+            $result = $this->normalizeResponse($response, $entityCatalog);
 
             $ms = $this->logger->stopTimer('query_understanding');
             $this->logger->info('query_understanding', 'Analysis complete', [
@@ -176,13 +176,19 @@ PROMPT;
 
     /**
      * Normalize the LLM response into the expected structure.
+     *
+     * @param object|array $response      Raw LLM JSON response
+     * @param array        $entityCatalog Catalog used to validate entity_types (see buildEntityCatalog)
      */
-    private function normalizeResponse(object|array $response): QueryUnderstandingResult
+    private function normalizeResponse(object|array $response, array $entityCatalog = []): QueryUnderstandingResult
     {
         $data = is_object($response) ? (array) $response : $response;
 
         return new QueryUnderstandingResult(
-            entityTypes: $this->ensureStringArray($data['entity_types'] ?? []),
+            entityTypes: $this->validateEntityTypes(
+                $this->ensureStringArray($data['entity_types'] ?? []),
+                $entityCatalog
+            ),
             personNames: $this->ensureStringArray($data['person_names'] ?? []),
             propertyConcepts: $this->ensureStringArray($data['property_concepts'] ?? []),
             searchQuery: is_string($data['search_query'] ?? null) ? $data['search_query'] : '',
@@ -206,6 +212,56 @@ PROMPT;
         return array_values(array_filter(
             array_map(fn($v) => is_string($v) ? $v : null, $value)
         ));
+    }
+
+    /**
+     * Filter LLM-returned entity types to only labels present in the catalog.
+     *
+     * The downstream pipeline force-injects QU entity_types into semantic selection
+     * at a high score (~0.8), so a hallucinated label would pollute retrieval. We
+     * keep only labels that exist in the entity catalog and log any rejected ones
+     * at debug. Matching is case-insensitive against the catalog's canonical label;
+     * the canonical casing is preserved in the output.
+     *
+     * @param string[] $entityTypes   Labels returned by the LLM
+     * @param array    $entityCatalog Catalog built from entity configs
+     * @return string[] Validated labels (canonical casing)
+     */
+    private function validateEntityTypes(array $entityTypes, array $entityCatalog): array
+    {
+        // No catalog to validate against → pass through unchanged (back-compat).
+        if (empty($entityCatalog)) {
+            return $entityTypes;
+        }
+
+        // Map lowercase label => canonical label for case-insensitive matching.
+        $allowed = [];
+        foreach ($entityCatalog as $entry) {
+            $label = is_array($entry) ? ($entry['label'] ?? null) : null;
+            if (is_string($label) && $label !== '') {
+                $allowed[strtolower($label)] = $label;
+            }
+        }
+
+        $valid = [];
+        $rejected = [];
+        foreach ($entityTypes as $label) {
+            $key = strtolower($label);
+            if (isset($allowed[$key])) {
+                $valid[] = $allowed[$key];
+            } else {
+                $rejected[] = $label;
+            }
+        }
+
+        if (!empty($rejected)) {
+            $this->logger->debug('query_understanding', 'Rejected entity_types not in catalog', [
+                'rejected' => $rejected,
+                'allowed_labels' => array_values($allowed),
+            ]);
+        }
+
+        return array_values(array_unique($valid));
     }
 
     /**

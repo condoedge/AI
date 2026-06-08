@@ -8,17 +8,31 @@ use Condoedge\Ai\Domain\Traits\ResolvesEntityConfigKey;
 
 /**
  * Resolves team_path config to Cypher filter clauses.
+ *
+ * Team IDs are emitted as a single bound Cypher parameter ($ai_team_ids)
+ * rather than string-concatenated into an `IN [...]` literal, eliminating the
+ * splice-injection surface. The IDs are also validated as integers as a
+ * defence-in-depth backstop.
  */
 class TeamPathResolver
 {
     use ResolvesEntityConfigKey;
+
+    /**
+     * Cypher parameter name used to bind the permitted team IDs.
+     */
+    public const TEAM_IDS_PARAM = 'ai_team_ids';
+
     /**
      * Resolve team path config to Cypher filter.
+     *
+     * The returned `filter` references the bound parameter `$ai_team_ids`; the
+     * caller binds the (validated, integer) IDs via the `parameters` key.
      *
      * @param string $entity Entity name
      * @param string $alias Cypher alias for entity (e.g., 'i' for Invoice)
      * @param array<int> $teamIds Team IDs to filter by
-     * @return array{type: string, filter: string}|null
+     * @return array{type: string, filter: string, parameters: array<string, array<int>>}|null
      */
     public function resolve(string $entity, string $alias, array $teamIds): ?array
     {
@@ -28,13 +42,17 @@ class TeamPathResolver
             return null;
         }
 
-        $teamIdList = implode(', ', $teamIds);
+        // Defence-in-depth: never trust the IDs as anything but integers.
+        $teamIds = $this->normalizeTeamIds($teamIds);
+        $param = '$' . self::TEAM_IDS_PARAM;
+        $parameters = [self::TEAM_IDS_PARAM => $teamIds];
 
         // Direct column: 'team_id'
         if (is_string($teamPath) && !str_contains($teamPath, '.') && $teamPath !== 'auto') {
             return [
                 'type' => 'direct',
-                'filter' => "WHERE {$alias}.{$teamPath} IN [{$teamIdList}]",
+                'filter' => "WHERE {$alias}.{$teamPath} IN {$param}",
+                'parameters' => $parameters,
             ];
         }
 
@@ -52,11 +70,26 @@ class TeamPathResolver
         if (is_array($teamPath) && isset($teamPath['rel'])) {
             return [
                 'type' => 'relationship',
-                'filter' => "MATCH ({$alias})-[:{$teamPath['rel']}]->(t:{$teamPath['target']}) WHERE t.id IN [{$teamIdList}]",
+                'filter' => "MATCH ({$alias})-[:{$teamPath['rel']}]->(t:{$teamPath['target']}) WHERE t.id IN {$param}",
+                'parameters' => $parameters,
             ];
         }
 
         return null;
+    }
+
+    /**
+     * Coerce team IDs to a clean list of integers (drops non-numeric values).
+     *
+     * @param array<int> $teamIds
+     * @return array<int>
+     */
+    private function normalizeTeamIds(array $teamIds): array
+    {
+        return array_values(array_map(
+            'intval',
+            array_filter($teamIds, fn($id) => is_numeric($id))
+        ));
     }
 
     /**
@@ -91,20 +124,23 @@ class TeamPathResolver
             return null;
         }
 
-        $teamIdList = implode(', ', $teamIds);
+        $param = '$' . self::TEAM_IDS_PARAM;
+        $parameters = [self::TEAM_IDS_PARAM => $teamIds];
 
         // Has foreign_key = direct filter
         if (isset($teamRel['foreign_key'])) {
             return [
                 'type' => 'direct',
-                'filter' => "WHERE {$alias}.{$teamRel['foreign_key']} IN [{$teamIdList}]",
+                'filter' => "WHERE {$alias}.{$teamRel['foreign_key']} IN {$param}",
+                'parameters' => $parameters,
             ];
         }
 
         // No foreign_key = relationship traversal
         return [
             'type' => 'relationship',
-            'filter' => "MATCH ({$alias})-[:{$teamRel['type']}]->(t:Team) WHERE t.id IN [{$teamIdList}]",
+            'filter' => "MATCH ({$alias})-[:{$teamRel['type']}]->(t:Team) WHERE t.id IN {$param}",
+            'parameters' => $parameters,
         ];
     }
 
@@ -119,8 +155,6 @@ class TeamPathResolver
         if (empty($parts)) {
             return null;
         }
-
-        $teamIdList = implode(', ', $teamIds);
 
         // Build relationship chain for multi-hop paths
         $matchChain = '';
@@ -161,7 +195,8 @@ class TeamPathResolver
 
         return [
             'type' => 'parent',
-            'filter' => "{$matchChain}WHERE {$lastAlias}.{$finalColumn} IN [{$teamIdList}]",
+            'filter' => "{$matchChain}WHERE {$lastAlias}.{$finalColumn} IN \$" . self::TEAM_IDS_PARAM,
+            'parameters' => [self::TEAM_IDS_PARAM => $teamIds],
         ];
     }
 }

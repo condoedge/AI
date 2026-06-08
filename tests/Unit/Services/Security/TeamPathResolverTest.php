@@ -26,7 +26,21 @@ class TeamPathResolverTest extends TestCase
 
         $this->assertEquals('direct', $result['type']);
         $this->assertStringContainsString('i.team_id IN', $result['filter']);
-        $this->assertStringContainsString('1, 3, 7', $result['filter']);
+        // Team IDs are bound as parameters, NOT spliced as an inline list.
+        $this->assertStringContainsString('$ai_team_ids', $result['filter']);
+        $this->assertStringNotContainsString('[', $result['filter']);
+        $this->assertSame([1, 3, 7], $result['parameters']['ai_team_ids']);
+    }
+
+    /** @test */
+    public function binds_team_ids_as_integer_parameters(): void
+    {
+        config(['entities.Invoice.security.team_path' => 'team_id']);
+
+        // Non-integer / string ids must be coerced to clean integers.
+        $result = $this->resolver->resolve('Invoice', 'i', ['1', 3, '7']);
+
+        $this->assertSame([1, 3, 7], $result['parameters']['ai_team_ids']);
     }
 
     /** @test */

@@ -860,8 +860,16 @@ class AiManager
         // Pass the PipelineContext directly to QueryGenerator
         $queryResult = $this->generateQuery($question, $ctx, $options);
 
+        // Thread pipeline identity/provenance into execution so the executor can
+        // (a) team-filter against the real user ($options['user']) rather than
+        // auth()->user(), and (b) log the real question instead of 'N/A'.
+        $execOptions = $options + [
+            'original_question' => $question,
+            'conversation_id' => $options['conversation_id'] ?? null,
+        ];
+
         // Execute the generated query
-        $executionResult = $this->executeQuery($queryResult['cypher'], [], $options);
+        $executionResult = $this->executeQuery($queryResult['cypher'], [], $execOptions);
         $executionResult = $this->enrichResultsWithEntityActions($executionResult);
         $executionResult = $this->filterSensitiveResults($executionResult, $options['user'] ?? null);
 
