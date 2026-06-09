@@ -56,30 +56,25 @@ class RetryPolicy
                 $lastException = $e;
                 $attempt++;
 
-                // Check if this exception type should trigger a retry
                 if (!$this->shouldRetry($e, $attempt)) {
                     throw $e;
                 }
 
-                // If this was the last attempt, throw the exception
                 if ($attempt >= $this->maxAttempts) {
                     throw $e;
                 }
 
-                // Calculate delay with exponential backoff and jitter
                 $delay = $this->calculateDelay($attempt);
 
-                // Call onRetry callback if provided
                 if ($onRetry !== null) {
                     $onRetry($e, $attempt, $delay);
                 }
 
-                // Sleep before retry
                 usleep($delay * 1000); // Convert ms to microseconds
             }
         }
 
-        // This should never be reached, but throw the last exception just in case
+        // Unreachable in practice; throw the last exception as a final guard.
         throw $lastException ?? new \RuntimeException('Retry failed with no exception');
     }
 
@@ -92,12 +87,10 @@ class RetryPolicy
      */
     private function shouldRetry(\Exception $exception, int $attempt): bool
     {
-        // Don't retry if we've exhausted attempts
         if ($attempt >= $this->maxAttempts) {
             return false;
         }
 
-        // If specific retryable exceptions are configured, check if this matches
         if (!empty($this->retryableExceptions)) {
             foreach ($this->retryableExceptions as $exceptionClass) {
                 if ($exception instanceof $exceptionClass) {
@@ -133,7 +126,6 @@ class RetryPolicy
 
         $delay = $exponentialDelay + $jitterAmount;
 
-        // Cap at maximum delay
         return min((int) $delay, $this->maxDelayMs);
     }
 

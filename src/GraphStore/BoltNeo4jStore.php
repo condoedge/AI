@@ -53,11 +53,9 @@ class BoltNeo4jStore implements GraphStoreInterface
         $this->username = $config['username'] ?? 'neo4j';
         $this->database = $config['database'] ?? 'neo4j';
 
-        // Initialize credentials using trait
         $this->initializeCredentials($config);
 
-        // Build the Neo4j client
-        // Database is specified in URI as query parameter
+        // Database is specified in the URI as a query parameter.
         $uriWithDatabase = $this->uri;
         if ($this->database && $this->database !== 'neo4j') {
             $separator = str_contains($this->uri, '?') ? '&' : '?';
@@ -195,15 +193,12 @@ class BoltNeo4jStore implements GraphStoreInterface
             'propertyKeys' => [],
         ];
 
-        // Get all node labels
         $labels = $this->query("CALL db.labels()");
         $schema['labels'] = array_column($labels, 'label');
 
-        // Get all relationship types
         $relTypes = $this->query("CALL db.relationshipTypes()");
         $schema['relationshipTypes'] = array_column($relTypes, 'relationshipType');
 
-        // Get all property keys
         $propKeys = $this->query("CALL db.propertyKeys()");
         $schema['propertyKeys'] = array_column($propKeys, 'propertyKey');
 
@@ -265,7 +260,6 @@ class BoltNeo4jStore implements GraphStoreInterface
     {
         $session = $this->client->beginTransaction();
 
-        // Store reference for later use
         $txId = spl_object_id($session);
 
         return [
@@ -405,19 +399,16 @@ class BoltNeo4jStore implements GraphStoreInterface
      */
     protected function convertValue(mixed $value): mixed
     {
-        // Handle Node - extract properties as array
         if ($value instanceof Node) {
             $props = $value->getProperties();
             return $this->convertValue($props);
         }
 
-        // Handle Relationship - extract properties
         if ($value instanceof Relationship) {
             $props = $value->getProperties();
             return $this->convertValue($props);
         }
 
-        // Handle CypherMap - convert to associative array with recursive conversion
         if ($value instanceof CypherMap) {
             $result = [];
             foreach ($value as $key => $val) {
@@ -426,7 +417,6 @@ class BoltNeo4jStore implements GraphStoreInterface
             return $result;
         }
 
-        // Handle CypherList - convert to indexed array with recursive conversion
         if ($value instanceof CypherList) {
             $result = [];
             foreach ($value as $val) {
@@ -435,7 +425,7 @@ class BoltNeo4jStore implements GraphStoreInterface
             return $result;
         }
 
-        // Handle other iterables (but not strings/arrays)
+        // Other iterables, but not strings/arrays which are handled below.
         if (is_iterable($value) && !is_array($value) && !is_string($value)) {
             $result = [];
             foreach ($value as $key => $val) {
@@ -444,7 +434,6 @@ class BoltNeo4jStore implements GraphStoreInterface
             return $result;
         }
 
-        // Handle plain arrays - recursively convert values
         if (is_array($value)) {
             $result = [];
             foreach ($value as $key => $val) {
@@ -453,7 +442,6 @@ class BoltNeo4jStore implements GraphStoreInterface
             return $result;
         }
 
-        // Scalar values pass through as-is
         return $value;
     }
 

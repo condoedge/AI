@@ -11,9 +11,8 @@ use Condoedge\Ai\Contracts\AiActionInterface;
  * export_excel, export_pdf). Provides SAFE DEFAULTS so each concrete action only declares
  * what differs.
  *
- * Defaults: no aliases, empty schema, 'link' presentation, no approval required,
- * authorize=true (these built-ins are presentational / read-only — domain actions that
- * mutate override requiresApproval()+authorize()).
+ * Defaults: no aliases, description = label, empty schema, read-only (mutates=false),
+ * authorize=true. Domain actions that mutate override mutates()+authorize().
  */
 abstract class AbstractBuiltInAction implements AiActionInterface
 {
@@ -32,14 +31,18 @@ abstract class AbstractBuiltInAction implements AiActionInterface
         return [];
     }
 
-    public function presentation(): string
-    {
-        return 'link';
-    }
-
-    public function requiresApproval(): bool
+    public function mutates(): bool
     {
         return false;
+    }
+
+    /**
+     * Backward-compatible alias of {@see mutates()} for any host action written against the
+     * old method name. The dispatcher reads mutates().
+     */
+    final public function requiresApproval(): bool
+    {
+        return $this->mutates();
     }
 
     public function authorize(mixed $user, array $input): bool

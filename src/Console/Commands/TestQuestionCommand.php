@@ -27,7 +27,6 @@ class TestQuestionCommand extends Command
         $this->info("Testing question: \"{$question}\"");
         $this->newLine();
 
-        // Resolve user
         $userId = $this->option('user');
         $userClass = config('auth.providers.users.model', 'App\\Models\\User');
         $user = $userId ? $userClass::find($userId) : $userClass::first();
@@ -62,7 +61,6 @@ class TestQuestionCommand extends Command
         $contextMs = round((microtime(true) - $contextStart) * 1000);
         $this->info("Context retrieved in {$contextMs}ms");
 
-        // Show selection info
         $selectionInfo = $context->selectionInfo;
         if (!empty($selectionInfo)) {
             $this->info("Selection method: " . ($selectionInfo['method'] ?? 'unknown'));
@@ -72,11 +70,9 @@ class TestQuestionCommand extends Command
                        ", Scopes: " . ($selectionInfo['scopes_selected'] ?? 0));
         }
 
-        // Show quality
         $quality = $context->quality;
         $this->info("Context quality: " . ($quality['level'] ?? 'unknown') . " ({$quality['score']}/{$quality['max']})");
 
-        // Show detected entities
         $entityMeta = $context->entityMetadata;
         $detected = $entityMeta['detected_entities'] ?? [];
         $this->info("Detected entities: " . (empty($detected) ? 'NONE' : implode(', ', array_map('class_basename', $detected))));
@@ -86,7 +82,6 @@ class TestQuestionCommand extends Command
             $this->info("Detected scopes: " . implode(', ', array_keys($detectedScopes)));
         }
 
-        // Show schema info
         $schema = $context->graphSchema;
         $this->info("Schema labels: " . implode(', ', $schema['labels'] ?? []));
 
@@ -95,7 +90,6 @@ class TestQuestionCommand extends Command
         }
 
         if ($showDebug) {
-            // Show Query Understanding results
             $qu = $context->qu;
             $this->newLine();
             $this->comment('Query Understanding:');
@@ -112,14 +106,12 @@ class TestQuestionCommand extends Command
                 $this->line('  Search tags: ' . implode(', ', $qu->searchTags));
             }
 
-            // Show similar queries
             $this->newLine();
             $this->comment('Similar queries:');
             foreach ($context->similarQueries as $sq) {
                 $this->line(sprintf("  [%.2f] %s → %s", $sq['score'], $sq['question'], substr($sq['query'], 0, 80)));
             }
 
-            // Show relevant entities sample
             $this->newLine();
             $this->comment('Example entities:');
             foreach ($context->relevantEntities as $label => $entities) {
@@ -260,9 +252,7 @@ class TestQuestionCommand extends Command
         $respStart = microtime(true);
 
         try {
-            // File context already retrieved in Step 2
-
-            // Build PipelineContext for response generation
+            // File context was already retrieved in Step 2.
             $pipelineCtx = new PipelineContext();
             $pipelineCtx->question = $question;
             $pipelineCtx->fileContext = $fileContext;
@@ -291,12 +281,10 @@ class TestQuestionCommand extends Command
 
         $respMs = round((microtime(true) - $respStart) * 1000);
 
-        // Final answer
         $this->newLine();
         $this->comment('=== FINAL ANSWER ===');
         $this->line($response['answer'] ?? 'No answer generated');
 
-        // Summary
         $this->newLine();
         $this->comment('--- Timing Summary ---');
         $totalMs = $contextMs + $queryMs + $execMs + $respMs;

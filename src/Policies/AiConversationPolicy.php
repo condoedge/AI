@@ -21,12 +21,10 @@ class AiConversationPolicy
      */
     public function view(Authenticatable $user, AiConversation $conversation): bool
     {
-        // Owner can always view
         if ($conversation->user_id === $user->id) {
             return true;
         }
 
-        // Team member can view team conversations
         if ($conversation->team_id && $this->userBelongsToTeam($user, $conversation->team_id)) {
             return true;
         }
@@ -56,7 +54,6 @@ class AiConversationPolicy
      */
     public function delete(Authenticatable $user, AiConversation $conversation): bool
     {
-        // Only owner can delete
         return $conversation->user_id === $user->id;
     }
 

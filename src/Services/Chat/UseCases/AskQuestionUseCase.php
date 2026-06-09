@@ -15,14 +15,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Single home of chat-turn orchestration.
- *
- * Faithfully extracts AiChatService::askWithConversation (AiChatService.php:79-189) and
- * regenerateResponse (:202-291), collapsing the ~80% duplicate flow into one private path
- * parameterized by $persistUserMessage. Compared to the original:
- *  - the security gate runs as STEP 0, BEFORE any context processing or persistence
- *    (fixing the old ordering bug where the user message was processed/stored before the
- *    injection check at AiChatService.php:105-109);
+ * Single home of chat-turn orchestration for both ask and regenerate, collapsed into one
+ * private path parameterized by $persistUserMessage. Key guarantees:
+ *  - the security gate runs as STEP 0, BEFORE any context processing or persistence;
  *  - injection becomes a per-request refusal (decline-and-continue) instead of a stored
  *    assistant message, returned as a failed ChatTurnResult;
  *  - the whole turn runs inside a DB::transaction so a mid-turn failure leaves no partial
@@ -30,8 +25,7 @@ use Illuminate\Support\Facades\Log;
  *  - the created assistant AiMessage is returned on the result so callers never re-query.
  *
  * Concrete, container-autowired (not bound, not interfaced) per the Sisc UseCase convention.
- * AI is resolved via the facade exactly as AiChatService does today (AiChatService is
- * config-`new`ed and cannot inject it).
+ * AI is resolved via the facade (AiChatService is config-`new`ed and cannot inject it).
  */
 class AskQuestionUseCase
 {
@@ -61,6 +55,7 @@ class AskQuestionUseCase
             user: $input->user,
             persistUserMessage: true,
             regenerated: false,
+            pageContext: $input->pageContext?->toArray(),
         ));
     }
 
@@ -80,8 +75,7 @@ class AskQuestionUseCase
     ): ChatTurnResult {
         $question = $userMessage->content;
 
-        // STEP 0 — same security gate, same ordering as execute() (fixes the old inconsistent
-        // ordering between AiChatService.php:103-109 and :222-225). Runs before the transaction.
+        // STEP 0 — same security gate and ordering as execute(), before the transaction.
         if (!$this->securityGuard->assertSafe($question, $user, $allowAnonymous)) {
             return ChatTurnResult::failure('ai.chat.injection-blocked');
         }
@@ -108,14 +102,15 @@ class AskQuestionUseCase
         string $style,
         mixed $user,
         bool $persistUserMessage,
-        bool $regenerated
+        bool $regenerated,
+        ?array $pageContext = null
     ): ChatTurnResult {
         try {
             $schema = $this->getSchema();
 
             // Process question through the context system: extract entities, resolve
             // references, update the context snapshot. For regenerate we only need the
-            // prompt context (the user message already exists), matching the original.
+            // prompt context (the user message already exists).
             if ($persistUserMessage) {
                 $contextResult = $this->contextManager->processQuestion($conversation, $question, $schema);
                 $conversationContext = $this->contextManager->buildPromptContext($conversation);
@@ -131,11 +126,14 @@ class AskQuestionUseCase
                 $enrichedQuestion = $question;
             }
 
-            // Call AI with full conversation context.
+            // Call AI with full conversation context. page_context (the soft prior for which
+            // page/record the chat was opened from) rides alongside as the PageContext array;
+            // it is null when the chat was not opened from a page, keeping the turn unchanged.
             $aiResponse = AI::answerQuestion($enrichedQuestion, [
                 'style' => $style,
                 'conversation_id' => $conversation->id,
                 'conversation_context' => $conversationContext,
+                'page_context' => $pageContext,
                 'user' => $user,
             ]);
 
@@ -188,8 +186,8 @@ class AskQuestionUseCase
 
             $errorText = $this->getUserFriendlyError($e);
 
-            // Preserve the original behavior of recording a visible error message in the
-            // conversation, and return it as a failed turn carrying that message.
+            // Record a visible error message in the conversation and return it as a failed
+            // turn carrying that message.
             $assistantMessage = $conversation->addMessage('assistant', $errorText, [
                 'error' => true,
                 'regenerated' => $regenerated,
@@ -200,7 +198,7 @@ class AskQuestionUseCase
     }
 
     /**
-     * Fetch the graph schema for context processing (mirrors AiChatService::getSchema()).
+     * Fetch the graph schema for context processing.
      * Returns an empty schema on failure rather than aborting the turn.
      */
     private function getSchema(): array
@@ -215,7 +213,7 @@ class AskQuestionUseCase
     }
 
     /**
-     * Convert exception to a user-friendly message (ported from AiChatService::getUserFriendlyError).
+     * Convert exception to a user-friendly message.
      */
     private function getUserFriendlyError(\Throwable $e): string
     {

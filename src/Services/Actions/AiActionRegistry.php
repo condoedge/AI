@@ -50,6 +50,28 @@ class AiActionRegistry
         if ($registerBuiltIns) {
             $this->registerBuiltIns();
         }
+
+        $this->registerConfigActions();
+    }
+
+    /**
+     * Container-tolerant config read. The config() helper exists even when no Laravel
+     * container is booted (pure unit tests), where calling it throws "Target class
+     * [config] does not exist" — so guard on the binding and fall back to the default.
+     */
+    private function cfg(string $key, mixed $default): mixed
+    {
+        if (function_exists('app') && function_exists('config')) {
+            try {
+                if (app()->bound('config')) {
+                    return config($key, $default);
+                }
+            } catch (\Throwable $e) {
+                // Container/config not available — fall through to default.
+            }
+        }
+
+        return $default;
     }
 
     /**
@@ -64,6 +86,31 @@ class AiActionRegistry
 
         foreach ($this->defaultActions() as $action) {
             // Don't clobber an action a project already registered under the same key.
+            if (!isset($this->generic[$action->key()])) {
+                $this->generic[$action->key()] = $action;
+            }
+        }
+    }
+
+    /**
+     * Ingest config('ai.actions') class-strings the house-Plugin way: a host lists an AiAction
+     * class-string in that flat array exactly as it lists a Plugin, and the registry instantiates
+     * each on boot (new $class()) beside the built-ins — no bespoke service-provider code.
+     *
+     * SAFE DEFAULTS: the key may be absent or carry non-class entries (e.g. the 'token_ttl' tuning
+     * scalar lives in the same array); those are ignored, never thrown on. A class-string never
+     * clobbers a built-in or an explicitly-registered action under the same key.
+     */
+    private function registerConfigActions(): void
+    {
+        foreach ((array) $this->cfg('ai.actions', []) as $entry) {
+            if (!is_string($entry) || !is_a($entry, AiActionInterface::class, true)) {
+                // Non-class entries (token_ttl tuning, malformed values) are not actions.
+                continue;
+            }
+
+            $action = new $entry();
+            // Don't clobber a built-in / explicitly-registered action under the same key.
             if (!isset($this->generic[$action->key()])) {
                 $this->generic[$action->key()] = $action;
             }
@@ -111,9 +158,9 @@ class AiActionRegistry
             return $this->generic[$key];
         }
 
-        $config = config('ai.generic_actions', []);
-        if (isset($config[$key]) && $this->isValidConfigEntry($config[$key])) {
-            return new ConfigAiAction($key, $this->normalizeConfigEntry($config[$key]));
+        $config = $this->cfg('ai.generic_actions', []);
+        if (isset($config[$key])) {
+            return $this->resolveConfigEntry($key, $config[$key]);
         }
 
         return null;
@@ -128,10 +175,10 @@ class AiActionRegistry
             return $this->entity[$entityType][$key];
         }
 
-        $config = config('ai.entity_actions', []);
+        $config = $this->cfg('ai.entity_actions', []);
         $entry = $config[$entityType][$key] ?? null;
-        if ($entry !== null && $this->isValidConfigEntry($entry)) {
-            return new ConfigAiAction($key, $this->normalizeConfigEntry($entry), $entityType);
+        if ($entry !== null) {
+            return $this->resolveConfigEntry($key, $entry, $entityType);
         }
 
         return null;
@@ -147,9 +194,10 @@ class AiActionRegistry
         $actions = [];
 
         // Config-defined first.
-        foreach ((array) (config('ai.entity_actions', [])[$entityType] ?? []) as $key => $entry) {
-            if ($this->isValidConfigEntry($entry)) {
-                $actions[$key] = new ConfigAiAction((string) $key, $this->normalizeConfigEntry($entry), $entityType);
+        foreach ((array) ($this->cfg('ai.entity_actions', [])[$entityType] ?? []) as $key => $entry) {
+            $resolved = $this->resolveConfigEntry((string) $key, $entry, $entityType);
+            if ($resolved !== null) {
+                $actions[$key] = $resolved;
             }
         }
 
@@ -170,9 +218,13 @@ class AiActionRegistry
     {
         $actions = $this->generic; // built-ins + registered
 
-        foreach ((array) config('ai.generic_actions', []) as $key => $entry) {
-            if (!isset($actions[$key]) && $this->isValidConfigEntry($entry)) {
-                $actions[$key] = new ConfigAiAction((string) $key, $this->normalizeConfigEntry($entry));
+        foreach ((array) $this->cfg('ai.generic_actions', []) as $key => $entry) {
+            if (isset($actions[$key])) {
+                continue;
+            }
+            $resolved = $this->resolveConfigEntry((string) $key, $entry);
+            if ($resolved !== null) {
+                $actions[$key] = $resolved;
             }
         }
 
@@ -255,6 +307,28 @@ class AiActionRegistry
             'array' => is_array($value) ? $value : (array) $value,
             default => (string) $value,
         };
+    }
+
+    /**
+     * Resolve a single config entry into an action, or null when it is not usable.
+     *
+     * A host may place EITHER a legacy closure / array-with-closure (wrapped in ConfigAiAction
+     * with SAFE DEFAULTS) OR a ready-made AiActionInterface instance (e.g. a
+     * {@see ModelMethodMutationAction}) straight into entity_actions / generic_actions config. An
+     * instance is returned as-is so its typed mutates()/authorize()/inputSchema() survive intact —
+     * the closure adapter would flatten a mutating action into a read-only one.
+     */
+    private function resolveConfigEntry(string $key, mixed $entry, ?string $entityType = null): ?AiActionInterface
+    {
+        if ($entry instanceof AiActionInterface) {
+            return $entry;
+        }
+
+        if ($this->isValidConfigEntry($entry)) {
+            return new ConfigAiAction($key, $this->normalizeConfigEntry($entry), $entityType);
+        }
+
+        return null;
     }
 
     /**

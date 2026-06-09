@@ -11,6 +11,7 @@ use Condoedge\Ai\GraphStore\CypherSanitizer;
 use Condoedge\Ai\Exceptions\CypherInjectionException;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
 
 /**
  * Security tests for QueryGenerator
@@ -161,25 +162,45 @@ class QueryGeneratorSecurityTest extends TestCase
      */
     public function it_sanitizes_labels_extracted_from_user_input(): void
     {
-        // Attempt injection via "show all X" pattern
+        // Attempt injection via the "show all X" pattern. Structural Cypher
+        // characters embedded in the question must never be interpolated into a
+        // template label: the template only captures \w+ AND wraps the result in
+        // a backtick-escaped, schema-validated label. Because the injected
+        // structure breaks the anchored template pattern, the question cannot
+        // produce a template query at all and falls through to the LLM.
         $question = "show all Customer})-[:HACKED]->(x";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Customer', 'Order'],
-                'relationships' => [],
-            ],
+        $context = new PipelineContext();
+        $context->graphSchema = [
+            'labels' => ['Customer', 'Order'],
+            'relationships' => [],
         ];
 
-        $result = $this->generator->generate($question, $context);
+        // The mocked LLM stands in for the fallthrough path; it returns a clean
+        // query. The security property under test is that no injected template
+        // query is produced from the malicious question.
+        $this->mockLlm->shouldReceive('complete')
+            ->once()
+            ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
 
-        // The query should be safe - no injection characters
+        $result = $this->generator->generate($question, $context, ['explain' => false]);
+
+        // The injection structure must never appear in the executed query.
         $this->assertStringNotContainsString('})', $result['cypher']);
         $this->assertStringNotContainsString('HACKED', $result['cypher']);
         $this->assertStringNotContainsString('->(', $result['cypher']);
 
-        // Should still be a valid query structure
-        $this->assertStringContainsString('MATCH', $result['cypher']);
-        $this->assertStringContainsString('Customer', $result['cypher']);
+        // The malicious question did NOT yield a template query (it could not be
+        // safely extracted), so no template was used.
+        $this->assertNull($result['metadata']['template_used']);
+
+        // A benign question over the same schema still flows through the template
+        // path and produces a clean, backtick-escaped label - proving the
+        // template label extraction is sanitized, not merely bypassed.
+        $benign = $this->generator->generate('show all Customer', $context);
+        $this->assertEquals('list_all', $benign['metadata']['template_used']);
+        $this->assertStringContainsString('MATCH', $benign['cypher']);
+        $this->assertStringContainsString('Customer', $benign['cypher']);
+        $this->assertStringNotContainsString('})', $benign['cypher']);
     }
 
     /**
@@ -191,11 +212,10 @@ class QueryGeneratorSecurityTest extends TestCase
         $this->expectExceptionMessage('Unknown label');
 
         $question = "show all Hackers";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Customer', 'Order'],
-                'relationships' => [],
-            ],
+        $context = new PipelineContext();
+        $context->graphSchema = [
+            'labels' => ['Customer', 'Order'],
+            'relationships' => [],
         ];
 
         $this->generator->generate($question, $context);
@@ -207,11 +227,10 @@ class QueryGeneratorSecurityTest extends TestCase
     public function it_falls_through_to_llm_when_schema_is_empty(): void
     {
         $question = "show all customers";
-        $context = [
-            'graph_schema' => [
-                'labels' => [], // Empty schema
-                'relationships' => [],
-            ],
+        $context = new PipelineContext();
+        $context->graphSchema = [
+            'labels' => [], // Empty schema
+            'relationships' => [],
         ];
 
         // Since schema is empty, should fall through to LLM
@@ -231,7 +250,7 @@ class QueryGeneratorSecurityTest extends TestCase
     public function it_falls_through_to_llm_when_schema_is_missing(): void
     {
         $question = "show all customers";
-        $context = []; // No schema at all
+        $context = new PipelineContext(); // No schema at all (graphSchema defaults to [])
 
         // Since schema is missing, should fall through to LLM
         $this->mockLlm->shouldReceive('complete')
@@ -249,20 +268,38 @@ class QueryGeneratorSecurityTest extends TestCase
      */
     public function it_prevents_cypher_injection_via_count_template(): void
     {
+        // A "how many X ..." question carrying a DETACH DELETE payload must never
+        // be interpolated into the count template. The count template captures
+        // only \w+ and is anchored, so the malicious structure breaks the match
+        // and the question falls through to the LLM rather than producing an
+        // injected count query.
         $question = "how many Customer})-[r]->(n) DETACH DELETE n //";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Customer', 'Order'],
-                'relationships' => [],
-            ],
+        $context = new PipelineContext();
+        $context->graphSchema = [
+            'labels' => ['Customer', 'Order'],
+            'relationships' => [],
         ];
 
-        $result = $this->generator->generate($question, $context);
+        $this->mockLlm->shouldReceive('complete')
+            ->once()
+            ->andReturn('MATCH (n:Customer) RETURN count(n) as count');
 
-        // The query should be safe
+        $result = $this->generator->generate($question, $context, ['explain' => false]);
+
+        // The executed query must carry no write/injection payload.
         $this->assertStringNotContainsString('DETACH', $result['cypher']);
         $this->assertStringNotContainsString('DELETE', $result['cypher']);
         $this->assertStringNotContainsString('})', $result['cypher']);
+
+        // The malicious question produced no template query.
+        $this->assertNull($result['metadata']['template_used']);
+
+        // A benign count question over the same schema still uses the count
+        // template and yields a clean, injection-free query.
+        $benign = $this->generator->generate('how many Customer', $context);
+        $this->assertEquals('count', $benign['metadata']['template_used']);
+        $this->assertStringNotContainsString('DETACH', $benign['cypher']);
+        $this->assertStringNotContainsString('})', $benign['cypher']);
     }
 
     /**
@@ -272,11 +309,10 @@ class QueryGeneratorSecurityTest extends TestCase
     {
         // User types "customers" (lowercase, plural), schema has "Customer"
         $question = "show all customers";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Customer', 'Order'],
-                'relationships' => [],
-            ],
+        $context = new PipelineContext();
+        $context->graphSchema = [
+            'labels' => ['Customer', 'Order'],
+            'relationships' => [],
         ];
 
         $result = $this->generator->generate($question, $context);
@@ -294,11 +330,10 @@ class QueryGeneratorSecurityTest extends TestCase
         // Even if a label somehow passes validation, it should still be sanitized
         // This tests that escapeLabel is called even after schema validation
         $question = "show all Customer";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Customer'],
-                'relationships' => [],
-            ],
+        $context = new PipelineContext();
+        $context->graphSchema = [
+            'labels' => ['Customer'],
+            'relationships' => [],
         ];
 
         $result = $this->generator->generate($question, $context);

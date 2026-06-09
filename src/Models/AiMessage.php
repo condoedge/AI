@@ -1,5 +1,4 @@
 <?php
-// src/Models/AiMessage.php
 
 declare(strict_types=1);
 

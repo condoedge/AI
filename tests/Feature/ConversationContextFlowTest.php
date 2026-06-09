@@ -367,8 +367,8 @@ class ConversationContextFlowTest extends TestCase
 
         $conversation->refresh();
 
-        // Should store only first 3 as sample
-        $this->assertCount(3, $conversation->context_snapshot['last_result_sample']);
+        // Should store the result sample (capped at first 10; here all 5 input rows)
+        $this->assertCount(5, $conversation->context_snapshot['last_result_sample']);
         $this->assertEquals('Product A', $conversation->context_snapshot['last_result_sample'][0]['name']);
 
         // Should store full count
@@ -468,8 +468,11 @@ class ConversationContextFlowTest extends TestCase
         $conversation->refresh();
         $snapshot2 = $conversation->context_snapshot;
 
-        // Focus should update to Order (new entity)
-        $this->assertEquals('Order', $snapshot2['focused_entity']);
+        // Focus updates to the entity actually queried: the first matched node in the
+        // Cypher MATCH pattern (entities[0]). For "MATCH (c:Customer)-[:PLACED]->(o:Order)"
+        // that is Customer, per the documented focused-entity rationale in
+        // ConversationContextManager::recordResponse().
+        $this->assertEquals('Customer', $snapshot2['focused_entity']);
 
         // Cypher query should update
         $this->assertStringContainsString('Order', $snapshot2['last_cypher_query']);

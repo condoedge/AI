@@ -4,21 +4,18 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Actions\BuiltIn;
 
+use Condoedge\Ai\Services\Actions\ActionContext;
 use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 
 /**
  * render_table — generative-UI built-in.
  *
- * Injects a TABLE built from a tabular result set into the chat message. The result set is
- * taken from the render context ('result_set' or 'rows'), so the LLM only needs to say
- * "show this as a table" — it never has to ship the data through the link.
+ * Returns a TABLE intent built from a tabular result set. The result set is taken from the
+ * context's result_set, so the LLM only needs to say "show this as a table" — it never has to
+ * ship the data through the link. The presenter renders the normalized {headers, rows} payload.
  *
  * Link grammar:
  *   [Show as table](action://render_table?limit=10)
- *
- * Renders an _Rows/_Html table when Kompo helpers are present; otherwise returns the
- * normalized {headers, rows} payload that MessagesQuery::renderTableData() already knows
- * how to display.
  */
 class RenderTableAction extends AbstractBuiltInAction
 {
@@ -40,11 +37,6 @@ class RenderTableAction extends AbstractBuiltInAction
         return 'Render the current result set as a table.';
     }
 
-    public function presentation(): string
-    {
-        return 'table';
-    }
-
     public function inputSchema(): array
     {
         return [
@@ -52,10 +44,10 @@ class RenderTableAction extends AbstractBuiltInAction
         ];
     }
 
-    public function handle(array $input, array $context): mixed
+    public function handle(array $input, ActionContext $context): AiActionResult
     {
-        $rows = $context['result_set'] ?? $context['rows'] ?? [];
-        if (!is_array($rows) || empty($rows)) {
+        $rows = $context->resultSet;
+        if (empty($rows)) {
             return AiActionResult::error('No data available to render as a table.');
         }
 
@@ -67,15 +59,8 @@ class RenderTableAction extends AbstractBuiltInAction
 
         $payload = $this->normalize($rows, $limit);
 
-        // The 'table' response_data shape consumed by MessagesQuery::renderTableData().
-        $tableData = [
-            'type' => 'table',
-            'headers' => $payload['headers'],
-            'rows' => $payload['rows'],
-        ];
-
-        return AiActionResult::ok(
-            $tableData,
+        return AiActionResult::table(
+            ['headers' => $payload['headers'], 'rows' => $payload['rows']],
             'Rendered ' . count($payload['rows']) . ' row(s) as a table.'
         );
     }

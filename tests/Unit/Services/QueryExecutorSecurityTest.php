@@ -415,6 +415,186 @@ class QueryExecutorSecurityTest extends TestCase
         );
     }
 
+    /** @test */
+    public function structurally_unsafe_rewrite_degrades_to_safe_stop_not_a_throw(): void
+    {
+        // A scopeable, permitted query whose per-binding filter cannot be spliced
+        // into a structurally valid rewrite (here: a non-lexable MATCH clause) must
+        // NOT throw and must NOT run unfiltered. applySecurityFilter signals a
+        // safe-stop; execute() degrades to a clean empty result, so a malformed
+        // query never reaches the graph store.
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+
+        $user = (object) ['id' => 7];
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $security->shouldReceive('shouldSkipTeamFilterForCount')->andReturn(false);
+        // A 'match'-style filter with unbalanced delimiters → injector cannot build a
+        // valid rewrite → returns null → safe-stop.
+        $security->shouldReceive('getTeamFilterWithParameters')
+            ->andReturn([
+                'filter' => 'MATCH (i)-[:BELONGS_TO]->(t:Team WHERE t.id IN $ai_team_ids',
+                'parameters' => ['ai_team_ids' => [1]],
+            ]);
+        $this->bindSecurityService($security);
+
+        $result = $this->invokeApplySecurityFilter('MATCH (i:Invoice) RETURN i', ['user' => $user]);
+
+        $this->assertTrue($result['safe_stop'] ?? false, 'Expected a structural safe-stop');
+        $this->assertFalse($result['filter_applied']);
+        $this->assertSame('', $result['query']);
+    }
+
+    /** @test */
+    public function safe_stop_makes_execute_return_clean_empty_result_without_querying_store(): void
+    {
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+
+        // The store must never be queried when the rewrite is structurally unsafe.
+        $this->mockGraphStore->shouldNotReceive('query');
+
+        $user = (object) ['id' => 7];
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $security->shouldReceive('shouldSkipTeamFilterForCount')->andReturn(false);
+        $security->shouldReceive('getTeamFilterWithParameters')
+            ->andReturn([
+                'filter' => 'MATCH (i)-[:BELONGS_TO]->(t:Team WHERE t.id IN $ai_team_ids',
+                'parameters' => ['ai_team_ids' => [1]],
+            ]);
+        $this->bindSecurityService($security);
+
+        $result = $this->executor->execute('MATCH (i:Invoice) RETURN i', [], ['user' => $user]);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame([], $result['data']);
+        $this->assertTrue($result['metadata']['safe_stop'] ?? false);
+        $this->assertFalse($result['metadata']['security_filter_applied']);
+    }
+
+    // =========================================================================
+    // ACCEPTANCE GATE (generator-emits-scope) — PRIMARY path
+    // =========================================================================
+
+    /** @test */
+    public function gate_accepts_a_generator_scoped_query_as_is_without_re_injecting(): void
+    {
+        // The generator already emitted the resolver-correct team predicate on the
+        // binding's own alias. The gate ACCEPTS the query AS-IS (no double WHERE,
+        // no re-splice), merges the bound parameters, and marks the filter applied.
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+        config()->set('entities.Invoice.security.team_path', 'team_id');
+
+        $user = (object) ['id' => 7];
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $security->shouldReceive('shouldSkipTeamFilterForCount')->andReturn(false);
+        $security->shouldReceive('getTeamFilterWithParameters')
+            ->with($user, 'Invoice', Mockery::any())
+            ->andReturn(['filter' => 'WHERE i.team_id IN $ai_team_ids', 'parameters' => ['ai_team_ids' => [4, 9]]]);
+        $this->bindSecurityService($security);
+
+        $original = 'MATCH (i:Invoice) WHERE i.team_id IN $ai_team_ids RETURN i';
+        $result = $this->invokeApplySecurityFilter($original, ['user' => $user]);
+
+        $this->assertTrue($result['filter_applied']);
+        // Accepted verbatim — exactly one team predicate, no second WHERE spliced in.
+        $this->assertSame($original, $result['query']);
+        $this->assertSame(1, substr_count($result['query'], 'i.team_id IN $ai_team_ids'));
+        $this->assertSame(['ai_team_ids' => [4, 9]], $result['parameters']);
+    }
+
+    /** @test */
+    public function gate_rejects_one_unscoped_binding_and_injector_fallback_scopes_it(): void
+    {
+        // ONE sensitive binding lacks its team predicate → the gate REFUSES to
+        // accept (leak-impossibility via the NEW path, not the splicer), and the
+        // fallback injector scopes it. Proves: a query reaching the store always
+        // carries the predicate, whether the generator emitted it or not.
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+        config()->set('entities.Invoice.security.team_path', 'team_id');
+
+        $user = (object) ['id' => 7];
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $security->shouldReceive('shouldSkipTeamFilterForCount')->andReturn(false);
+        $security->shouldReceive('getTeamFilterWithParameters')
+            ->andReturn(['filter' => 'WHERE i.team_id IN $ai_team_ids', 'parameters' => ['ai_team_ids' => [4]]]);
+        $this->bindSecurityService($security);
+
+        // No team predicate in the source → gate rejects → injector adds it.
+        $result = $this->invokeApplySecurityFilter('MATCH (i:Invoice) RETURN i', ['user' => $user]);
+
+        $this->assertTrue($result['filter_applied']);
+        $this->assertStringContainsString('i.team_id IN $ai_team_ids', $result['query']);
+        $this->assertSame(['ai_team_ids' => [4]], $result['parameters']);
+    }
+
+    /** @test */
+    public function gate_rejects_inlined_team_ids_and_falls_back_to_bound_injection(): void
+    {
+        // The generator INLINED the ids (`IN [1,2]`) instead of using the bound
+        // parameter — the gate must not accept it; the injector re-scopes with the
+        // bound $ai_team_ids form, and no inline list reaches the store.
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+        config()->set('entities.Invoice.security.team_path', 'team_id');
+
+        $user = (object) ['id' => 7];
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $security->shouldReceive('shouldSkipTeamFilterForCount')->andReturn(false);
+        $security->shouldReceive('getTeamFilterWithParameters')
+            ->andReturn(['filter' => 'WHERE i.team_id IN $ai_team_ids', 'parameters' => ['ai_team_ids' => [4]]]);
+        $this->bindSecurityService($security);
+
+        $result = $this->invokeApplySecurityFilter('MATCH (i:Invoice) WHERE i.team_id IN [1, 2] RETURN i', ['user' => $user]);
+
+        $this->assertTrue($result['filter_applied']);
+        $this->assertStringContainsString('i.team_id IN $ai_team_ids', $result['query']);
+    }
+
+    /** @test */
+    public function gate_accepts_a_column_consistent_scoped_union_as_is(): void
+    {
+        // The Parking/Storage/Vehicles-style UNION the generator now emits: every
+        // branch MATCHes its own labelled node, scopes it on its own alias, and
+        // projects the SAME column name. The gate accepts it AS-IS (column-consistent
+        // → structurally valid → no re-splice that would break the projection).
+        config()->set('ai.security.enabled', true);
+        config()->set('ai.security.on_permission_unexistent', 'deny');
+        config()->set('entities.Parking.security.team_path', 'team_id');
+        config()->set('entities.Storage.security.team_path', 'team_id');
+        config()->set('entities.Vehicle.security.team_path', 'team_id');
+
+        $user = (object) ['id' => 7];
+
+        $security = Mockery::mock(AiSecurityService::class);
+        $security->shouldReceive('shouldSkipTeamFilterForCount')->andReturn(false);
+        $security->shouldReceive('getTeamFilterWithParameters')
+            ->andReturnUsing(function ($u, $label, $alias) {
+                return ['filter' => "WHERE {$alias}.team_id IN \$ai_team_ids", 'parameters' => ['ai_team_ids' => [4]]];
+            });
+        $this->bindSecurityService($security);
+
+        $original = 'MATCH (p:Parking) WHERE p.team_id IN $ai_team_ids RETURN p.id AS result '
+            . 'UNION MATCH (s:Storage) WHERE s.team_id IN $ai_team_ids RETURN s.id AS result '
+            . 'UNION MATCH (v:Vehicle) WHERE v.team_id IN $ai_team_ids RETURN v.id AS result';
+
+        $result = $this->invokeApplySecurityFilter($original, ['user' => $user]);
+
+        $this->assertTrue($result['filter_applied']);
+        $this->assertSame($original, $result['query']);
+        // Each branch scoped exactly once on its own alias.
+        $this->assertSame(1, substr_count($result['query'], 'p.team_id IN $ai_team_ids'));
+        $this->assertSame(1, substr_count($result['query'], 's.team_id IN $ai_team_ids'));
+        $this->assertSame(1, substr_count($result['query'], 'v.team_id IN $ai_team_ids'));
+    }
+
     public function tearDown(): void
     {
         Mockery::close();

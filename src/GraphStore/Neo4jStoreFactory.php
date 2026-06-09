@@ -61,19 +61,15 @@ class Neo4jStoreFactory
         $uri = $config['uri'] ?? 'bolt://localhost:7687';
         $scheme = self::extractScheme($uri);
 
-        // Check if Bolt is requested
         if (in_array($scheme, self::BOLT_SCHEMES, true)) {
-            // Check if Bolt driver is available
             if (self::isBoltDriverAvailable()) {
                 return new BoltNeo4jStore($config);
             }
 
-            // Fall back to HTTP with warning
             Log::warning('Neo4j Bolt driver not available (laudis/neo4j-php-client not installed). ' .
                 'Falling back to HTTP API. Install the package for better performance: ' .
                 'composer require laudis/neo4j-php-client:^3.0');
 
-            // Convert bolt URI to http for fallback
             $config['uri'] = self::convertToHttpUri($uri);
             return new Neo4jStore($config);
         }
@@ -106,11 +102,11 @@ class Neo4jStoreFactory
     {
         $parsed = parse_url($uri);
         $host = $parsed['host'] ?? 'localhost';
-        // Bolt uses 7687, HTTP uses 7474
+        // Bolt uses 7687, HTTP uses 7474.
         $port = 7474;
         $scheme = 'http';
 
-        // Use HTTPS for encrypted schemes
+        // Use HTTPS for encrypted schemes.
         if (in_array($parsed['scheme'] ?? '', ['neo4j+s', 'neo4j+ssc'], true)) {
             $scheme = 'https';
         }

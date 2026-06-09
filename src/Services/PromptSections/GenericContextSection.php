@@ -14,9 +14,9 @@ use Condoedge\Ai\DTOs\PipelineContext;
  *
  * The current-date line is always included: it is a single, language-independent
  * fact that the query generator needs for any relative-date reasoning ("today",
- * "ce mois-ci", "vergangene Woche", ...). A previous version gated this on a
- * hardcoded English keyword list, which silently failed for every other language
- * and violated the project's no-hardcoded-semantics rule.
+ * "ce mois-ci", "vergangene Woche", ...). It must not be gated on a hardcoded
+ * keyword list, which would silently fail for non-English languages and violate
+ * the project's no-hardcoded-semantics rule.
  */
 class GenericContextSection extends BasePromptSection
 {

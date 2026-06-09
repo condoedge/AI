@@ -41,16 +41,14 @@ class FileProcessor implements FileProcessorInterface
         $startTime = microtime(true);
 
         try {
-            // Validate file object
             $this->validateFileObject($file);
 
             // Resolve the target collection for this call. Null => the chunk
             // store's bound collection (e.g. file_chunks). The docs ingest path
             // passes 'documentation_chunks' so physical docs land in their own
-            // collection (B4).
+            // collection.
             $collection = $options['collection'] ?? null;
 
-            // Check if already processed and not forcing reprocess
             if (!($options['force'] ?? false) && $this->isProcessed($file, $collection)) {
                 return ProcessingResult::failure(
                     $file->id,
@@ -59,7 +57,6 @@ class FileProcessor implements FileProcessorInterface
                 );
             }
 
-            // Get file path
             $filePath = $this->getFilePath($file);
 
             if (!file_exists($filePath)) {
@@ -70,10 +67,8 @@ class FileProcessor implements FileProcessorInterface
                 );
             }
 
-            // Get file extension
             $extension = pathinfo($file->name, PATHINFO_EXTENSION);
 
-            // Check if file type is supported
             if (!$this->supportsFileType($extension)) {
                 return ProcessingResult::failure(
                     $file->id,
@@ -132,7 +127,6 @@ class FileProcessor implements FileProcessorInterface
                 );
             }
 
-            // Success!
             return ProcessingResult::success(
                 $file->id,
                 count($fileChunks),
@@ -161,10 +155,9 @@ class FileProcessor implements FileProcessorInterface
      */
     public function reprocessFile(object $file, ?string $collection = null): ProcessingResult
     {
-        // First remove existing chunks (from the same collection)
         $this->removeFile($file, $collection);
 
-        // Then process with force option, preserving the target collection
+        // Force reprocess, preserving the target collection.
         return $this->processFile($file, ['force' => true, 'collection' => $collection]);
     }
 
@@ -262,12 +255,11 @@ class FileProcessor implements FileProcessorInterface
      */
     private function getFilePath(object $file): string
     {
-        // If path is already absolute, use it
         if ($this->isAbsolutePath($file->path)) {
             return $file->path;
         }
 
-        // Otherwise, construct from storage disk
+        // Construct from the storage disk root for relative paths.
         $disk = $file->disk ?? 'local';
         $storagePath = config("filesystems.disks.{$disk}.root");
 
@@ -310,29 +302,110 @@ class FileProcessor implements FileProcessorInterface
         array $embeddings,
         string $fullText
     ): array {
+        $this->assertEmbeddingsAlignWithChunks($textChunks, $embeddings);
+
         $fileChunks = [];
         $totalChunks = count($textChunks);
-        $position = 0;
+
+        // Moving character cursor over the source. Chunks overlap and the
+        // chunker may renormalize whitespace between joined units, so positions
+        // are resolved by locating each chunk's text in the source from the
+        // cursor rather than by cumulatively summing chunk lengths (which would
+        // run past the true end once overlap is involved).
+        $cursor = 0;
 
         foreach ($textChunks as $index => $chunkText) {
-            $chunkLength = strlen($chunkText);
-            $endPosition = $position + $chunkLength;
+            [$startPosition, $endPosition] = $this->resolveChunkOffsets(
+                $fullText,
+                $chunkText,
+                $cursor
+            );
 
             $fileChunks[] = new FileChunk(
                 fileId: $file->id,
                 fileName: $file->name,
                 content: $chunkText,
-                embedding: $embeddings[$index] ?? [],
+                embedding: $embeddings[$index],
                 chunkIndex: $index,
                 totalChunks: $totalChunks,
-                startPosition: $position,
+                startPosition: $startPosition,
                 endPosition: $endPosition,
                 metadata: []
             );
 
-            $position = $endPosition;
+            // Advance the cursor to this chunk's start so the next (overlapping)
+            // chunk is searched forward of here, never behind it.
+            $cursor = $startPosition;
         }
 
         return $fileChunks;
+    }
+
+    /**
+     * Resolve the real character [start, end) offsets of a chunk in the source.
+     *
+     * The chunk length is authoritative (end = start + character length). The
+     * start is the chunk's character position in the source, found from the
+     * moving cursor. Whitespace-normalized joins (paragraph/sentence chunks)
+     * may not be verbatim substrings, so we fall back to anchoring on the
+     * chunk's leading token; if even that fails the cursor itself is used.
+     *
+     * @param string $fullText
+     * @param string $chunkText
+     * @param int $cursor Character offset to search forward from
+     * @return array{0:int,1:int} [start, end]
+     */
+    private function resolveChunkOffsets(string $fullText, string $chunkText, int $cursor): array
+    {
+        $chunkLength = mb_strlen($chunkText, 'UTF-8');
+
+        $start = mb_strpos($fullText, $chunkText, $cursor, 'UTF-8');
+
+        if ($start === false) {
+            // Anchor on the chunk's first line / leading token to keep start
+            // truthful for whitespace-normalized joins.
+            $anchor = trim((string) preg_split('/\r\n|\r|\n/', $chunkText, 2)[0]);
+
+            $start = $anchor !== ''
+                ? mb_strpos($fullText, $anchor, $cursor, 'UTF-8')
+                : false;
+
+            if ($start === false) {
+                $start = $cursor;
+            }
+        }
+
+        return [$start, $start + $chunkLength];
+    }
+
+    /**
+     * Guard that every chunk has exactly one matching embedding so a chunk can
+     * never be paired with the wrong vector or an empty/short batch silently
+     * becoming an unsearchable empty vector.
+     *
+     * @param array $textChunks
+     * @param array $embeddings
+     * @return void
+     * @throws \RuntimeException
+     */
+    private function assertEmbeddingsAlignWithChunks(array $textChunks, array $embeddings): void
+    {
+        if (count($embeddings) !== count($textChunks)) {
+            throw new \RuntimeException(sprintf(
+                'Embedding/chunk count mismatch: %d chunks vs %d embeddings.',
+                count($textChunks),
+                count($embeddings)
+            ));
+        }
+
+        foreach ($textChunks as $index => $chunkText) {
+            $vector = $embeddings[$index] ?? null;
+
+            if (!is_array($vector) || $vector === []) {
+                throw new \RuntimeException(
+                    "Empty or missing embedding for chunk index {$index}."
+                );
+            }
+        }
     }
 }

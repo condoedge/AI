@@ -68,17 +68,14 @@ class SemanticContextSelector
         $topK = $options['top_k'] ?? self::DEFAULT_TOP_K;
         $collectionName = $this->config['collection'] ?? $this->collectionName;
 
-        // Check if semantic index exists
+        // Fall back to keyword-based selection when the semantic index is unavailable.
         if (!$this->indexExists($collectionName)) {
-            // Fall back to keyword-based selection
             $this->logger->fallback('semantic_selector', 'vector_search', 'keyword_matching', 'semantic index not available');
             return $this->keywordBasedSelection($question, $entityConfigs);
         }
 
-        // Embed the question
         $questionEmbedding = $this->embeddingProvider->embed($question);
 
-        // Search for relevant context pieces
         $results = $this->vectorStore->search(
             $collectionName,
             $questionEmbedding,
@@ -91,7 +88,6 @@ class SemanticContextSelector
             'threshold' => $threshold,
         ]);
 
-        // Group results by type and deduplicate
         $selectedEntities = [];
         $selectedRelationships = [];
         $selectedScopes = [];
@@ -210,7 +206,6 @@ class SemanticContextSelector
             );
         }
 
-        // Sort by score
         uasort($selectedEntities, fn($a, $b) => ($b->score) <=> ($a->score));
         uasort($selectedRelationships, fn($a, $b) => ($b->score) <=> ($a->score));
         uasort($selectedScopes, fn($a, $b) => ($b->score) <=> ($a->score));
@@ -256,7 +251,6 @@ class SemanticContextSelector
             'entity_count' => count($entityConfigs),
         ]);
 
-        // Ensure collection exists
         $this->vectorStore->ensureCollection($collectionName, $dimension);
 
         // Build all points in memory first (does not touch the target collection)

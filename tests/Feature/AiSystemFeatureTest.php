@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Tests\Feature;
 
 use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\GraphStore\Neo4jStore;
 use Condoedge\Ai\Tests\Fixtures\TestCustomer;
 use Condoedge\Ai\Tests\Fixtures\TestOrder;
+use Condoedge\Ai\VectorStore\QdrantStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Condoedge\Ai\Tests\TestCase;
 
@@ -41,10 +43,62 @@ class AiSystemFeatureTest extends TestCase
      */
     public function setUp(): void
     {
+        // These end-to-end tests exercise the full RAG pipeline against live
+        // services (OpenAI embeddings + LLM, Neo4j graph store, Qdrant vector
+        // store). Without an OpenAI key the RefreshDatabase boot itself fails
+        // (the embedding provider is resolved during migration), so gate on the
+        // key BEFORE parent::setUp() to keep the suite skipping cleanly in CI.
+        $this->skipWithoutOpenAiKey();
+
         parent::setUp();
+
+        // The app/config is booted now, so the live store connections can be
+        // probed safely. Skip cleanly when Neo4j or Qdrant are unavailable.
+        $this->skipWithoutLiveStores();
 
         // Create test customers and orders
         $this->seedTestData();
+    }
+
+    /**
+     * Skip the test unless an OpenAI API key is configured.
+     *
+     * Runs before parent::setUp() (and therefore before the RefreshDatabase
+     * migration boot that eagerly resolves the OpenAI embedding provider), so a
+     * missing key skips the test instead of erroring the whole suite.
+     */
+    protected function skipWithoutOpenAiKey(): void
+    {
+        $apiKey = getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? null);
+
+        if (!$apiKey || $apiKey === 'your-openai-api-key-here') {
+            $this->markTestSkipped('OpenAI API key not configured. Set OPENAI_API_KEY to run AI system feature tests.');
+        }
+    }
+
+    /**
+     * Skip the test unless Neo4j and Qdrant are both reachable.
+     *
+     * Must run after parent::setUp() since the store constructors read config()
+     * from the booted application container.
+     */
+    protected function skipWithoutLiveStores(): void
+    {
+        try {
+            if (!(new Neo4jStore())->testConnection()) {
+                $this->markTestSkipped('Neo4j is not available. Start docker-compose to run AI system feature tests.');
+            }
+        } catch (\Throwable $e) {
+            $this->markTestSkipped('Neo4j is not available (' . $e->getMessage() . '). Start docker-compose to run AI system feature tests.');
+        }
+
+        try {
+            if (!(new QdrantStore())->testConnection()) {
+                $this->markTestSkipped('Qdrant is not available. Start docker-compose to run AI system feature tests.');
+            }
+        } catch (\Throwable $e) {
+            $this->markTestSkipped('Qdrant is not available (' . $e->getMessage() . '). Start docker-compose to run AI system feature tests.');
+        }
     }
 
     /**

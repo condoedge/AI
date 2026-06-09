@@ -2,6 +2,8 @@
 
 namespace Condoedge\Ai\Tests\Unit\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryUnderstandingResult;
 use Condoedge\Ai\Services\PromptSections\CurrentUserContextSection;
 use Condoedge\Ai\Tests\TestCase;
 use Illuminate\Foundation\Auth\User;
@@ -17,6 +19,11 @@ class CurrentUserContextSectionTest extends TestCase
         $this->section = new CurrentUserContextSection();
     }
 
+    private function context(): PipelineContext
+    {
+        return new PipelineContext();
+    }
+
     /** @test */
     public function it_has_correct_name_and_priority(): void
     {
@@ -30,7 +37,7 @@ class CurrentUserContextSectionTest extends TestCase
         // Ensure no user is authenticated
         Auth::shouldReceive('check')->andReturn(false);
 
-        $result = $this->section->shouldInclude('How many orders?', [], []);
+        $result = $this->section->shouldInclude('How many orders?', $this->context(), []);
 
         $this->assertFalse($result);
     }
@@ -47,28 +54,25 @@ class CurrentUserContextSectionTest extends TestCase
         Auth::shouldReceive('check')->andReturn(true);
         Auth::shouldReceive('user')->andReturn($user);
 
-        $result = $this->section->shouldInclude('How many orders?', [], []);
+        $result = $this->section->shouldInclude('How many orders?', $this->context(), []);
 
         $this->assertTrue($result);
     }
 
     /** @test */
-    public function it_includes_section_when_current_user_in_context(): void
+    public function it_excludes_section_when_unauthenticated_even_with_populated_context(): void
     {
-        // Even without auth, if context has current_user, include the section
+        // Inclusion is driven solely by the auth gate, not by data carried in the
+        // pipeline context. A populated context (e.g. a possessive question) must
+        // NOT smuggle the user section in when there is no authenticated user.
         Auth::shouldReceive('check')->andReturn(false);
 
-        $context = [
-            'current_user' => [
-                'id' => 1,
-                'name' => 'Test User',
-                'email' => 'test@example.com',
-            ],
-        ];
+        $context = $this->context();
+        $context->qu = new QueryUnderstandingResult(isPossessive: true);
 
-        $result = $this->section->shouldInclude('How many orders?', $context, []);
+        $result = $this->section->shouldInclude('How many orders do I have?', $context, []);
 
-        $this->assertTrue($result);
+        $this->assertFalse($result);
     }
 
     /** @test */
@@ -76,7 +80,7 @@ class CurrentUserContextSectionTest extends TestCase
     {
         Auth::shouldReceive('check')->andReturn(false);
 
-        $result = $this->section->shouldInclude('What is the total revenue?', [], []);
+        $result = $this->section->shouldInclude('What is the total revenue?', $this->context(), []);
 
         $this->assertFalse($result);
     }
@@ -93,12 +97,74 @@ class CurrentUserContextSectionTest extends TestCase
         Auth::shouldReceive('user')->andReturn($user);
         Auth::shouldReceive('id')->andReturn(42);
 
-        $output = $this->section->format('test question', [], []);
+        $output = $this->section->format('test question', $this->context(), []);
 
         $this->assertStringContainsString('CURRENT USER CONTEXT', $output);
         $this->assertStringContainsString('John Doe', $output);
-        $this->assertStringContainsString('john@example.com', $output);
         $this->assertStringContainsString('42', $output);
+    }
+
+    /** @test */
+    public function it_omits_user_email_by_default(): void
+    {
+        // PII minimization: the user's email is NOT shipped to the LLM unless explicitly
+        // enabled or the question is about the user's own data.
+        $user = new User();
+        $user->id = 42;
+        $user->name = 'John Doe';
+        $user->email = 'john@example.com';
+
+        Auth::shouldReceive('check')->andReturn(true);
+        Auth::shouldReceive('user')->andReturn($user);
+        Auth::shouldReceive('id')->andReturn(42);
+
+        $output = $this->section->format('How many orders are there?', $this->context(), []);
+
+        $this->assertStringNotContainsString('john@example.com', $output);
+        $this->assertStringNotContainsString('Current user email', $output);
+        // Identity that the query actually needs (id + team) is still present.
+        $this->assertStringContainsString('Current user ID: 42', $output);
+    }
+
+    /** @test */
+    public function it_includes_user_email_when_the_config_flag_is_enabled(): void
+    {
+        config(['ai.prompt.include_user_email' => true]);
+
+        $user = new User();
+        $user->id = 42;
+        $user->name = 'John Doe';
+        $user->email = 'john@example.com';
+
+        Auth::shouldReceive('check')->andReturn(true);
+        Auth::shouldReceive('user')->andReturn($user);
+        Auth::shouldReceive('id')->andReturn(42);
+
+        $output = $this->section->format('test question', $this->context(), []);
+
+        $this->assertStringContainsString('john@example.com', $output);
+    }
+
+    /** @test */
+    public function it_includes_user_email_for_possessive_ownership_questions(): void
+    {
+        // When the question is about the user's own data, the email is allowed even with
+        // the flag off, because ownership resolution may need it.
+        $user = new User();
+        $user->id = 42;
+        $user->name = 'John Doe';
+        $user->email = 'john@example.com';
+
+        Auth::shouldReceive('check')->andReturn(true);
+        Auth::shouldReceive('user')->andReturn($user);
+        Auth::shouldReceive('id')->andReturn(42);
+
+        $context = $this->context();
+        $context->qu = new QueryUnderstandingResult(isPossessive: true);
+
+        $output = $this->section->format('How many orders do I have?', $context, []);
+
+        $this->assertStringContainsString('john@example.com', $output);
     }
 
     /** @test */
@@ -106,7 +172,7 @@ class CurrentUserContextSectionTest extends TestCase
     {
         Auth::shouldReceive('check')->andReturn(false);
 
-        $output = $this->section->format('test question', [], []);
+        $output = $this->section->format('test question', $this->context(), []);
 
         $this->assertStringContainsString('Guest', $output);
         $this->assertStringContainsString('N/A', $output);

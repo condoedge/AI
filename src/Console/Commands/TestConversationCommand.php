@@ -109,18 +109,14 @@ class TestConversationCommand extends Command
 
                 $elapsed = round((microtime(true) - $startTime) * 1000);
 
-                // Display answer
                 $this->line("<fg=green>Answer:</> {$result['answer']}");
 
-                // Display Cypher query if present
                 if (!empty($result['cypher_query'])) {
                     $this->line("<fg=gray>Cypher:</> {$result['cypher_query']}");
                 }
 
-                // Display timing
                 $this->line("<fg=gray>Time:</> {$elapsed}ms");
 
-                // Record for script saving
                 $history[] = [
                     'question' => $question,
                     'answer' => $result['answer'],
@@ -138,12 +134,10 @@ class TestConversationCommand extends Command
             $this->newLine();
         }
 
-        // Offer to save if there's history
         if (!empty($history) && $this->option('save')) {
             $this->saveScript($history, $this->option('save'), $user->id);
         }
 
-        // Cleanup test conversation
         $conversation->delete();
 
         return self::SUCCESS;
@@ -200,7 +194,6 @@ class TestConversationCommand extends Command
                     $this->line("  <fg=gray>Cypher:</> " . $this->truncateText($result['cypher_query'], 150));
                 }
 
-                // Check assertions if defined
                 $assertionPassed = $this->checkAssertions($turn, $result);
 
                 if ($assertionPassed) {
@@ -221,7 +214,6 @@ class TestConversationCommand extends Command
             $this->newLine();
         }
 
-        // Summary
         $total = $passed + $failed;
         $this->info("Results: {$passed}/{$total} passed ({$totalTime}ms total)");
 
@@ -229,7 +221,6 @@ class TestConversationCommand extends Command
             $this->warn("{$failed} turn(s) failed.");
         }
 
-        // Cleanup
         $conversation->delete();
 
         return $failed === 0 ? self::SUCCESS : self::FAILURE;

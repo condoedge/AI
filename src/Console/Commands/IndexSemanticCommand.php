@@ -64,7 +64,6 @@ class IndexSemanticCommand extends Command
      */
     public function handle(SemanticIndexer $indexer): int
     {
-        // Check mode
         if ($this->option('check')) {
             return $this->checkIndexes($indexer);
         }
@@ -82,7 +81,6 @@ class IndexSemanticCommand extends Command
 
         $results = [];
 
-        // Index entities
         if ($indexAll || $entities) {
             $this->line('📦 Indexing entities...');
             try {
@@ -99,7 +97,6 @@ class IndexSemanticCommand extends Command
             $this->newLine();
         }
 
-        // Index scopes
         if ($indexAll || $scopes) {
             $this->line('🎯 Indexing scopes...');
             try {
@@ -116,11 +113,9 @@ class IndexSemanticCommand extends Command
             $this->newLine();
         }
 
-        // Index templates
         if ($indexAll || $templates) {
             $this->line('📋 Indexing templates...');
             try {
-                // Load templates from config
                 $templateConfig = config('ai.query_generation.templates', []);
 
                 if (empty($templateConfig)) {
@@ -140,11 +135,9 @@ class IndexSemanticCommand extends Command
             $this->newLine();
         }
 
-        // Summary
         $this->info('✅ Indexing complete!');
         $this->newLine();
 
-        // Display next steps
         $this->line('<comment>Next steps:</comment>');
         $this->line('  1. Test semantic matching:');
         $this->line('     php artisan ai:test-semantic "Show all clients"');
@@ -183,7 +176,6 @@ class IndexSemanticCommand extends Command
 
         $this->table(['Type', 'Collection', 'Status'], $rows);
 
-        // Check configuration
         $this->newLine();
         $this->line('<comment>Configuration:</comment>');
 
@@ -201,7 +193,6 @@ class IndexSemanticCommand extends Command
             $this->line("  " . str_replace('_', ' ', ucfirst($key)) . ": {$value}");
         }
 
-        // Recommendations
         $missing = array_filter($status, fn($exists) => !$exists);
 
         if (!empty($missing)) {

@@ -56,7 +56,6 @@ class ResponseEntityActionsSection extends BaseResponseSection
             return false;
         }
 
-        // Get entity types from all sources
         $entityTypes = $this->resolveEntityTypes($context);
 
         foreach ($entityTypes as $entityType) {
@@ -65,7 +64,6 @@ class ResponseEntityActionsSection extends BaseResponseSection
             }
         }
 
-        // Check for generic actions
         $genericActions = $this->discovery->getGenericActions();
         return !empty($genericActions);
     }
@@ -75,7 +73,6 @@ class ResponseEntityActionsSection extends BaseResponseSection
         $output = $this->header('Action Links');
         $output .= "You can include clickable action links in your response using Markdown syntax.\n\n";
 
-        // Resolve entity types and IDs
         $entityTypes = $this->resolveEntityTypes($context);
         $entityData = $this->resolveEntityData($context);
 
@@ -95,7 +92,6 @@ class ResponseEntityActionsSection extends BaseResponseSection
                 $output .= "\n";
             }
 
-            // Show available entity IDs with pre-formatted links
             if (!empty($entityData) && !empty($actions[0]['action_key'])) {
                 $firstActionKey = $actions[0]['action_key'];
                 $output .= "\n**Available {$entityType} IDs:**\n";
@@ -111,7 +107,6 @@ class ResponseEntityActionsSection extends BaseResponseSection
             $output .= "\n";
         }
 
-        // Generic actions
         $genericActions = $this->discovery->getGenericActions();
         if (!empty($genericActions)) {
             $output .= "**Generic Actions:**\n";

@@ -14,10 +14,10 @@ use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
  * Handler for entity:// and action:// protocol links.
  *
  * Processes AI-generated action links and creates Kompo elements via the
- * {@see AiActionRegistry} + {@see ActionDispatcher} (which back today's closure config
- * entries through the ConfigAiAction adapter — fully backward-compatible).
+ * {@see AiActionRegistry} + {@see ActionDispatcher} (which back closure config entries
+ * through the ConfigAiAction adapter).
  *
- * Link formats (params are OPTIONAL — param-less links keep working unchanged):
+ * Link formats (params are optional):
  * - [text](entity://EntityType/id/action_key)
  * - [text](entity://EntityType/id/action_key?field=default&other=2)
  * - [text](action://action_key)
@@ -44,7 +44,7 @@ class ActionLinkHandler extends AbstractContentLinkHandler
     ) {
         $this->discovery = $discovery ?? app(EntityAutoDiscovery::class);
         // Resolve a dispatcher with the shared registry; fall back to a self-built one with
-        // SAFE DEFAULTS so the handler works even before the main session wires DI.
+        // safe defaults so the handler works even without DI wiring.
         $this->dispatcher = $dispatcher ?? $this->resolveDispatcher();
     }
 
@@ -110,7 +110,7 @@ class ActionLinkHandler extends AbstractContentLinkHandler
             'entity_id' => $entityId,
         ]);
 
-        return $this->renderResult($this->dispatcher->dispatch($action, $params, $ctx));
+        return $this->renderResult($this->dispatcher->dispatch($action, $params, $ctx), $actionKey);
     }
 
     /**
@@ -126,20 +126,31 @@ class ActionLinkHandler extends AbstractContentLinkHandler
 
         $ctx = array_merge($context, ['text' => $text]);
 
-        return $this->renderResult($this->dispatcher->dispatch($action, $params, $ctx));
+        return $this->renderResult($this->dispatcher->dispatch($action, $params, $ctx), $actionKey);
     }
 
     /**
      * Turn an AiActionResult into the element to drop into the message.
      *
      * - Approval-required (deferred) results render an ApprovalCard instead of executing.
-     * - Errors render nothing (the caller already logs / degrades).
+     * - Export errors (e.g. phpspreadsheet/dompdf absent) render a VISIBLE honest-failure notice
+     *   instead of vanishing — a silently inert download link is a worse UX than a clear message.
+     * - Other errors render nothing (the caller already logs / degrades, and a generic action
+     *   failure must not leak its internal reason into the chat bubble).
      * - Plain renderables (Kompo elements) pass straight through.
      */
-    private function renderResult(?AiActionResult $result): mixed
+    private function renderResult(?AiActionResult $result, string $actionKey = ''): mixed
     {
-        if ($result === null || $result->isError) {
+        if ($result === null) {
             return null;
+        }
+
+        if ($result->isError) {
+            // HONEST FAILURE: only the export actions surface their reason to the user; every
+            // other action keeps failing closed (no inert link, no leaked internals).
+            return $this->isExportAction($actionKey)
+                ? $this->renderExportFailure($result->summaryForLlm)
+                : null;
         }
 
         $renderable = $result->renderable;
@@ -150,6 +161,31 @@ class ActionLinkHandler extends AbstractContentLinkHandler
         }
 
         return $renderable;
+    }
+
+    /**
+     * The built-in export actions whose failure (missing host library) must be shown, not hidden.
+     */
+    private function isExportAction(string $actionKey): bool
+    {
+        return str_starts_with($actionKey, 'export_');
+    }
+
+    /**
+     * Render an export failure as a small, visible inline notice carrying the user-facing reason.
+     */
+    private function renderExportFailure(string $message): mixed
+    {
+        $message = trim($message) !== ''
+            ? $message
+            : 'This export is unavailable in the current environment.';
+
+        if (function_exists('_Html')) {
+            return _Html(e($message))->class('cdge-export-error text-sm text-red-600');
+        }
+
+        // No Kompo runtime (unit context) — return the message text so the failure is never silent.
+        return $message;
     }
 
     protected function getStripReplacement(array $match): string

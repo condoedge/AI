@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Chat\Inputs;
 
+use Condoedge\Ai\DTOs\PageContext;
 use Condoedge\Ai\Models\AiConversation;
 
 /**
@@ -12,17 +13,20 @@ use Condoedge\Ai\Models\AiConversation;
  * A constructor-promoted readonly DTO (modeled on Sisc's RegisterScoutDTO) that carries
  * everything the use case needs to run a chat turn without reaching into request()/Kompo:
  * the raw question, the conversation it belongs to, the requested response style, the
- * acting user (for file-access authorization + injection logging), and an explicit
- * allow-anonymous opt-in for public queries.
+ * acting user (for file-access authorization + injection logging), an explicit
+ * allow-anonymous opt-in for public queries, and the optional page context (the soft prior
+ * for "which page/record the chat was opened from").
  */
 final class AskQuestionInput
 {
     /**
-     * @param string         $question       The user's raw question text.
-     * @param AiConversation $conversation   The conversation for context tracking + persistence.
-     * @param string         $style          Response style (friendly|professional|concise|...).
-     * @param mixed          $user           The acting user (Authenticatable|null). Null only allowed when $allowAnonymous.
-     * @param bool           $allowAnonymous Explicit opt-in to run without a user (public queries).
+     * @param string            $question       The user's raw question text.
+     * @param AiConversation    $conversation   The conversation for context tracking + persistence.
+     * @param string            $style          Response style (friendly|professional|concise|...).
+     * @param mixed             $user           The acting user (Authenticatable|null). Null only allowed when $allowAnonymous.
+     * @param bool              $allowAnonymous Explicit opt-in to run without a user (public queries).
+     * @param PageContext|null  $pageContext    The page/record the chat was opened from. Null (default)
+     *                                          keeps every existing call site working unchanged.
      */
     public function __construct(
         public readonly string $question,
@@ -30,6 +34,7 @@ final class AskQuestionInput
         public readonly string $style = 'friendly',
         public readonly mixed $user = null,
         public readonly bool $allowAnonymous = false,
+        public readonly ?PageContext $pageContext = null,
     ) {
     }
 }

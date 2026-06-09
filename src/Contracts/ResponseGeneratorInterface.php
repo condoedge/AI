@@ -67,15 +67,6 @@ interface ResponseGeneratorInterface
     ): array;
 
     /**
-     * Summarize large result sets
-     *
-     * @param array $queryResult Large result set to summarize
-     * @param int $maxItems Max items to include in summary
-     * @return array Summarized results
-     */
-    public function summarize(array $queryResult, int $maxItems = 10): array;
-
-    /**
      * Extract insights from data
      *
      * @param array $queryResult Query results to analyze
@@ -87,8 +78,8 @@ interface ResponseGeneratorInterface
      * Suggest appropriate visualizations
      *
      * @param array $queryResult Query results
-     * @param string $cypherQuery Original query
+     * @param string|null $cypherQuery Original query (null when no Cypher was generated)
      * @return array Suggested visualization types with rationale
      */
-    public function suggestVisualizations(array $queryResult, string $cypherQuery): array;
+    public function suggestVisualizations(array $queryResult, ?string $cypherQuery): array;
 }

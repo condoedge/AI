@@ -87,10 +87,7 @@ class PatternLibrary
             throw new \InvalidArgumentException("Unknown pattern: {$name}");
         }
 
-        // Validate parameters
         $this->validatePatternParams($pattern, $params);
-
-        // Build semantic description
         $description = $this->buildSemanticDescription($pattern, $params);
 
         return [
@@ -124,7 +121,6 @@ class PatternLibrary
             return require $configPath;
         }
 
-        // Return empty array if nothing found
         return [];
     }
 

@@ -51,7 +51,6 @@ class EnhanceConfigCommand extends Command
             return self::FAILURE;
         }
 
-        // Validate user exists before starting iterations
         $userId = $this->option('user');
         $userClass = config('auth.providers.users.model', 'App\\Models\\User');
         $user = $userClass::find($userId);
@@ -78,7 +77,6 @@ class EnhanceConfigCommand extends Command
             }
         }
 
-        // Filter to specific model if requested
         $specificModel = $this->option('model');
         if ($specificModel) {
             if (!isset($configurations[$specificModel])) {
@@ -189,7 +187,6 @@ class EnhanceConfigCommand extends Command
             $this->newLine();
         }
 
-        // Summary
         $this->newLine();
         $this->info("Enhanced: {$enhanced} entities");
         if (!empty($errors)) {

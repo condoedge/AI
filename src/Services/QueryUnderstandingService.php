@@ -115,6 +115,7 @@ class QueryUnderstandingService
     private function buildMessages(string $question, array $entityCatalog): array
     {
         $catalogText = $this->formatCatalog($entityCatalog);
+        $translationKeyDoc = $this->translationInstruction($this->corpusLanguages());
 
         $system = <<<PROMPT
 You are a query understanding assistant for a graph database system. Your job is to analyze a natural language question and extract structured information to help find the right data.
@@ -128,11 +129,11 @@ TASK: Given the user's question, return a JSON object with exactly these keys:
 - "property_concepts": array of SHORT single-word or two-word property concept strings (e.g., "insurance", "email", "balance", "birthday", "parking"). Keep each concept as short as possible — one word preferred. These are abstract data concepts that may be stored as properties on entities, NOT entity types themselves.
 - "search_query": a rewritten version of the question optimized for semantic search against entity descriptions. Remove filler words, expand abbreviations, use domain terminology.
 - "is_possessive": boolean, true if the user is asking about THEIR OWN data ("my unit", "my invoices", "do I have", "am I", etc.)
-- "intent": one of: "count", "list", "lookup", "aggregate", "compare", "other"
+- "intent": one of: "count", "list", "lookup", "aggregate", "compare", "file_listing", "other". Use "file_listing" when the user asks to see or list the documents/files available to them (e.g. "which files do I have access to?", "show my documents", "list the files I can see").
 - "question_type": one of "data_query" (needs database/graph lookup), "knowledge_query" (needs file/document content — rules, regulations, policies, "can I do X?"), "hybrid" (needs both data and documents)
 - "clarified_question": "Usually the concrete asking of the user hides a more abstract context and intent. If the question is "How many parking spaces do I have?" the clarified_question might be "How many parking space entities are related to the person entity representing me in the graph?" This is meant to clarify the underlying data relationships and intent in a way that can help with debugging and prompt engineering. Keep it concise.
 But also it could have a base significance. let's say the user asks "Can i tear down a wall in my apartment?" the clarified question might be "What are the rules and regulations regarding modifying a residential unit in my building, more specifically tearing down a wall, and how do they apply to me as a tenant?"
-- "search_tags": array of EXACTLY 10 keyword tags for searching documents and files. CRITICAL: You MUST return exactly 10 tags. Include: (1) literal terms from the question, (2) domain-specific synonyms that would appear in legal/regulatory documents, (3) the broader category or domain the question belongs to (e.g., "co-ownership" for condo questions), (4) French translations of key terms, (5) related technical terms. For "Can I tear down a wall?" you MUST produce tags like: ["wall", "structural modification", "renovation", "common portions", "private portions", "co-ownership", "alteration", "building work", "mur", "copropriété"]. Think: what words would appear in a legal document, regulation, or building rule that answers this question?
+- "search_tags": array of 5 to 10 keyword tags for searching documents and files. Include: (1) literal terms from the question, (2) domain synonyms that would appear in the relevant documents, (3) the broader category or domain the question belongs to, (4) related technical terms, and (5) if the project's documents are multilingual, translations of the key terms into the other language(s). Think: what words would appear in a document, rule, or regulation that answers this question?{$translationKeyDoc}
 
 Rules:
 - Only use entity labels from the AVAILABLE ENTITY TYPES list.
@@ -146,6 +147,64 @@ PROMPT;
             ['role' => 'system', 'content' => $system],
             ['role' => 'user', 'content' => $question],
         ];
+    }
+
+    /**
+     * The configured corpus languages (e.g. ['fr', 'en']). Empty by default, which
+     * keeps the prompt and result unchanged (no translation, zero added cost).
+     *
+     * @return string[] Normalized, de-duplicated, non-empty language codes.
+     */
+    private function corpusLanguages(): array
+    {
+        $languages = $this->config['corpus_languages'] ?? [];
+        if (!is_array($languages)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($languages as $code) {
+            if (is_string($code) && trim($code) !== '') {
+                $normalized[] = trim($code);
+            }
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
+    /**
+     * Build the extra prompt instruction asking the model to translate the question
+     * into each configured corpus language. Returns '' when none are configured so
+     * the base prompt is untouched.
+     */
+    private function translationInstruction(array $languages): string
+    {
+        if (empty($languages)) {
+            return '';
+        }
+
+        $list = implode('", "', $languages);
+
+        return "\n- \"corpus_translations\": an object mapping each of these corpus "
+            . "language codes [\"{$list}\"] to a search-optimized rendering of the "
+            . "question in THAT language only (a single fluent, pure-language "
+            . "phrasing — never mixed-language keyword soup). Do NOT translate the "
+            . "surface words literally and do NOT keep it minimal: render the intent "
+            . "using the concrete domain/technical terms the relevant SOURCE "
+            . "DOCUMENTS in that language actually use. You MUST name, in that "
+            . "language: (a) the category of action as the documents name it — for "
+            . "any build/renovate/demolish/alter request that means the WORKS / "
+            . "construction-renovation activity (in French: 'travaux') AND the "
+            . "specific alteration; (b) the specific object or structure affected; "
+            . "(c) the governing context (e.g. the property type, the by-laws or code "
+            . "that applies). For example, a casual English 'Can I tear down a wall "
+            . "keeping in mind rules of quebec?' must be rendered for a French legal "
+            . "corpus as something like 'Quelles sont les règles et les travaux "
+            . "permis concernant la démolition ou la modification d'un mur dans une "
+            . "copropriété au Québec ?' — note it names the works ('travaux'), the "
+            . "structure (mur) and the context (copropriété, Québec). These "
+            . "renderings are additional document-search probes so a question asked "
+            . "in one language still retrieves documents written in another.";
     }
 
     /**
@@ -196,8 +255,47 @@ PROMPT;
             intent: $this->normalizeIntent($data['intent'] ?? 'other'),
             questionType: $this->normalizeQuestionType($data['question_type'] ?? 'hybrid'),
             clarifiedQuestion: is_string($data['clarified_question'] ?? null) ? $data['clarified_question'] : '',
-            searchTags: $this->ensureStringArray($data['search_tags'] ?? []),
+            searchTags: array_slice($this->ensureStringArray($data['search_tags'] ?? []), 0, 10),
+            corpusTranslations: $this->parseCorpusTranslations($data['corpus_translations'] ?? null),
         );
+    }
+
+    /**
+     * Parse the LLM's corpus_translations into a clean language => translation map.
+     *
+     * Only the configured corpus languages are kept (a model that volunteers an
+     * unrequested language is ignored), blank translations are dropped, and any
+     * non-map / malformed value degrades silently to no translations so retrieval
+     * never breaks.
+     *
+     * @param mixed $value Raw corpus_translations from the LLM response.
+     * @return array<string,string>
+     */
+    private function parseCorpusTranslations(mixed $value): array
+    {
+        $languages = $this->corpusLanguages();
+        if (empty($languages)) {
+            return [];
+        }
+
+        // chatJson decodes nested JSON objects to stdClass; coerce to an
+        // associative array so an object map is handled like an array map.
+        if (is_object($value)) {
+            $value = (array) $value;
+        }
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $translations = [];
+        foreach ($languages as $code) {
+            $translation = $value[$code] ?? null;
+            if (is_string($translation) && trim($translation) !== '') {
+                $translations[$code] = trim($translation);
+            }
+        }
+
+        return $translations;
     }
 
     /**
@@ -273,7 +371,7 @@ PROMPT;
             return 'other';
         }
 
-        $valid = ['count', 'list', 'lookup', 'aggregate', 'compare', 'other'];
+        $valid = ['count', 'list', 'lookup', 'aggregate', 'compare', 'file_listing', 'other'];
 
         $normalized = strtolower(trim($intent));
 

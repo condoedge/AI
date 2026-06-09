@@ -13,6 +13,16 @@ use Condoedge\Ai\Exceptions\SecurityException;
 use Condoedge\Ai\Models\AiQueryLog;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
 use Condoedge\Ai\Services\Security\AiSecurityService;
+use Condoedge\Ai\Services\Security\CypherScopeAnalyzer;
+use Condoedge\Ai\Services\Security\CypherStructuralValidator;
+use Condoedge\Ai\Services\Security\ScopeAcceptanceGate;
+use Condoedge\Ai\Services\Security\SecurityFilterInjector;
+use Condoedge\Ai\Services\Security\SensitiveLabelCoverageGate;
+use Condoedge\Ai\Services\Security\TeamPathResolver;
+use Condoedge\Ai\Services\Security\Scope\FilterClause;
+use Condoedge\Ai\Services\Security\Scope\NodeBinding;
+use Condoedge\Ai\Services\Security\Scope\Scope;
+use Condoedge\Ai\Services\Security\Scope\ScopePlan;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -69,7 +79,6 @@ class QueryExecutor implements QueryExecutorInterface
      */
     public function execute(?string $cypherQuery, array $parameters = [], array $options = []): array
     {
-        // Merge options with defaults
         $timeout = $options['timeout'] ?? $this->config['default_timeout'] ?? 30;
         $limit = $options['limit'] ?? $this->config['default_limit'] ?? 100;
         $readOnly = $options['read_only'] ?? $this->config['read_only_mode'] ?? true;
@@ -87,8 +96,21 @@ class QueryExecutor implements QueryExecutorInterface
             ];
         }
 
-        // Apply security filtering if enabled
         $securityResult = $this->applySecurityFilter($cypherQuery, $options);
+
+        // Structural safe-stop: the security layer could not produce a valid scoped
+        // rewrite. Return a clean empty result instead of running anything — fail
+        // closed without a crash, and without shipping a malformed query to Neo4j.
+        if (($securityResult['safe_stop'] ?? false) === true) {
+            return [
+                'success' => true,
+                'data' => [],
+                'stats' => [],
+                'metadata' => ['security_filter_applied' => false, 'safe_stop' => true],
+                'errors' => [],
+            ];
+        }
+
         $cypherQuery = $securityResult['query'];
         $securityFilterApplied = $securityResult['filter_applied'];
 
@@ -105,36 +127,42 @@ class QueryExecutor implements QueryExecutorInterface
             );
         }
 
-        // Check read-only mode
         if ($readOnly && $this->containsWriteOperations($cypherQuery)) {
             throw new ReadOnlyViolationException(
                 'Write operations not allowed in read-only mode'
             );
         }
 
-        // Apply limit if not present
+        // Apply a default limit when the query doesn't specify one.
         if (!preg_match('/\bLIMIT\b/i', $cypherQuery)) {
             $cypherQuery .= " LIMIT {$limit}";
         }
 
-        // Track execution time
         $startTime = microtime(true);
 
         try {
-            // Execute query
             $rawResults = $this->graphStore->query($cypherQuery, $parameters);
 
-            // Format results
+            // Enforce the configured wall-clock timeout on the success path too.
+            // The GraphStore interface carries no per-query timeout, so a slow
+            // backend can return AFTER the budget elapsed; surface that as a
+            // timeout reflecting the configured limit rather than silently
+            // returning stale/expensive results.
+            $elapsedMs = (microtime(true) - $startTime) * 1000;
+            if ($elapsedMs >= ($timeout * 1000)) {
+                throw new QueryTimeoutException(
+                    "Query exceeded timeout of {$timeout} seconds"
+                );
+            }
+
             $formattedData = match ($format) {
                 'graph' => $this->formatAsGraph($rawResults),
                 'json' => $this->formatAsJson($rawResults),
                 default => $this->formatAsTable($rawResults),
             };
 
-            // Collect statistics
             $stats = $includeStats ? $this->collectStatistics($rawResults, $startTime) : [];
 
-            // Check for slow query
             $executionTime = $stats['execution_time_ms'] ?? 0;
             $slowThreshold = $this->config['slow_query_threshold_ms'] ?? 1000;
 
@@ -170,8 +198,11 @@ class QueryExecutor implements QueryExecutorInterface
                 'errors' => [],
             ];
 
+        } catch (QueryTimeoutException $e) {
+            // Wall-clock budget exceeded on the success path — surface directly
+            // (the message already reflects the configured timeout).
+            throw $e;
         } catch (\Exception $e) {
-            // Check if timeout
             $executionTime = round((microtime(true) - $startTime) * 1000, 2);
 
             // Log failed query execution (non-blocking)
@@ -190,7 +221,6 @@ class QueryExecutor implements QueryExecutorInterface
                 );
             }
 
-            // Other execution errors
             throw new QueryExecutionException(
                 "Query execution failed: " . $e->getMessage(),
                 0,
@@ -254,25 +284,19 @@ class QueryExecutor implements QueryExecutorInterface
         array $parameters = [],
         array $options = []
     ): array {
-        // Validate pagination parameters
         $page = max(1, $page);
         $perPage = min($perPage, $this->config['max_limit'] ?? 1000);
         $perPage = max(1, $perPage);
 
-        // Calculate offset
         $offset = ($page - 1) * $perPage;
 
-        // Get total count first
         $total = $this->executeCount($cypherQuery, $parameters, $options);
 
-        // Add pagination to query
         $paginatedQuery = preg_replace('/\bLIMIT\s+\d+/i', '', $cypherQuery);
         $paginatedQuery .= " SKIP {$offset} LIMIT {$perPage}";
 
-        // Execute paginated query
         $result = $this->execute($paginatedQuery, $parameters, $options);
 
-        // Add pagination metadata
         $lastPage = (int) ceil($total / $perPage);
 
         return [
@@ -597,7 +621,9 @@ class QueryExecutor implements QueryExecutorInterface
 
         $user = auth()->user();
         if ($user && method_exists($user, 'currentTeam')) {
-            return $user->currentTeam()?->id;
+            // Property access, not the method: a belongsTo currentTeam() returns the relation,
+            // whose ->id is undefined and throws. The property resolves the related model.
+            return $user->currentTeam?->id;
         }
 
         if ($user && property_exists($user, 'current_team_id')) {
@@ -625,9 +651,11 @@ class QueryExecutor implements QueryExecutorInterface
      */
     private function applySecurityFilter(string $cypherQuery, array $options): array
     {
+        $unfiltered = ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
+
         // Skip if security filtering disabled in options
         if (($options['skip_security'] ?? false) === true) {
-            return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
+            return $unfiltered;
         }
 
         // Get security service
@@ -635,7 +663,7 @@ class QueryExecutor implements QueryExecutorInterface
 
         // Check if security is enabled
         if (!config('ai.security.enabled', true)) {
-            return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
+            return $unfiltered;
         }
 
         // Resolve the acting user: prefer the user threaded through the pipeline
@@ -643,74 +671,220 @@ class QueryExecutor implements QueryExecutorInterface
         // or wrong on CLI / queue / regeneration / impersonation paths.
         $user = $options['user'] ?? auth()->user();
 
-        // Extract entity from query first — only a parseable, sensitive entity
-        // triggers the fail-closed branch (e.g. `RETURN 1` / `CALL db.labels()`
-        // have no entity and are not team-scoped).
-        $entity = $this->extractPrimaryEntity($cypherQuery);
+        // STRUCTURAL ANALYSIS (safe-by-construction): recognize the scopeable subset
+        // and enumerate EVERY tenant-sensitive node binding on its own live alias.
+        // This replaces the former regex entity/alias detection. The legacy regex
+        // helpers (extractPrimaryEntity/…/injectTeamFilter) are retained only as
+        // thin shims for direct-call unit tests; the execution path never uses them.
+        $plan = $this->scopeAnalyzer()->analyze($cypherQuery);
+        $primaryBinding = $plan->primaryBinding();
+        $primaryEntity = $primaryBinding?->label ?? '(unlabeled)';
+
+        // ANALYZER-INDEPENDENT COVERAGE GATE (fail-closed invariant). The analyzer
+        // cannot see sensitive labels nested inside CALL{} subqueries or behind a
+        // label-free relationship hop, so trusting it alone leaks: it reports "no
+        // sensitive binding" and the query runs UNSCOPED. This lexical scan finds
+        // every tenant-sensitive label the query references at ANY depth and proves
+        // the analyzer enumerated each one. A sensitive label the analyzer missed (a
+        // coverage gap) means the query CANNOT be proven scoped → safe-stop. This is
+        // unconditional: a query touching tenant data that we cannot prove is fully
+        // scoped never runs unfiltered, regardless of the on_permission_unexistent
+        // bypass switch (which only governs genuinely non-sensitive shapes below).
+        $coverage = $this->sensitiveLabelCoverageGate();
+        if ($coverage->referencesSensitiveLabel($cypherQuery)
+            && (!$plan->isScopeable || !$coverage->planCoversSensitiveBindings($cypherQuery, $plan))) {
+            return $this->safeStopNoResult($primaryEntity, 'sensitive_label_coverage_gap');
+        }
 
         if (!$user) {
-            // No resolvable user. If the query binds any sensitive node — a
-            // labelled entity OR a label-free node access whose tenancy cannot be
-            // proven — fail closed (or bypass with a warning).
-            if ($entity !== null || $this->queryAccessesNodes($cypherQuery)) {
-                return $this->failClosedOrBypass(
-                    $cypherQuery,
-                    $entity ?? '(unlabeled)',
-                    'no_resolvable_user'
-                );
+            // No resolvable user. If the query binds (or would bind) any sensitive
+            // node — whether scopeable or an un-anchorable/label-free shape — fail
+            // closed (or bypass with a warning). A pure scalar/introspection query
+            // (no node access) is not subject to scoping.
+            if ($plan->hasSensitiveBindings() || $plan->accessesNodes) {
+                return $this->failClosedOrBypass($cypherQuery, $primaryEntity, 'no_resolvable_user');
             }
 
-            return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
+            return $unfiltered;
         }
 
-        if (!$entity) {
-            // A node-binding query with no extractable label cannot be team-scoped
-            // and must not run unfiltered — tenancy is unprovable → fail closed.
-            if ($this->queryAccessesNodes($cypherQuery)) {
-                return $this->failClosedOrBypass(
-                    $cypherQuery,
-                    '(unlabeled)',
-                    'unlabeled_entity'
-                );
+        // Out of the scopeable subset: a node-accessing query we cannot PROVE we can
+        // tenant-scope must never run unfiltered → fail closed (or bypass loudly).
+        if (!$plan->isScopeable) {
+            if ($plan->accessesNodes) {
+                return $this->failClosedOrBypass($cypherQuery, $primaryEntity, $plan->reason ?? 'not_scopeable');
             }
 
-            // Pure scalar / introspection (e.g. RETURN 1, CALL db.labels()) — no
-            // nodes to scope.
-            return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
+            // Scopeable-shape-irrelevant but node-free (e.g. an unusual scalar form);
+            // nothing tenant-sensitive to scope.
+            return $unfiltered;
         }
 
-        $alias = $this->extractEntityAlias($cypherQuery, $entity);
+        // In-subset but binds no tenant-sensitive node (e.g. RETURN 1, CALL db.labels()).
+        if (!$plan->hasSensitiveBindings()) {
+            return $unfiltered;
+        }
 
-        // Check for COUNT query with global permission
-        if ($this->isCountQuery($cypherQuery)) {
-            if ($securityService->shouldSkipTeamFilterForCount($user, $entity)) {
-                return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
+        // COUNT query with a single sensitive entity and global-count permission:
+        // preserve the legacy team-filter skip.
+        if ($this->isCountQuery($cypherQuery) && $primaryBinding !== null) {
+            $distinctLabels = $this->distinctSensitiveLabels($plan);
+            if (count($distinctLabels) === 1
+                && $securityService->shouldSkipTeamFilterForCount($user, $primaryBinding->label)) {
+                return $unfiltered;
             }
         }
 
-        // Get team filter. AiSecurityService already throws SecurityException
-        // for missing permissions / missing team_path under 'deny'.
-        $teamFiltered = $securityService->getTeamFilterWithParameters($user, $entity, $alias);
-        $teamFilter = $teamFiltered['filter'] ?? null;
-        $parameters = $teamFiltered['parameters'] ?? [];
+        // Resolve each binding's team filter from AiSecurityService EXACTLY ONCE
+        // (memoized by label|alias). The same resolution feeds BOTH the acceptance
+        // gate (which verifies the generator already emitted the scope) and the
+        // fallback injector (which splices it when the generator did not), so deny
+        // is enforced once and getTeamFilterWithParameters is not called twice per
+        // binding. UNCHANGED contract: it still throws SecurityException on deny and
+        // still returns the bound $ai_team_ids parameter.
+        $mergedParameters = [];
+        $anyFilter = false;
+        $resolvedCache = [];
 
-        if ($teamFilter) {
-            $injected = $this->injectTeamFilter($cypherQuery, $teamFilter);
+        $resolveFor = function (NodeBinding $binding) use ($securityService, $user, &$resolvedCache): array {
+            $key = $binding->label . '|' . $binding->alias;
+            if (!array_key_exists($key, $resolvedCache)) {
+                $resolvedCache[$key] = $securityService->getTeamFilterWithParameters($user, $binding->label, $binding->alias);
+            }
+            return $resolvedCache[$key];
+        };
 
-            if ($injected === null) {
-                // A sensitive entity needs filtering but the query shape can't be
-                // safely rewritten → never run it unfiltered. Fail closed/bypass.
-                return $this->failClosedOrBypass(
-                    $cypherQuery,
-                    $entity,
-                    'injection_not_applicable'
-                );
+        $filterFor = function (NodeBinding $binding) use ($resolveFor, &$mergedParameters, &$anyFilter): ?FilterClause {
+            $resolved = $resolveFor($binding);
+            $filter = $resolved['filter'] ?? null;
+
+            if (!$filter) {
+                // 'bypass' for a missing team_path on THIS binding: no filter. Other
+                // bindings are still scoped.
+                return null;
             }
 
-            return ['query' => $injected, 'filter_applied' => true, 'parameters' => $parameters];
+            $anyFilter = true;
+            $mergedParameters = array_merge($mergedParameters, $resolved['parameters'] ?? []);
+
+            $kind = preg_match('/\bMATCH\b/i', $filter) ? 'match' : 'where';
+
+            return new FilterClause($kind, $filter, $resolved['parameters'] ?? []);
+        };
+
+        // The gate's REQUIRED per-binding rule: the team-ID-free resolver TEMPLATE
+        // (single source of truth) for any binding that AiSecurityService says needs
+        // a filter. A binding whose resolved filter is null (bypass / missing
+        // team_path) needs no predicate → return null, and the gate treats it as
+        // satisfied. When the security service says a binding IS filtered but the
+        // resolver cannot produce a verifiable template ('unverifiable'), the gate
+        // refuses to accept it as-is → falls back to the injector (which applies the
+        // resolved filter directly).
+        $teamPathResolver = $this->teamPathResolver();
+        $ruleFor = function (NodeBinding $binding) use ($resolveFor, $teamPathResolver): ?array {
+            $resolved = $resolveFor($binding);
+            if (empty($resolved['filter'])) {
+                return null; // not tenant-scoped for this binding
+            }
+
+            $rule = $teamPathResolver->ruleFor($binding->label, $binding->alias);
+
+            // Filtered, but no verifiable template (the resolver and the security
+            // service disagree, or the path is non-templatable here): never accept
+            // as self-scoped — let the injector apply the resolved filter instead.
+            return $rule ?? ['type' => 'unverifiable', 'kind' => 'where', 'alias' => $binding->alias, 'column' => null, 'filter' => $resolved['filter']];
+        };
+
+        // PRIMARY — generator-emits-scope: accept the query AS-IS when every
+        // sensitive binding already carries its resolver-correct $ai_team_ids
+        // predicate on its own live alias, the query is structurally valid (incl.
+        // UNION-column consistency), and the per-binding security resolution
+        // (deny/params) succeeds. The gate is the positive precondition the
+        // invariant test re-verifies on output; an accepted query satisfies it by
+        // construction.
+        if ($this->scopeAcceptanceGate()->isFullySelfScoped($cypherQuery, $plan, $ruleFor)
+            && $this->structuralValidator()->isValid($cypherQuery)) {
+            // Run $filterFor over every binding so deny is enforced and the bound
+            // $ai_team_ids parameters are collected for the accepted query.
+            foreach ($plan->scopes as $scope) {
+                foreach ($scope->sensitiveBindings as $binding) {
+                    $filterFor($binding);
+                }
+            }
+
+            if (!$anyFilter) {
+                // Every binding resolved to "no filter" (bypass / missing team_path).
+                return $unfiltered;
+            }
+
+            return ['query' => $cypherQuery, 'filter_applied' => true, 'parameters' => $mergedParameters];
         }
 
-        return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
+        // FALLBACK — at least one binding was not self-scoped (omission, wrong alias,
+        // wrong path-kind, inlined ids, mismatched UNION columns). Splice the
+        // missing scope. inject() scopes every still-unscoped binding AND self-
+        // validates (returns null on any malformed rewrite, incl. UNION-column).
+        $injected = $this->securityFilterInjector()->inject($cypherQuery, $plan, $filterFor);
+
+        if ($injected === null) {
+            // The plan was scopeable but a binding could not be safely rewritten, or
+            // the rewrite was not structurally valid (defence-in-depth gate). Never
+            // run it unfiltered AND never ship a malformed query to Neo4j. Degrade
+            // gracefully to an empty result so the caller answers "no data" instead
+            // of crashing on a raw SyntaxError. This is a structural safety stop, not
+            // an authz denial, so it is unconditional (not subject to 'bypass').
+            return $this->safeStopNoResult($primaryEntity, 'gate_and_injector_failed');
+        }
+
+        if (!$anyFilter) {
+            // Every binding resolved to "no filter" (bypass / missing team_path) —
+            // legacy behaviour ran the query unfiltered.
+            return $unfiltered;
+        }
+
+        return ['query' => $injected, 'filter_applied' => true, 'parameters' => $mergedParameters];
+    }
+
+    /** Distinct tenant-sensitive labels present across all scopes. */
+    private function distinctSensitiveLabels(\Condoedge\Ai\Services\Security\Scope\ScopePlan $plan): array
+    {
+        $labels = [];
+        foreach ($plan->scopes as $scope) {
+            foreach ($scope->sensitiveBindings as $binding) {
+                $labels[$binding->label] = true;
+            }
+        }
+        return array_keys($labels);
+    }
+
+    private function scopeAnalyzer(): CypherScopeAnalyzer
+    {
+        return app(CypherScopeAnalyzer::class);
+    }
+
+    private function securityFilterInjector(): SecurityFilterInjector
+    {
+        return app(SecurityFilterInjector::class);
+    }
+
+    private function scopeAcceptanceGate(): ScopeAcceptanceGate
+    {
+        return app(ScopeAcceptanceGate::class);
+    }
+
+    private function structuralValidator(): CypherStructuralValidator
+    {
+        return app(CypherStructuralValidator::class);
+    }
+
+    private function teamPathResolver(): TeamPathResolver
+    {
+        return app(TeamPathResolver::class);
+    }
+
+    private function sensitiveLabelCoverageGate(): SensitiveLabelCoverageGate
+    {
+        return app(SensitiveLabelCoverageGate::class);
     }
 
     /**
@@ -744,6 +918,26 @@ class QueryExecutor implements QueryExecutorInterface
         );
 
         return ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
+    }
+
+    /**
+     * Graceful fail-closed for a STRUCTURAL stop: a scopeable, permitted query whose
+     * tenant-scoped rewrite could not be produced safely / validly. Unlike a permission
+     * denial this must neither throw (it would surface as a crash) nor run unfiltered
+     * (it would leak). It signals execute() to short-circuit to an empty success
+     * result so the user gets an honest "no data", and a malformed query never reaches
+     * Neo4j.
+     *
+     * @return array{query: string, filter_applied: bool, parameters: array, safe_stop: bool}
+     */
+    private function safeStopNoResult(string $entity, string $reason): array
+    {
+        Log::channel(config('ai.security.log_channel', 'ai-security'))->warning(
+            'AI query stopped: tenant-scoped rewrite could not be produced safely; returning no result',
+            ['entity' => $entity, 'reason' => $reason, 'action' => 'safe_stop']
+        );
+
+        return ['query' => '', 'filter_applied' => false, 'parameters' => [], 'safe_stop' => true];
     }
 
     /**
@@ -800,103 +994,54 @@ class QueryExecutor implements QueryExecutorInterface
     }
 
     /**
-     * Inject the team filter into a Cypher query, scoping the PRIMARY MATCH of
-     * every UNION branch.
+     * LEGACY SHIM — retained for direct-call unit tests only.
      *
-     * The filter MUST land on the primary MATCH — i.e. before the first
-     * `WITH`/`RETURN`/`ORDER` that follows it — because a `WITH` may project the
-     * entity variable away (`MATCH (i:Invoice) WITH i.amount AS amount ...`),
-     * after which the predicate could no longer reference it. Injecting at the
-     * *last* WHERE (the previous behaviour) silently mis-scoped WITH-chains and
-     * UNION branches.
-     *
-     * For `UNION` / `UNION ALL` queries, each branch is an independent query
-     * with its own scope, so the filter is applied to every branch.
+     * Delegates to the structural {@see CypherScopeAnalyzer} + {@see
+     * SecurityFilterInjector} that the real execution path uses. To preserve the
+     * legacy single-filter-string contract (one predicate string, applied to the
+     * PRIMARY binding of each part/UNION branch), it scopes only the FIRST
+     * sensitive binding of each scope with the supplied $filter and returns null
+     * for any shape the analyzer cannot prove scopeable.
      *
      * @return string|null The rewritten query, or null if the shape cannot be
      *                     safely filtered (caller then fails closed).
      */
     private function injectTeamFilter(string $query, string $filter): ?string
     {
-        // Split on UNION / UNION ALL, keeping the separators so we can rebuild.
-        $parts = preg_split(
-            '/(\bUNION\s+ALL\b|\bUNION\b)/i',
-            $query,
-            -1,
-            PREG_SPLIT_DELIM_CAPTURE
-        );
+        $plan = $this->scopeAnalyzer()->analyze($query);
 
-        $rebuilt = '';
-        foreach ($parts as $part) {
-            // Separators (UNION / UNION ALL) pass through untouched.
-            if (preg_match('/^\s*UNION(\s+ALL)?\s*$/i', $part)) {
-                $rebuilt .= $part;
-                continue;
-            }
-
-            // Empty fragments (can occur at split boundaries) pass through.
-            if (trim($part) === '') {
-                $rebuilt .= $part;
-                continue;
-            }
-
-            $branch = $this->injectTeamFilterIntoBranch($part, $filter);
-            if ($branch === null) {
-                return null; // a branch could not be filtered → fail closed
-            }
-            $rebuilt .= $branch;
-        }
-
-        return $rebuilt;
-    }
-
-    /**
-     * Inject the team filter into a single (UNION-free) query branch, on its
-     * PRIMARY MATCH (before the first WITH/RETURN/ORDER anchor).
-     *
-     * @return string|null Rewritten branch, or null if no safe anchor exists.
-     */
-    private function injectTeamFilterIntoBranch(string $branch, string $filter): ?string
-    {
-        // Locate the first clause that closes the primary MATCH scope. The team
-        // predicate must be inserted BEFORE it so the entity variable is still
-        // bound. WITH is included so we filter before the variable is projected.
-        if (!preg_match('/\b(WITH|RETURN|ORDER)\b/i', $branch, $m, PREG_OFFSET_CAPTURE)) {
-            // No RETURN/WITH/ORDER anchor in this branch — cannot safely splice.
+        if (!$plan->isScopeable || !$plan->hasSensitiveBindings()) {
             return null;
         }
 
-        $anchorPos = $m[0][1];
-        $head = substr($branch, 0, $anchorPos); // up to (not incl.) the anchor
-        $tail = substr($branch, $anchorPos);    // the anchor + rest
-
-        // MATCH-based filter (relationship / parent traversal): splice the whole
-        // MATCH ... WHERE block in before the anchor.
-        if (preg_match('/\bMATCH\b/i', $filter)) {
-            return rtrim($head) . ' ' . trim($filter) . ' ' . $tail;
-        }
-
-        // Simple WHERE filter (direct column).
-        $condition = preg_replace('/^\s*WHERE\s+/i', '', trim($filter));
-
-        // If the primary-MATCH scope (the head) already has its own WHERE, merge
-        // with AND; otherwise add a new WHERE. We only consider a WHERE that
-        // lives in the head (before the anchor) — a WHERE after RETURN belongs to
-        // a different scope.
-        if (preg_match('/\bWHERE\b/i', $head, $wm, PREG_OFFSET_CAPTURE)) {
-            $beforeWhere = substr($head, 0, $wm[0][1]);
-            $existing = trim(substr($head, $wm[0][1] + strlen($wm[0][0])));
-
-            // A top-level OR in the existing predicate must be grouped before the
-            // team filter is AND-appended: `a OR b AND team` binds as
-            // `a OR (b AND team)`, leaving the `a` branch unscoped (cross-tenant leak).
-            if (preg_match('/\bOR\b/i', $existing)) {
-                return rtrim($beforeWhere) . ' WHERE (' . $existing . ') AND ' . $condition . ' ' . $tail;
+        // Legacy behaviour: one filter string applied to the primary binding of
+        // each scope. Reduce every scope to its first sensitive binding.
+        $reducedScopes = [];
+        foreach ($plan->scopes as $scope) {
+            if (empty($scope->sensitiveBindings)) {
+                $reducedScopes[] = $scope;
+                continue;
             }
-
-            return rtrim($head) . ' AND ' . $condition . ' ' . $tail;
+            $reducedScopes[] = new Scope(
+                sensitiveBindings: [$scope->sensitiveBindings[0]],
+                anchorOffset: $scope->anchorOffset,
+                whereOffset: $scope->whereOffset,
+                whereEndOffset: $scope->whereEndOffset,
+                whereHasTopLevelOr: $scope->whereHasTopLevelOr
+            );
         }
 
-        return rtrim($head) . ' WHERE ' . $condition . ' ' . $tail;
+        $reducedPlan = new ScopePlan(
+            $plan->isScopeable,
+            $reducedScopes,
+            $plan->literalSpans,
+            $plan->accessesNodes,
+            $plan->reason
+        );
+
+        $kind = preg_match('/\bMATCH\b/i', $filter) ? 'match' : 'where';
+        $filterFor = static fn(NodeBinding $b): FilterClause => new FilterClause($kind, $filter, []);
+
+        return $this->securityFilterInjector()->inject($query, $reducedPlan, $filterFor);
     }
 }

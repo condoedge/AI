@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Services\Context;
 
+use Condoedge\Ai\Contracts\ChunkStoreInterface;
 use Condoedge\Ai\Contracts\FileAccessResolverInterface;
 use Condoedge\Ai\DTOs\FileChunk;
 use Condoedge\Ai\Services\Context\FileContextProvider;
 use Condoedge\Ai\Services\Context\FilenameExtractor;
 use Condoedge\Ai\Services\FileSearchService;
+use Condoedge\Ai\Services\Retrieval\RerankerInterface;
 use Mockery;
 use Mockery\MockInterface;
 use Orchestra\Testbench\TestCase;
@@ -148,6 +150,34 @@ class FileContextProviderTest extends TestCase
         $this->assertArrayHasKey('relevance', $result[0]);
         $this->assertArrayHasKey('chunk_index', $result[0]);
         $this->assertArrayHasKey('source', $result[0]);
+    }
+
+    /** @test */
+    public function get_file_context_min_score_override_admits_borderline_documents(): void
+    {
+        // The recall safety net rescues a relevant document that lands just under the
+        // confident relevance threshold by re-querying with a lower min_score. This
+        // verifies getFileContext forwards that override (the mechanism the net relies
+        // on): the default confident threshold (0.7 here) cuts a 0.36 document, while an
+        // explicit lower floor admits it so the answer can ground on the real source.
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $chunk = $this->createMockChunk(7, 'declaration.pdf', 'Rules about modifying load-bearing walls in the co-ownership.');
+
+        $this->searchService->shouldReceive('searchByContent')->andReturn([
+            ['file_id' => 7, 'score' => 0.36, 'chunk_count' => 1, 'best_chunk' => $chunk, 'chunks' => [$chunk]],
+        ]);
+        $this->accessResolver->shouldReceive('filterAccessibleFileIds')->andReturn([7]);
+
+        // Confident threshold (0.7) cuts the borderline 0.36 document -> nothing to ground on.
+        $default = $this->provider->getFileContext('Can I tear down a wall?', $user);
+        $this->assertSame(0, $default['file_count']);
+
+        // The recall override (lower floor) admits it -> the real document grounds the answer.
+        $rescued = $this->provider->getFileContext('Can I tear down a wall?', $user, ['min_score' => 0.3]);
+        $this->assertSame(1, $rescued['file_count']);
+        $this->assertSame(7, $rescued['relevant_files'][0]['file_id']);
     }
 
     /** @test */
@@ -1728,5 +1758,563 @@ class FileContextProviderTest extends TestCase
         );
 
         $this->assertCount(1, $result);
+    }
+
+    // =========================================================================
+    // Reranker single-path tests (D1)
+    // =========================================================================
+
+    /** @test */
+    public function it_always_invokes_the_injected_reranker(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $chunkA = new FileChunk(
+            fileId: 1, fileName: 'a.pdf', content: 'Alpha content',
+            embedding: [], chunkIndex: 0, totalChunks: 1,
+            startPosition: 0, endPosition: 13, metadata: []
+        );
+        $chunkB = new FileChunk(
+            fileId: 2, fileName: 'b.pdf', content: 'Beta content',
+            embedding: [], chunkIndex: 0, totalChunks: 1,
+            startPosition: 0, endPosition: 12, metadata: []
+        );
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([
+                ['file_id' => 1, 'score' => 0.95, 'chunk_count' => 1, 'best_chunk' => $chunkA, 'chunks' => [$chunkA]],
+                ['file_id' => 2, 'score' => 0.85, 'chunk_count' => 1, 'best_chunk' => $chunkB, 'chunks' => [$chunkB]],
+            ]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1, 2]);
+
+        // Spy reranker: must be called exactly once with the query and the full
+        // candidate pool — even though no rerank_enabled config is set. It selects
+        // ONLY the lower-scored candidate (file 2), proving the reranker's selection
+        // (not the raw cosine order) is what flows downstream — i.e. it is always on
+        // the path, not gated off.
+        $reranker = Mockery::mock(RerankerInterface::class);
+        $reranker->shouldReceive('rerank')
+            ->once()
+            ->with('search query', Mockery::type('array'), Mockery::type('callable'), 5)
+            ->andReturnUsing(function ($query, $candidates, $textOf, $limit) {
+                $candidates = array_values($candidates);
+                // Keep only the file_id === 2 candidate.
+                $kept = array_values(array_filter($candidates, fn($c) => $c['file_id'] === 2));
+                return array_slice($kept, 0, $limit);
+            });
+
+        $provider = new FileContextProvider(
+            $this->searchService,
+            $this->accessResolver,
+            $this->filenameExtractor,
+            null,
+            $reranker
+        );
+
+        $result = $provider->searchRelevantFiles('search query', $user);
+
+        // The reranker dropped the top-scored file 1 and kept only file 2; that
+        // selection survives to the output, proving rerank() is always applied.
+        $this->assertCount(1, $result);
+        $this->assertEquals(2, $result[0]['file_id']);
+    }
+
+    // =========================================================================
+    // File enumeration tests (capability A — Q4)
+    // =========================================================================
+
+    /** @test */
+    public function it_enumerates_accessible_files_as_references(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $this->accessResolver
+            ->shouldReceive('enumerateAccessibleFiles')
+            ->once()
+            ->with($user, Mockery::any())
+            ->andReturn([
+                ['file_id' => 10, 'name' => 'lease.pdf', 'type' => 'pdf'],
+                ['file_id' => 11, 'name' => 'rules.docx', 'type' => 'docx'],
+            ]);
+
+        $result = $this->provider->enumerateAccessibleFiles($user);
+
+        $this->assertCount(2, $result);
+        $this->assertEquals(10, $result[0]['file_id']);
+        $this->assertEquals('lease.pdf', $result[0]['filename']);
+        $this->assertEquals('pdf', $result[0]['type']);
+        $this->assertEquals('database', $result[0]['source']);
+        $this->assertEquals('enumeration', $result[0]['match_type']);
+    }
+
+    /** @test */
+    public function enumeration_returns_only_what_the_resolver_allows(): void
+    {
+        // The provider must never widen the resolver's ACL-filtered set: it lists
+        // exactly the descriptors the resolver returns and nothing else.
+        $user = new \stdClass();
+        $user->id = 7;
+
+        $this->accessResolver
+            ->shouldReceive('enumerateAccessibleFiles')
+            ->once()
+            ->andReturn([
+                ['file_id' => 42, 'name' => 'allowed.pdf', 'type' => 'pdf'],
+            ]);
+
+        $result = $this->provider->enumerateAccessibleFiles($user);
+
+        $this->assertCount(1, $result);
+        $this->assertEquals(42, $result[0]['file_id']);
+    }
+
+    /** @test */
+    public function enumeration_forwards_the_configured_max_files_limit(): void
+    {
+        config(['ai.file_context.enumeration.max_files' => 3]);
+
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $this->accessResolver
+            ->shouldReceive('enumerateAccessibleFiles')
+            ->once()
+            ->with($user, 3)
+            ->andReturn([]);
+
+        $result = $this->provider->enumerateAccessibleFiles($user);
+
+        $this->assertSame([], $result);
+    }
+
+    /** @test */
+    public function enumeration_requires_a_user_when_security_enabled(): void
+    {
+        $this->accessResolver
+            ->shouldReceive('shouldEnforceSecurity')
+            ->andReturn(true);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('User required for file context retrieval');
+
+        $this->provider->enumerateAccessibleFiles(null);
+    }
+
+    /** @test */
+    public function enumeration_context_reports_counts_and_flags(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $this->accessResolver
+            ->shouldReceive('enumerateAccessibleFiles')
+            ->once()
+            ->andReturn([
+                ['file_id' => 10, 'name' => 'a.pdf', 'type' => 'pdf'],
+                ['file_id' => 11, 'name' => 'b.pdf', 'type' => 'pdf'],
+            ]);
+
+        $context = $this->provider->getFileEnumerationContext($user);
+
+        $this->assertTrue($context['enumeration']);
+        $this->assertEquals(2, $context['file_count']);
+        $this->assertCount(2, $context['relevant_files']);
+        $this->assertTrue($context['has_database']);
+        $this->assertFalse($context['has_physical']);
+    }
+
+    // =========================================================================
+    // Grounding-quality snippet assembly tests (capability B — Q6)
+    // =========================================================================
+
+    /** @test */
+    public function it_stitches_top_chunks_into_a_richer_snippet(): void
+    {
+        config(['ai.file_context.snippet_chunks' => 3]);
+        config(['ai.file_context.snippet_length' => 2000]);
+
+        $user = new \stdClass();
+        $user->id = 1;
+
+        // Three chunks of the same file (plain FileChunk objects, the shape
+        // FileSearchService returns in chunks[]). The clause the model must quote
+        // spans chunk 0 and chunk 1; the single-best-chunk path would show only one.
+        $c0 = $this->fileChunk(1, 'doc.pdf', 'The owner shall not modify', 0);
+        $c1 = $this->fileChunk(1, 'doc.pdf', 'any structural common portion', 1);
+        $c2 = $this->fileChunk(1, 'doc.pdf', 'unrelated trailing text', 2);
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 0.95,
+                    'chunk_count' => 3,
+                    'best_chunk' => $c1,
+                    'chunks' => [$c0, $c1, $c2],
+                ],
+            ]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $result = $this->provider->searchRelevantFiles('Can I modify a common portion?', $user);
+
+        $this->assertCount(1, $result);
+        // Both top chunks present, in reading order (chunk 0 before chunk 1).
+        $snippet = $result[0]['snippet'];
+        $this->assertStringContainsString('The owner shall not modify', $snippet);
+        $this->assertStringContainsString('any structural common portion', $snippet);
+        $pos0 = strpos($snippet, 'The owner shall not modify');
+        $pos1 = strpos($snippet, 'any structural common portion');
+        $this->assertLessThan($pos1, $pos0, 'Chunks should be stitched in reading order');
+    }
+
+    /** @test */
+    public function snippet_chunks_one_preserves_single_chunk_behaviour(): void
+    {
+        config(['ai.file_context.snippet_chunks' => 1]);
+        config(['ai.file_context.snippet_length' => 2000]);
+
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $c0 = $this->fileChunk(1, 'doc.pdf', 'Only the best chunk content', 0);
+        $c1 = $this->fileChunk(1, 'doc.pdf', 'Secondary chunk content', 1);
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 0.9,
+                    'chunk_count' => 2,
+                    'best_chunk' => $c0,
+                    'chunks' => [$c0, $c1],
+                ],
+            ]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $result = $this->provider->searchRelevantFiles('query', $user);
+
+        $this->assertCount(1, $result);
+        $this->assertEquals('Only the best chunk content', $result[0]['snippet']);
+        $this->assertStringNotContainsString('Secondary chunk content', $result[0]['snippet']);
+    }
+
+    /** @test */
+    public function snippet_centers_on_the_best_chunk_not_the_lowest_index_cover(): void
+    {
+        // Regression: a document whose operative clause lives at a HIGH chunk index
+        // (e.g. art. 19 deep in a declaration) must not be crowded out by its
+        // lowest-index cover/preamble chunks. The snippet must LEAD with the best
+        // chunk and fill from its reading-order NEIGHBORS, not from index 0.
+        config(['ai.file_context.snippet_chunks' => 3]);
+        // Budget large enough for the best chunk + 2 neighbors, but far too small
+        // to ALSO carry the three low-index cover chunks ahead of them. If the
+        // assembler led with index 0, the operative clause would be truncated off.
+        config(['ai.file_context.snippet_length' => 220]);
+        // The right document scores low under a cross-lingual probe; admit it.
+        config(['ai.file_context.min_relevance_score' => 0.4]);
+
+        $user = new \stdClass();
+        $user->id = 1;
+
+        // Cover/preamble chunks (low index) — long enough to blow the budget on
+        // their own if they led the snippet.
+        $cover0 = $this->fileChunk(1, 'decl.pdf', str_repeat('COVER PAGE NOTARY PREAMBLE. ', 6), 0);
+        $cover1 = $this->fileChunk(1, 'decl.pdf', str_repeat('TABLE OF CONTENTS SECTION. ', 6), 1);
+        $cover2 = $this->fileChunk(1, 'decl.pdf', str_repeat('DEFINITIONS AND RECITALS. ', 6), 2);
+
+        // The operative clause and its immediate neighbors (high index).
+        $before = $this->fileChunk(1, 'decl.pdf', 'NEIGHBOR-BEFORE-23', 23);
+        $best = $this->fileChunk(1, 'decl.pdf', 'OPERATIVE-ARTICLE-19-CLAUSE', 24);
+        $after = $this->fileChunk(1, 'decl.pdf', 'NEIGHBOR-AFTER-25', 25);
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 0.61,
+                    'chunk_count' => 6,
+                    'best_chunk' => $best,
+                    'chunks' => [$cover0, $cover1, $cover2, $before, $best, $after],
+                ],
+            ]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $result = $this->provider->searchRelevantFiles('travaux parties exclusives', $user);
+
+        $this->assertCount(1, $result);
+        $snippet = $result[0]['snippet'];
+
+        // The operative clause must be present (not truncated off by cover chunks).
+        $this->assertStringContainsString('OPERATIVE-ARTICLE-19-CLAUSE', $snippet);
+
+        // It must be CENTERED: filled from the best chunk's neighbors (23/25), not
+        // from the globally-lowest-index cover chunks (0/1/2).
+        $this->assertStringContainsString('NEIGHBOR-BEFORE-23', $snippet);
+        $this->assertStringContainsString('NEIGHBOR-AFTER-25', $snippet);
+        $this->assertStringNotContainsString('COVER PAGE NOTARY PREAMBLE', $snippet);
+        $this->assertStringNotContainsString('TABLE OF CONTENTS SECTION', $snippet);
+
+        // Selected chunks are sorted by reading order for a coherent read.
+        $posBefore = strpos($snippet, 'NEIGHBOR-BEFORE-23');
+        $posBest = strpos($snippet, 'OPERATIVE-ARTICLE-19-CLAUSE');
+        $posAfter = strpos($snippet, 'NEIGHBOR-AFTER-25');
+        $this->assertLessThan($posBest, $posBefore, 'Neighbor before should precede best in reading order');
+        $this->assertLessThan($posAfter, $posBest, 'Best should precede neighbor after in reading order');
+    }
+
+    /** @test */
+    public function snippet_centering_keeps_best_chunk_when_budget_fits_only_one(): void
+    {
+        // When the length budget can only fit the operative clause itself, the
+        // best chunk must still survive (it leads selection) rather than the cover.
+        config(['ai.file_context.snippet_chunks' => 3]);
+        config(['ai.file_context.snippet_length' => 40]);
+        config(['ai.file_context.min_relevance_score' => 0.4]);
+
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $cover0 = $this->fileChunk(1, 'decl.pdf', str_repeat('X', 200), 0);
+        $best = $this->fileChunk(1, 'decl.pdf', 'OPERATIVE-CLAUSE', 24);
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'score' => 0.61,
+                    'chunk_count' => 2,
+                    'best_chunk' => $best,
+                    'chunks' => [$cover0, $best],
+                ],
+            ]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $result = $this->provider->searchRelevantFiles('clause', $user);
+
+        $this->assertCount(1, $result);
+        // The operative clause leads the snippet, so it is the first thing the
+        // budget admits — it must not be truncated off by the cover chunk.
+        $this->assertStringContainsString('OPERATIVE-CLAUSE', $result[0]['snippet']);
+    }
+
+    // =========================================================================
+    // Context-window expansion tests (small-to-big / sentence-window)
+    // =========================================================================
+
+    /** @test */
+    public function window_indices_clamps_to_the_files_real_index_range(): void
+    {
+        // Pure windowing: from a best index and the file's available chunk indices,
+        // select [best-window .. best+window] intersected with what actually exists.
+        $method = new \ReflectionMethod(FileContextProvider::class, 'windowIndices');
+        $method->setAccessible(true);
+
+        $available = [0, 1, 2, 3, 4, 5];
+
+        // Mid-document hit, window 2: full symmetric window.
+        $this->assertSame([1, 2, 3, 4, 5], $method->invoke($this->provider, 3, 2, $available));
+
+        // Hit at the start: clamp the low side.
+        $this->assertSame([0, 1, 2], $method->invoke($this->provider, 0, 2, $available));
+
+        // Hit at the end: clamp the high side.
+        $this->assertSame([3, 4, 5], $method->invoke($this->provider, 5, 2, $available));
+
+        // window 0: only the best chunk itself.
+        $this->assertSame([3], $method->invoke($this->provider, 3, 0, $available));
+
+        // Single-chunk file: no-op, just the best index.
+        $this->assertSame([2], $method->invoke($this->provider, 2, 2, [2]));
+
+        // Sparse/gappy index set (only existing indices are returned).
+        $this->assertSame([10, 12], $method->invoke($this->provider, 11, 2, [10, 12, 20]));
+    }
+
+    /** @test */
+    public function it_expands_snippet_with_index_adjacent_neighbors_from_the_chunk_store(): void
+    {
+        config(['ai.file_context.context_window' => 2]);
+        config(['ai.file_context.snippet_chunks' => 5]);
+        config(['ai.file_context.snippet_length' => 4000]);
+        // The right document scores low under a cross-lingual probe; admit it.
+        config(['ai.file_context.min_relevance_score' => 0.4]);
+
+        $user = new \stdClass();
+        $user->id = 1;
+
+        // Only the operative clause (index 24) was independently retrieved by the
+        // vector search. Its true neighbors (23 and 25) were NOT returned.
+        $best = $this->fileChunk(1, 'decl.pdf', 'ARTICLE 19 travaux conservation immeuble', 24);
+
+        // The full file as the chunk store has it: neighbors 23 (prejudice clause)
+        // and 25 exist on disk even though search did not return them.
+        $allChunks = [
+            $this->fileChunk(1, 'decl.pdf', 'ARTICLE 18 preceding content', 22),
+            $this->fileChunk(1, 'decl.pdf', 'PREJUDICE compensation clause neighbor', 23),
+            $best,
+            $this->fileChunk(1, 'decl.pdf', 'ARTICLE 20 following content', 25),
+            $this->fileChunk(1, 'decl.pdf', 'ARTICLE 21 far content', 27),
+        ];
+
+        $chunkStore = Mockery::mock(ChunkStoreInterface::class);
+        $chunkStore->shouldReceive('getFileChunks')
+            ->once()
+            ->with(1, null)
+            ->andReturn($allChunks);
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'collection' => '__primary__',
+                    'score' => 0.61,
+                    'chunk_count' => 1,
+                    'best_chunk' => $best,
+                    'chunks' => [$best],
+                ],
+            ]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $provider = new FileContextProvider(
+            $this->searchService,
+            $this->accessResolver,
+            $this->filenameExtractor,
+            null,
+            null,
+            $chunkStore
+        );
+
+        $result = $provider->searchRelevantFiles('travaux parties exclusives', $user);
+
+        $this->assertCount(1, $result);
+        $snippet = $result[0]['snippet'];
+
+        // The operative clause is still present.
+        $this->assertStringContainsString('ARTICLE 19 travaux conservation immeuble', $snippet);
+
+        // ...AND its index-adjacent neighbors (never independently retrieved) were
+        // stitched in around it, so the model reads the full passage.
+        $this->assertStringContainsString('PREJUDICE compensation clause neighbor', $snippet);
+        $this->assertStringContainsString('ARTICLE 20 following content', $snippet);
+
+        // The far chunk (index 27, outside the +/-2 window) is NOT pulled in.
+        $this->assertStringNotContainsString('ARTICLE 21 far content', $snippet);
+
+        // Stitched in reading order: neighbor-before precedes best precedes neighbor-after.
+        $posBefore = strpos($snippet, 'PREJUDICE compensation clause neighbor');
+        $posBest = strpos($snippet, 'ARTICLE 19 travaux conservation immeuble');
+        $posAfter = strpos($snippet, 'ARTICLE 20 following content');
+        $this->assertLessThan($posBest, $posBefore);
+        $this->assertLessThan($posAfter, $posBest);
+    }
+
+    /** @test */
+    public function context_window_zero_is_a_no_op_and_never_calls_the_chunk_store(): void
+    {
+        config(['ai.file_context.context_window' => 0]);
+        config(['ai.file_context.snippet_chunks' => 5]);
+        config(['ai.file_context.snippet_length' => 4000]);
+        // The right document scores low under a cross-lingual probe; admit it.
+        config(['ai.file_context.min_relevance_score' => 0.4]);
+
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $best = $this->fileChunk(1, 'decl.pdf', 'ONLY-RETRIEVED-CHUNK', 24);
+
+        // With the window disabled the chunk store must never be touched.
+        $chunkStore = Mockery::mock(ChunkStoreInterface::class);
+        $chunkStore->shouldReceive('getFileChunks')->never();
+
+        $this->searchService
+            ->shouldReceive('searchByContent')
+            ->once()
+            ->andReturn([
+                [
+                    'file_id' => 1,
+                    'collection' => '__primary__',
+                    'score' => 0.61,
+                    'chunk_count' => 1,
+                    'best_chunk' => $best,
+                    'chunks' => [$best],
+                ],
+            ]);
+
+        $this->accessResolver
+            ->shouldReceive('filterAccessibleFileIds')
+            ->once()
+            ->andReturn([1]);
+
+        $provider = new FileContextProvider(
+            $this->searchService,
+            $this->accessResolver,
+            $this->filenameExtractor,
+            null,
+            null,
+            $chunkStore
+        );
+
+        $result = $provider->searchRelevantFiles('query', $user);
+
+        $this->assertCount(1, $result);
+        // Behaviour identical to today: only the retrieved chunk's content.
+        $this->assertSame('ONLY-RETRIEVED-CHUNK', $result[0]['snippet']);
+    }
+
+    /**
+     * Build a plain FileChunk, the shape FileSearchService returns inside a
+     * result's chunks[] (no per-chunk score; only the file's best_chunk is known).
+     */
+    private function fileChunk(int $fileId, string $name, string $content, int $index): FileChunk
+    {
+        return new FileChunk(
+            fileId: $fileId,
+            fileName: $name,
+            content: $content,
+            embedding: [],
+            chunkIndex: $index,
+            totalChunks: 3,
+            startPosition: 0,
+            endPosition: mb_strlen($content),
+            metadata: []
+        );
     }
 }

@@ -13,12 +13,10 @@ use Illuminate\Support\Facades\DB;
 /**
  * Regenerate the assistant answer for an existing user message.
  *
- * Owns the single home of the trailing-message truncation rule that was duplicated across
- * RegenerateMessageService.php:47-49 and EditMessageModal.php: delete every message after the
- * target user message (by id for reliable ordering), then reuse AskQuestionUseCase's shared
- * turn flow with persistUserMessage=false so the user message is not re-stored.
+ * Owns the single home of the trailing-message truncation rule: delete every message after
+ * the target user message (by id for reliable ordering), then reuse AskQuestionUseCase's
+ * shared turn flow with persistUserMessage=false so the user message is not re-stored.
  *
- * Absorbs RegenerateMessageService's logic (the precondition + truncate + delegate).
  * Concrete, container-autowired (not bound, not interfaced) per the Sisc UseCase convention.
  */
 class RegenerateAnswerUseCase
@@ -72,8 +70,7 @@ class RegenerateAnswerUseCase
     /**
      * Delete every message after the target user message.
      *
-     * Uses id (not created_at) for reliable ordering — the one home of the rule formerly
-     * copy-pasted in RegenerateMessageService.php:47-49 and EditMessageModal.php:151-153/186-188.
+     * Uses id (not created_at) for reliable ordering.
      */
     private function truncateTrailingMessages(AiConversation $conversation, AiMessage $userMessage): void
     {

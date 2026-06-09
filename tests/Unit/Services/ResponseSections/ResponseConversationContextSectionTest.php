@@ -4,30 +4,40 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection;
 use PHPUnit\Framework\TestCase;
 
 class ResponseConversationContextSectionTest extends TestCase
 {
+    /**
+     * Build a PipelineContext carrying the given conversation context payload.
+     */
+    private function contextWith(array $conversationContext): PipelineContext
+    {
+        $context = new PipelineContext();
+        $context->conversationContext = $conversationContext;
+
+        return $context;
+    }
+
     /** @test */
     public function it_includes_file_download_urls_in_prompt(): void
     {
         $section = new ResponseConversationContextSection();
 
-        $context = [
-            'conversation_context' => [
-                'last_referenced_files' => [
-                    [
-                        'ref' => 1,
-                        'id' => 123,
-                        'name' => 'report.pdf',
-                        'snippet' => 'Quarterly sales report...',
-                        'download_url' => '/files/123/download',
-                        'can_download' => true,
-                    ],
+        $context = $this->contextWith([
+            'last_referenced_files' => [
+                [
+                    'ref' => 1,
+                    'id' => 123,
+                    'name' => 'report.pdf',
+                    'snippet' => 'Quarterly sales report...',
+                    'download_url' => '/files/123/download',
+                    'can_download' => true,
                 ],
             ],
-        ];
+        ]);
 
         $result = $section->format($context, []);
 
@@ -40,20 +50,18 @@ class ResponseConversationContextSectionTest extends TestCase
     {
         $section = new ResponseConversationContextSection();
 
-        $context = [
-            'conversation_context' => [
-                'last_referenced_files' => [
-                    [
-                        'ref' => 1,
-                        'id' => 456,
-                        'name' => 'restricted.pdf',
-                        'snippet' => 'Restricted content...',
-                        'download_url' => '/files/456/download',
-                        'can_download' => false,
-                    ],
+        $context = $this->contextWith([
+            'last_referenced_files' => [
+                [
+                    'ref' => 1,
+                    'id' => 456,
+                    'name' => 'restricted.pdf',
+                    'snippet' => 'Restricted content...',
+                    'download_url' => '/files/456/download',
+                    'can_download' => false,
                 ],
             ],
-        ];
+        ]);
 
         $result = $section->format($context, []);
 
@@ -66,20 +74,18 @@ class ResponseConversationContextSectionTest extends TestCase
     {
         $section = new ResponseConversationContextSection();
 
-        $context = [
-            'conversation_context' => [
-                'last_referenced_files' => [
-                    [
-                        'ref' => 1,
-                        'id' => 789,
-                        'name' => 'legacy.pdf',
-                        'snippet' => 'Legacy content...',
-                        'can_download' => true,
-                        // No download_url provided
-                    ],
+        $context = $this->contextWith([
+            'last_referenced_files' => [
+                [
+                    'ref' => 1,
+                    'id' => 789,
+                    'name' => 'legacy.pdf',
+                    'snippet' => 'Legacy content...',
+                    'can_download' => true,
+                    // No download_url provided
                 ],
             ],
-        ];
+        ]);
 
         $result = $section->format($context, []);
 
@@ -91,13 +97,11 @@ class ResponseConversationContextSectionTest extends TestCase
     {
         $section = new ResponseConversationContextSection();
 
-        $context = [
-            'conversation_context' => [
-                'last_referenced_files' => [
-                    ['name' => 'doc.pdf', 'snippet' => 'Content here'],
-                ],
+        $context = $this->contextWith([
+            'last_referenced_files' => [
+                ['name' => 'doc.pdf', 'snippet' => 'Content here'],
             ],
-        ];
+        ]);
 
         $this->assertTrue($section->shouldInclude($context, []));
     }
@@ -106,22 +110,20 @@ class ResponseConversationContextSectionTest extends TestCase
     {
         $section = new ResponseConversationContextSection();
 
-        $this->assertFalse($section->shouldInclude([], []));
-        $this->assertFalse($section->shouldInclude(['conversation_context' => []], []));
+        $this->assertFalse($section->shouldInclude(new PipelineContext(), []));
+        $this->assertFalse($section->shouldInclude($this->contextWith([]), []));
     }
 
     public function test_format_includes_file_content_with_ref_numbers(): void
     {
         $section = new ResponseConversationContextSection();
 
-        $context = [
-            'conversation_context' => [
-                'last_referenced_files' => [
-                    ['name' => 'policy.pdf', 'id' => 1, 'snippet' => 'Policy content...'],
-                    ['name' => 'guide.md', 'id' => 2, 'snippet' => 'Guide content...'],
-                ],
+        $context = $this->contextWith([
+            'last_referenced_files' => [
+                ['name' => 'policy.pdf', 'id' => 1, 'snippet' => 'Policy content...'],
+                ['name' => 'guide.md', 'id' => 2, 'snippet' => 'Guide content...'],
             ],
-        ];
+        ]);
 
         $result = $section->format($context, []);
 
@@ -149,14 +151,12 @@ class ResponseConversationContextSectionTest extends TestCase
     {
         $section = new ResponseConversationContextSection();
 
-        $context = [
-            'conversation_context' => [
-                'last_result_sample' => [
-                    ['id' => 1, 'name' => 'Item 1'],
-                    ['id' => 2, 'name' => 'Item 2'],
-                ],
+        $context = $this->contextWith([
+            'last_result_sample' => [
+                ['id' => 1, 'name' => 'Item 1'],
+                ['id' => 2, 'name' => 'Item 2'],
             ],
-        ];
+        ]);
 
         $result = $section->format($context, []);
 
@@ -168,12 +168,10 @@ class ResponseConversationContextSectionTest extends TestCase
     {
         $section = new ResponseConversationContextSection();
 
-        $context = [
-            'conversation_context' => [
-                'focused_entity' => 'Project XYZ',
-                'focused_entity_filter' => 'project_id = 123',
-            ],
-        ];
+        $context = $this->contextWith([
+            'focused_entity' => 'Project XYZ',
+            'focused_entity_filter' => 'project_id = 123',
+        ]);
 
         $result = $section->format($context, []);
 

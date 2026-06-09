@@ -285,20 +285,26 @@ Typical index sizes:
 ### Check Matching Results
 
 ```php
-use Condoedge\Ai\Services\SemanticMatcher;
+use Condoedge\Ai\Services\ScopeSemanticMatcher;
+use Condoedge\Ai\Services\SemanticContextSelector;
 
-$matcher = app(SemanticMatcher::class);
+$entityConfigs = config('ai.entities');
 
-// Check entity detection
-$entities = $matcher->detectEntities("Show all clients");
-// Returns: [['entity' => 'Customer', 'score' => 0.92, 'matched_text' => 'clients']]
+// Check entity/relationship/scope selection
+$selector = app(SemanticContextSelector::class);
+$result = $selector->selectRelevantContext('Show all clients', $entityConfigs);
+// $result is a SemanticSelectionResult:
+//   $result->entities       — array<string, SelectedEntity> keyed by entity name,
+//                             each with ->score and ->matchedText
+//   $result->relationships  — array<string, SelectedRelationship>
+//   $result->scopes         — array<string, SelectedScope>
+//   $result->selectionMethod — 'semantic' or 'keyword' (keyword = index unavailable)
 
-// Check scope detection
-$scopes = $matcher->detectScopes("active premium customers");
-// Returns: [
-//   ['scope' => 'active', 'score' => 0.89],
-//   ['scope' => 'premium', 'score' => 0.85]
-// ]
+// Check scope detection on its own
+$scopeMatcher = app(ScopeSemanticMatcher::class);
+$scopes = $scopeMatcher->findMatchingScopes('active premium customers', $entityConfigs);
+// Returns matched scopes keyed by scope, each with a 'match_score' (0-1),
+// 'entity', 'scope' and 'match_type'.
 ```
 
 ### View Index Contents

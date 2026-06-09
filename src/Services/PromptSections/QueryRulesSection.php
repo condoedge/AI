@@ -78,7 +78,6 @@ class QueryRulesSection extends BasePromptSection
             $output .= $this->formatReadOnlyConstraint();
         }
 
-        // Add custom rules
         $output .= $this->formatCustomRules();
 
         return $output;
@@ -87,10 +86,10 @@ class QueryRulesSection extends BasePromptSection
     private function formatSchemaCompliance(): string
     {
         return "1. SCHEMA COMPLIANCE:\n" .
-               "   - Use only labels and relationships from the schema above\n" .
-               "   - Use only properties that exist in the schema\n" .
+               "   - Use only labels and relationships from the GRAPH SCHEMA block\n" .
+               "   - Use only properties that exist in the GRAPH SCHEMA block\n" .
                "   - CRITICAL: Use the EXACT relationship directions shown (arrows matter!)\n" .
-               "   - CRITICAL: Use the EXACT data formats from example entities (strings vs dates)\n\n";
+               "   - CRITICAL: Use the EXACT data formats from the EXAMPLE ENTITIES block (strings vs dates)\n\n";
     }
 
     private function formatDataTypeRules(): string
@@ -99,7 +98,7 @@ class QueryRulesSection extends BasePromptSection
                "   - Dates stored as STRINGS (e.g., '2024-01-15'): compare as strings using < > = operators\n" .
                "   - For relative date comparisons (today, now, current), use toString(date()) — this returns today's date as a string\n" .
                "   - NEVER hardcode specific dates — use toString(date()) for 'today', 'current', 'upcoming', 'past', etc.\n" .
-               "   - EXCEPTION: If a DETECTED BUSINESS CONCEPT provides a CYPHER PATTERN, use that pattern EXACTLY as written\n\n";
+               "   - EXCEPTION: If the DETECTED BUSINESS CONCEPTS block provides a CYPHER PATTERN, use that pattern EXACTLY as written\n\n";
     }
 
     private function formatRelationshipRules(): string
@@ -114,9 +113,9 @@ class QueryRulesSection extends BasePromptSection
     private function formatBusinessRules(): string
     {
         return "4. BUSINESS RULES:\n" .
-               "   - CRITICAL: If a DETECTED BUSINESS CONCEPT above has a CYPHER PATTERN, you MUST use it in your WHERE clause\n" .
-               "   - Check the EXAMPLE ENTITIES to determine the data type of status/role/type fields — some are integers, some are strings\n" .
-               "   - Check the DETECTED ENTITIES section for enum value mappings before filtering on status/role/type fields\n" .
+               "   - CRITICAL: If the DETECTED BUSINESS CONCEPTS block has a CYPHER PATTERN, you MUST use it in your WHERE clause\n" .
+               "   - Check the EXAMPLE ENTITIES block to determine the data type of status/role/type fields — some are integers, some are strings\n" .
+               "   - Check the DETECTED ENTITIES block for enum value mappings before filtering on status/role/type fields\n" .
                "   - Apply filters exactly as specified in scope definitions\n" .
                "   - Use DISTINCT when specified to avoid duplicates\n" .
                "   - When returning entity data, JOIN to related entities to get human-readable names (e.g., JOIN Contact for BoardMember)\n\n";

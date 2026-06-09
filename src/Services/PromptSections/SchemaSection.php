@@ -17,17 +17,25 @@ class SchemaSection extends BasePromptSection
     protected string $name = 'schema';
     protected int $priority = 20;
 
+    /**
+     * Skip the section entirely when there is no schema, rather than narrating its
+     * absence ("No schema information available."), which is noise to the model.
+     */
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
+    {
+        return !empty($context->graphSchema);
+    }
+
     public function format(string $question, PipelineContext $context, array $options = []): string
     {
         $schema = $context->graphSchema;
 
         if (empty($schema)) {
-            return $this->header('GRAPH SCHEMA') . "No schema information available.\n\n";
+            return '';
         }
 
         $output = $this->header('GRAPH SCHEMA');
 
-        // Node labels
         if (!empty($schema['labels'])) {
             $output .= "Available Node Labels:\n";
             foreach ($schema['labels'] as $label) {
@@ -36,7 +44,6 @@ class SchemaSection extends BasePromptSection
             $output .= "\n";
         }
 
-        // Relationship types
         if (!empty($schema['relationships'])) {
             $output .= "Available Relationship Types:\n";
             foreach ($schema['relationships'] as $relType) {
@@ -45,11 +52,9 @@ class SchemaSection extends BasePromptSection
             $output .= "\n";
         }
 
-        // Node properties by label (if structured)
         if (!empty($schema['properties']) && is_array($schema['properties'])) {
             $firstValue = reset($schema['properties']);
             if (is_array($firstValue)) {
-                // Structured by label
                 $output .= "Node Properties by Label:\n";
                 foreach ($schema['properties'] as $label => $properties) {
                     if (is_array($properties)) {

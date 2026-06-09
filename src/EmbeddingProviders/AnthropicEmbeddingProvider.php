@@ -49,8 +49,7 @@ class AnthropicEmbeddingProvider implements EmbeddingProviderInterface
     {
         $this->validateConfig($config);
 
-        // Store config for future implementation
-        // Currently not used since API doesn't exist yet
+        // Stored for a future implementation; unused while no embeddings API exists.
         $this->model = $config['model'] ?? 'claude-3-5-sonnet-20241022';
         $this->dimensions = $config['dimensions'] ?? 1024;
         $this->maxLength = 200000; // Claude's context window

@@ -11,7 +11,7 @@ class AiLogger
 {
     private ?string $traceId = null;
     private bool $debugEnabled;
-    private string $channel;
+    private ?string $channel = null;
     private array $timers = [];
 
     public function __construct()

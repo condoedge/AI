@@ -1,8 +1,8 @@
 <?php
-// src/Kompo/ChatMessageForm.php
 
 namespace Condoedge\Ai\Kompo;
 
+use Condoedge\Ai\DTOs\PageContext;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
 use Condoedge\Ai\Models\AiConversation;
@@ -40,12 +40,23 @@ class ChatMessageForm extends Form
     protected ?AiConversation $conversation = null;
     protected string $responseStyle = 'friendly';
 
+    /**
+     * The page/record the chat was opened from, forwarded as an array prop from the surface
+     * (like conversation_id). Null when the chat was not opened from a page-aware host.
+     */
+    protected ?PageContext $pageContext = null;
+
     public function created()
     {
         $this->conversationId = $this->prop('conversation_id');
         $this->responseStyle = $this->prop('response_style') ?? $this->settings()->responseStyle() ?? 'friendly';
 
-        // Only query for conversation if auth is available
+        // Page context crosses the Kompo prop boundary as an array; rebuild the DTO here.
+        $page = $this->prop('page_context');
+        if (is_array($page) && !empty($page)) {
+            $this->pageContext = PageContext::fromArray($page);
+        }
+
         if ($this->conversationId) {
             $this->conversation = AiConversation::where('user_id', auth()->id())
                 ->find($this->conversationId);
@@ -170,6 +181,7 @@ class ChatMessageForm extends Form
                 $message,
                 $style,
                 auth()->user(),
+                $this->pageContext,
             );
 
             // Soft failure (injection refusal, AI/DB error): the use case already recorded a

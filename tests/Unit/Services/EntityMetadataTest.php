@@ -9,6 +9,7 @@ use Condoedge\Ai\Services\ContextRetriever;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Support\AiLogger;
 use Mockery;
 
 /**
@@ -28,6 +29,7 @@ class EntityMetadataTest extends TestCase
     private $mockVectorStore;
     private $mockGraphStore;
     private $mockEmbeddingProvider;
+    private $logger;
     private $service;
     private $testEntityConfigs;
 
@@ -36,8 +38,10 @@ class EntityMetadataTest extends TestCase
         parent::setUp();
 
         $this->mockVectorStore = Mockery::mock(VectorStoreInterface::class);
+        $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true)->byDefault();
         $this->mockGraphStore = Mockery::mock(GraphStoreInterface::class);
         $this->mockEmbeddingProvider = Mockery::mock(EmbeddingProviderInterface::class);
+        $this->logger = new AiLogger();
 
         // Define test entity configurations with metadata
         $this->testEntityConfigs = [
@@ -126,6 +130,7 @@ class EntityMetadataTest extends TestCase
             $this->mockVectorStore,
             $this->mockGraphStore,
             $this->mockEmbeddingProvider,
+            $this->logger,
             $this->testEntityConfigs
         );
     }
@@ -438,6 +443,7 @@ class EntityMetadataTest extends TestCase
             $this->mockVectorStore,
             $this->mockGraphStore,
             $this->mockEmbeddingProvider,
+            $this->logger,
             $configsWithoutMetadata
         );
 
@@ -457,15 +463,17 @@ class EntityMetadataTest extends TestCase
     {
         $question = 'How many volunteers do we have?';
 
-        // Mock dependencies
+        // Mock dependencies. Retrieval embeds + searches twice: once for the
+        // similar-query lookup (STEP 3) and once for the semantic-entity-label
+        // fallback (STEP 4, since no SemanticContextSelector is injected here).
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
+            ->twice()
             ->andReturn([0.1]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
-            ->once()
+            ->twice()
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -475,9 +483,9 @@ class EntityMetadataTest extends TestCase
 
         $context = $this->service->retrieveContext($question);
 
-        $this->assertArrayHasKey('entity_metadata', $context);
-        $this->assertArrayHasKey('detected_entities', $context['entity_metadata']);
-        $this->assertArrayHasKey('detected_scopes', $context['entity_metadata']);
+        $this->assertInstanceOf(\Condoedge\Ai\DTOs\PipelineContext::class, $context);
+        $this->assertArrayHasKey('detected_entities', $context->entityMetadata);
+        $this->assertArrayHasKey('detected_scopes', $context->entityMetadata);
     }
 
     /**
@@ -492,6 +500,7 @@ class EntityMetadataTest extends TestCase
             $this->mockVectorStore,
             $this->mockGraphStore,
             $this->mockEmbeddingProvider,
+            $this->logger,
             [] // Empty configs will cause issues
         ) extends ContextRetriever {
             public function getEntityMetadata(string $question): array
@@ -500,15 +509,17 @@ class EntityMetadataTest extends TestCase
             }
         };
 
-        // Mock dependencies
+        // Mock dependencies. Retrieval embeds + searches twice: once for the
+        // similar-query lookup (STEP 3) and once for the semantic-entity-label
+        // fallback (STEP 4, since no SemanticContextSelector is injected here).
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
+            ->twice()
             ->andReturn([0.1]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
-            ->once()
+            ->twice()
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -519,8 +530,8 @@ class EntityMetadataTest extends TestCase
         $context = $brokenService->retrieveContext($question);
 
         // Should have error but not crash
-        $this->assertNotEmpty($context['errors']);
-        $this->assertStringContainsString('Entity metadata retrieval failed', $context['errors'][0]);
+        $this->assertNotEmpty($context->errors);
+        $this->assertStringContainsString('Entity metadata retrieval failed', $context->errors[0]);
     }
 
     /**
@@ -530,14 +541,17 @@ class EntityMetadataTest extends TestCase
     {
         $question = 'Show me all volunteers';
 
+        // Retrieval embeds + searches twice: once for the similar-query lookup
+        // (STEP 3) and once for the semantic-entity-label fallback (STEP 4,
+        // since no SemanticContextSelector is injected here).
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
+            ->twice()
             ->andReturn([0.1]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
-            ->once()
+            ->twice()
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -547,9 +561,9 @@ class EntityMetadataTest extends TestCase
 
         $context = $this->service->retrieveContext($question);
 
-        $this->assertArrayHasKey('volunteers', $context['entity_metadata']['detected_scopes']);
+        $this->assertArrayHasKey('volunteers', $context->entityMetadata['detected_scopes']);
 
-        $volunteerScope = $context['entity_metadata']['detected_scopes']['volunteers'];
+        $volunteerScope = $context->entityMetadata['detected_scopes']['volunteers'];
         $this->assertEquals('Person', $volunteerScope['entity']);
         $this->assertEquals("type = 'volunteer'", $volunteerScope['cypher_pattern']);
     }

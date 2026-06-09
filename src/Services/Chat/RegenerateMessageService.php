@@ -16,7 +16,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
  * walking back from an assistant message) and enforces the role preconditions. The actual
  * truncate + regenerate flow lives in RegenerateAnswerUseCase (the single home of that rule).
  *
- * It returns the legacy array shape so existing Kompo callers keep working unchanged.
+ * It returns the array shape expected by existing Kompo callers.
  */
 class RegenerateMessageService
 {

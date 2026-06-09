@@ -62,7 +62,6 @@ class IngestEntityJob implements ShouldQueue
     public function handle(): void
     {
         try {
-            // Ingest the entity into Neo4j and Qdrant
             AI::ingest($this->entity);
 
             Log::info('AI entity ingested successfully', [

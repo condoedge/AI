@@ -1,21 +1,26 @@
 # AI Chat UI Components
 
-Beautiful, production-ready chat interface components for the AI package. Built on Kompo with proper AJAX handling and session persistence.
+Production-ready chat interface components for the AI package. Built on Kompo with conversation persistence, file references, regenerate/edit, feedback, and a response-style selector.
 
 ## Overview
 
-The AI Chat system provides two main components:
+Every chat surface renders the **same shared body** (conversation sidebar + message list + chat JS). They differ only in chrome (how they are wrapped/opened). The body lives on `AbstractChatSurface`; the concrete surfaces are thin shells.
 
-| Component | Description | Use Case |
-|-----------|-------------|----------|
-| `AiChatModal` | Modal dialog with full chat | Popup chat triggered by buttons |
-| `AiChatFloating` | Floating action button | Global chat access from any page |
+| Component | Description | Opened via |
+|-----------|-------------|------------|
+| `AiChatModal` | Chat inside a modal overlay | `->selfGet(...)->inModal()` |
+| `AiChatDrawer` | Chat inside a slide-over drawer | `->selfGet(...)->inDrawer()` |
+| `AiChatScreen` | Routed, full-page chat | route `ai.chat.screen` (`GET /ai/chat`) |
+| `AiChatFloating` | Floating action button that opens one of the above | placed in a layout |
+| `AiChatPanel` | Backward-compatible alias of `AiChatModal` | same as `AiChatModal` |
+
+All of these live in `Condoedge\Ai\Kompo`.
+
+> The chat surfaces read their configuration from `config('ai.chat')` (resolved through `ChatSettingsInterface`), **not** from a constructor props array. The only prop a surface reads directly is `page_context` (see [Page Context](#page-context)). To change titles, example questions, features, etc., edit `config/ai.php` or the matching `AI_CHAT_*` env vars.
 
 ## Quick Start
 
-### 1. Add Floating Button to Your Layout
-
-The simplest way to add AI chat to your application:
+### 1. Add the Floating Button to Your Layout
 
 ```php
 use Condoedge\Ai\Kompo\AiChatFloating;
@@ -26,15 +31,15 @@ public function render()
     return _Rows(
         // Your page content...
 
-        // Add floating chat button
+        // Floating chat button (bottom-right)
         new AiChatFloating()
     );
 }
 ```
 
-That's it! A floating button appears in the bottom-right corner. Click it to open the AI chat modal.
+The button appears in the bottom-right corner. Clicking it opens the surface configured by `config('ai.chat.surface')` — a modal (default), a drawer, or it navigates to the full-page screen.
 
-### 2. Open Chat from Any Button
+### 2. Open the Chat from Any Button
 
 ```php
 use Condoedge\Ai\Kompo\AiChatModal;
@@ -57,266 +62,202 @@ class MyPage extends Form
 }
 ```
 
-### 3. Customize with Props
+Swap `AiChatModal` + `->inModal()` for `AiChatDrawer` + `->inDrawer()` to open it in a slide-over instead.
+
+### 3. Use the Full-Page Screen
+
+The package registers a route for `AiChatScreen`:
+
+```php
+// routes/web.php (registered by the package)
+Route::get('ai/chat', AiChatScreen::class)->name('ai.chat.screen');
+```
+
+Link to it with `->redirect('ai.chat.screen')`, or set `AI_CHAT_SURFACE=screen` so the floating button navigates there.
+
+## Choosing the Surface (Floating Button)
+
+`AiChatFloating` opens whichever surface is configured. Set it once:
+
+```php
+// config/ai.php → 'chat' => [ ... ]
+'surface' => env('AI_CHAT_SURFACE', 'modal'), // 'modal' | 'drawer' | 'screen'
+```
+
+```env
+AI_CHAT_SURFACE=drawer
+```
+
+There is no fluent builder on `AiChatFloating` (no `->position()`, `->theme()`, `->withLabel()`, `->withPulse()`, `->modalConfig()`). Visual defaults come from config (see below).
+
+## Page Context
+
+A host can make the chat aware of the page/record it was opened from by passing a single `page_context` array prop. It is forwarded through the surface to the chat pipeline (and used to pick per-entity welcome examples via `config('ai.chat.page_examples')`):
 
 ```php
 public function openChat()
 {
     return new AiChatModal(null, [
-        'welcome_title' => 'Sales Assistant',
-        'welcome_message' => 'Ask me about your sales data.',
-        'example_questions' => [
-            'What were yesterday\'s sales?',
-            'Show top customers',
-            'Revenue by region',
+        'page_context' => [
+            'entity_type' => 'Unit',
+            'entity_id' => $this->model->id,
         ],
     ]);
 }
 ```
 
-## AiChatModal
-
-The main chat interface, displayed as a modal dialog.
-
-### Basic Usage
-
-```php
-use Condoedge\Ai\Kompo\AiChatModal;
-
-// Default configuration from config/ai.php
-return new AiChatModal();
-
-// With custom props
-return new AiChatModal(null, [
-    'welcome_title' => 'AI Assistant',
-    'welcome_message' => 'How can I help you today?',
-    'example_questions' => ['Question 1', 'Question 2'],
-    'theme' => 'modern',
-    'show_metrics' => true,
-]);
-```
-
-### Available Props
-
-| Prop | Type | Default | Description |
-|------|------|---------|-------------|
-| `welcome_title` | string | 'AI Assistant' | Title on welcome screen |
-| `welcome_message` | string | 'Ask me anything...' | Message on welcome screen |
-| `example_questions` | array | [] | Clickable example questions |
-| `theme` | string | 'modern' | UI theme |
-| `show_timestamps` | bool | false | Show message timestamps |
-| `show_avatars` | bool | true | Show user/assistant avatars |
-| `show_typing_indicator` | bool | true | Show typing animation |
-| `show_metrics` | bool | false | Show execution time |
-| `show_suggestions` | bool | true | Show follow-up suggestions |
-| `max_suggestions` | int | 3 | Max suggestions to display |
-| `enable_copy` | bool | true | Enable copy message button |
-| `enable_feedback` | bool | false | Enable thumbs up/down |
-| `enable_markdown` | bool | true | Render markdown in responses |
-| `persist_history` | bool | true | Save chat to session |
-| `max_messages` | int | 50 | Max messages to keep |
-| `input_placeholder` | string | 'Ask a question...' | Input placeholder text |
-
-### Modal Title
-
-```php
-$modal = new AiChatModal();
-$modal->_Title = 'Custom Title';
-return $modal;
-```
-
-## AiChatFloating
-
-A floating action button that opens the chat modal.
-
-### Basic Usage
-
-```php
-use Condoedge\Ai\Kompo\AiChatFloating;
-
-// Default configuration
-new AiChatFloating()
-
-// With props
-new AiChatFloating([
-    'position' => 'bottom-left',
-    'theme' => 'solid',
-    'pulse' => true,
-])
-```
-
-### Fluent Configuration
-
-```php
-(new AiChatFloating())
-    ->position('bottom-left')     // Position on screen
-    ->size('lg')                  // Button size
-    ->theme('gradient')           // Visual theme
-    ->withLabel('Need help?')     // Add text label
-    ->withPulse()                 // Add pulse animation
-    ->modalConfig([               // Pass config to modal
-        'welcome_title' => 'Help Center',
-        'example_questions' => ['How do I...?'],
-    ]);
-```
-
-### Position Options
-
-```php
-->position('bottom-right')  // Default
-->position('bottom-left')
-->position('top-right')
-->position('top-left')
-```
-
-### Size Options
-
-```php
-->size('sm')   // 48x48px
-->size('md')   // 56x56px
-->size('lg')   // 64x64px (default)
-```
-
-### Theme Options
-
-```php
-->theme('gradient')  // Purple gradient (default)
-->theme('solid')     // Solid indigo
-->theme('outline')   // White with border
-->theme('dark')      // Dark gray
-```
-
-### With Label
-
-```php
-// Button expands to include text
-(new AiChatFloating())->withLabel('Chat with AI')
-```
-
-### Pulse Animation
-
-```php
-// Adds attention-grabbing pulse effect
-(new AiChatFloating())->withPulse()
-```
+Arrays are used because Kompo serializes props across the request boundary; an object would not survive. Absent or empty `page_context` simply means the chat is not page-aware.
 
 ## Configuration
 
-All defaults can be set in `config/ai.php`:
+All chat defaults live under `config('ai.chat')` in `config/ai.php`, each backed by an `AI_CHAT_*` env var:
 
 ```php
 'chat' => [
-    // Service implementation
-    'service' => \Condoedge\Ai\Services\Chat\AiChatService::class,
+    // Service implementation (must implement AiChatServiceInterface)
+    'service' => env('AI_CHAT_SERVICE', \Condoedge\Ai\Services\Chat\AiChatService::class),
 
-    // Theme: modern, minimal, gradient, glassmorphism
-    'theme' => 'modern',
-    'primary_color' => '#6366f1',
+    // Surface the floating button opens: 'modal' | 'drawer' | 'screen'
+    'surface' => env('AI_CHAT_SURFACE', 'modal'),
 
     // Welcome screen
     'welcome' => [
-        'title' => 'AI Assistant',
-        'message' => 'Ask me anything about your data.',
+        'title' => env('AI_CHAT_WELCOME_TITLE', 'AI Assistant'),
+        'message' => env('AI_CHAT_WELCOME_MESSAGE', 'Ask me anything about your data...'),
     ],
 
-    // Example questions for welcome screen
+    // Example questions on the welcome screen
     'example_questions' => [
         'How many records do we have?',
-        'Show recent activity',
+        'Show me recent activity',
     ],
 
-    // Message display
-    'show_timestamps' => false,
-    'show_avatars' => true,
-    'show_typing_indicator' => true,
-    'show_suggestions' => true,
-    'show_metrics' => false,
-    'max_suggestions' => 3,
-
-    // Features
-    'enable_copy' => true,
-    'enable_feedback' => false,
-    'enable_markdown' => true,
+    // Per-entity-type welcome examples, keyed by page_context.entity_type
+    'page_examples' => [
+        // 'Unit' => ['Show this unit\'s payment history', 'Who owns this unit?'],
+    ],
 
     // Persistence
-    'persist_history' => true,
-    'max_messages' => 50,
+    'persist_history' => env('AI_CHAT_PERSIST_HISTORY', true),
+    'max_messages' => env('AI_CHAT_MAX_MESSAGES', 50),
+    'max_history_messages' => env('AI_CHAT_MAX_HISTORY_MESSAGES', 10), // sent to the LLM
+
+    // UI features
+    'show_timestamps' => env('AI_CHAT_SHOW_TIMESTAMPS', false),
+    'show_avatars' => env('AI_CHAT_SHOW_AVATARS', true),
+    'show_typing_indicator' => env('AI_CHAT_SHOW_TYPING', true),
+    'show_suggestions' => env('AI_CHAT_SHOW_SUGGESTIONS', true),
+    'max_suggestions' => env('AI_CHAT_MAX_SUGGESTIONS', 3),
+    'show_metrics' => env('AI_CHAT_SHOW_METRICS', false),
+
+    // Features
+    'enable_copy' => env('AI_CHAT_ENABLE_COPY', true),
+    'enable_feedback' => env('AI_CHAT_ENABLE_FEEDBACK', false),
+    'enable_regenerate' => env('AI_CHAT_ENABLE_REGENERATE', true),
+    'enable_edit' => env('AI_CHAT_ENABLE_EDIT', true),
+    'enable_markdown' => env('AI_CHAT_ENABLE_MARKDOWN', true),
+    'response_style' => env('AI_CHAT_RESPONSE_STYLE', 'friendly'),
 
     // Input
-    'input_placeholder' => 'Ask a question...',
-    'auto_focus' => true,
+    'input_placeholder' => env('AI_CHAT_INPUT_PLACEHOLDER', 'ai.chat.input-placeholder'),
+    'auto_focus' => env('AI_CHAT_AUTO_FOCUS', true),
+
+    // Surface-specific defaults
+    'floating' => ['position' => 'bottom-right', 'size' => 'lg', 'style' => 'gradient'],
+    'modal' => ['size' => 'xl', 'full_screen' => false],
+    'drawer' => ['position' => 'right', 'width' => '400px'],
 ],
 ```
 
+See `config/ai.php` for the complete, commented list.
+
+## Theming
+
+Theme resolution is configured under `config('ai.ui')`:
+
+```php
+'ui' => [
+    // ConfigChatThemeFactory (config only) or UserChatThemeFactory (per-user, falls back to config)
+    'factory' => env('AI_UI_FACTORY', \Condoedge\Ai\Services\UI\UserChatThemeFactory::class),
+
+    // Built-in themes: 'indigo', 'green', 'config'
+    'theme' => env('AI_UI_THEME', 'green'),
+],
+```
+
+See [Theming](theming) for the full theme surface.
+
 ## Custom Chat Service
 
-Create a custom service to change how the AI processes questions:
+To change how questions are processed, implement `AiChatServiceInterface` and bind it.
 
 ### 1. Implement the Interface
 
 ```php
 namespace App\Services;
 
+use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
-use Condoedge\Ai\Services\Chat\AiChatMessage;
-use Condoedge\Ai\Services\Chat\AiChatResponseData;
 
 class CustomChatService implements AiChatServiceInterface
 {
-    public function ask(string $question, array $options = []): AiChatMessage
-    {
-        // Your custom AI logic here
+    /**
+     * @return array{
+     *   answer: string,
+     *   data: array,
+     *   suggestions: array<string>,
+     *   sources: array,
+     *   cypher_query: ?string
+     * }
+     */
+    public function askWithConversation(
+        string $question,
+        AiConversation $conversation,
+        array $options = []
+    ): array {
+        // $options may include 'style' and 'user' (for file-access authorization)
         $answer = $this->processQuestion($question);
 
-        // Build response with optional rich data
-        $responseData = AiChatResponseData::text()
-            ->withSuggestions(['Follow-up 1', 'Follow-up 2']);
-
-        return AiChatMessage::assistant($answer, $responseData);
-    }
-
-    public function askWithHistory(
-        string $question,
-        array $history,
-        array $options = []
-    ): AiChatMessage {
-        // Use conversation history for context
-        return $this->ask($question, $options);
-    }
-
-    public function getSuggestions(string $question, string $response): array
-    {
         return [
-            'Tell me more',
-            'Show related data',
+            'answer' => $answer,
+            'data' => [],
+            'suggestions' => ['Tell me more', 'Show related data'],
+            'sources' => [],
+            'cypher_query' => null,
         ];
     }
 
-    public function getExampleQuestions(): array
+    public function getSchema(): array
     {
-        return [
-            'What can you help me with?',
-            'Show me a summary',
-        ];
+        // ['labels' => [...], 'relationships' => [...], 'properties' => [...]]
+        return [];
     }
 
     public function isAvailable(): bool
     {
-        return true; // Check if AI service is configured
+        return true; // e.g. check API keys / store connectivity
     }
 
     protected function processQuestion(string $question): string
     {
-        // Call your AI backend (OpenAI, Anthropic, custom, etc.)
         return "Response to: {$question}";
     }
 }
 ```
 
-### 2. Register in Service Provider
+### 2. Register It
 
 ```php
-// app/Providers/AppServiceProvider.php
+// config/ai.php
+'chat' => [
+    'service' => \App\Services\CustomChatService::class,
+    // ...
+],
+```
+
+Or bind the interface in a service provider:
+
+```php
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 use App\Services\CustomChatService;
 
@@ -326,226 +267,43 @@ public function register()
 }
 ```
 
-## Response Data Types
-
-The chat supports rich response formats beyond plain text.
-
-### Text Response
-
-```php
-use Condoedge\Ai\Services\Chat\AiChatResponseData;
-
-$responseData = AiChatResponseData::text();
-```
-
-### Table Response
-
-Display tabular data in the chat:
-
-```php
-$responseData = AiChatResponseData::table(
-    headers: ['Name', 'Email', 'Orders'],
-    rows: [
-        ['John Doe', 'john@example.com', 15],
-        ['Jane Smith', 'jane@example.com', 23],
-    ]
-);
-```
-
-### Metric Response
-
-Display a large number/value:
-
-```php
-$responseData = AiChatResponseData::metric(
-    label: 'Total Revenue',
-    value: '$125,430',
-    icon: '💰',
-    trend: '+12%'
-);
-```
-
-### List Response
-
-Display a structured list:
-
-```php
-$responseData = AiChatResponseData::list([
-    ['title' => 'Order #1234', 'description' => 'Pending - $150'],
-    ['title' => 'Order #1235', 'description' => 'Shipped - $89'],
-]);
-```
-
-### Adding Actions and Suggestions
-
-```php
-$responseData = AiChatResponseData::text()
-    ->withActions([
-        ['label' => 'View Details', 'url' => '/orders/123'],
-        ['label' => 'Export CSV', 'url' => '/export'],
-    ])
-    ->withSuggestions([
-        'Show order details',
-        'Filter by status',
-        'Export this data',
-    ])
-    ->withMetrics(
-        executionTimeMs: 145,
-        rowsReturned: 25,
-        query: 'MATCH (n:Order) RETURN n'
-    );
-```
-
 ## Architecture
 
-The chat system is built with a trait-based architecture for flexibility:
+The surfaces share one body and a set of traits.
 
-### Core Traits
+### Class Structure
+
+```
+AbstractChatSurface          (shared body: sidebar + MessagesQuery + chat JS)
+├── AiChatModal              (modal chrome)
+│   └── AiChatPanel          (alias of AiChatModal)
+├── AiChatDrawer             (slide-over chrome)
+└── AiChatScreen             (full-page chrome)
+```
+
+### Traits used by `AbstractChatSurface`
 
 | Trait | Purpose |
 |-------|---------|
-| `HasAiChatConfig` | Configuration loading and persistence |
-| `HasAiMessages` | Message history management |
-| `HasMessageBubbles` | Message bubble rendering |
-| `HasWelcomeScreen` | Welcome screen rendering |
+| `HasChatSettings` | Reads chat config/settings (`settings()`, `cfg()`) |
+| `HasChatTheme` | Theme/gradient helpers |
+| `HasAvatars` | User/assistant avatar rendering |
+| `HasConversationCreation` | `createConversation()` action |
+| `HasMethodsAsProperties` | Lets snake_case props proxy to camelCase theme methods |
 
-### Component Structure
+### Extending a Surface
 
-```
-AiChatModal
-├── HasAiChatConfig      (config from props/config)
-├── HasAiMessages        (message history in session)
-├── HasMessageBubbles    (renders each message)
-└── HasWelcomeScreen     (renders when no messages)
-```
-
-### Extending with Custom Traits
-
-Create your own traits to customize behavior:
-
-```php
-namespace App\Kompo\Traits;
-
-trait HasCustomMessageBubbles
-{
-    protected function renderMessageBubble($message, $config)
-    {
-        // Your custom rendering logic
-        return _Rows(
-            _Html($message->content)->class('my-custom-bubble')
-        );
-    }
-}
-```
-
-Then create a custom modal:
+Subclass any surface to override chrome or behavior:
 
 ```php
 namespace App\Kompo;
 
 use Condoedge\Ai\Kompo\AiChatModal;
-use App\Kompo\Traits\HasCustomMessageBubbles;
 
 class CustomChatModal extends AiChatModal
 {
-    use HasCustomMessageBubbles;
-}
-```
-
-## Examples
-
-### Dashboard with Chat Button
-
-```php
-class Dashboard extends Form
-{
-    public function render()
-    {
-        return _Rows(
-            _FlexBetween(
-                _TitleMain('Dashboard'),
-                _Button('Ask AI')
-                    ->icon(_Sax('message-question', 18))
-                    ->selfGet('openAiChat')
-                    ->inModal()
-            )->class('mb-6'),
-
-            // Dashboard content...
-        );
-    }
-
-    public function openAiChat()
-    {
-        return new AiChatModal(null, [
-            'welcome_title' => 'Dashboard Assistant',
-            'example_questions' => [
-                'Show today\'s summary',
-                'What needs my attention?',
-                'Compare to last week',
-            ],
-        ]);
-    }
-}
-```
-
-### Global Floating Button in Layout
-
-```php
-class MainLayout extends Form
-{
-    public function render()
-    {
-        return _Rows(
-            // Header, navigation, content...
-
-            // Global floating chat - appears on all pages
-            (new AiChatFloating())
-                ->position('bottom-right')
-                ->theme('gradient')
-                ->withPulse()
-                ->modalConfig([
-                    'welcome_title' => 'Help Center',
-                    'welcome_message' => 'Ask me anything!',
-                ])
-        );
-    }
-}
-```
-
-### Context-Specific Chat
-
-```php
-class OrderDetails extends Form
-{
-    public $model = Order::class;
-
-    public function render()
-    {
-        return _Rows(
-            // Order details...
-
-            _Button('Ask about this order')
-                ->selfGet('openOrderChat')
-                ->inModal()
-        );
-    }
-
-    public function openOrderChat()
-    {
-        return new AiChatModal(null, [
-            'welcome_title' => "Order #{$this->model->id} Assistant",
-            'welcome_message' => 'Ask me about this order.',
-            'example_questions' => [
-                'What is the order status?',
-                'Show shipping details',
-                'List all items',
-            ],
-            // Pass order context to service
-            'context' => [
-                'order_id' => $this->model->id,
-            ],
-        ]);
-    }
+    // Override surfaceStyle()/surfaceClass() for custom chrome,
+    // or add your own action methods.
 }
 ```
 
@@ -553,21 +311,20 @@ class OrderDetails extends Form
 
 ### Chat not responding
 
-1. Check that `AiChatServiceInterface` is bound in your service provider
-2. Verify your AI API keys are configured in `.env`
-3. Check Laravel logs for errors
+1. Confirm `config('ai.chat.service')` (or the `AiChatServiceInterface` binding) resolves to a working service.
+2. Verify your LLM/store credentials are configured in `.env`.
+3. Check Laravel logs for errors. `isAvailable()` returning `false` renders the offline state.
 
 ### Messages not persisting
 
-1. Ensure `persist_history` is `true` in config
-2. Check that sessions are working in your app
-3. Verify `max_messages` isn't set too low
+1. Ensure `persist_history` is `true`.
+2. Check that sessions work in your app.
+3. Verify `max_messages` isn't set too low.
 
 ### Styling issues
 
-1. Make sure Tailwind CSS is configured
-2. Check that the component classes aren't being purged
-3. Try adding ai component paths to your Tailwind content config:
+1. Make sure Tailwind CSS is configured.
+2. Ensure the component classes aren't being purged:
 
 ```js
 // tailwind.config.js

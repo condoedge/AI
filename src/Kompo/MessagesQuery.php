@@ -2,8 +2,12 @@
 
 namespace Condoedge\Ai\Kompo;
 
+use Condoedge\Ai\DTOs\PageContext;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
+use Condoedge\Ai\Kompo\Support\ConversationActions;
+use Condoedge\Ai\Kompo\Support\MessageBubbleRenderer;
+use Condoedge\Ai\Kompo\Support\RichDataRenderer;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
@@ -11,11 +15,22 @@ use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Kompo\Traits\HasFilePreview;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
-use Condoedge\Ai\Services\Response\ContentLinkProcessor;
-use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
-use Condoedge\Utils\Facades\FileModel;
 use Condoedge\Utils\Kompo\Common\Query;
 
+/**
+ * The chat messages panel. Owns list/render orchestration and the Kompo round-trip surface
+ * (the public selfPost/selfGet action methods Kompo resolves against this component), and
+ * delegates the heavy lifting to three plain collaborators:
+ *
+ *  - MessageBubbleRenderer — user/assistant bubble + action-bar markup.
+ *  - RichDataRenderer       — response_data tables/metrics/lists, suggestions, metrics, file cards.
+ *  - ConversationActions    — ownership-scoped pin/feedback/archive/delete mutations.
+ *
+ * The action methods stay here as thin entry points because Kompo resolves selfPost('feedback')
+ * / selfGet('editMessage') / etc. against THIS component; they delegate their authorization +
+ * mutation to ConversationActions (one consistent ownership gate) and their domain work to the
+ * ChatPresenter use-case seam.
+ */
 class MessagesQuery extends Query
 {
     use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation, HasFilePreview;
@@ -29,6 +44,9 @@ class MessagesQuery extends Query
 
     protected $conversation;
 
+    /** The page/record the chat was opened from (forwarded array prop -> DTO). */
+    protected ?PageContext $pageContext = null;
+
     public $perPage = 30;
     public $paginationType = 'Scroll';
     public $topPagination = true;
@@ -36,9 +54,21 @@ class MessagesQuery extends Query
 
     protected $latestMessageId;
 
+    /** Lazily built per-request collaborators (see accessors below). */
+    protected ?MessageBubbleRenderer $bubbleRenderer = null;
+    protected ?RichDataRenderer $richDataRenderer = null;
+    protected ?ConversationActions $conversationActions = null;
+
     public function created()
     {
         $this->id(self::ID);
+
+        // Page context (array prop -> DTO): forwarded to ChatMessageForm and used to prefer
+        // per-entity-type welcome examples. Empty/absent => null (no effect).
+        $page = $this->prop('page_context');
+        if (is_array($page) && !empty($page)) {
+            $this->pageContext = PageContext::fromArray($page);
+        }
 
         // If animations disabled, force speed to 'none' which disables all animations via CSS
         $animationSpeed = $this->settings()->enableAnimations()
@@ -46,7 +76,6 @@ class MessagesQuery extends Query
             : 'none';
         $speedClass = 'animation-speed-' . $animationSpeed;
 
-        // Only query for conversation if auth is available
         $this->conversation = AiConversation::where('user_id', auth()->id())
             ->find($this->prop('conversation_id') ?? session('selected_conversation_id'));
 
@@ -142,6 +171,7 @@ class MessagesQuery extends Query
             new ChatMessageForm(null, [
                 'conversation_id' => $this->conversation?->id,
                 'response_style' => $this->settings()->responseStyle(),
+                'page_context' => $this->pageContext?->toArray(),
             ]),
 
             $this->conversation
@@ -150,7 +180,7 @@ class MessagesQuery extends Query
         )->class('flex-shrink-0 relative z-0');
     }
 
-    
+
     public function query()
     {
         if (!$this->conversation) {
@@ -169,9 +199,7 @@ class MessagesQuery extends Query
 
     public function render($message)
     {
-        $bubble = $message->role === 'user'
-            ? $this->userBubble($message)
-            : $this->assistantBubble($message);
+        $bubble = $this->bubbleRenderer()->render($message, $this->messageResultSet($message));
 
         $isLatest = $message->id === $this->latestMessageId;
 
@@ -181,295 +209,6 @@ class MessagesQuery extends Query
             'data-message-id' => $message->id,
             'data-latest' => $isLatest ? 'true' : null,
         ]);
-    }
-
-    public function userBubble($message)
-    {
-        $isNew = $this->isNewMessage($message);
-        $animationClass = $isNew ? ' animate-message-user' : '';
-        $highlightClass = $isNew ? ' animate-new-message-highlight' : '';
-
-        return _Rows(
-            _FlexEnd(
-                _Rows(
-                    _Html(e($message->content))->class('whitespace-pre-wrap'),
-                    $this->settings()->showTimestamps()
-                        ? _Html($message->created_at->format('g:i A'))->class('text-xs opacity-60 mt-2')
-                        : null,
-                )->class('group px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md' . $highlightClass),
-                $this->settings()->showAvatars()
-                    ? _Html($this->userAvatarHtml())->class('ml-3 flex-shrink-0')
-                    : null,
-            )->class('items-end' . $animationClass),
-            // Edit button on hover
-            $this->settings()->enableEdit() ? _FlexEnd(
-                _Link(__('ai.common.edit'))->icon('pencil')
-                    ->class('opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-gray-600 mt-1 transition-opacity')
-                    ->selfGet('editMessage', ['id' => $message->id])->inModal(),
-            ) : null,
-        )->class('group');
-    }
-
-    public function assistantBubble($message)
-    {
-        $isNew = $this->isNewMessage($message);
-        $animationClass = $isNew ? ' animate-message-assistant' : '';
-        $contentRevealClass = $isNew ? ' animate-content-reveal' : '';
-        $staggerClass = $isNew ? ' animate-stagger-content' : '';
-
-        $content = [];
-
-        // Get file references for citation linking
-        $files = $message->hasFileReferences() ? $message->getReferencedFiles() : [];
-
-        // Process content: strip action links, strip citations, create elements.
-        // We pass the result set so render_table/export_* actions can build tables/exports
-        // from the data without the LLM shipping it through the link.
-        $processed = $this->getContentLinkProcessor()->processForDirectRendering(
-            $message->content,
-            [
-                'files' => $files,
-                'result_set' => $this->messageResultSet($message),
-                'user' => auth()->user(),
-            ]
-        );
-
-        // Main content (links stripped to plain text)
-        $content[] = _Html($this->renderMarkdown($processed['content']))->class('prose prose-sm max-w-none' . $contentRevealClass);
-
-        // Link elements rendered directly (actions + file citations)
-        if ($processed['has_links']) {
-            $content[] = _Flex(...$processed['elements'])
-                ->class('mt-3 pt-2 border-t border-gray-100 gap-2 flex-wrap');
-        }
-
-        // Rich data display (tables, metrics, lists)
-        if ($responseData = $message->response_data) {
-            $richData = $this->renderRichData($responseData);
-            if ($richData && $isNew) {
-                $richData->class($staggerClass);
-            }
-            $content[] = $richData;
-        }
-
-        // File reference cards (separate from citations)
-        if (!empty($files)) {
-            $content[] = $this->renderFileReferences($files);
-        }
-
-        // Follow-up suggestions
-        $suggestions = $message->metadata['suggestions'] ?? [];
-        if ($this->settings()->showSuggestions() && !empty($suggestions)) {
-            $content[] = $this->renderSuggestions($suggestions);
-        }
-
-        // Metrics (execution time, confidence)
-        if ($this->settings()->showMetrics() && $message->execution_time_ms) {
-            $content[] = $this->renderMetrics($message);
-        }
-
-        // Action bar (copy, feedback, regenerate)
-        $content[] = $this->messageActionBar($message);
-
-        return _Rows(
-            _Flex(
-                $this->settings()->showAvatars()
-                    ? _Html($this->assistantAvatarHtml())->class('mr-3 flex-shrink-0 self-start')
-                    : null,
-                _Rows(...$content)
-                    ->class('group px-5 py-4 rounded-2xl rounded-tl-md max-w-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md transition-shadow'),
-            )->class('items-start' . $animationClass),
-        );
-    }
-
-    protected function messageActionBar($message)
-    {
-        $actions = [];
-
-        // Copy button
-        if ($this->settings()->enableCopy()) {
-            $actions[] = _Link()->icon(_Sax('copy', 16))
-                ->class('p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all')
-                ->balloon(__('ai.messages.copy'), 'up')
-                ->copyToClipboard($message->content, 'translate.copied-to-clipboard');
-        }
-
-        // Feedback buttons
-        if ($this->settings()->enableFeedback()) {
-            $feedback = $message->metadata['feedback'] ?? null;
-            $actions[] = _Link()->icon(_Sax('like-1', 16))
-                ->class('p-1.5 rounded-lg transition-all ' . ($feedback === 'positive'
-                    ? 'bg-emerald-100 text-emerald-600'
-                    : 'hover:bg-emerald-50 text-gray-400 hover:text-emerald-600'))
-                ->balloon(__('ai.messages.helpful'), 'up')
-                ->selfPost('feedback', ['id' => $message->id, 'type' => 'positive'])
-                ->alert('translate.feedback-received-successfully')
-                ->refresh();
-
-            $actions[] = _Link()->icon(_Sax('dislike', 16))
-                ->class('p-1.5 rounded-lg transition-all ' . ($feedback === 'negative'
-                    ? 'bg-red-100 text-red-600'
-                    : 'hover:bg-red-50 text-gray-400 hover:text-red-600'))
-                ->balloon(__('ai.messages.not-helpful'), 'up')
-                ->selfPost('feedback', ['id' => $message->id, 'type' => 'negative'])
-                ->alert('translate.feedback-received-successfully')
-                ->refresh();
-        }
-
-        // Regenerate button
-        if ($this->settings()->enableRegenerate()) {
-            $dotColor = $this->theme()->primarySolid();
-            $regeneratingText = __('ai.messages.regenerating');
-            $messageId = $message->id;
-            $actions[] = _Link()->icon(_Sax('refresh', 16))
-                ->class('p-1.5 rounded-lg text-gray-400 ' . $this->theme()->linkHover() . ' transition-all')
-                ->balloon(__('ai.messages.regenerate'), 'up')
-                ->onClick(fn($e) => $e
-                    ->run('() => {
-                        // Show typing dots indicator on this message (find by ID injected from PHP)
-                        const bubble = document.querySelector("[data-message-id=\"' . $messageId . '\"]");
-                        if (bubble) {
-                            const content = bubble.querySelector(".prose");
-                            if (content) {
-                                content.innerHTML = "<div class=\"flex items-center gap-1.5 h-6\"><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-1\"></span><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-2\"></span><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-3\"></span></div><div class=\"text-xs text-gray-400 mt-2\">' . $regeneratingText . '</div>";
-                            }
-                        }
-                    }')
-                    && $e->selfPost('regenerate', ['id' => $message->id])
-                        ->refresh()
-                );
-        }
-
-        return _Flex(...$actions)
-            ->class('mt-3 pt-2 border-t border-gray-50 gap-1 opacity-0 group-hover:opacity-100 transition-opacity');
-    }
-
-    protected function renderSuggestions(array $suggestions)
-    {
-        $chips = array_map(fn($s) =>
-            _Link($s)
-                ->class('inline-flex items-center px-3 py-1.5 text-sm rounded-full bg-gray-100 text-gray-700 ' . $this->theme()->primaryLightBgHover() . ' transition-all cursor-pointer')
-                ->selfPost('askSuggestion', ['question' => $s])->refresh(),
-            array_slice($suggestions, 0, $this->settings()->maxSuggestions())
-        );
-
-        return _Rows(
-            _Html(__('ai.messages.follow-up'))->class('text-xs font-medium text-gray-400 mb-2'),
-            _Flex(...$chips)->class('flex-wrap gap-2'),
-        )->class('mt-4 pt-3 border-t border-gray-100');
-    }
-
-    protected function renderRichData($responseData)
-    {
-        if (!is_array($responseData)) {
-            return null;
-        }
-
-        $type = $responseData['type'] ?? 'text';
-
-        return match($type) {
-            'table' => $this->renderTableData($responseData),
-            'metric' => $this->renderMetricData($responseData),
-            'list' => $this->renderListData($responseData),
-            default => null,
-        };
-    }
-
-    protected function renderTableData($data)
-    {
-        $headers = $data['headers'] ?? [];
-        $rows = $data['rows'] ?? [];
-
-        if (empty($headers) || empty($rows)) {
-            return null;
-        }
-
-        $headerHtml = '<tr>' . implode('', array_map(fn($h) =>
-            '<th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">' . e($h) . '</th>',
-            $headers)) . '</tr>';
-
-        $rowsHtml = implode('', array_map(fn($row) =>
-            '<tr class="hover:bg-gray-50">' . implode('', array_map(fn($cell) =>
-                '<td class="px-4 py-2 text-sm text-gray-700 border-t border-gray-100">' . e($cell) . '</td>',
-                $row)) . '</tr>',
-            array_slice($rows, 0, 10)));
-
-        return _Html('<div class="mt-4 overflow-hidden rounded-lg border border-gray-200"><table class="min-w-full">' . $headerHtml . $rowsHtml . '</table></div>');
-    }
-
-    protected function renderMetricData($data)
-    {
-        return _Flex(
-            _Html($data['icon'] ?? '📊')->class('text-3xl'),
-            _Rows(
-                _Html($data['label'] ?? __('ai.common.value'))->class('text-sm text-gray-500'),
-                _Flex(
-                    _Html($data['value'] ?? '-')->class('text-2xl font-bold text-gray-800'),
-                    isset($data['trend']) ? _Badge($data['trend'])
-                        ->class(str_contains($data['trend'], '+') ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700') : null,
-                )->class('items-center gap-2'),
-            ),
-        )->class('mt-4 p-4 ' . $this->theme()->primaryLightBg() . ' rounded-xl items-center gap-4');
-    }
-
-    protected function renderListData($data)
-    {
-        $items = $data['items'] ?? [];
-        if (empty($items)) {
-            return null;
-        }
-
-        $badgeColors = $this->theme()->activeBadge();
-        $listItems = array_map(fn($item) =>
-            _Flex(
-                _Html('<span class="w-6 h-6 rounded-full ' . $badgeColors . ' flex items-center justify-center text-xs font-medium flex-shrink-0">' . e($item['icon'] ?? '•') . '</span>'),
-                _Rows(
-                    _Html(e($item['title'] ?? ''))->class('font-medium text-gray-800'),
-                    _Html(e($item['description'] ?? ''))->class('text-sm text-gray-500'),
-                ),
-            )->class('items-start gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors'),
-            array_slice($items, 0, 5)
-        );
-
-        return _Rows(...$listItems)->class('mt-4 space-y-2');
-    }
-
-    protected function renderMetrics($message)
-    {
-        return _Flex(
-            _Html('⚡ ' . $message->execution_time_ms . 'ms')->class('text-xs text-gray-400'),
-            $message->confidence_score ? _Html('🎯 ' . round($message->confidence_score * 100) . '%')->class('text-xs text-gray-400') : null,
-        )->class('mt-2 gap-3');
-    }
-
-    protected function renderFileReferences(array $files)
-    {
-        if (empty($files)) {
-            return null;
-        }
-
-        $cards = array_map(fn($file) => $this->fileReferenceCard($file), $files);
-
-        return _Rows(
-            _Html('📎 Referenced Files:')->class('text-xs font-medium text-gray-400 mb-2'),
-            _Flex(...$cards)->class('flex-wrap gap-2'),
-        )->class('mt-4 pt-3 border-t border-gray-100');
-    }
-
-    protected function fileReferenceCard(array $file)
-    {
-        $file = FileModel::find($file['id']);
-        $type = $file->file_type_enum;
-        $icon = $type->icon();
-        $isPreviewable = $type->isPreviewable();
-
-        return _Flex(
-            _Sax($icon, 16)->class($this->theme()->primaryText()),
-            _Html($file['name'])->class('text-sm text-gray-700 font-medium'),
-        )->class('inline-flex items-center gap-2 px-3 py-2 rounded-lg ' . $this->theme()->primaryLightBg() . ' ' . $this->theme()->primaryLightBgHover() . ' cursor-pointer transition-all')
-         ->balloon(__('ai.messages.click-to-view'), 'up')
-         ->when($isPreviewable, fn($link) => $type->getPreviewButton($link, $file)
-         );
     }
 
     protected function emptyState()
@@ -494,8 +233,9 @@ class MessagesQuery extends Query
             _Html($this->settings()->welcomeMessage())->class('text-gray-500 text-center max-w-md mb-6'),
         ];
 
-        // Example questions
-        $examples = $this->settings()->exampleQuestions();
+        // Example questions: prefer a per-entity-type override for the page the chat was
+        // opened from (e.g. "Show this unit's payment history"), falling back to the global list.
+        $examples = $this->resolveExampleQuestions();
         if (!empty($examples)) {
             $questionButtons = array_map(fn($q) =>
                 _Link($q)->icon('chat-bubble-left-ellipsis')
@@ -513,24 +253,46 @@ class MessagesQuery extends Query
         return _Rows(...$elements)->id('chat-welcome-state')->class('flex flex-col items-center justify-center flex-1 py-8 px-4');
     }
 
+    /**
+     * Resolve the welcome-screen example questions.
+     *
+     * When the chat was opened from a page with a known entity type, a host can tailor the
+     * suggestions via config('ai.chat.page_examples.{EntityType}') (config-only, no LLM call) so
+     * a Unit page shows "Show this unit's payment history." Falls back to the global example list.
+     *
+     * @return array<int,string>
+     */
+    protected function resolveExampleQuestions(): array
+    {
+        $entityType = $this->pageContext?->entityType;
+
+        if ($entityType !== null && $entityType !== '' && function_exists('app') && app()->bound('config')) {
+            $pageExamples = config('ai.chat.page_examples.' . $entityType);
+            if (is_array($pageExamples) && !empty($pageExamples)) {
+                return $pageExamples;
+            }
+        }
+
+        return $this->settings()->exampleQuestions();
+    }
+
     public function togglePin($id)
     {
-        $conversation = AiConversation::where('user_id', auth()->id())->find($id);
-        if ($conversation) {
-            $metadata = $conversation->metadata ?? [];
-            $metadata['pinned'] = !($metadata['pinned'] ?? false);
-            $conversation->update(['metadata' => $metadata]);
-        }
+        $this->conversationActions()->togglePin((int) $id, auth()->user());
     }
 
     public function feedback($id, $type)
     {
-        $message = $this->conversation?->messages()->find($id);
-        if ($message) {
-            $metadata = $message->metadata ?? [];
-            $metadata['feedback'] = $type;
-            $message->update(['metadata' => $metadata]);
+        if (!$this->conversation) {
+            return;
         }
+
+        $this->conversationActions()->recordFeedback(
+            (int) $this->conversation->id,
+            (int) $id,
+            $type,
+            auth()->user(),
+        );
     }
 
     /**
@@ -674,25 +436,51 @@ class MessagesQuery extends Query
         return is_array($sample) ? $sample : [];
     }
 
-    // ========== HELPERS ==========
+    // ========== COLLABORATORS ==========
 
-    protected function renderMarkdown(string $text): string
+    /**
+     * The bubble renderer, built once per request from the component's resolved theme/settings
+     * and avatar HTML. Defaults to an internally-constructed instance so the existing
+     * service-provider binding (which constructs MessagesQuery with no args) keeps working.
+     */
+    protected function bubbleRenderer(): MessageBubbleRenderer
     {
-        $renderer = new SafeMarkdownRenderer([
-            'activeBadge' => $this->theme()->activeBadge(),
-            'primaryText' => $this->theme()->primaryText(),
-        ]);
-
-        return $renderer->render($text);
+        if ($this->bubbleRenderer === null) {
+            $this->bubbleRenderer = new MessageBubbleRenderer(
+                $this->theme(),
+                $this->settings(),
+                $this->richDataRenderer(),
+                app(\Condoedge\Ai\Services\Response\ContentLinkProcessor::class),
+                $this->userAvatarHtml(),
+                $this->assistantAvatarHtml(),
+            );
+        }
+        return $this->bubbleRenderer;
     }
 
     /**
-     * Get the content link processor service.
+     * The rich-data renderer (tables/metrics/lists, suggestions, metrics, file cards).
      */
-    protected function getContentLinkProcessor(): ContentLinkProcessor
+    protected function richDataRenderer(): RichDataRenderer
     {
-        return app(ContentLinkProcessor::class);
+        if ($this->richDataRenderer === null) {
+            $this->richDataRenderer = new RichDataRenderer($this->theme(), $this->settings());
+        }
+        return $this->richDataRenderer;
     }
+
+    /**
+     * The ownership-scoped conversation/message mutation service.
+     */
+    protected function conversationActions(): ConversationActions
+    {
+        if ($this->conversationActions === null) {
+            $this->conversationActions = app(ConversationActions::class);
+        }
+        return $this->conversationActions;
+    }
+
+    // ========== HELPERS ==========
 
     protected function scrollScript($withTransition = true): string
     {
@@ -706,31 +494,15 @@ class MessagesQuery extends Query
 
     public function deleteConversation($id)
     {
-        AiConversation::where('user_id', auth()->id())->where('id', $id)->delete();
+        $this->conversationActions()->delete((int) $id, auth()->user());
 
         session(['selected_conversation_id' => null]);
     }
 
     public function archiveConversation($id)
     {
-        AiConversation::where('user_id', auth()->id())
-            ->where('id', $id)
-            ->update(['status' => 'archived']);
+        $this->conversationActions()->archive((int) $id, auth()->user());
 
         session(['selected_conversation_id' => null]);
     }
-
-    /**
-     * Check if message is newly added (for animation purposes)
-     * Messages created within the last 5 seconds are considered "new"
-     */
-    protected function isNewMessage($message): bool
-    {
-        if (!$message->created_at) {
-            return true; // Temp messages are always "new"
-        }
-
-        return $message->created_at->diffInSeconds(now()) < 5;
-    }
-
 }

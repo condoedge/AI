@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Actions\BuiltIn;
 
+use Condoedge\Ai\Services\Actions\ActionContext;
 use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 use Condoedge\Ai\Services\Chat\Exporter\ResultSetExporter;
 
@@ -11,7 +12,7 @@ use Condoedge\Ai\Services\Chat\Exporter\ResultSetExporter;
  * export_pdf — generative-UI built-in.
  *
  * Exports the current/last result set as a PDF download. Backed by {@see ResultSetExporter},
- * which degrades gracefully (returns an isError AiActionResult telling the user to install
+ * which degrades gracefully (returns an error AiActionResult telling the user to install
  * barryvdh/laravel-dompdf) when Dompdf is absent.
  *
  * Link grammar:
@@ -40,11 +41,6 @@ class ExportPdfAction extends AbstractBuiltInAction
         return 'Export the current result set as a PDF file.';
     }
 
-    public function presentation(): string
-    {
-        return 'export';
-    }
-
     public function aliases(): array
     {
         return ['export pdf', 'download pdf', 'export to pdf', 'pdf'];
@@ -57,10 +53,10 @@ class ExportPdfAction extends AbstractBuiltInAction
         ];
     }
 
-    public function handle(array $input, array $context): mixed
+    public function handle(array $input, ActionContext $context): AiActionResult
     {
-        $rows = $context['result_set'] ?? $context['rows'] ?? [];
-        if (!is_array($rows) || empty($rows)) {
+        $rows = $context->resultSet;
+        if (empty($rows)) {
             return AiActionResult::error('No data available to export to PDF.');
         }
 

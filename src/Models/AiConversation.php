@@ -1,5 +1,4 @@
 <?php
-// src/Models/AiConversation.php
 
 declare(strict_types=1);
 
@@ -172,7 +171,6 @@ class AiConversation extends Model
     // ACTIONS
     public function addMessage(string $role, string $content, array $data = []): AiMessage
     {
-        // Extract data fields and merge into metadata
         $metadata = $data['metadata'] ?? [];
         if (isset($data['referenced_files'])) {
             $metadata['referenced_files'] = $data['referenced_files'];

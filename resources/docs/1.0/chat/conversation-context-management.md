@@ -818,11 +818,20 @@ The `AiConversation` model stores context in the `context_snapshot` JSON field:
 #### askWithConversation()
 
 ```php
+/**
+ * @return array{
+ *   answer: string,
+ *   data: array,
+ *   suggestions: array<string>,
+ *   sources: array,
+ *   cypher_query: ?string
+ * }
+ */
 public function askWithConversation(
     string $question,
     AiConversation $conversation,
     array $options = []
-): AiChatMessage
+): array
 ```
 
 Process a question within a persistent conversation context.
@@ -1107,8 +1116,11 @@ $conversation = AiConversation::firstOrCreate([
 ]);
 $response = $chatService->askWithConversation($question, $conversation);
 
-// Avoid - no context tracking
-$response = $chatService->ask($question);
+// Avoid - creating a fresh, throwaway conversation per turn loses all context
+$response = $chatService->askWithConversation($question, AiConversation::create([
+    'user_id' => auth()->id(),
+    'status' => 'active',
+]));
 ```
 
 ### 2. Provide Complete Schema

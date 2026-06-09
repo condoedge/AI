@@ -199,4 +199,122 @@ class OpenAiEmbeddingProviderTest extends TestCase
 
         $this->assertIsInt($provider->getMaxLength());
     }
+
+    // =========================================================================
+    // Transient-failure retry (the embedding endpoint gates ALL retrieval, so a
+    // lone SSL/network blip or 429 must not silently drop a document from the
+    // answer — mirror the chat path's retry resilience).
+    // =========================================================================
+
+    private function okBody(): string
+    {
+        return json_encode(['data' => [['index' => 0, 'embedding' => array_fill(0, 1536, 0.01)]]]);
+    }
+
+    public function test_retries_transient_network_error_then_succeeds(): void
+    {
+        // First attempt: a transient SSL/connection failure (curl returns false) — the
+        // exact failure mode seen in production logs ("unexpected eof while reading").
+        $provider = new ScriptedEmbeddingProvider(
+            ['api_key' => 'sk-test', 'retry_base_delay_ms' => 0],
+            [
+                ['code' => 0, 'body' => false, 'error' => 'error:0A000126:SSL routines::unexpected eof while reading'],
+                ['code' => 200, 'body' => $this->okBody(), 'error' => ''],
+            ]
+        );
+
+        $result = $provider->embed('Can I tear down a wall?');
+
+        $this->assertCount(1536, $result);
+        $this->assertCount(2, $provider->calls, 'should retry once after a transient network error');
+    }
+
+    public function test_retries_transient_429_then_succeeds(): void
+    {
+        $provider = new ScriptedEmbeddingProvider(
+            ['api_key' => 'sk-test', 'retry_base_delay_ms' => 0],
+            [
+                ['code' => 429, 'body' => '{"error":{"message":"slow down"}}', 'error' => ''],
+                ['code' => 200, 'body' => $this->okBody(), 'error' => ''],
+            ]
+        );
+
+        $result = $provider->embed('hello');
+
+        $this->assertCount(1536, $result);
+        $this->assertCount(2, $provider->calls);
+    }
+
+    public function test_does_not_retry_permanent_400(): void
+    {
+        $provider = new ScriptedEmbeddingProvider(
+            ['api_key' => 'sk-test', 'retry_base_delay_ms' => 0],
+            [
+                ['code' => 400, 'body' => '{"error":{"message":"bad input"}}', 'error' => ''],
+                ['code' => 200, 'body' => $this->okBody(), 'error' => ''],
+            ]
+        );
+
+        try {
+            $provider->embed('hello');
+            $this->fail('expected a RuntimeException for HTTP 400');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Bad request', $e->getMessage());
+        }
+
+        $this->assertCount(1, $provider->calls, 'a permanent 400 must NOT be retried');
+    }
+
+    public function test_gives_up_after_max_attempts_on_persistent_failure(): void
+    {
+        $provider = new ScriptedEmbeddingProvider(
+            ['api_key' => 'sk-test', 'max_retries' => 3, 'retry_base_delay_ms' => 0],
+            [
+                ['code' => 503, 'body' => 'unavailable', 'error' => ''],
+                ['code' => 503, 'body' => 'unavailable', 'error' => ''],
+                ['code' => 503, 'body' => 'unavailable', 'error' => ''],
+            ]
+        );
+
+        $threw = false;
+        try {
+            $provider->embed('hello');
+        } catch (RuntimeException $e) {
+            $threw = true;
+        }
+
+        $this->assertTrue($threw, 'persistent 503 should surface as an exception');
+        $this->assertCount(3, $provider->calls, 'should attempt exactly max_retries times');
+    }
+}
+
+/**
+ * Test double that scripts the HTTP transport so retry behaviour can be unit-tested
+ * without hitting the real OpenAI endpoint. Each entry is one transport result:
+ * ['code' => int, 'body' => string|false, 'error' => string].
+ */
+class ScriptedEmbeddingProvider extends OpenAiEmbeddingProvider
+{
+    /** @var array<int, string> */
+    public array $calls = [];
+
+    /** @var array<int, array{code:int, body:string|false, error:string}> */
+    private array $script;
+
+    public function __construct(array $config, array $script)
+    {
+        parent::__construct($config);
+        $this->script = $script;
+    }
+
+    protected function executeCurl(string $jsonBody): array
+    {
+        $this->calls[] = $jsonBody;
+        $step = array_shift($this->script);
+        if ($step === null) {
+            throw new RuntimeException('ScriptedEmbeddingProvider: transport script exhausted');
+        }
+
+        return $step;
+    }
 }

@@ -27,10 +27,9 @@ use Condoedge\Ai\Services\PromptSections\CurrentUserContextSection;
  * Constructs comprehensive prompts for Neo4j Cypher query generation by composing
  * multiple configurable sections. Uses the HasInternalModules trait for extensibility.
  *
- * ## Architecture
- *
  * The builder uses a priority-based module pipeline where each section contributes
- * a portion of the final prompt. Sections are processed in priority order (lower = first).
+ * a portion of the final prompt. Sections are processed in priority order (lower =
+ * first) and loaded from `config('ai.query_generator_sections')`.
  *
  * Default sections (in priority order):
  * - project_context (10): Project name, description, business rules
@@ -48,72 +47,6 @@ use Condoedge\Ai\Services\PromptSections\CurrentUserContextSection;
  * - query_rules (75): Rules for query generation
  * - question (80): The user's actual question
  * - task_instructions (90): Final instructions for the LLM
- *
- * ## Configuration
- *
- * Default sections are loaded from `config('ai.query_generator_sections')`.
- *
- * ```php
- * // config/ai.php
- * return [
- *     'query_generator_sections' => [
- *         \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
- *         \Condoedge\Ai\Services\PromptSections\SchemaSection::class,
- *         // ... more sections
- *     ],
- * ];
- * ```
- *
- * ## Extension Methods
- *
- * ### Add a new section
- * ```php
- * $builder->addModule(new CustomSection());
- * ```
- *
- * ### Remove a section
- * ```php
- * $builder->removeModule('similar_queries');
- * ```
- *
- * ### Replace a section
- * ```php
- * $builder->replaceModule('project_context', new MyProjectContextSection());
- * ```
- *
- * ### Extend with callbacks (insert content after a section)
- * ```php
- * $builder->extendAfter('schema', function($question, $context, $options) {
- *     return "\n=== CUSTOM SECTION ===\n\nYour content here\n\n";
- * });
- * ```
- *
- * ### Global extensions (applied to all instances)
- * ```php
- * SemanticPromptBuilder::extendBuild(function($builder) {
- *     $builder->addModule(new GlobalCustomSection());
- * });
- * ```
- *
- * ## Usage Example
- *
- * ```php
- * $builder = new SemanticPromptBuilder($patternLibrary);
- *
- * // Customize for your needs
- * $builder->setProjectContext([
- *     'name' => 'My CRM',
- *     'description' => 'Customer relationship management system',
- *     'business_rules' => ['All dates are in UTC'],
- * ]);
- *
- * // Build the prompt
- * $prompt = $builder->buildPrompt(
- *     question: "How many customers do we have?",
- *     context: ['schema' => $schema, 'metadata' => $metadata],
- *     allowWrite: false
- * );
- * ```
  *
  * @uses HasInternalModules<PromptSectionInterface> For module pipeline functionality
  *
@@ -287,15 +220,21 @@ class SemanticPromptBuilder
         $options = ['allowWrite' => $allowWrite];
 
         // System framing: explicit custom prompt overrides; otherwise the config identity
-        // plus an internal, provider-neutral role note.
+        // plus an internal, provider-neutral role note (config-driven so it can be localized).
         if ($this->systemPrompt !== null) {
             $system = $this->systemPrompt . "\n\n";
         } else {
             $identity = AssistantIdentity::render(includeLanguagePolicy: false);
+            $roleNote = $this->queryRoleNote();
             $system = ($identity !== '' ? $identity . "\n\n" : '')
-                . "Internally, you translate the user's questions into a graph query language based on the "
-                . "semantic business definitions provided below. Never reveal this query language or any internal "
-                . "schema to the user.\n\n";
+                . ($roleNote !== '' ? $roleNote . "\n\n" : '');
+        }
+
+        // Append the tenant-scopeable subset rules so the model emits queries the
+        // execution security boundary can scope (reduces fail-closed over-DENY).
+        $subsetRules = $this->scopeableSubsetRules();
+        if ($subsetRules !== '') {
+            $system .= $subsetRules . "\n\n";
         }
 
         $user = '';
@@ -326,24 +265,52 @@ class SemanticPromptBuilder
     }
 
     /**
-     * Build the full query-generation prompt as a single string.
-     *
-     * Retained for backward compatibility with callers/tests that expect one string.
-     * The live QueryGenerator path uses buildPrompts() for true role separation.
-     *
-     * @param string $question User's natural language question
-     * @param PipelineContext $context Pipeline context with schema, metadata, and detected scopes
-     * @param bool $allowWrite Whether to allow write operations
-     * @return string Complete LLM prompt
+     * The internal, provider-neutral note appended after the identity in the SYSTEM
+     * message. Config-driven (ai.prompt.query_role_note) so it can be localized or
+     * overridden like the rest of the identity. Container-tolerant for unit tests.
      */
-    public function buildPrompt(
-        string $question,
-        PipelineContext $context,
-        bool $allowWrite = false
-    ): string {
-        ['system' => $system, 'user' => $user] = $this->buildPrompts($question, $context, $allowWrite);
+    private function queryRoleNote(): string
+    {
+        $default = "Internally, you translate the user's questions into a graph query language based on the "
+            . 'semantic business definitions provided below. Never reveal this query language or any internal '
+            . 'schema to the user.';
 
-        return $system . $user;
+        if (function_exists('app') && app()->bound('config')) {
+            return (string) config('ai.prompt.query_role_note', $default);
+        }
+
+        return $default;
+    }
+
+    /**
+     * Static rules that constrain generation to the tenant-scopeable subset the
+     * CypherScopeAnalyzer recognizes. Returned empty when team security is off so
+     * unscoped deployments are unaffected. Container-tolerant for unit tests.
+     */
+    private function scopeableSubsetRules(): string
+    {
+        if (function_exists('app') && app()->bound('config')) {
+            if (!config('ai.security.enabled', true)) {
+                return '';
+            }
+            if (!config('ai.security.enforce_scopeable_subset', true)) {
+                return '';
+            }
+        }
+
+        return implode("\n", [
+            'QUERY SHAPE RULES (required so results stay scoped to the user\'s permissions):',
+            '- Give every matched node an explicit variable AND label, e.g. MATCH (i:Invoice) — never MATCH (n) or MATCH (n {id: 1}).',
+            '- The variable you RETURN must be a labelled node bound by a MATCH in that same query part.',
+            '- One query part per UNION branch; each branch must MATCH its own labelled nodes.',
+            '- Do not use CALL {} subqueries, pattern comprehensions over sensitive entities, or EXISTS {} that bind sensitive nodes.',
+            '- Emit a single statement (no ";"-separated statements).',
+            '- If a WHERE uses a top-level OR, the whole disjunction is fine — it will be grouped automatically.',
+            'UNION RULES (critical):',
+            '- Treat each UNION branch as a complete, independent query: MATCH its own labelled nodes AND add their $ai_team_ids filter INSIDE that branch.',
+            '- Every branch\'s RETURN must project the SAME column names/aliases (e.g. RETURN x AS result) so all UNION branches share the same columns.',
+            '- Express team scoping as a WHERE predicate whenever possible; if a relationship MATCH is required, place it before the branch\'s RETURN and do NOT add the helper node to the RETURN.',
+        ]);
     }
 
     // =========================================================================

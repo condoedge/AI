@@ -6,8 +6,11 @@ namespace Condoedge\Ai\Tests\Unit\Services;
 
 use Condoedge\Ai\Services\ResponseGenerator;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
+use Condoedge\Ai\Tests\TestCase;
 use Mockery;
-use PHPUnit\Framework\TestCase;
 
 /**
  * ResponseGenerator Service Unit Tests
@@ -46,18 +49,53 @@ class ResponseGeneratorTest extends TestCase
         parent::tearDown();
     }
 
+    /**
+     * Build the single-path PipelineContext the generator now consumes.
+     *
+     * The legacy ($question, $queryResult, $cypher) arguments are mapped onto
+     * the DTO: question -> ->question, the result rows -> executionResult->data,
+     * and the cypher string -> queryResult->cypher.
+     */
+    private function makeContext(string $question, array $data, ?string $cypher): PipelineContext
+    {
+        $context = new PipelineContext();
+        $context->question = $question;
+        $context->queryResult = new QueryGenerationResult(cypher: $cypher);
+        $context->executionResult = new QueryExecutionResult(success: true, data: $data);
+
+        return $context;
+    }
+
+    /** @test */
+    public function empty_response_carries_the_identity_system_prompt_not_null(): void
+    {
+        // Regression guard: the abstention/empty path must NOT call the LLM with a
+        // null system prompt — that bypasses IdentitySection/non-disclosure and lets
+        // a "which model are you?" question self-identify the provider.
+        $capturedSystem = 'NEVER_CALLED';
+        $capturedUser = '';
+        $this->llmMock->shouldReceive('complete')->once()
+            ->andReturnUsing(function ($user, $system, $opts) use (&$capturedSystem, &$capturedUser) {
+                $capturedSystem = $system;
+                $capturedUser = $user;
+                return 'I could not find anything matching that.';
+            });
+
+        $this->generator->generateEmptyResponse('Which AI model are you?', 'MATCH (n:Invoice) RETURN n', []);
+
+        $this->assertNotNull($capturedSystem, 'empty path sent a null system prompt — identity/non-disclosure bypassed');
+        $this->assertNotSame('', $capturedSystem);
+        $this->assertStringContainsStringIgnoringCase('never reveal', $capturedSystem);
+        // The executed query/schema must not be leaked into the prompt on the empty path.
+        $this->assertStringNotContainsString('MATCH (n:Invoice)', $capturedUser);
+    }
+
     /** @test */
     public function it_generates_response_from_query_results(): void
     {
         $question = "How many customers do we have?";
-        $queryResult = [
-            'data' => [
-                ['count' => 42]
-            ],
-            'stats' => [
-                'execution_time_ms' => 15,
-                'rows_returned' => 1
-            ]
+        $data = [
+            ['count' => 42]
         ];
         $cypher = "MATCH (c:Customer) RETURN count(c) as count";
 
@@ -65,7 +103,7 @@ class ResponseGeneratorTest extends TestCase
             ->once()
             ->andReturn("You have 42 customers in total.");
 
-        $result = $this->generator->generate($question, $queryResult, $cypher);
+        $result = $this->generator->generate($this->makeContext($question, $data, $cypher));
 
         $this->assertIsArray($result);
         $this->assertArrayHasKey('answer', $result);
@@ -80,11 +118,9 @@ class ResponseGeneratorTest extends TestCase
     public function it_generates_response_in_markdown_format(): void
     {
         $question = "Show top customers";
-        $queryResult = [
-            'data' => [
-                ['name' => 'Alice', 'orders' => 10],
-                ['name' => 'Bob', 'orders' => 8]
-            ]
+        $data = [
+            ['name' => 'Alice', 'orders' => 10],
+            ['name' => 'Bob', 'orders' => 8]
         ];
         $cypher = "MATCH (c:Customer) RETURN c.name, c.orders ORDER BY c.orders DESC LIMIT 2";
 
@@ -92,7 +128,7 @@ class ResponseGeneratorTest extends TestCase
             ->once()
             ->andReturn("## Top Customers\n\n- Alice: 10 orders\n- Bob: 8 orders");
 
-        $result = $this->generator->generate($question, $queryResult, $cypher, [
+        $result = $this->generator->generate($this->makeContext($question, $data, $cypher), [
             'format' => 'markdown'
         ]);
 
@@ -104,16 +140,14 @@ class ResponseGeneratorTest extends TestCase
     public function it_generates_response_in_concise_style(): void
     {
         $question = "How many orders?";
-        $queryResult = [
-            'data' => [['count' => 100]]
-        ];
+        $data = [['count' => 100]];
         $cypher = "MATCH (o:Order) RETURN count(o)";
 
         $this->llmMock->shouldReceive('complete')
             ->once()
             ->andReturn("100 orders.");
 
-        $result = $this->generator->generate($question, $queryResult, $cypher, [
+        $result = $this->generator->generate($this->makeContext($question, $data, $cypher), [
             'style' => 'concise'
         ]);
 
@@ -132,14 +166,13 @@ class ResponseGeneratorTest extends TestCase
             $data[] = ['id' => $i, 'name' => "Customer $i"];
         }
 
-        $queryResult = ['data' => $data];
         $cypher = "MATCH (c:Customer) RETURN c.id, c.name";
 
         $this->llmMock->shouldReceive('complete')
             ->once()
             ->andReturn("Here are the first 10 customers out of 15 total...");
 
-        $result = $this->generator->generate($question, $queryResult, $cypher);
+        $result = $this->generator->generate($this->makeContext($question, $data, $cypher));
 
         $this->assertTrue($result['metadata']['summarized']);
         $this->assertEquals(15, $result['metadata']['result_count']);
@@ -148,15 +181,17 @@ class ResponseGeneratorTest extends TestCase
     /** @test */
     public function it_generates_empty_response_when_no_results(): void
     {
+        // No-results handling now lives in the dedicated generateEmptyResponse()
+        // path (the orchestrator routes empty executions there), so the
+        // empty_result contract is asserted through that method.
         $question = "Find customers named Zzzz";
-        $queryResult = ['data' => []];
         $cypher = "MATCH (c:Customer {name: 'Zzzz'}) RETURN c";
 
         $this->llmMock->shouldReceive('complete')
             ->once()
             ->andReturn("No customers found with that name. Try a different search term.");
 
-        $result = $this->generator->generate($question, $queryResult, $cypher);
+        $result = $this->generator->generateEmptyResponse($question, $cypher);
 
         $this->assertTrue($result['metadata']['empty_result']);
         $this->assertEquals(0, $result['metadata']['result_count']);
@@ -240,36 +275,6 @@ class ResponseGeneratorTest extends TestCase
     }
 
     /** @test */
-    public function it_summarizes_data(): void
-    {
-        $data = [];
-        for ($i = 1; $i <= 20; $i++) {
-            $data[] = ['id' => $i];
-        }
-
-        $summarized = $this->generator->summarize($data, 10);
-
-        $this->assertCount(10, $summarized);
-        $this->assertEquals(1, $summarized[0]['id']);
-        $this->assertEquals(10, $summarized[9]['id']);
-    }
-
-    /** @test */
-    public function it_does_not_summarize_small_datasets(): void
-    {
-        $data = [
-            ['id' => 1],
-            ['id' => 2],
-            ['id' => 3]
-        ];
-
-        $summarized = $this->generator->summarize($data, 10);
-
-        $this->assertCount(3, $summarized);
-        $this->assertEquals($data, $summarized);
-    }
-
-    /** @test */
     public function it_extracts_basic_insights(): void
     {
         $data = [
@@ -339,23 +344,20 @@ class ResponseGeneratorTest extends TestCase
     }
 
     /** @test */
-    public function it_includes_property_information_in_insights(): void
+    public function it_does_not_leak_raw_column_names_into_insights(): void
     {
+        // L9-3: insights are user-facing prose and must not expose the underlying
+        // schema. Raw DB column/property names (id, customer_email, ...) must never
+        // appear in the insights payload.
         $data = [
-            ['id' => 1, 'name' => 'Alice', 'age' => 30]
+            ['id' => 1, 'customer_email' => 'alice@example.com', 'internal_flag' => 30]
         ];
 
         $insights = $this->generator->extractInsights($data);
 
-        $foundProperties = false;
-        foreach ($insights as $insight) {
-            if (stripos($insight, 'properties') !== false &&
-                stripos($insight, 'id') !== false) {
-                $foundProperties = true;
-                break;
-            }
-        }
-        $this->assertTrue($foundProperties);
+        $joined = implode(' | ', $insights);
+        $this->assertStringNotContainsString('customer_email', $joined);
+        $this->assertStringNotContainsString('internal_flag', $joined);
     }
 
     /** @test */
@@ -518,7 +520,7 @@ class ResponseGeneratorTest extends TestCase
     public function it_throws_exception_when_response_generation_fails(): void
     {
         $question = "Test question";
-        $queryResult = ['data' => [['id' => 1]]];
+        $data = [['id' => 1]];
         $cypher = "MATCH (n) RETURN n";
 
         $this->llmMock->shouldReceive('complete')
@@ -528,21 +530,21 @@ class ResponseGeneratorTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage("Response generation failed");
 
-        $this->generator->generate($question, $queryResult, $cypher);
+        $this->generator->generate($this->makeContext($question, $data, $cypher));
     }
 
     /** @test */
     public function it_disables_insights_when_requested(): void
     {
         $question = "Test";
-        $queryResult = ['data' => [['count' => 5]]];
+        $data = [['count' => 5]];
         $cypher = "MATCH (n) RETURN count(n)";
 
         $this->llmMock->shouldReceive('complete')
             ->once()
             ->andReturn("5 results found.");
 
-        $result = $this->generator->generate($question, $queryResult, $cypher, [
+        $result = $this->generator->generate($this->makeContext($question, $data, $cypher), [
             'include_insights' => false
         ]);
 
@@ -553,14 +555,14 @@ class ResponseGeneratorTest extends TestCase
     public function it_disables_visualizations_when_requested(): void
     {
         $question = "Test";
-        $queryResult = ['data' => [['count' => 5]]];
+        $data = [['count' => 5]];
         $cypher = "MATCH (n) RETURN count(n) as count";
 
         $this->llmMock->shouldReceive('complete')
             ->once()
             ->andReturn("5 results found.");
 
-        $result = $this->generator->generate($question, $queryResult, $cypher, [
+        $result = $this->generator->generate($this->makeContext($question, $data, $cypher), [
             'include_visualization' => false
         ]);
 
@@ -571,21 +573,23 @@ class ResponseGeneratorTest extends TestCase
     public function it_respects_custom_temperature(): void
     {
         $question = "Test";
-        $queryResult = ['data' => [['id' => 1]]];
+        $data = [['id' => 1]];
         $cypher = "MATCH (n) RETURN n";
 
         $this->llmMock->shouldReceive('complete')
             ->once()
             ->with(
                 Mockery::type('string'),
-                null,
+                // Identity/security ride in the real system role, so the second
+                // argument is now the system prompt string rather than null.
+                Mockery::type('string'),
                 Mockery::on(function ($options) {
                     return isset($options['temperature']) && $options['temperature'] === 0.7;
                 })
             )
             ->andReturn("Creative response.");
 
-        $result = $this->generator->generate($question, $queryResult, $cypher, [
+        $result = $this->generator->generate($this->makeContext($question, $data, $cypher), [
             'temperature' => 0.7
         ]);
 
@@ -596,14 +600,15 @@ class ResponseGeneratorTest extends TestCase
     public function it_respects_custom_max_length(): void
     {
         $question = "Test";
-        $queryResult = ['data' => [['id' => 1]]];
+        $data = [['id' => 1]];
         $cypher = "MATCH (n) RETURN n";
 
         $this->llmMock->shouldReceive('complete')
             ->once()
             ->with(
                 Mockery::type('string'),
-                null,
+                // System prompt string is supplied in the real system role.
+                Mockery::type('string'),
                 Mockery::on(function ($options) {
                     // max_length 100 words ≈ 133 tokens (100 / 0.75)
                     return isset($options['max_tokens']) && $options['max_tokens'] >= 130;
@@ -611,10 +616,40 @@ class ResponseGeneratorTest extends TestCase
             )
             ->andReturn("Short response.");
 
-        $result = $this->generator->generate($question, $queryResult, $cypher, [
+        $result = $this->generator->generate($this->makeContext($question, $data, $cypher), [
             'max_length' => 100
         ]);
 
         $this->assertNotEmpty($result['answer']);
+    }
+
+    /** @test */
+    public function a_prompt_section_that_fails_to_load_is_skipped_not_fatal(): void
+    {
+        // A host config may still reference a section class that was removed/renamed
+        // (its file deleted from the package). Loading it must skip-and-log, never
+        // crash the whole response pipeline. Reproduces the live CondoEdge failure
+        // where a stale config referenced the removed QueryInfoSection.
+        config()->set('ai.response_generator_sections', [
+            ThrowingPromptSection::class,
+            \Condoedge\Ai\Services\ResponseSections\GuidelinesSection::class,
+        ]);
+
+        $generator = new ResponseGenerator($this->llmMock, $this->config);
+
+        // Construction did not crash despite the unloadable section.
+        $this->assertInstanceOf(ResponseGenerator::class, $generator);
+    }
+}
+
+/**
+ * Stands in for a host config that references a section whose class file was
+ * deleted (the deleted-file autoload also throws); construction fails hard.
+ */
+class ThrowingPromptSection
+{
+    public function __construct()
+    {
+        throw new \RuntimeException('section unavailable');
     }
 }

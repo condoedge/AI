@@ -35,7 +35,7 @@ class FileSearchService
     /**
      * Additional collections to union into content/filename search alongside the
      * chunk store's bound (primary) collection. Used so physical/documentation
-     * docs (e.g. 'documentation_chunks') are returned by content search (B4).
+     * docs (e.g. 'documentation_chunks') are returned by content search.
      *
      * @var array<string>
      */
@@ -75,7 +75,6 @@ class FileSearchService
         $limit = $options['limit'] ?? 10;
         $includeRelationships = $options['include_relationships'] ?? false;
 
-        // Build filters for Qdrant
         $filters = [];
         if (isset($options['file_id'])) {
             $filters['file_id'] = $options['file_id'];
@@ -146,7 +145,6 @@ class FileSearchService
             $maxScore = collect($fileChunks)->max('score');
             $avgScore = collect($fileChunks)->avg('score');
 
-            // Get best matching chunk for preview
             $bestChunk = collect($fileChunks)->sortByDesc('score')->first();
 
             $result = [
@@ -179,17 +177,14 @@ class FileSearchService
             ->values()
             ->toArray();
 
-        // Load File models
         $fileIds = array_column($results, 'file_id');
         $files = FileModel::whereIn('id', $fileIds)->get()->keyBy('id');
 
-        // Enhance results with File models
         foreach ($results as &$result) {
             $file = $files->get($result['file_id']);
             if ($file) {
                 $result['file'] = $file;
 
-                // Optionally load relationships from Neo4j
                 if ($includeRelationships) {
                     $result['relationships'] = $this->getFileRelationships($file);
                 }
@@ -289,7 +284,6 @@ class FileSearchService
         $limit = $options['limit'] ?? 10;
         $includeRelationships = $options['include_relationships'] ?? false;
 
-        // Build filters for chunk store
         $filters = [];
         if (isset($options['file_types'])) {
             $filters['file_types'] = $options['file_types'];
@@ -300,7 +294,7 @@ class FileSearchService
 
         // Search chunk store by filename (primary collection), then union any
         // additional collections (e.g. documentation_chunks) so physical docs are
-        // found by explicit filename references too (B4).
+        // found by explicit filename references too.
         $chunks = $this->chunkStore->searchByFilename($filename, $limit * 2, $filters);
 
         foreach ($this->additionalCollections as $collection) {
@@ -316,32 +310,27 @@ class FileSearchService
             return [];
         }
 
-        // Group chunks by file ID (match searchByContent pattern)
         $fileGroups = collect($chunks)->groupBy(fn($result) => $result['chunk']->fileId);
 
         $results = [];
         foreach ($fileGroups as $fileId => $fileChunks) {
-            // Get best matching chunk for preview (highest score)
             $bestChunk = collect($fileChunks)->sortByDesc('score')->first();
 
             $results[] = [
                 'file_id' => $fileId,
-                'score' => $bestChunk['score'], // Use best chunk's score for filename match
+                'score' => $bestChunk['score'],
                 'best_chunk' => $bestChunk['chunk'],
                 'chunk_count' => count($fileChunks),
                 'chunks' => array_map(fn($r) => $r['chunk'], $fileChunks->toArray()),
             ];
         }
 
-        // Sort by score descending and limit
         usort($results, fn($a, $b) => $b['score'] <=> $a['score']);
         $results = array_slice($results, 0, $limit);
 
-        // Load File models
         $fileIds = array_column($results, 'file_id');
         $files = FileModel::whereIn('id', $fileIds)->get()->keyBy('id');
 
-        // Enhance with File models
         foreach ($results as &$result) {
             $file = $files->get($result['file_id']);
             if ($file) {
@@ -376,14 +365,12 @@ class FileSearchService
         $cypher = $this->buildMetadataQuery($criteria, $limit);
         $results = $this->graphStore->query($cypher, $criteria);
 
-        // Extract file IDs from results
         $fileIds = array_column($results, 'id');
 
         if (empty($fileIds)) {
             return [];
         }
 
-        // Load File models
         $files = FileModel::whereIn('id', $fileIds)->get();
 
         return $files->map(function ($file) {

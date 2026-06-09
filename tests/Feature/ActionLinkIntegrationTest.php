@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Feature;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\Services\ResponseSections\ResponseEntityActionsSection;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Condoedge\Ai\Tests\TestCase;
@@ -30,18 +33,18 @@ class ActionLinkIntegrationTest extends TestCase
 
         $section = new ResponseEntityActionsSection();
 
-        // Simulate NO QUERY scenario - cypher is empty but we have conversation context
-        $context = [
-            'question' => 'give me the profile link for John',
-            'cypher' => '', // Empty because QueryGenerator returned NO QUERY REQUIRED
-            'data' => [], // Empty because no query was executed
-            'conversation_context' => [
-                'focused_entity' => 'Person',
-                'last_result_sample' => [
-                    ['id' => '152463', 'name' => 'John Doe', 'full_name' => 'John Doe'],
-                ],
-                'last_result_count' => 1,
+        // Simulate NO QUERY scenario - cypher is empty but we have conversation context.
+        // The pipeline now carries a typed PipelineContext DTO, not a raw array.
+        $context = new PipelineContext();
+        $context->question = 'give me the profile link for John';
+        $context->queryResult = new QueryGenerationResult(cypher: ''); // NO QUERY REQUIRED
+        $context->executionResult = new QueryExecutionResult(success: true, data: []); // nothing executed
+        $context->conversationContext = [
+            'focused_entity' => 'Person',
+            'last_result_sample' => [
+                ['id' => '152463', 'name' => 'John Doe', 'full_name' => 'John Doe'],
             ],
+            'last_result_count' => 1,
         ];
 
         $shouldInclude = $section->shouldInclude($context, []);
@@ -74,16 +77,15 @@ class ActionLinkIntegrationTest extends TestCase
 
         $section = new ResponseEntityActionsSection();
 
-        $context = [
-            'cypher' => '',
-            'data' => [],
-            'conversation_context' => [
-                'focused_entity' => 'Person',
-                'last_result_sample' => [
-                    ['id' => '100', 'name' => 'Alice Johnson'],
-                    ['id' => '101', 'name' => 'Bob Smith'],
-                    ['id' => '102', 'name' => 'Carol White'],
-                ],
+        $context = new PipelineContext();
+        $context->queryResult = new QueryGenerationResult(cypher: '');
+        $context->executionResult = new QueryExecutionResult(success: true, data: []);
+        $context->conversationContext = [
+            'focused_entity' => 'Person',
+            'last_result_sample' => [
+                ['id' => '100', 'name' => 'Alice Johnson'],
+                ['id' => '101', 'name' => 'Bob Smith'],
+                ['id' => '102', 'name' => 'Carol White'],
             ],
         ];
 

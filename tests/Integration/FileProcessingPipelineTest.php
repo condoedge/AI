@@ -40,6 +40,11 @@ class FileProcessingPipelineTest extends TestCase
         $this->vectorStoreMock->shouldReceive('collectionExists')
             ->andReturn(true);
 
+        // QdrantChunkStore::ensureCollectionExists() best-effort ensures the
+        // full-text payload index on every verified collection.
+        $this->vectorStoreMock->shouldReceive('ensurePayloadIndex')
+            ->andReturn(true);
+
         // Setup embedding provider mock to return fake embeddings
         $this->embeddingProviderMock->shouldReceive('embedBatch')
             ->andReturnUsing(function ($texts) {
@@ -57,7 +62,8 @@ class FileProcessingPipelineTest extends TestCase
         $chunkStore = new QdrantChunkStore(
             $this->vectorStoreMock,
             $this->embeddingProviderMock,
-            'file_chunks'
+            'file_chunks',
+            1536 // Explicit vector size avoids config() helper, which needs a booted Laravel container
         );
 
         $this->processor = new FileProcessor(
@@ -215,6 +221,111 @@ MD;
         $this->assertGreaterThanOrEqual(1, $result->chunksCreated);
         // Verify the chunks are properly structured
         $this->assertEquals($result->chunksCreated, $result->embeddingsGenerated);
+    }
+
+    public function test_chunk_offsets_map_to_real_positions_in_source_text()
+    {
+        // Overlapping chunks: the old offset logic summed each chunk's length
+        // cumulatively, so with overlap the "start" of later chunks ran past
+        // their true position in the source text. Offsets must be real character
+        // positions: mb_substr(text, start, end - start) === chunk content.
+        $filePath = $this->tempDir . '/offsets.txt';
+        $content = str_repeat('Hello world this is a sentence. ', 80); // ~2500 chars
+        file_put_contents($filePath, $content);
+
+        $file = (object) [
+            'id' => 42,
+            'name' => 'offsets.txt',
+            'path' => $filePath,
+            'disk' => 'local',
+        ];
+
+        $this->vectorStoreMock->shouldReceive('count')
+            ->once()
+            ->andReturn(0);
+
+        $capturedPoints = [];
+        $this->vectorStoreMock->shouldReceive('upsert')
+            ->once()
+            ->andReturnUsing(function ($collection, $points) use (&$capturedPoints) {
+                $capturedPoints = $points;
+                return true;
+            });
+
+        $result = $this->processor->processFile($file, [
+            'chunk_size' => 200,
+            'overlap' => 50,
+        ]);
+
+        $this->assertTrue($result->success);
+        $this->assertGreaterThan(1, count($capturedPoints), 'Expected multiple overlapping chunks');
+
+        foreach ($capturedPoints as $point) {
+            $start = $point['payload']['start_position'];
+            $end = $point['payload']['end_position'];
+            $chunkContent = $point['payload']['content'];
+
+            $this->assertGreaterThanOrEqual(0, $start);
+            $this->assertLessThanOrEqual(mb_strlen($content, 'UTF-8'), $end);
+            $this->assertSame(
+                $end - $start,
+                mb_strlen($chunkContent, 'UTF-8'),
+                'end - start must equal the chunk character length'
+            );
+            $this->assertSame(
+                $chunkContent,
+                mb_substr($content, $start, $end - $start, 'UTF-8'),
+                'The slice of the source text at [start, end) must equal the chunk content'
+            );
+        }
+    }
+
+    public function test_chunk_offsets_are_real_for_multibyte_source()
+    {
+        // Multibyte content: offsets are CHARACTER positions, so slicing with
+        // mb_substr at the stored offsets must reproduce the chunk exactly.
+        $filePath = $this->tempDir . '/accents.txt';
+        $sentence = 'Voilà une phrase accentuée à propos du café. ';
+        $content = str_repeat($sentence, 60);
+        file_put_contents($filePath, $content);
+
+        $file = (object) [
+            'id' => 43,
+            'name' => 'accents.txt',
+            'path' => $filePath,
+            'disk' => 'local',
+        ];
+
+        $this->vectorStoreMock->shouldReceive('count')
+            ->once()
+            ->andReturn(0);
+
+        $capturedPoints = [];
+        $this->vectorStoreMock->shouldReceive('upsert')
+            ->once()
+            ->andReturnUsing(function ($collection, $points) use (&$capturedPoints) {
+                $capturedPoints = $points;
+                return true;
+            });
+
+        $result = $this->processor->processFile($file, [
+            'chunk_size' => 300,
+            'overlap' => 60,
+        ]);
+
+        $this->assertTrue($result->success);
+
+        foreach ($capturedPoints as $point) {
+            $start = $point['payload']['start_position'];
+            $end = $point['payload']['end_position'];
+            $chunkContent = $point['payload']['content'];
+
+            $this->assertSame(
+                $chunkContent,
+                mb_substr($content, $start, $end - $start, 'UTF-8'),
+                'Multibyte chunk must round-trip via mb_substr at its character offsets'
+            );
+        }
     }
 
     public function test_fails_gracefully_for_unsupported_file_type()

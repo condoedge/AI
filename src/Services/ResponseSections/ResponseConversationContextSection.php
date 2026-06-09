@@ -45,7 +45,6 @@ class ResponseConversationContextSection extends BaseResponseSection
 
         $output = $this->header('Conversation Context');
 
-        // Referenced files from previous response - include full content for follow-ups
         if (!empty($conversationContext['last_referenced_files'])) {
             $output .= "**Files Referenced in Previous Response:**\n\n";
 
@@ -73,13 +72,11 @@ class ResponseConversationContextSection extends BaseResponseSection
             $output .= "or similar references, use the file content above to answer.\n\n";
         }
 
-        // Previous result sample for context
         if (!empty($conversationContext['last_result_sample'])) {
             $output .= "**Previous Query Results Sample:**\n";
             $output .= "```json\n" . json_encode($conversationContext['last_result_sample'], JSON_PRETTY_PRINT) . "\n```\n\n";
         }
 
-        // Focused entity
         if (!empty($conversationContext['focused_entity'])) {
             $output .= "**Current Focus:** {$conversationContext['focused_entity']}\n";
 

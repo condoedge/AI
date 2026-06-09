@@ -33,6 +33,12 @@ class DualStorageCoordinationTest extends TestCase
         // Set up database schema for File model
         $this->setUpDatabase();
 
+        // FileSearchService resolves the File model through the FileModel facade
+        // (the 'file-model' container binding), not the File class directly.
+        // Bind it to a real File instance so FileModel::whereIn(...)->get() queries
+        // the sqlite 'files' table this test populates.
+        $this->app->instance('file-model', new File());
+
         // Create mocks
         $this->fileProcessorMock = Mockery::mock(FileProcessorInterface::class);
         $this->chunkStoreMock = Mockery::mock(ChunkStoreInterface::class);

@@ -106,7 +106,6 @@ class GuidelinesSection extends BaseResponseSection
         $format = $options['format'] ?? 'text';
         $maxLength = $options['max_length'] ?? $this->getMaxLengthForStyle($style);
 
-        // Load config-based restrictions
         $hideTechnical = $options['hide_technical'] ?? config('ai.response_generation.hide_technical_details', true);
         $hideStats = $options['hide_stats'] ?? config('ai.response_generation.hide_execution_stats', true);
         $hideProjectInfo = $options['hide_project'] ?? config('ai.response_generation.hide_project_info', true);
@@ -119,21 +118,18 @@ class GuidelinesSection extends BaseResponseSection
         $output .= "- Use specific data from the results\n";
         $output .= "- Keep response under {$maxLength} words\n";
 
-        // The "don't reveal how you got it" rule is stated ONCE here (it used to be
-        // repeated across the style block, the detailed config block, and a separate avoid list).
-        // It applies to every style except 'technical', which may surface those details.
+        // The "don't reveal how you got it" rule is stated ONCE here, and applies to
+        // every style except 'technical', which may surface those details.
         if ($style !== 'technical' && $this->shouldHideMechanics($style, $hideTechnical, $hideStats, $hideProjectInfo)) {
             $output .= "- Do NOT reveal how you found the answer: no query/database references, no execution time or performance metrics, no project/system name, and no phrases like \"The query returned\" or \"This was obtained by\". Speak directly as if you simply know the answer.\n";
         }
 
-        // Format-specific guidelines
         if ($format === 'markdown') {
             $output .= "- Format response in Markdown\n";
         } elseif ($format === 'json') {
             $output .= "- Structure response as JSON with 'summary' and 'details' keys\n";
         }
 
-        // Things to avoid (custom only — the built-in mechanics rule above is not repeated here)
         if (!empty($this->avoidGuidelines)) {
             $output .= "\nDo NOT include:\n";
             foreach (array_unique($this->avoidGuidelines) as $avoid) {
@@ -141,7 +137,6 @@ class GuidelinesSection extends BaseResponseSection
             }
         }
 
-        // Custom guidelines
         if (!empty($this->customGuidelines)) {
             $output .= "\nAdditional guidelines:\n";
             foreach ($this->customGuidelines as $guideline) {

@@ -9,70 +9,11 @@ namespace Condoedge\Ai\Services;
  * Used by SemanticPromptBuilder and ResponseGenerator to compose their outputs from
  * reusable, configurable sections.
  *
- * ## Core Concepts
- *
- * - **Module**: A class implementing SectionModuleInterface that contributes content
- * - **Priority**: Numeric value determining processing order (lower = earlier)
- * - **Callbacks**: Hooks that run before/after specific modules
- * - **Global Extensions**: Modifications applied to all new instances
- *
- * ## Architecture
- *
- * ```
- * ┌─────────────────────────────────────────────────────────────┐
- * │                    HasInternalModules                       │
- * ├─────────────────────────────────────────────────────────────┤
- * │  Properties:                                                │
- * │  - $sections[]        → Registered modules by name          │
- * │  - $beforeCallbacks[] → Hooks before modules                │
- * │  - $afterCallbacks[]  → Hooks after modules                 │
- * │  - $globalExtensions  → Static extensions for all instances │
- * ├─────────────────────────────────────────────────────────────┤
- * │  Pipeline Processing:                                       │
- * │  1. Sort modules by priority                                │
- * │  2. For each module:                                        │
- * │     a. Run before callbacks                                 │
- * │     b. Process module (if shouldInclude)                    │
- * │     c. Run after callbacks                                  │
- * └─────────────────────────────────────────────────────────────┘
- * ```
- *
- * ## Usage Examples
- *
- * ### Basic Usage
- * ```php
- * class MyBuilder {
- *     use HasInternalModules;
- *
- *     protected $defaultModulesConfigKey = 'myapp.builder_modules';
- *
- *     public function __construct() {
- *         $this->registerDefaultModules();
- *         $this->applyGlobalExtensions();
- *     }
- * }
- * ```
- *
- * ### Adding/Removing Modules
- * ```php
- * $builder->addModule(new CustomModule());
- * $builder->removeModule('unwanted_module');
- * $builder->replaceModule('old_module', new NewModule());
- * ```
- *
- * ### Extending with Callbacks
- * ```php
- * $builder->extendAfter('schema', function($context, $options) {
- *     return "\n=== CUSTOM SECTION ===\n";
- * });
- * ```
- *
- * ### Global Extensions
- * ```php
- * MyBuilder::extendBuild(function($builder) {
- *     $builder->addModule(new GlobalModule());
- * });
- * ```
+ * Core concepts:
+ * - Module: a class implementing SectionModuleInterface that contributes content
+ * - Priority: numeric value determining processing order (lower = earlier)
+ * - Callbacks: hooks that run before/after specific modules
+ * - Global Extensions: modifications applied to all new instances
  *
  * @template T of \Condoedge\Ai\Contracts\SectionModuleInterface
  *
@@ -146,21 +87,8 @@ trait HasInternalModules
     /**
      * Register default modules from configuration.
      *
-     * Loads module class names from the config key specified in
-     * $defaultModulesConfigKey and instantiates each one.
-     *
-     * Config format:
-     * ```php
-     * // config/ai.php
-     * return [
-     *     'query_generator_sections' => [
-     *         \App\Sections\SchemaSection::class,
-     *         \App\Sections\QueryRulesSection::class,
-     *         // Or use a closure for dynamic instantiation:
-     *         fn($builder) => new CustomSection($builder->getConfig()),
-     *     ],
-     * ];
-     * ```
+     * Loads module class names (or closures returning a module) from the config key
+     * specified in $defaultModulesConfigKey and instantiates each one.
      *
      * @return void
      */
@@ -170,18 +98,35 @@ trait HasInternalModules
         $sections = config($configKey, []) ?? [];
 
         foreach ($sections as $sectionClass) {
-            // Support closure-based module instantiation
-            if (gettype($sectionClass) == 'function' || $sectionClass instanceof \Closure) {
-                $sectionClass = $sectionClass($this);
-            }
+            try {
+                // Support closure-based module instantiation.
+                if (gettype($sectionClass) == 'function' || $sectionClass instanceof \Closure) {
+                    $sectionClass = $sectionClass($this);
+                }
 
-            // Instantiate and add the module
-            if (gettype($sectionClass) == 'string' && class_exists($sectionClass)) {
-                $this->addModule(new $sectionClass());
-            }
+                if (gettype($sectionClass) == 'string' && class_exists($sectionClass)) {
+                    $this->addModule(new $sectionClass());
+                }
 
-            if (gettype($sectionClass) == 'object') {
-                $this->addModule($sectionClass);
+                if (gettype($sectionClass) == 'object') {
+                    $this->addModule($sectionClass);
+                }
+            } catch (\Throwable $e) {
+                // A host config may reference a section class that was removed or
+                // renamed (or whose file was deleted) — skip it rather than crash the
+                // whole prompt pipeline. class_exists() itself can throw when a stale
+                // autoload classmap still points at a deleted file.
+                try {
+                    \Illuminate\Support\Facades\Log::warning(
+                        'AI: skipping a prompt section that could not be loaded',
+                        [
+                            'section' => is_string($sectionClass) ? $sectionClass : gettype($sectionClass),
+                            'error' => $e->getMessage(),
+                        ]
+                    );
+                } catch (\Throwable $ignored) {
+                    // Logging must never itself crash section registration.
+                }
             }
         }
     }
@@ -435,48 +380,27 @@ trait HasInternalModules
      * @param callable $afterCallbackProcess Handles after callbacks
      *                 Signature: function(callable $callback): void
      * @return void
-     *
-     * @example
-     * In SemanticPromptBuilder::buildPrompt()
-     * ```$this->processModules(
-     *     beforeCallbackProcess: function($callback) use (&$prompt, $question, $context, $options) {
-     *         $prompt .= $callback($question, $context, $options);
-     *     },
-     *     moduleProcess: function($section) use (&$prompt, $question, $context, $options) {
-     *         if ($section->shouldInclude($question, $context, $options)) {
-     *             $prompt .= $section->format($question, $context, $options);
-     *         }
-     *     },
-     *     afterCallbackProcess: function($callback) use (&$prompt, $question, $context, $options) {
-     *         $prompt .= $callback($question, $context, $options);
-     *     },
-     * );
-     * ```
      */
     public function processModules(
         callable $beforeCallbackProcess,
         callable $moduleProcess,
         callable $afterCallbackProcess
     ): void {
-        // Sort modules by priority (lower values = higher priority = processed first)
+        // Sort modules by priority (lower values = higher priority = processed first).
         $sortedSections = $this->sections;
         uasort($sortedSections, fn($a, $b) => $a->getPriority() <=> $b->getPriority());
 
-        // Process each module with its callbacks
         foreach ($sortedSections as $section) {
             $sectionName = $section->getName();
 
-            // Execute "before" callbacks for this module
             if (isset($this->beforeCallbacks[$sectionName])) {
                 foreach ($this->beforeCallbacks[$sectionName] as $callback) {
                     $beforeCallbackProcess($callback);
                 }
             }
 
-            // Execute the module itself
             $moduleProcess($section);
 
-            // Execute "after" callbacks for this module
             if (isset($this->afterCallbacks[$sectionName])) {
                 foreach ($this->afterCallbacks[$sectionName] as $callback) {
                     $afterCallbackProcess($callback);

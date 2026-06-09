@@ -308,46 +308,47 @@ The Chat UI uses `AiChatServiceInterface` for processing questions. Create a cus
 
 ### 1. Implement the Interface
 
+`AiChatServiceInterface` has three methods. `askWithConversation()` returns an
+array (not a dedicated message object):
+
 ```php
 namespace App\Services;
 
+use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
-use Condoedge\Ai\Services\Chat\AiChatMessage;
-use Condoedge\Ai\Services\Chat\AiChatResponseData;
 
 class CustomChatService implements AiChatServiceInterface
 {
-    public function ask(string $question, array $options = []): AiChatMessage
-    {
-        // Your custom AI logic
+    /**
+     * @return array{
+     *   answer: string,
+     *   data: array,
+     *   suggestions: array<string>,
+     *   sources: array,
+     *   cypher_query: ?string
+     * }
+     */
+    public function askWithConversation(
+        string $question,
+        AiConversation $conversation,
+        array $options = []
+    ): array {
+        // $options may include 'style' and 'user' (for file-access authorization)
         $answer = $this->processQuestion($question, $options);
 
-        // Return with optional rich data
-        $responseData = AiChatResponseData::text()
-            ->withSuggestions(['Follow-up 1', 'Follow-up 2']);
-
-        return AiChatMessage::assistant($answer, $responseData);
+        return [
+            'answer' => $answer,
+            'data' => [],
+            'suggestions' => ['Follow-up 1', 'Follow-up 2'],
+            'sources' => [],
+            'cypher_query' => null,
+        ];
     }
 
-    public function askWithHistory(
-        string $question,
-        array $history,
-        array $options = []
-    ): AiChatMessage {
-        // Use conversation history for context
-        return $this->ask($question, array_merge($options, [
-            'history' => $history
-        ]));
-    }
-
-    public function getSuggestions(string $question, string $response): array
+    public function getSchema(): array
     {
-        return ['Tell me more', 'Show details'];
-    }
-
-    public function getExampleQuestions(): array
-    {
-        return ['What can you help with?', 'Show me a summary'];
+        // ['labels' => [...], 'relationships' => [...], 'properties' => [...]]
+        return [];
     }
 
     public function isAvailable(): bool
@@ -357,14 +358,25 @@ class CustomChatService implements AiChatServiceInterface
 
     protected function processQuestion(string $question, array $options): string
     {
-        // Your custom logic here
-        // Could call a different AI, use RAG, query databases, etc.
+        // Your custom logic: call a different AI, use RAG, query databases, etc.
         return "Response to: {$question}";
     }
 }
 ```
 
-### 2. Register in Service Provider
+### 2. Register the Service
+
+Point the config at your class:
+
+```php
+// config/ai.php
+'chat' => [
+    'service' => \App\Services\CustomChatService::class,
+    // ...
+],
+```
+
+Or bind the interface in a service provider:
 
 ```php
 // app/Providers/AppServiceProvider.php
@@ -375,41 +387,6 @@ public function register()
 {
     $this->app->bind(AiChatServiceInterface::class, CustomChatService::class);
 }
-```
-
-### 3. Use Rich Response Types
-
-The chat supports structured response formats:
-
-```php
-use Condoedge\Ai\Services\Chat\AiChatResponseData;
-
-// Table response
-$data = AiChatResponseData::table(
-    headers: ['Name', 'Email', 'Orders'],
-    rows: [['John', 'john@example.com', 15]]
-);
-
-// Metric response
-$data = AiChatResponseData::metric(
-    label: 'Total Revenue',
-    value: '$125,430',
-    trend: '+12%'
-);
-
-// List response
-$data = AiChatResponseData::list([
-    ['title' => 'Order #1234', 'description' => 'Pending - $150'],
-]);
-
-// With suggestions and actions
-$data = AiChatResponseData::text()
-    ->withSuggestions(['Show more', 'Export'])
-    ->withActions([
-        ['label' => 'View Details', 'url' => '/details/123'],
-    ]);
-
-return AiChatMessage::assistant($answer, $data);
 ```
 
 See: [Chat UI Components](/docs/{{version}}/chat/chat-ui) for full documentation.

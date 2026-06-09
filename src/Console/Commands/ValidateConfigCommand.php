@@ -41,7 +41,6 @@ class ValidateConfigCommand extends Command
             $this->validateEntityConfig($entityClass, $config);
         }
 
-        // Display results
         $this->displayResults();
 
         return empty($this->errors) ? self::SUCCESS : self::FAILURE;
@@ -51,7 +50,6 @@ class ValidateConfigCommand extends Command
     {
         $shortName = class_basename($entityClass);
 
-        // Check required keys
         if (empty($config['graph'])) {
             $this->errors[] = "{$shortName}: missing 'graph' configuration";
         } else {
@@ -74,7 +72,6 @@ class ValidateConfigCommand extends Command
             }
         }
 
-        // Check class exists
         if (!class_exists($entityClass)) {
             $this->errors[] = "{$shortName}: class does not exist ({$entityClass})";
         }

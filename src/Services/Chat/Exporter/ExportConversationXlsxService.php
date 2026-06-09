@@ -11,10 +11,6 @@ namespace Condoedge\Ai\Services\Chat\Exporter;
  * which is GUARDED: when PhpSpreadsheet is absent it degrades. This service surfaces that
  * degradation by throwing a clear, actionable exception (the export controller maps the
  * message to the user) rather than silently producing nothing.
- *
- * NOTE FOR THE MAIN SESSION: register this in ExporterConversationFactory (config-driven) —
- * this slice intentionally does NOT edit the factory's type map. Add:
- *     'xlsx' => ExportConversationXlsxService::class,
  */
 class ExportConversationXlsxService implements ExportConversationServiceInterface
 {

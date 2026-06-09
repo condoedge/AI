@@ -36,7 +36,6 @@ class ResultsDataSection extends BaseResponseSection
             return "Results: No data returned\n\n";
         }
 
-        // Summarize if too large
         $displayData = count($data) > $this->maxItems
             ? array_slice($data, 0, $this->maxItems)
             : $data;

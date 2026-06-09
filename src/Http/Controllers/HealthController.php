@@ -1,5 +1,4 @@
 <?php
-// src/Http/Controllers/HealthController.php
 
 declare(strict_types=1);
 
@@ -17,7 +16,6 @@ class HealthController extends Controller
         $services = [];
         $healthy = true;
 
-        // Check Neo4j
         try {
             $graphStore = app(GraphStoreInterface::class);
             $graphStore->getSchema();
@@ -27,7 +25,6 @@ class HealthController extends Controller
             $healthy = false;
         }
 
-        // Check Qdrant
         try {
             $vectorStore = app(VectorStoreInterface::class);
             $vectorStore->listCollections();

@@ -45,7 +45,6 @@ class FileProcessingPlugin extends ModelPlugin
             });
         });
 
-        // File Deleting - Remove from both stores
         $modelClass::deleting(function ($file) {
             dispatch(function () use ($file) {
                  $this->handleFileDeleting($file);
@@ -62,10 +61,8 @@ class FileProcessingPlugin extends ModelPlugin
     protected function handleFileCreated($file): void
     {
         try {
-            // Step 1: Sync metadata to Neo4j
             $this->syncToNeo4j($file, 'create');
 
-            // Step 2: Process content for Qdrant (if supported file type)
             if ($this->shouldProcessContent($file)) {
                 $this->processFileContent($file);
             }
@@ -83,10 +80,9 @@ class FileProcessingPlugin extends ModelPlugin
     protected function handleFileUpdated($file): void
     {
         try {
-            // Step 1: Sync updated metadata to Neo4j
             $this->syncToNeo4j($file, 'update');
 
-            // Step 2: Reprocess content if path changed (file replaced)
+            // Reprocess content only when the path changed (file replaced)
             if ($file->isDirty('path') && $this->shouldProcessContent($file)) {
                 $this->reprocessFileContent($file);
             }
@@ -104,12 +100,10 @@ class FileProcessingPlugin extends ModelPlugin
     protected function handleFileDeleting($file): void
     {
         try {
-            // Step 1: Remove from Qdrant
             if ($this->isProcessed($file)) {
                 $this->removeFileContent($file);
             }
 
-            // Step 2: Remove from Neo4j
             $this->removeFromNeo4j($file);
         } catch (\Throwable $e) {
             $this->handleError('delete', $file, $e);
@@ -175,13 +169,11 @@ class FileProcessingPlugin extends ModelPlugin
     {
         $processor = app(FileProcessorInterface::class);
 
-        // Check if should queue processing
         if ($this->shouldQueueProcessing($file)) {
             $this->queueFileProcessing($file);
             return;
         }
 
-        // Process synchronously
         $result = $processor->processFile((object) $file->getAttributes());
 
         if ($result->failed()) {
@@ -203,13 +195,11 @@ class FileProcessingPlugin extends ModelPlugin
     {
         $processor = app(FileProcessorInterface::class);
 
-        // Check if should queue
         if ($this->shouldQueueProcessing($file)) {
             $this->queueFileProcessing($file, true);
             return;
         }
 
-        // Reprocess synchronously
         $result = $processor->reprocessFile($file);
 
         if ($result->failed()) {
@@ -241,17 +231,14 @@ class FileProcessingPlugin extends ModelPlugin
      */
     protected function shouldProcessContent($file): bool
     {
-        // Check if file processing is enabled
         if (!config('ai.file_processing.enabled', true)) {
             return false;
         }
 
-        // Check if file exists on disk
         if (!$file->path) {
             return false;
         }
 
-        // Check if file type is supported
         if (!method_exists($file, 'shouldProcessContent')) {
             // Fallback: check processor directly
             $processor = app(FileProcessorInterface::class);
@@ -286,12 +273,10 @@ class FileProcessingPlugin extends ModelPlugin
      */
     protected function shouldQueueProcessing($file): bool
     {
-        // Check global config
         if (config('ai.file_processing.queue', false)) {
             return true;
         }
 
-        // Check file size threshold
         $queueThreshold = config('ai.file_processing.queue_threshold_bytes', 5 * 1024 * 1024); // 5MB default
         if ($file->size > $queueThreshold) {
             return true;
@@ -311,7 +296,6 @@ class FileProcessingPlugin extends ModelPlugin
     {
         $job = new ProcessFileJob($file, $reprocess);
 
-        // Configure queue connection and name from config
         $queueConnection = config('ai.file_processing.queue_connection');
         $queueName = config('ai.file_processing.queue_name', 'default');
 
@@ -370,7 +354,4 @@ class FileProcessingPlugin extends ModelPlugin
     {
         return $file instanceof Nodeable;
     }
-
-    // Model methods
-
 }

@@ -42,10 +42,8 @@ class Neo4jStore implements GraphStoreInterface
         $this->username = $config['username'] ?? 'neo4j';
         $this->database = $config['database'] ?? 'neo4j';
 
-        // Initialize credentials using trait
         $this->initializeCredentials($config);
 
-        // Parse URI for HTTP endpoint
         $parsedUri = parse_url($this->uri);
         $scheme = $parsedUri['scheme'] ?? 'http';
         $host = $parsedUri['host'] ?? 'localhost';
@@ -53,7 +51,6 @@ class Neo4jStore implements GraphStoreInterface
 
         $this->httpEndpoint = "{$scheme}://{$host}:{$port}/db/{$this->database}/tx/commit";
 
-        // Initialize retry policy and circuit breaker
         $this->retryPolicy = RetryPolicy::forDatabaseOperations();
         $this->circuitBreaker = new CircuitBreaker('neo4j', failureThreshold: 5, recoveryTimeoutSeconds: 30);
     }
@@ -71,7 +68,6 @@ class Neo4jStore implements GraphStoreInterface
 
     public function createNode(string $label, array $properties): string|int
     {
-        // Validate label to prevent injection
         $safeLabel = CypherSanitizer::escapeLabel($label);
 
         // Use MERGE to ensure idempotency — running ingest twice won't create duplicates
@@ -83,13 +79,12 @@ class Neo4jStore implements GraphStoreInterface
             throw new \RuntimeException("Failed to create node with label '{$label}'");
         }
 
-        // Return the application ID (from properties) if it exists, otherwise Neo4j internal ID
+        // Prefer the application id from properties; fall back to Neo4j's internal id.
         return $result[0]['appId'] ?? $result[0]['nodeId'];
     }
 
     public function updateNode(string $label, string|int $id, array $properties): bool
     {
-        // Validate label to prevent injection
         $safeLabel = CypherSanitizer::escapeLabel($label);
 
         $setClause = $this->arrayToSetClause($properties);
@@ -104,7 +99,6 @@ class Neo4jStore implements GraphStoreInterface
 
     public function deleteNode(string $label, string|int $id): bool
     {
-        // Validate label to prevent injection
         $safeLabel = CypherSanitizer::escapeLabel($label);
 
         $cypher = "MATCH (n:{$safeLabel} {id: \$id}) DETACH DELETE n";
@@ -122,7 +116,6 @@ class Neo4jStore implements GraphStoreInterface
         string $type,
         array $properties = []
     ): bool {
-        // Validate labels and type to prevent injection
         $safeFromLabel = CypherSanitizer::escapeLabel($fromLabel);
         $safeToLabel = CypherSanitizer::escapeLabel($toLabel);
         $safeType = CypherSanitizer::escapeRelationshipType($type);
@@ -152,7 +145,6 @@ class Neo4jStore implements GraphStoreInterface
         string|int $toId,
         string $type
     ): bool {
-        // Validate labels and type to prevent injection
         $safeFromLabel = CypherSanitizer::escapeLabel($fromLabel);
         $safeToLabel = CypherSanitizer::escapeLabel($toLabel);
         $safeType = CypherSanitizer::escapeRelationshipType($type);
@@ -180,7 +172,6 @@ class Neo4jStore implements GraphStoreInterface
                 throw new \RuntimeException("Neo4j query error: {$error['message']}");
             }
 
-            // Extract results from Neo4j response format
             return $this->extractResults($response);
 
         } catch (\Exception $e) {
@@ -196,15 +187,12 @@ class Neo4jStore implements GraphStoreInterface
             'propertyKeys' => [],
         ];
 
-        // Get all node labels
         $labels = $this->query("CALL db.labels()");
         $schema['labels'] = array_column($labels, 'label');
 
-        // Get all relationship types
         $relTypes = $this->query("CALL db.relationshipTypes()");
         $schema['relationshipTypes'] = array_column($relTypes, 'relationshipType');
 
-        // Get all property keys
         $propKeys = $this->query("CALL db.propertyKeys()");
         $schema['propertyKeys'] = array_column($propKeys, 'propertyKey');
 
@@ -213,7 +201,6 @@ class Neo4jStore implements GraphStoreInterface
 
     public function nodeExists(string $label, string|int $id): bool
     {
-        // Validate label to prevent injection
         $safeLabel = CypherSanitizer::escapeLabel($label);
 
         $cypher = "MATCH (n:{$safeLabel} {id: \$id}) RETURN count(n) as count";
@@ -229,7 +216,6 @@ class Neo4jStore implements GraphStoreInterface
         string|int $toId,
         string $type
     ): bool {
-        // Validate labels and type to prevent injection
         $safeFromLabel = CypherSanitizer::escapeLabel($fromLabel);
         $safeToLabel = CypherSanitizer::escapeLabel($toLabel);
         $safeType = CypherSanitizer::escapeRelationshipType($type);
@@ -247,7 +233,6 @@ class Neo4jStore implements GraphStoreInterface
 
     public function getNode(string $label, string|int $id): ?array
     {
-        // Validate label to prevent injection
         $safeLabel = CypherSanitizer::escapeLabel($label);
 
         $cypher = "MATCH (n:{$safeLabel} {id: \$id}) RETURN n";
@@ -452,9 +437,7 @@ class Neo4jStore implements GraphStoreInterface
      */
     protected function executeCypher(string $cypher, array $parameters = []): array
     {
-        // Wrap in circuit breaker to prevent cascading failures
         return $this->circuitBreaker->call(function () use ($cypher, $parameters) {
-            // Wrap in retry policy for transient failures
             return $this->retryPolicy->execute(
                 operation: function () use ($cypher, $parameters) {
                     return $this->performHttpRequest($cypher, $parameters);
@@ -464,7 +447,7 @@ class Neo4jStore implements GraphStoreInterface
                         'attempt' => $attempt,
                         'delay_ms' => $delay,
                         'error' => $e->getMessage(),
-                        'cypher' => substr($cypher, 0, 100), // Log first 100 chars
+                        'cypher' => substr($cypher, 0, 100),
                     ]));
                 }
             );
@@ -485,22 +468,19 @@ class Neo4jStore implements GraphStoreInterface
             $this->curlHandle = curl_init();
         }
 
-        // Set/update the URL for this request
         curl_setopt($this->curlHandle, CURLOPT_URL, $targetEndpoint);
 
-        // Configure for connection reuse
         curl_setopt($this->curlHandle, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($this->curlHandle, CURLOPT_POST, true);
         curl_setopt($this->curlHandle, CURLOPT_HTTPHEADER, [
             'Content-Type: application/json',
             'Accept: application/json',
-            'Connection: keep-alive', // Enable HTTP keep-alive
+            'Connection: keep-alive',
         ]);
         curl_setopt($this->curlHandle, CURLOPT_USERPWD, "{$this->username}:{$this->getPassword()}");
         curl_setopt($this->curlHandle, CURLOPT_TIMEOUT, 30);
         curl_setopt($this->curlHandle, CURLOPT_CONNECTTIMEOUT, 5);
 
-        // Enable TCP keep-alive
         curl_setopt($this->curlHandle, CURLOPT_TCP_KEEPALIVE, 1);
         curl_setopt($this->curlHandle, CURLOPT_TCP_KEEPIDLE, 60);
         curl_setopt($this->curlHandle, CURLOPT_TCP_KEEPINTVL, 30);
@@ -657,7 +637,6 @@ class Neo4jStore implements GraphStoreInterface
 
         $parts = [];
         foreach (array_keys($properties) as $key) {
-            // Validate property key to prevent injection
             $safeKey = CypherSanitizer::validatePropertyKey($key);
             $parts[] = "{$safeKey}: \${$key}";
         }
@@ -671,7 +650,6 @@ class Neo4jStore implements GraphStoreInterface
     {
         $parts = [];
         foreach (array_keys($properties) as $key) {
-            // Validate property key to prevent injection
             $safeKey = CypherSanitizer::validatePropertyKey($key);
             $parts[] = "n.{$safeKey} = \${$key}";
         }

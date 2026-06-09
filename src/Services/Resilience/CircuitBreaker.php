@@ -63,10 +63,8 @@ class CircuitBreaker
         // Sync from cache to get the latest shared state
         $this->syncFromCache();
 
-        // Check if circuit should transition states
         $this->updateState();
 
-        // If circuit is open, fail fast
         if ($this->state === self::STATE_OPEN) {
             throw new CircuitBreakerOpenException(
                 "Circuit breaker '{$this->name}' is OPEN. Service unavailable."
@@ -76,16 +74,13 @@ class CircuitBreaker
         try {
             $result = $operation();
 
-            // Operation succeeded - record success
             $this->recordSuccess();
 
             return $result;
 
         } catch (\Exception $e) {
-            // Operation failed - record failure
             $this->recordFailure();
 
-            // Re-throw the exception
             throw $e;
         }
     }
@@ -101,7 +96,6 @@ class CircuitBreaker
             $this->failureCount = Cache::decrement($this->cacheKey('failure_count'));
 
             if ($this->failureCount <= -$this->successThreshold) {
-                // Enough successes - close the circuit
                 $this->transitionTo(self::STATE_CLOSED);
                 $this->failureCount = 0;
                 $this->setCachedFailureCount(0);
@@ -127,7 +121,6 @@ class CircuitBreaker
         $this->lastFailureTime = time();
         $this->setCachedLastFailureTime($this->lastFailureTime);
 
-        // Check if we should open the circuit
         if ($this->state === self::STATE_CLOSED && $this->failureCount >= $this->failureThreshold) {
             $this->transitionTo(self::STATE_OPEN);
         } else if ($this->state === self::STATE_HALF_OPEN) {
@@ -147,7 +140,6 @@ class CircuitBreaker
             $openedAt = $this->openedAt ?? $this->getCachedOpenedAt() ?? $now;
             $timeSinceOpened = $now - $openedAt;
 
-            // Check if recovery timeout has elapsed
             if ($timeSinceOpened >= $this->recoveryTimeoutSeconds) {
                 $this->transitionTo(self::STATE_HALF_OPEN);
             }
@@ -164,7 +156,6 @@ class CircuitBreaker
         $oldState = $this->state;
         $this->state = $newState;
 
-        // Update cached state immediately
         $this->setCachedState($newState);
 
         if ($newState === self::STATE_OPEN) {
@@ -177,7 +168,6 @@ class CircuitBreaker
             $this->setCachedFailureCount(0);
         }
 
-        // Log state transition
         \Illuminate\Support\Facades\Log::info(
             "Circuit breaker '{$this->name}' transitioned: {$oldState} -> {$newState}",
             [
@@ -233,7 +223,6 @@ class CircuitBreaker
         $this->lastFailureTime = null;
         $this->openedAt = null;
 
-        // Clear all cached state
         $this->setCachedState(self::STATE_CLOSED);
         $this->setCachedFailureCount(0);
         $this->setCachedLastFailureTime(null);

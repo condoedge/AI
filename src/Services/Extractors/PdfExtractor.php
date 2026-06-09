@@ -40,7 +40,6 @@ class PdfExtractor implements FileExtractorInterface
         try {
             $text = $this->parser->extractText($filePath);
 
-            // Clean up extracted text
             $text = $this->cleanExtractedText($text);
 
             return trim($text);
@@ -96,12 +95,10 @@ class PdfExtractor implements FileExtractorInterface
                 'modification_date' => $details['ModDate'] ?? null,
             ];
 
-            // Count approximate words
             $text = $this->parser->extractText($filePath);
             $metadata['word_count'] = str_word_count($text);
             $metadata['character_count'] = strlen($text);
 
-            // Remove null values
             return array_filter($metadata, fn($value) => $value !== null);
         } catch (\Exception $e) {
             return [
@@ -136,7 +133,6 @@ class PdfExtractor implements FileExtractorInterface
         // Remove excessive blank lines (more than 2 consecutive)
         $text = preg_replace('/\n{3,}/', "\n\n", $text);
 
-        // Fix common PDF extraction issues
         // Remove soft hyphens
         $text = str_replace("\u{00AD}", '', $text);
 

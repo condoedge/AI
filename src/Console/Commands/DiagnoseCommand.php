@@ -35,22 +35,12 @@ class DiagnoseCommand extends Command
         $this->info(str_repeat('=', 50));
         $this->newLine();
 
-        // 1. Check configuration files
         $this->checkConfiguration();
-
-        // 2. Check Neo4j connectivity
         $this->checkNeo4j();
-
-        // 3. Check Qdrant connectivity
         $this->checkQdrant();
-
-        // 4. Check LLM API
         $this->checkLlmApi();
-
-        // 5. Check embedding provider
         $this->checkEmbeddingProvider();
 
-        // Summary
         $this->newLine();
         $this->info(str_repeat('=', 50));
         $this->info("Summary: {$this->passed} passed, {$this->failed} failed, {$this->warnings} warnings");
@@ -70,7 +60,6 @@ class DiagnoseCommand extends Command
     {
         $this->info('Configuration:');
 
-        // Check entities.php exists
         $entitiesPath = config_path('entities.php');
         if (File::exists($entitiesPath)) {
             $entities = include $entitiesPath;
@@ -80,7 +69,6 @@ class DiagnoseCommand extends Command
             $this->reportFail('entities.php not found - run: php artisan ai:discover');
         }
 
-        // Check ai.php config
         if (config('ai.llm.default')) {
             $this->reportPass('ai.php configured (default LLM: ' . config('ai.llm.default') . ')');
         } else {
@@ -159,7 +147,7 @@ class DiagnoseCommand extends Command
         $this->reportPass("Provider: {$provider}");
 
         if (!$apiKey) {
-            $this->reportFail('API key not set - add to .env: AI_' . strtoupper($provider) . '_API_KEY=xxx');
+            $this->reportFail('API key not set - add to .env: ' . strtoupper($provider) . '_API_KEY=xxx');
         } elseif (strlen($apiKey) < 20) {
             $this->reportWarn('API key looks invalid (too short)');
         } else {
@@ -182,7 +170,7 @@ class DiagnoseCommand extends Command
         $this->reportPass("Provider: {$provider}, Model: {$model}, Dimensions: {$dimensions}");
 
         if (!$apiKey) {
-            $this->reportFail('API key not set - add to .env: AI_' . strtoupper($provider) . '_EMBEDDING_API_KEY=xxx');
+            $this->reportFail('API key not set - add to .env: ' . strtoupper($provider) . '_API_KEY=xxx (shared with the LLM provider)');
         } elseif (strlen($apiKey) < 20) {
             $this->reportWarn('API key looks invalid (too short)');
         } else {

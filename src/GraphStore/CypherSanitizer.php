@@ -88,21 +88,18 @@ class CypherSanitizer
      */
     private static function validateIdentifier(string $identifier, string $type): string
     {
-        // Check for empty identifier
         if (empty($identifier)) {
             throw new CypherInjectionException(
                 "Invalid {$type}: cannot be empty"
             );
         }
 
-        // Check length
         if (strlen($identifier) > self::MAX_IDENTIFIER_LENGTH) {
             throw new CypherInjectionException(
                 "Invalid {$type}: exceeds maximum length of " . self::MAX_IDENTIFIER_LENGTH
             );
         }
 
-        // Check pattern
         if (!preg_match(self::IDENTIFIER_PATTERN, $identifier)) {
             throw new CypherInjectionException(
                 "Invalid {$type} '{$identifier}': must contain only alphanumeric characters and underscores, " .
@@ -110,7 +107,6 @@ class CypherSanitizer
             );
         }
 
-        // Check reserved keywords
         if (in_array(strtoupper($identifier), self::RESERVED_KEYWORDS, true)) {
             throw new CypherInjectionException(
                 "Invalid {$type} '{$identifier}': cannot use reserved Cypher keyword"
@@ -165,13 +161,11 @@ class CypherSanitizer
      */
     public static function escapeRelationshipType(string $type): string
     {
-        // Validate pattern and length (but allow reserved keywords since backtick quoting handles them)
+        // Allow reserved keywords here; backtick quoting below makes them safe.
         $type = self::validateIdentifierSafe($type, 'relationship type');
 
-        // Escape backticks
         $escaped = str_replace('`', '``', $type);
 
-        // Return with backtick quoting
         return "`{$escaped}`";
     }
 

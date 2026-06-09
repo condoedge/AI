@@ -334,7 +334,7 @@ class RelationshipDiscoverer
     private function convertToNeo4jRelationship(string $methodName, $relation): ?array
     {
         $relatedModel = $relation->getRelated();
-        $targetLabel = class_basename($relatedModel);
+        $targetLabel = $this->resolveTargetLabel($relatedModel);
 
         // Convert method name to Neo4j relationship type
         // e.g., 'customer' -> 'CUSTOMER', 'orders' -> 'ORDERS'
@@ -423,6 +423,39 @@ class RelationshipDiscoverer
 
         // Skip any other unsupported relationship types
         return null;
+    }
+
+    /**
+     * Resolve the clean Neo4j node label for a related model.
+     *
+     * Keeps the label consistent with the rest of the discovery system
+     * (AliasGenerator::generateLabel): prefer the model's own getNodeLabel()
+     * when it implements Nodeable, otherwise fall back to the class basename
+     * with the test-fixture 'Test' prefix stripped.
+     *
+     * @param Model $relatedModel Related model instance
+     * @return string Clean node label (e.g., 'Order' rather than 'TestOrder')
+     */
+    private function resolveTargetLabel(Model $relatedModel): string
+    {
+        if (method_exists($relatedModel, 'getNodeLabel')) {
+            try {
+                $label = $relatedModel->getNodeLabel();
+                if (is_string($label) && $label !== '') {
+                    return $label;
+                }
+            } catch (\Throwable $e) {
+                // Fall through to class-name based resolution
+            }
+        }
+
+        $label = class_basename($relatedModel);
+
+        if (str_starts_with($label, 'Test')) {
+            $label = substr($label, 4);
+        }
+
+        return $label;
     }
 
     /**

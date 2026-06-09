@@ -26,7 +26,6 @@ class UserChatThemeFactory implements ChatThemeFactoryInterface
 
     public function create(?string $themeName = null, array $overrides = []): ChatThemeInterface
     {
-        // Get user settings if authenticated
         // IMPORTANT: Check if auth is available before calling - prevents
         // "Target class [auth] does not exist" during early container resolution
         $userSettings = null;

@@ -53,7 +53,6 @@ class ConversationContextSection extends BasePromptSection
 
         $output = "## Conversation Context\n\n";
 
-        // Focused entity with filter
         if (!empty($conversationContext['focused_entity'])) {
             $output .= "**Current Focus:** {$conversationContext['focused_entity']}";
 
@@ -68,21 +67,18 @@ class ConversationContextSection extends BasePromptSection
             }
         }
 
-        // Previous query reference
         if (!empty($conversationContext['last_cypher_query'])) {
             $output .= "\n**Previous Query:**\n```cypher\n{$conversationContext['last_cypher_query']}\n```\n";
             $resultCount = $conversationContext['last_result_count'] ?? 0;
             $output .= "Returned {$resultCount} results.\n";
         }
 
-        // Result sample for reference
         if (!empty($conversationContext['last_result_sample'])) {
             $output .= "\n**Sample of Previous Results:**\n```json\n";
             $output .= json_encode($conversationContext['last_result_sample'], JSON_PRETTY_PRINT);
             $output .= "\n```\n";
         }
 
-        // Recent exchanges
         if (!empty($conversationContext['recent_exchanges'])) {
             $output .= "\n**Recent Conversation:**\n";
 
@@ -98,13 +94,11 @@ class ConversationContextSection extends BasePromptSection
             }
         }
 
-        // Mentioned entities for reference
         if (!empty($conversationContext['mentioned_entities'])) {
             $entities = implode(', ', $conversationContext['mentioned_entities']);
             $output .= "\n**Entities discussed:** {$entities}\n";
         }
 
-        // Referenced files from previous response
         if (!empty($conversationContext['last_referenced_files'])) {
             $output .= "\n**Files Referenced in Previous Response:**\n";
             foreach ($conversationContext['last_referenced_files'] as $file) {
@@ -116,7 +110,6 @@ class ConversationContextSection extends BasePromptSection
             }
         }
 
-        // Previous insights from response
         if (!empty($conversationContext['last_insights'])) {
             $output .= "\n**Previous Insights:**\n";
             foreach ($conversationContext['last_insights'] as $insight) {
@@ -124,7 +117,6 @@ class ConversationContextSection extends BasePromptSection
             }
         }
 
-        // Truncation warning from execution stats
         if (!empty($conversationContext['last_execution_stats']['was_truncated'])) {
             $stats = $conversationContext['last_execution_stats'];
             $rowsReturned = $stats['rows_returned'] ?? 0;
@@ -133,21 +125,54 @@ class ConversationContextSection extends BasePromptSection
             $output .= "(showing {$rowsReturned} of {$rowsAvailable} available).\n";
         }
 
-        // Available actions from previous response
         $availableActions = $conversationContext['last_available_actions'] ?? [];
         if (!empty($availableActions)) {
             $output .= $this->formatAvailableActions($availableActions);
         }
 
-        // Follow-up hint (enhanced instructions)
-        $output .= "\n**Instructions for using conversation context:**\n";
-        $output .= "- If the user references 'those', 'them', 'the same', 'it', use the previous results/filter.\n";
-        $output .= "- If the user asks 'what about X?' or 'and the Y?', modify the previous query for entity X/Y.\n";
-        $output .= "- If the user asks about a DIFFERENT topic/entity than the current focus, generate a FRESH query for that entity. Do NOT force the previous entity into the new query.\n";
-        $output .= "- If the user asks for an aggregation ('total amount', 'sum', 'average') of previous results, reuse the previous query pattern but change the RETURN clause.\n";
-        $output .= "- If the user asks about 'the file', 'that file', refer to the files referenced above.\n";
+        // Follow-up instructions: each bullet is gated on the data it references, so the model
+        // is never handed guidance about context that isn't present.
+        $output .= $this->formatFollowUpInstructions($conversationContext);
 
         return $output;
+    }
+
+    /**
+     * Build the follow-up instruction bullets, including only those whose referent data is
+     * present. Returns '' when nothing to follow up on, so the block is omitted entirely.
+     */
+    private function formatFollowUpInstructions(array $conversationContext): string
+    {
+        $hasPreviousQuery = !empty($conversationContext['last_cypher_query']);
+        $hasPreviousResultsOrFilter = !empty($conversationContext['last_result_sample'])
+            || !empty($conversationContext['focused_entity_filter'])
+            || $hasPreviousQuery;
+        $hasFocus = !empty($conversationContext['focused_entity']);
+        $hasReferencedFiles = !empty($conversationContext['last_referenced_files']);
+
+        $bullets = [];
+
+        if ($hasPreviousResultsOrFilter) {
+            $bullets[] = "- If the user references 'those', 'them', 'the same', 'it', use the previous results/filter.";
+        }
+        if ($hasPreviousQuery) {
+            $bullets[] = "- If the user asks 'what about X?' or 'and the Y?', modify the previous query for entity X/Y.";
+        }
+        if ($hasFocus) {
+            $bullets[] = "- If the user asks about a DIFFERENT topic/entity than the current focus, generate a FRESH query for that entity. Do NOT force the previous entity into the new query.";
+        }
+        if ($hasPreviousQuery) {
+            $bullets[] = "- If the user asks for an aggregation ('total amount', 'sum', 'average') of previous results, reuse the previous query pattern but change the RETURN clause.";
+        }
+        if ($hasReferencedFiles) {
+            $bullets[] = "- If the user asks about 'the file', 'that file', refer to the files referenced above.";
+        }
+
+        if (empty($bullets)) {
+            return '';
+        }
+
+        return "\n**Instructions for using conversation context:**\n" . implode("\n", $bullets) . "\n";
     }
 
     /**

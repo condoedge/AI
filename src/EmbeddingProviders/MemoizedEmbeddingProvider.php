@@ -37,7 +37,6 @@ class MemoizedEmbeddingProvider implements EmbeddingProviderInterface
 
     public function embedBatch(array $texts): array
     {
-        // Check which texts need embedding
         $uncached = [];
         $uncachedIndices = [];
 
@@ -49,7 +48,6 @@ class MemoizedEmbeddingProvider implements EmbeddingProviderInterface
             }
         }
 
-        // Embed only the uncached texts
         if (!empty($uncached)) {
             $newEmbeddings = $this->inner->embedBatch($uncached);
             foreach ($uncached as $j => $text) {
@@ -57,7 +55,6 @@ class MemoizedEmbeddingProvider implements EmbeddingProviderInterface
             }
         }
 
-        // Build result from cache
         $result = [];
         foreach ($texts as $text) {
             $result[] = $this->cache[md5($text)];

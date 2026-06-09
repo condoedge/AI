@@ -9,11 +9,11 @@ use Condoedge\Ai\Models\AiMessage;
 /**
  * Immutable result of a single chat turn (ask / regenerate / edit-and-regenerate).
  *
- * Carries everything the presentation layer must branch on, so a Presenter never has
- * to re-query the database to recover the assistant message the use case just produced
- * (today ChatMessageForm.php:182-192 and EditMessageModal.php:200-204 re-query "latest
- * assistant message", which is race-prone). Soft/expected failures are represented as a
- * failed() result with a translation-key error; only programmer/precondition errors throw.
+ * Carries everything the presentation layer must branch on, so a Presenter never has to
+ * re-query the database to recover the assistant message the use case just produced
+ * (re-querying the "latest assistant message" is race-prone). Soft/expected failures are
+ * represented as a failed() result with a translation-key error; only programmer/precondition
+ * errors throw.
  *
  * Modeled on Sisc's readonly Result DTOs (e.g. App\Services\Inscriptions\Results\ApprovalResult).
  */

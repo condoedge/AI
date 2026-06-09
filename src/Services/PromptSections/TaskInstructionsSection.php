@@ -44,16 +44,12 @@ class TaskInstructionsSection extends BasePromptSection
             return $output;
         }
 
-        $output .= "Generate a Cypher query that:\n";
-        $output .= "1. Accurately answers the user's question\n";
-        $output .= "2. Uses the EXACT relationship directions shown in the schema\n";
-        $output .= "3. Uses the EXACT data formats shown in the example entities\n";
-        $output .= "4. Respects all business rules from the detected concepts above\n";
-        $output .= "5. Uses the appropriate query patterns from the library\n";
-        $output .= "6. Follows all query generation rules\n";
-        $output .= "7. Returns clean Cypher only (no markdown, no explanations, no formatting)\n\n";
+        // The OUTPUT-FORMAT, relationship-direction and data-format rules already live in the
+        // QUERY GENERATION RULES block; this section carries only its unique signal: the
+        // escape hatch and the generation cue.
+        $output .= "Generate a Cypher query that answers the user's question, following the QUERY GENERATION RULES.\n\n";
 
-        $output .= "If the question cannot be answered with a Cypher query based on the provided context or a query it's not required to answer the question, return an strict text: 'NO QUERY REQUIRED'.\n\n";
+        $output .= "If the question cannot be answered with a Cypher query based on the provided context, or a query is not required to answer it, return the exact text: 'NO QUERY REQUIRED'.\n\n";
 
         $output .= "CYPHER QUERY:";
 

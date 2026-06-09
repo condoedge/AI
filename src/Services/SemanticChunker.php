@@ -196,27 +196,43 @@ class SemanticChunker implements FileChunkerInterface
         $chunks = [];
         $currentChunk = [];
         $currentLength = 0;
+        $separatorLength = mb_strlen($separator, 'UTF-8');
 
         foreach ($units as $unit) {
-            $unitLength = strlen($unit);
+            $unitLength = mb_strlen($unit, 'UTF-8');
 
-            // If a single unit exceeds chunk size, we can't use this chunking method
+            // If a single unit exceeds the chunk size, only that unit is split
+            // (via finer character chunking). The boundary-aligned units around
+            // it keep their boundaries instead of the whole document collapsing
+            // to blind character slicing.
             if ($unitLength > $chunkSize) {
-                return [];
+                // Flush whatever boundary-aligned content is buffered first so
+                // the oversized unit's slices don't get fused onto it.
+                if (!empty($currentChunk)) {
+                    $chunks[] = implode($separator, $currentChunk);
+                    $currentChunk = [];
+                    $currentLength = 0;
+                }
+
+                foreach ($this->chunkByCharacters($unit, $chunkSize, $overlap) as $slice) {
+                    $chunks[] = $slice;
+                }
+
+                continue;
             }
 
             // If adding this unit would exceed chunk size and we already have content
-            if ($currentLength > 0 && ($currentLength + $unitLength + strlen($separator)) > $chunkSize) {
+            if ($currentLength > 0 && ($currentLength + $unitLength + $separatorLength) > $chunkSize) {
                 // Save current chunk
                 $chunks[] = implode($separator, $currentChunk);
 
                 // Start new chunk with overlap
                 $currentChunk = $this->getOverlapUnits($currentChunk, $overlap, $separator);
-                $currentLength = strlen(implode($separator, $currentChunk));
+                $currentLength = mb_strlen(implode($separator, $currentChunk), 'UTF-8');
             }
 
             $currentChunk[] = $unit;
-            $currentLength += $unitLength + strlen($separator);
+            $currentLength += $unitLength + $separatorLength;
         }
 
         // Add final chunk if not empty
@@ -239,18 +255,19 @@ class SemanticChunker implements FileChunkerInterface
     {
         $overlapUnits = [];
         $overlapLength = 0;
+        $separatorLength = mb_strlen($separator, 'UTF-8');
 
         // Take units from the end until we reach overlap size
         for ($i = count($units) - 1; $i >= 0; $i--) {
             $unit = $units[$i];
-            $unitLength = strlen($unit);
+            $unitLength = mb_strlen($unit, 'UTF-8');
 
             if ($overlapLength + $unitLength > $overlapSize) {
                 break;
             }
 
             array_unshift($overlapUnits, $unit);
-            $overlapLength += $unitLength + strlen($separator);
+            $overlapLength += $unitLength + $separatorLength;
         }
 
         return $overlapUnits;

@@ -21,12 +21,30 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
  *
  * Nothing here imports those classes at the top of the file — every reference is a string
  * passed to class_exists()/new, so the package autoloads cleanly without them installed.
+ *
+ * EXPORT PRIVACY (the file must not leak what the chat answer would never show):
+ *   Both toExcel()/toPdf() project rows through {@see redact()} before serializing, so the
+ *   generated file drops internal id-ish columns (neo4j_id, *_id, leading-underscore keys)
+ *   and any field the privacy policy hides (PII column names). The behavior is config-driven
+ *   via config('ai.export') so a host can tune the deny-list/patterns or disable it entirely.
  */
 class ResultSetExporter
 {
     private const SPREADSHEET_CLASS = '\\PhpOffice\\PhpSpreadsheet\\Spreadsheet';
     private const XLSX_WRITER_CLASS = '\\PhpOffice\\PhpSpreadsheet\\Writer\\Xlsx';
     private const DOMPDF_CLASS = '\\Dompdf\\Dompdf';
+
+    /**
+     * Internal id-ish column names always dropped from an export (case-insensitive). These are
+     * graph/store internals that carry no user-facing meaning and leak the schema.
+     */
+    private const DEFAULT_INTERNAL_COLUMNS = ['neo4j_id', 'element_id', 'elementid', '_id'];
+
+    /**
+     * Column-name patterns (PCRE, anchored, case-insensitive) treated as internal id-ish keys:
+     * anything ending in `_id`, and any leading-underscore meta key (e.g. `_owner_id`).
+     */
+    private const DEFAULT_INTERNAL_PATTERNS = ['/_id$/i', '/^_/'];
 
     /**
      * Whether Excel export is possible in this runtime.
@@ -49,7 +67,7 @@ class ResultSetExporter
      *
      * @param array<int, array<string, mixed>> $rows
      * @param string $title
-     * @return AiActionResult  ok → renderable is ['content'=>bytes,'mime'=>..,'filename'=>..]; error → isError set.
+     * @return AiActionResult  Export kind → payload ['content'=>bytes,'mime'=>..,'filename'=>..]; or Error kind.
      */
     public function toExcel(array $rows, string $title = 'export'): AiActionResult
     {
@@ -59,7 +77,7 @@ class ResultSetExporter
             );
         }
 
-        [$headers, $matrix] = $this->toMatrix($rows);
+        [$headers, $matrix] = $this->toMatrix($this->redact($rows));
         if (empty($matrix)) {
             return AiActionResult::error('Nothing to export: the result set is empty.');
         }
@@ -83,11 +101,12 @@ class ResultSetExporter
 
         $bytes = $this->captureWriterOutput($writer);
 
-        return AiActionResult::ok([
-            'content' => $bytes,
-            'mime' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'filename' => $this->safeFilename($title, 'xlsx'),
-        ], 'Generated an Excel export with ' . count($matrix) . ' row(s).');
+        return AiActionResult::export(
+            $bytes,
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            $this->safeFilename($title, 'xlsx'),
+            'Generated an Excel export with ' . count($matrix) . ' row(s).'
+        );
     }
 
     /**
@@ -105,7 +124,7 @@ class ResultSetExporter
             );
         }
 
-        [$headers, $matrix] = $this->toMatrix($rows);
+        [$headers, $matrix] = $this->toMatrix($this->redact($rows));
         if (empty($matrix)) {
             return AiActionResult::error('Nothing to export: the result set is empty.');
         }
@@ -120,11 +139,152 @@ class ResultSetExporter
         $dompdf->render();
         $bytes = (string) $dompdf->output();
 
-        return AiActionResult::ok([
-            'content' => $bytes,
-            'mime' => 'application/pdf',
-            'filename' => $this->safeFilename($title, 'pdf'),
-        ], 'Generated a PDF export with ' . count($matrix) . ' row(s).');
+        return AiActionResult::export(
+            $bytes,
+            'application/pdf',
+            $this->safeFilename($title, 'pdf'),
+            'Generated a PDF export with ' . count($matrix) . ' row(s).'
+        );
+    }
+
+    /**
+     * Project rows so an export never leaks what the chat prose would have withheld.
+     *
+     * Drops, per column NAME (case-insensitive):
+     *   - configured internal id-ish columns + the default deny-list (neo4j_id, *_id, _meta);
+     *   - any field hidden by the privacy policy (PII column names), passed in by the caller or
+     *     read from config('ai.access_control.identifying_fields.*').
+     *
+     * The whole step is bypassable with config('ai.export.redact_rows') = false, so a host that
+     * exports through an already-redacted result set is not double-charged.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<int, string>|null $piiColumns  Explicit PII column names; null => read config.
+     * @return array<int, array<string, mixed>>
+     */
+    public function redact(array $rows, ?array $piiColumns = null): array
+    {
+        if (!$this->redactionEnabled()) {
+            return $rows;
+        }
+
+        $internalColumns = $this->lowerSet($this->configList('ai.export.internal_columns', self::DEFAULT_INTERNAL_COLUMNS));
+        $internalPatterns = $this->configList('ai.export.internal_patterns', self::DEFAULT_INTERNAL_PATTERNS);
+        $piiColumns = $this->lowerSet($piiColumns ?? $this->configuredPiiColumns());
+
+        $redacted = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $kept = [];
+            foreach ($row as $key => $value) {
+                if ($this->isRedactedColumn((string) $key, $internalColumns, $internalPatterns, $piiColumns)) {
+                    continue;
+                }
+                $kept[$key] = $value;
+            }
+            $redacted[] = $kept;
+        }
+
+        return $redacted;
+    }
+
+    /**
+     * @param array<string, true> $internalColumns  lower-cased name => true
+     * @param array<int, string> $internalPatterns  PCRE patterns
+     * @param array<string, true> $piiColumns        lower-cased name => true
+     */
+    private function isRedactedColumn(string $key, array $internalColumns, array $internalPatterns, array $piiColumns): bool
+    {
+        $lower = strtolower($key);
+
+        if (isset($internalColumns[$lower]) || isset($piiColumns[$lower])) {
+            return true;
+        }
+
+        foreach ($internalPatterns as $pattern) {
+            if (@preg_match($pattern, $key) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function redactionEnabled(): bool
+    {
+        return (bool) ($this->safeConfig('ai.export.redact_rows') ?? true);
+    }
+
+    /**
+     * PII column names the privacy policy hides — the SAME list the prose layer uses, so the
+     * file and the chat answer agree on what is sensitive (model-agnostic, config-driven).
+     *
+     * @return array<int, string>
+     */
+    private function configuredPiiColumns(): array
+    {
+        $fields = $this->safeConfig('ai.access_control.identifying_fields');
+        if (!is_array($fields)) {
+            return [];
+        }
+
+        $columns = [];
+        foreach ($fields as $entityColumns) {
+            if (is_array($entityColumns)) {
+                foreach ($entityColumns as $column) {
+                    $columns[] = (string) $column;
+                }
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Read a config list with a default, tolerating a missing container (unit context).
+     *
+     * @param array<int, string> $default
+     * @return array<int, string>
+     */
+    private function configList(string $key, array $default): array
+    {
+        $value = $this->safeConfig($key);
+
+        return is_array($value) ? array_values(array_map('strval', $value)) : $default;
+    }
+
+    /**
+     * Read config tolerating an unbooted container (the exporter is unit-tested without a full
+     * app boot). Any resolution failure yields null so callers fall back to safe defaults.
+     */
+    private function safeConfig(string $key): mixed
+    {
+        if (!function_exists('config')) {
+            return null;
+        }
+
+        try {
+            return config($key);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * @param array<int, string> $names
+     * @return array<string, true>  lower-cased name => true
+     */
+    private function lowerSet(array $names): array
+    {
+        $set = [];
+        foreach ($names as $name) {
+            $set[strtolower((string) $name)] = true;
+        }
+
+        return $set;
     }
 
     /**

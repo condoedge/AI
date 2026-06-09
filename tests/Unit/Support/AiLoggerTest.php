@@ -176,4 +176,18 @@ class AiLoggerTest extends TestCase
         // Slow timer ran longer, so it should have a larger elapsed time
         $this->assertGreaterThan($fastElapsed, $slowElapsed);
     }
+
+    /** @test */
+    public function it_constructs_when_no_log_channel_is_configured(): void
+    {
+        // A bare host (or Testbench) may leave both keys unset. The logger is
+        // resolved eagerly during command registration, so a TypeError at
+        // construction would crash every console command.
+        config()->set('ai.log_channel', null);
+        config()->set('logging.default', null);
+
+        $logger = new AiLogger();
+
+        $this->assertInstanceOf(AiLogger::class, $logger);
+    }
 }

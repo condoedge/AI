@@ -21,59 +21,28 @@ use Condoedge\Ai\Services\Response\ResponseFileEnricher;
 use Condoedge\Ai\Services\Response\ResponseEntityEnricher;
 
 /**
- * AI Manager - Convenient wrapper around AI services
+ * AI Manager - thin orchestrator over the AI pipeline services.
  *
- * This class provides a convenient API while properly using dependency injection
- * and Laravel's service container. All dependencies are injected via constructor,
- * making this class fully testable and following Laravel best practices.
- *
- * **Usage via Facade:**
- * ```php
- * use Condoedge\Ai\Facades\AI;
- *
- * AI::ingest($customer);
- * $context = AI::retrieveContext("Show all teams");
- * $response = AI::chat("What is 2+2?");
- * ```
- *
- * **Usage via Dependency Injection:**
- * ```php
- * use Condoedge\Ai\Services\AiManager;
- *
- * class CustomerController extends Controller
- * {
- *     public function __construct(private AiManager $ai) {}
- *
- *     public function store(Request $request)
- *     {
- *         $customer = Customer::create($request->validated());
- *         $this->ai->ingest($customer);
- *     }
- * }
- * ```
- *
- * **Testing:**
- * ```php
- * // Mock the facade
- * AI::shouldReceive('ingest')->once()->with($customer)->andReturn([...]);
- *
- * // Or inject a mock
- * $mockAi = Mockery::mock(AiManager::class);
- * $mockAi->shouldReceive('ingest')->once()->andReturn([...]);
- * ```
+ * Owns the single canonical chat entry point (answerQuestion) plus the
+ * ingest/context/response/file/embedding/llm delegations. All dependencies are
+ * injected via constructor, keeping the class fully testable and aligned with
+ * Laravel's container.
  *
  * @package Condoedge\Ai\Services
  */
 class AiManager
 {
     /**
-     * Create a new AI Manager instance
-     *
-     * All dependencies are injected via constructor, ensuring:
-     * - Testability: Easy to mock dependencies
-     * - Flexibility: Can swap implementations via service provider
-     * - Clarity: Dependencies are explicit and visible
-     *
+     * Relevance window (raw-cosine) within which two angles' results for the same
+     * file are treated as equally on-topic when choosing which angle's snippet to
+     * keep. Within the window the deeper (past-cover) snippet is preferred so the
+     * operative clause is not displaced by a marginally-higher-scoring cover chunk.
+     */
+    private const SNIPPET_RELEVANCE_MARGIN = 0.12;
+
+    private readonly QueryParameterizer $queryParameterizer;
+
+    /**
      * @param DataIngestionServiceInterface $ingestion Data ingestion service
      * @param ContextRetrieverInterface $context Context retrieval (RAG) service
      * @param EmbeddingProviderInterface $embedding Embedding generation service
@@ -85,6 +54,7 @@ class AiManager
      * @param FileContextProvider|null $fileContextProvider File context provider for file-based RAG
      * @param ResponseFileEnricher|null $responseFileEnricher Response enricher for file references
      * @param ResponseEntityEnricher|null $responseEntityEnricher Response enricher for entity actions
+     * @param QueryParameterizer|null $queryParameterizer Identity-aware (de)parameterizer for stored queries
      */
     public function __construct(
         private readonly DataIngestionServiceInterface $ingestion,
@@ -97,8 +67,10 @@ class AiManager
         private readonly VectorStoreInterface $vectorStore,
         private readonly ?FileContextProvider $fileContextProvider = null,
         private readonly ?ResponseFileEnricher $responseFileEnricher = null,
-        private readonly ?ResponseEntityEnricher $responseEntityEnricher = null
+        private readonly ?ResponseEntityEnricher $responseEntityEnricher = null,
+        ?QueryParameterizer $queryParameterizer = null
     ) {
+        $this->queryParameterizer = $queryParameterizer ?? new QueryParameterizer();
     }
 
     // =========================================================================
@@ -175,13 +147,7 @@ class AiManager
      * to provide rich context for LLM query generation.
      *
      * @param string $question The question to get context for
-     * @param array $options Optional parameters:
-     *                       - collection: Vector collection name (default: 'questions')
-     *                       - limit: Max similar queries (default: 5)
-     *                       - includeSchema: Include graph schema (default: true)
-     *                       - includeExamples: Include sample entities (default: true)
-     *                       - examplesPerLabel: Examples per label (default: 2)
-     *                       - scoreThreshold: Minimum similarity score (default: 0.0)
+     * @param array $options Optional parameters (collection, limit, includeSchema, includeExamples, ...)
      * @return PipelineContext Typed context object containing all pipeline data
      */
     public function retrieveContext(string $question, array $options = []): PipelineContext
@@ -236,22 +202,15 @@ class AiManager
     /**
      * Store a question-query pair in the vector store for future RAG retrieval
      *
-     * This method stores a question and its corresponding Cypher query in the
-     * vector database, enabling the system to learn from past queries and provide
-     * better context for similar future questions.
-     *
-     * The question is embedded and stored with its query in the 'questions' collection.
-     * This builds up a knowledge base of question-query pairs that can be used for
-     * few-shot learning in future query generation.
+     * The question is embedded and stored with its query in the 'questions' collection,
+     * building a knowledge base of question-query pairs used for few-shot learning in
+     * future query generation.
      *
      * @param string $question Natural language question
-     * @param string $cypherQuery The Cypher query that answers the question
-     * @param array $metadata Optional metadata to store with the query (e.g., user_id, timestamp, confidence)
+     * @param string|null $cypherQuery The Cypher query that answers the question
+     * @param array $metadata Optional metadata to store with the query
      * @param string $collection Collection name (default: 'questions')
      * @return array Result with keys: success, point_id, errors
-     *
-     * @throws \RuntimeException If embedding generation fails
-     * @throws \RuntimeException If vector store operation fails
      */
     public function storeQuery(
         string $question,
@@ -260,26 +219,21 @@ class AiManager
         string $collection = 'questions'
     ): array {
         try {
-            // Ensure collection exists
             if (!$this->vectorStore->collectionExists($collection)) {
                 $vectorSize = $this->embedding->getDimensions();
                 $this->vectorStore->createCollection($collection, $vectorSize, 'cosine');
             }
 
-            // Generate embedding for the question
             $embedding = $this->embedding->embed($question);
 
-            // Create unique ID for this question-query pair
             $pointId = md5($question . $cypherQuery);
 
-            // Prepare payload
             $payload = array_merge([
                 'question' => $question,
                 'cypher_query' => $cypherQuery,
                 'created_at' => now()->toIso8601String(),
             ], $metadata);
 
-            // Store in vector database
             $success = $this->vectorStore->upsert($collection, [
                 [
                     'id' => $pointId,
@@ -318,37 +272,6 @@ class AiManager
         return $this->embedding->embed($text);
     }
 
-    /**
-     * Generate embeddings for multiple texts (batch - more efficient)
-     *
-     * @param array $texts Array of texts
-     * @return array Array of vectors
-     */
-    public function embedBatch(array $texts): array
-    {
-        return $this->embedding->embedBatch($texts);
-    }
-
-    /**
-     * Get the dimensionality of embeddings
-     *
-     * @return int Vector dimensions
-     */
-    public function getEmbeddingDimensions(): int
-    {
-        return $this->embedding->getDimensions();
-    }
-
-    /**
-     * Get the embedding model being used
-     *
-     * @return string Model identifier
-     */
-    public function getEmbeddingModel(): string
-    {
-        return $this->embedding->getModel();
-    }
-
     // =========================================================================
     // LLM Methods
     // =========================================================================
@@ -359,14 +282,11 @@ class AiManager
      * Accepts either a simple string or an array of messages.
      *
      * @param string|array $input Simple string or array of messages
-     *                            String: Converted to [['role' => 'user', 'content' => $input]]
-     *                            Array: [['role' => 'user'|'system'|'assistant', 'content' => '...']]
      * @param array $options Optional parameters (temperature, max_tokens, etc.)
      * @return string LLM response
      */
     public function chat(string|array $input, array $options = []): string
     {
-        // Convert simple string to messages array
         if (is_string($input)) {
             $input = [['role' => 'user', 'content' => $input]];
         }
@@ -375,28 +295,7 @@ class AiManager
     }
 
     /**
-     * Chat with the LLM and get JSON response
-     *
-     * Forces the LLM to respond with valid JSON.
-     *
-     * @param string|array $input Simple string or array of messages
-     * @param array $options Optional parameters
-     * @return object|array Decoded JSON response
-     */
-    public function chatJson(string|array $input, array $options = []): object|array
-    {
-        // Convert simple string to messages array
-        if (is_string($input)) {
-            $input = [['role' => 'user', 'content' => $input]];
-        }
-
-        return $this->llm->chatJson($input, $options);
-    }
-
-    /**
      * Simple completion (prompt + optional system message)
-     *
-     * Convenience method for single-turn interactions.
      *
      * @param string $prompt User prompt
      * @param string|null $systemPrompt Optional system message
@@ -408,60 +307,6 @@ class AiManager
         return $this->llm->complete($prompt, $systemPrompt, $options);
     }
 
-    /**
-     * Stream a chat response (for real-time UI)
-     *
-     * @param array $messages Array of messages
-     * @param callable $callback Function to call with each chunk
-     * @param array $options Optional parameters
-     * @return void
-     */
-    public function stream(array $messages, callable $callback, array $options = []): void
-    {
-        $this->llm->stream($messages, $callback, $options);
-    }
-
-    /**
-     * Get the LLM model being used
-     *
-     * @return string Model identifier
-     */
-    public function getLlmModel(): string
-    {
-        return $this->llm->getModel();
-    }
-
-    /**
-     * Get the LLM provider name
-     *
-     * @return string Provider name (e.g., 'openai', 'anthropic')
-     */
-    public function getLlmProvider(): string
-    {
-        return $this->llm->getProvider();
-    }
-
-    /**
-     * Get the maximum context length (tokens)
-     *
-     * @return int Maximum tokens
-     */
-    public function getLlmMaxTokens(): int
-    {
-        return $this->llm->getMaxTokens();
-    }
-
-    /**
-     * Count tokens in a text (approximate)
-     *
-     * @param string $text Text to count
-     * @return int Estimated token count
-     */
-    public function countTokens(string $text): int
-    {
-        return $this->llm->countTokens($text);
-    }
-
     // =========================================================================
     // Query Generation Methods
     // =========================================================================
@@ -471,13 +316,12 @@ class AiManager
      *
      * @param string $question Natural language question
      * @param PipelineContext|null $context Pipeline context (use retrieveContext() to get this)
-     * @param array $options Optional parameters (temperature, max_retries, allow_write, explain)
+     * @param array $options Optional parameters (temperature, max_retries, allow_write, explain, user)
      * @return array Result with keys: cypher, explanation, confidence, warnings, metadata
      */
     public function generateQuery(string $question, ?PipelineContext $context = null, array $options = []): array
     {
         try {
-            // If no context provided, retrieve it
             if ($context === null) {
                 $context = $this->context->retrieveContext($question, $options);
             }
@@ -486,8 +330,10 @@ class AiManager
 
             if (isset($generation['cypher']) && $generation['cypher']) {
                 // Parameterize user-specific values before storing as reusable examples.
-                // This prevents user A's query from leaking data to user B.
-                $storedCypher = $this->parameterizeCypher($generation['cypher']);
+                // This prevents user A's query from leaking data to user B. Identity is
+                // threaded from $options['user'] so CLI/queue/eval/impersonation key the
+                // stored example to the real pipeline actor, not the ambient session.
+                $storedCypher = $this->parameterizerFor($options)->parameterize($generation['cypher']);
 
                 $this->storeQuery(
                     question: $question,
@@ -520,84 +366,13 @@ class AiManager
     /**
      * Validate a Cypher query for syntax and safety
      *
-     * @param string $cypherQuery Query to validate
+     * @param string|null $cypherQuery Query to validate
      * @param array $options Validation options (allow_write, max_complexity)
      * @return array Validation result with keys: valid, errors, warnings, complexity, is_read_only
-     * @throws \InvalidArgumentException If query is empty
      */
     public function validateQuery(?string $cypherQuery, array $options = []): array
     {
         return $this->queryGenerator->validate($cypherQuery, $options);
-    }
-
-    /**
-     * Sanitize a Cypher query by removing dangerous operations
-     *
-     * @param string $cypherQuery Query to sanitize
-     * @return string Sanitized query
-     */
-    public function sanitizeQuery(?string $cypherQuery): string
-    {
-        return $this->queryGenerator->sanitize($cypherQuery);
-    }
-
-    /**
-     * Get available query templates
-     *
-     * @return array Array of template metadata
-     */
-    public function getQueryTemplates(): array
-    {
-        return $this->queryGenerator->getTemplates();
-    }
-
-    /**
-     * Detect which template (if any) matches the question
-     *
-     * @param string $question Natural language question
-     * @return string|null Template name or null if no match
-     */
-    public function detectQueryTemplate(string $question): ?string
-    {
-        return $this->queryGenerator->detectTemplate($question);
-    }
-
-    /**
-     * Full pipeline: Question → Context → Query (convenience method)
-     *
-     * @param string $question Natural language question
-     * @param array $options Generation options
-     * @return array Result with keys: cypher, explanation, confidence, warnings, metadata, context
-     */
-    public function askQuestion(string $question, array $options = []): array
-    {
-        try {
-            // Step 1: Retrieve context (returns PipelineContext)
-            $ctx = $this->retrieveContext($question);
-
-            // Step 2: Generate query
-            $result = $this->generateQuery($question, $ctx, $options);
-
-            // Add context to result for transparency
-            $result['context'] = $ctx;
-
-            return $result;
-
-        } catch (\Throwable $e) {
-            \Log::error('Error in askQuestion: ' . $e->getMessage(), [
-                'question' => $question,
-                'exception' => get_class($e),
-            ]);
-
-            return [
-                'cypher' => null,
-                'explanation' => null,
-                'confidence' => 0,
-                'warnings' => [__('ai.error.encountered_issue', ['question' => $question])],
-                'metadata' => ['error' => true, 'error_message' => $e->getMessage()],
-                'context' => new PipelineContext(),
-            ];
-        }
     }
 
     // =========================================================================
@@ -607,118 +382,14 @@ class AiManager
     /**
      * Execute a Cypher query
      *
-     * @param string $cypherQuery Cypher query to execute
+     * @param string|null $cypherQuery Cypher query to execute
      * @param array $parameters Query parameters
      * @param array $options Execution options (timeout, limit, read_only, format, include_stats)
      * @return array Execution result with keys: success, data, stats, metadata, errors
-     * @throws \RuntimeException If query execution fails
      */
     public function executeQuery(?string $cypherQuery, array $parameters = [], array $options = []): array
     {
         return $this->queryExecutor->execute($cypherQuery, $parameters, $options);
-    }
-
-    /**
-     * Execute query and return count only
-     *
-     * @param string $cypherQuery Query to execute
-     * @param array $parameters Query parameters
-     * @param array $options Execution options
-     * @return int Count of results
-     */
-    public function executeCount(?string $cypherQuery, array $parameters = [], array $options = []): int
-    {
-        return $this->queryExecutor->executeCount($cypherQuery, $parameters, $options);
-    }
-
-    /**
-     * Execute query with pagination
-     *
-     * @param string $cypherQuery Query to execute
-     * @param int $page Page number (1-indexed)
-     * @param int $perPage Results per page
-     * @param array $parameters Query parameters
-     * @param array $options Execution options
-     * @return array Paginated results with data and pagination metadata
-     */
-    public function executePaginated(
-        ?string $cypherQuery,
-        int $page = 1,
-        int $perPage = 20,
-        array $parameters = [],
-        array $options = []
-    ): array {
-        return $this->queryExecutor->executePaginated($cypherQuery, $page, $perPage, $parameters, $options);
-    }
-
-    /**
-     * Explain a query (show execution plan)
-     *
-     * @param string $cypherQuery Query to explain
-     * @param array $parameters Query parameters
-     * @return array Execution plan details
-     */
-    public function explainQuery(?string $cypherQuery, array $parameters = []): array
-    {
-        return $this->queryExecutor->explain($cypherQuery, $parameters);
-    }
-
-    /**
-     * Test if a query is valid (dry run)
-     *
-     * @param string $cypherQuery Query to test
-     * @return bool True if query is valid
-     */
-    public function testQuery(?string $cypherQuery): bool
-    {
-        return $this->queryExecutor->test($cypherQuery);
-    }
-
-    /**
-     * Full pipeline: Question → Context → Query → Execute (convenience method)
-     *
-     * @param string $question Natural language question
-     * @param array $options Options for generation and execution
-     * @return array Result with query, execution results, and metadata
-     */
-    public function ask(string $question, array $options = []): array
-    {
-        try {
-            // Step 1: Retrieve context (returns PipelineContext)
-            $ctx = $this->retrieveContext($question);
-
-            // Step 2: Generate query
-            $queryResult = $this->generateQuery($question, $ctx, $options);
-
-            // Step 3: Execute query
-            $executionResult = $this->executeQuery($queryResult['cypher'], [], $options);
-
-            return [
-                'question' => $question,
-                'cypher' => $queryResult['cypher'],
-                'explanation' => $queryResult['explanation'],
-                'data' => $executionResult['data'],
-                'stats' => $executionResult['stats'],
-                'context' => $ctx,
-                'metadata' => array_merge($queryResult['metadata'], $executionResult['metadata']),
-            ];
-
-        } catch (\Throwable $e) {
-            \Log::error('Error in ask: ' . $e->getMessage(), [
-                'question' => $question,
-                'exception' => get_class($e),
-            ]);
-
-            return [
-                'question' => $question,
-                'cypher' => null,
-                'explanation' => null,
-                'data' => [],
-                'stats' => [],
-                'context' => new PipelineContext(),
-                'metadata' => ['error' => true, 'error_message' => $e->getMessage()],
-            ];
-        }
     }
 
     // =========================================================================
@@ -754,7 +425,7 @@ class AiManager
      * Suggest visualizations for query results
      *
      * @param array $queryResult Query results
-     * @param string $cypherQuery Original query
+     * @param string|null $cypherQuery Original query
      * @return array Suggested visualization types
      */
     public function suggestVisualizations(array $queryResult, ?string $cypherQuery): array
@@ -779,21 +450,23 @@ class AiManager
     public function answerQuestion(string $question, array $options = []): array
     {
         try {
-            // Step 1: Retrieve context (returns PipelineContext DTO)
             $ctx = $this->context->retrieveContext($question, $options);
 
-            // Step 2: Merge conversation context if provided
             if (!empty($options['conversation_context'])) {
                 $ctx->conversationContext = $options['conversation_context'];
             }
 
-            // Step 3: Retrieve file context using clarified question for better matching
+            // Page context is a soft prior — which page/record the chat was opened from.
+            // Symmetric to conversation_context; default-empty keeps the prompt section
+            // silent and adds no retrieval/entity-selection bias when absent.
+            if (!empty($options['page_context'])) {
+                $ctx->pageContext = $options['page_context'];
+            }
+
             $ctx = $this->retrieveAndSetFileContext($ctx, $question, $options);
 
-            // Step 4: Generate and execute query (or skip for knowledge-only questions)
             $ctx = $this->generateAndExecute($ctx, $question, $options);
 
-            // Step 5: Build and return response
             return $this->buildFinalResponse($question, $ctx, $options);
 
         } catch (\Throwable $e) {
@@ -825,6 +498,20 @@ class AiManager
 
         $user = $options['user'] ?? null;
 
+        // File-listing intent ("which files do I have access to?"): list the user's
+        // accessible files (ACL-respecting) instead of semantic retrieval. Derived
+        // from the QU intent (config-driven, model-agnostic) — never a hardcoded
+        // English phrase — so it activates the moment QU classifies a listing intent.
+        if ($this->isFileListingIntent($ctx)) {
+            $enumeration = $this->retrieveFileEnumerationContext($user);
+            if (!empty($enumeration['relevant_files'] ?? [])) {
+                $ctx->fileContext = $enumeration;
+                return $ctx;
+            }
+            // No enumerable files (or enumeration disabled/unavailable): fall through
+            // to normal retrieval rather than asserting an empty list.
+        }
+
         // Build search queries from QU output — multiple angles for better recall
         $queries = array_filter(array_unique([
             $ctx->qu->searchQuery,
@@ -836,20 +523,93 @@ class AiManager
             $queries[] = implode(' ', $ctx->qu->searchTags);
         }
 
-        // Try all queries and merge results (different phrasings find different files)
-        $allFiles = [];
+        // Cross-lingual angles: when the corpus is multilingual, the QU layer emits
+        // the question translated into each configured corpus language (one pure
+        // single-language phrasing per language). Add each as a SEPARATE fan-out
+        // angle so a question asked in one language still retrieves documents
+        // written in another. Empty when no corpus languages are configured, so
+        // the fan-out is unchanged for monolingual corpora.
+        foreach ($ctx->qu->corpusTranslations as $translation) {
+            if (is_string($translation) && trim($translation) !== '') {
+                $queries[] = $translation;
+            }
+        }
+
+        // Page context as one extra retrieval angle (soft prior): the record's label + visible
+        // filter values boost recall for the page the chat was opened from WITHOUT excluding any
+        // other record (it is just an additional phrasing merged into the fan-out below).
+        $pageAngle = $this->pageContextQueryAngle($options['page_context'] ?? []);
+        if ($pageAngle !== '') {
+            $queries[] = $pageAngle;
+        }
+
+        $queries = array_filter(array_unique($queries));
+
+        // Different phrasings find different files AND surface different chunks of
+        // the SAME file. Collect every per-angle result per file so the merge can
+        // both rank the file by its strongest angle and pick the most useful snippet
+        // across angles (not just the highest-cosine one, which is often a generic
+        // cover/preamble chunk).
+        $perFileResults = [];
+        $anyAngleSucceeded = false;
         foreach ($queries as $searchQuery) {
             $fileContext = $this->retrieveFileContext($searchQuery, $user);
+            // A successful retrieval (even an empty one) always carries 'file_count';
+            // retrieveFileContext returns a bare [] only when the provider threw. This
+            // lets the recall net below distinguish "searched, found nothing" (worth a
+            // retry at a lower floor) from "retrieval errored" (a retry would re-throw).
+            if (isset($fileContext['file_count'])) {
+                $anyAngleSucceeded = true;
+            }
             foreach ($fileContext['relevant_files'] ?? [] as $file) {
                 $fileId = $file['file_id'] ?? $file['filename'] ?? '';
-                if (!isset($allFiles[$fileId]) || ($file['relevance'] ?? 0) > ($allFiles[$fileId]['relevance'] ?? 0)) {
-                    $allFiles[$fileId] = $file;
+                $perFileResults[$fileId][] = $file;
+            }
+        }
+
+        $allFiles = [];
+        foreach ($perFileResults as $fileId => $results) {
+            $allFiles[$fileId] = $this->mergeFileAngleResults($results);
+        }
+
+        // Recall safety net: no angle cleared the confident relevance threshold, so the
+        // multi-angle merge is empty. Rather than dead-end into a generic, ungrounded
+        // answer, retry the SAME angles once at a lower floor and admit the strongest
+        // borderline document(s). This fires ONLY when the result would otherwise be
+        // empty (so it can never dilute a confident retrieval); the response layer still
+        // grounds or abstains, and a borderline-but-on-topic source is strictly more
+        // useful to ground on than nothing. Disabled when the floor is not below the
+        // confident threshold.
+        if (empty($allFiles) && $anyAngleSucceeded) {
+            $confident = (float) config('ai.file_context.min_relevance_score', 0.4);
+            $floor = (float) config('ai.file_context.recall_floor', 0.3);
+            $cap = max(1, (int) config('ai.file_context.recall_limit', 2));
+
+            if ($floor > 0.0 && $floor < $confident) {
+                $recallPerFile = [];
+                foreach ($queries as $searchQuery) {
+                    $fileContext = $this->retrieveFileContext($searchQuery, $user, [
+                        'min_score' => $floor,
+                        'limit' => $cap,
+                    ]);
+                    foreach ($fileContext['relevant_files'] ?? [] as $file) {
+                        $fileId = $file['file_id'] ?? $file['filename'] ?? '';
+                        $recallPerFile[$fileId][] = $file;
+                    }
+                }
+                foreach ($recallPerFile as $fileId => $results) {
+                    $allFiles[$fileId] = $this->mergeFileAngleResults($results);
+                }
+                // Keep only the strongest few borderline docs so a recall rescue never
+                // floods the prompt with weak, off-topic sources.
+                if (count($allFiles) > $cap) {
+                    uasort($allFiles, fn($a, $b) => ($b['priority_score'] ?? $b['relevance'] ?? 0) <=> ($a['priority_score'] ?? $a['relevance'] ?? 0));
+                    $allFiles = array_slice($allFiles, 0, $cap, true);
                 }
             }
         }
 
         if (!empty($allFiles)) {
-            // Sort by relevance descending
             $files = array_values($allFiles);
             usort($files, fn($a, $b) => ($b['priority_score'] ?? $b['relevance'] ?? 0) <=> ($a['priority_score'] ?? $a['relevance'] ?? 0));
 
@@ -865,14 +625,122 @@ class AiManager
     }
 
     /**
+     * Merge the per-angle results for ONE file into a single reference.
+     *
+     * Each fan-out angle phrases the question differently, so the same file is
+     * scored against several probes — and crucially, different probes surface
+     * different best chunks of that file. A literal probe often ranks a generic
+     * cover/preamble chunk (always near the start of the document) highest, while a
+     * concept-rich probe ranks the operative clause (deep in the document) highest
+     * but at a slightly lower raw cosine. Keeping only the max-relevance result
+     * therefore throws away the operative snippet in favour of the cover page.
+     *
+     * Resolution (model-agnostic, structural — no semantic word lists):
+     *   - Rank the file by its STRONGEST angle (max relevance), so a genuinely
+     *     relevant document is not demoted.
+     *   - Choose the SNIPPET from the most informative angle: among the angles
+     *     whose relevance is within a small margin of that max, prefer the one
+     *     whose best chunk sits DEEPEST in the document (largest chunk_index).
+     *     Cover/preamble/table-of-contents chunks are by construction the
+     *     lowest-index chunks, so a deeper best chunk of comparable relevance is
+     *     the substantive content the question is actually about.
+     *
+     * @param array<int,array> $results The same file's reference from each angle.
+     * @return array The merged reference (max relevance for ranking, best snippet).
+     */
+    private function mergeFileAngleResults(array $results): array
+    {
+        $maxRelevance = 0.0;
+        foreach ($results as $r) {
+            $maxRelevance = max($maxRelevance, (float) ($r['relevance'] ?? 0));
+        }
+
+        // Angles whose best chunk is close enough to the strongest to be considered
+        // equally on-topic; among these the deepest (past-cover) snippet wins.
+        $margin = self::SNIPPET_RELEVANCE_MARGIN;
+        $best = null;
+        foreach ($results as $r) {
+            if ((float) ($r['relevance'] ?? 0) < $maxRelevance - $margin) {
+                continue;
+            }
+            if ($best === null
+                || (int) ($r['chunk_index'] ?? 0) > (int) ($best['chunk_index'] ?? 0)) {
+                $best = $r;
+            }
+        }
+
+        // Fallback: if nothing qualified (shouldn't happen), keep the first result.
+        $merged = $best ?? $results[0];
+
+        // The file's ranking strength is its strongest angle, independent of which
+        // angle's snippet was chosen.
+        $merged['relevance'] = $maxRelevance;
+
+        return $merged;
+    }
+
+    /**
+     * Build one extra file-search query angle from page context: the record label plus the
+     * visible filter values. Returns '' when there is nothing to add, so the fan-out is
+     * unchanged for non-page-aware chats.
+     *
+     * @param array<string,mixed> $pageContext
+     */
+    private function pageContextQueryAngle(array $pageContext): string
+    {
+        if (empty($pageContext)) {
+            return '';
+        }
+
+        $parts = [];
+
+        if (!empty($pageContext['label'])) {
+            $parts[] = (string) $pageContext['label'];
+        }
+
+        $filters = $pageContext['filters'] ?? [];
+        if (is_array($filters)) {
+            foreach ($filters as $value) {
+                if (is_array($value)) {
+                    foreach ($value as $v) {
+                        $parts[] = (string) $v;
+                    }
+                } elseif ($value !== null && $value !== '' && !is_bool($value)) {
+                    $parts[] = (string) $value;
+                }
+            }
+        }
+
+        return trim(implode(' ', $parts));
+    }
+
+    /**
      * Generate Cypher query and execute it, or skip for knowledge-only questions.
      */
     private function generateAndExecute(PipelineContext $ctx, string $question, array $options): PipelineContext
     {
-        $hasFileContext = !empty($ctx->fileContext['relevant_files'] ?? $ctx->fileContext);
+        $hasFileContext = !empty($ctx->fileContext['relevant_files'] ?? []);
+        $isEnumeration = !empty($ctx->fileContext['enumeration'] ?? false);
 
-        // Skip Cypher for knowledge queries — no graph data answers "can I do X?"
-        if ($ctx->qu->questionType === 'knowledge_query') {
+        // File-enumeration intent: the user's accessible file list IS the answer.
+        // Skip Cypher and ground the response on that ACL-filtered list rather than
+        // running a graph query that would not produce the listing.
+        if ($isEnumeration && $hasFileContext) {
+            $ctx->queryResult = new QueryGenerationResult(
+                explanation: 'File listing — answered from the user\'s accessible files.',
+                confidence: 1.0,
+                metadata: ['source' => 'file_context', 'intent' => 'file_listing'],
+            );
+            $ctx->executionResult = QueryExecutionResult::empty();
+            return $ctx;
+        }
+
+        // Skip Cypher for knowledge queries ONLY when documents were actually
+        // retrieved — those documents are the grounding. With no document context
+        // we must NOT claim "answered from documents" at confidence 1.0; fall
+        // through to the normal query path so an empty result becomes an explicit
+        // no-source abstention rather than a confident, ungrounded answer.
+        if ($ctx->qu->questionType === 'knowledge_query' && $hasFileContext) {
             $ctx->queryResult = new QueryGenerationResult(
                 explanation: 'Knowledge query — answered from documents.',
                 confidence: 1.0,
@@ -882,7 +750,6 @@ class AiManager
             return $ctx;
         }
 
-        // Pass the PipelineContext directly to QueryGenerator
         $queryResult = $this->generateQuery($question, $ctx, $options);
 
         // Thread pipeline identity/provenance into execution so the executor can
@@ -893,12 +760,10 @@ class AiManager
             'conversation_id' => $options['conversation_id'] ?? null,
         ];
 
-        // Execute the generated query
         $executionResult = $this->executeQuery($queryResult['cypher'], [], $execOptions);
         $executionResult = $this->enrichResultsWithEntityActions($executionResult);
         $executionResult = $this->filterSensitiveResults($executionResult, $options['user'] ?? null);
 
-        // Store results on context as DTOs
         $ctx->queryResult = new QueryGenerationResult(
             cypher: $queryResult['cypher'] ?? null,
             explanation: $queryResult['explanation'] ?? '',
@@ -922,14 +787,43 @@ class AiManager
      */
     private function buildFinalResponse(string $question, PipelineContext $ctx, array $options): array
     {
-        $responseResult = $this->generateResponse($ctx, $options);
+        $hasFileContext = !empty($ctx->fileContext['relevant_files'] ?? []);
+        $hasData = !empty($ctx->executionResult->data);
 
-        // Enrich response with file references
+        // An empty result has two very different causes that must NOT be conflated:
+        //   1. The query ran and genuinely returned zero rows  -> abstain ("no results").
+        //   2. The pipeline could not run at all — the LLM/query layer was unavailable
+        //      (circuit breaker OPEN, generation exhausted its retries) or execution
+        //      errored. Reporting THAT as "no results were found for your question"
+        //      falsely tells the user their data does not exist when the service is
+        //      simply down. It must surface as an honest, transient error instead.
+        $generationFailed = ($ctx->queryResult->metadata['error'] ?? false) === true;
+        $executionFailed = !empty($ctx->executionResult->errors);
+
+        if (($generationFailed || $executionFailed) && !$hasData && !$hasFileContext) {
+            $responseResult = $this->responseGenerator->generateErrorResponse(
+                $question,
+                $this->infrastructureError($ctx),
+                $options
+            );
+        } elseif (!$hasData && !$hasFileContext) {
+            // Abstain explicitly when there is nothing to ground an answer on: no rows
+            // from the query AND no document context. This is the single no-source path
+            // (rather than letting the LLM narrate over an empty result and risk
+            // fabricating). generateResponse() is reserved for grounded answers.
+            $responseResult = $this->responseGenerator->generateEmptyResponse(
+                $question,
+                $ctx->queryResult->cypher,
+                $options
+            );
+        } else {
+            $responseResult = $this->generateResponse($ctx, $options);
+        }
+
         if (!empty($ctx->fileContext)) {
             $responseResult = $this->enrichResponseWithFiles($responseResult, $ctx->fileContext, $options);
         }
 
-        // Apply scope clarification
         $answer = $responseResult['answer'];
         $securityFilterApplied = $ctx->executionResult->metadata['security_filter_applied'] ?? false;
         $scopeClarified = false;
@@ -961,94 +855,56 @@ class AiManager
         ];
     }
 
+    /**
+     * Build a Throwable describing the infrastructure failure recorded in the pipeline
+     * context, so generateErrorResponse surfaces an honest, transient error. Prefers the
+     * recorded generation error message, then the first execution error, then a generic
+     * "temporarily unavailable". The message only drives error-type guidance selection —
+     * it is never shown verbatim to the user.
+     */
+    private function infrastructureError(PipelineContext $ctx): \Throwable
+    {
+        $message = $ctx->queryResult->metadata['error_message'] ?? null;
+
+        if (!is_string($message) || $message === '') {
+            $firstError = $ctx->executionResult->errors[0] ?? null;
+            $message = is_array($firstError) ? ($firstError['message'] ?? null) : (is_string($firstError) ? $firstError : null);
+        }
+
+        return new \RuntimeException(
+            is_string($message) && $message !== '' ? $message : 'The assistant service is temporarily unavailable.'
+        );
+    }
+
     // =========================================================================
     // Query Parameterization (security: prevent user ID leakage in stored queries)
     // =========================================================================
 
     /**
-     * Replace user-specific values with placeholders before storing queries.
-     * Prevents user A's data from leaking to user B via similar queries.
+     * Build the parameterizer bound to the pipeline actor for this request.
      *
-     * Uses config('ai.query_parameters') for project-specific fields.
-     * Default: user_id → $currentUserId, team_id → $currentTeamId
+     * When a user is threaded through $options the stored/served examples are
+     * keyed to that real identity; otherwise the default injected parameterizer
+     * (ambient auth() identity) is used.
      */
-    private function parameterizeCypher(string $cypher): string
+    private function parameterizerFor(array $options): QueryParameterizer
     {
-        foreach ($this->getQueryParameters() as $param) {
-            $value = $param['value'];
-            if ($value === null) {
-                continue;
-            }
-
-            $field = $param['field'];
-            $placeholder = $param['placeholder'];
-            $quotedValue = preg_quote((string) $value, '/');
-
-            // Property syntax: {field: value}
-            $cypher = preg_replace(
-                '/\b' . preg_quote($field, '/') . '\s*:\s*' . $quotedValue . '\b/',
-                $field . ': ' . $placeholder,
-                $cypher
-            );
-            // WHERE syntax: x.field = value
-            $cypher = preg_replace(
-                '/(\b' . preg_quote($field, '/') . '\s*=\s*)' . $quotedValue . '\b/',
-                '${1}' . $placeholder,
-                $cypher
-            );
+        if (array_key_exists('user', $options)) {
+            return QueryParameterizer::forUser($options['user']);
         }
 
-        return $cypher;
+        return $this->queryParameterizer;
     }
 
     /**
      * Replace placeholders with actual current user values when serving similar queries.
+     *
+     * Kept as a static entry point for SimilarQueriesSection, which renders stored
+     * example queries with the ambient current actor's values.
      */
     public static function deparameterizeCypher(string $cypher): string
     {
-        foreach (static::resolveQueryParameters() as $param) {
-            $value = $param['value'];
-            if ($value === null) {
-                continue;
-            }
-            $cypher = str_replace($param['placeholder'], (string) $value, $cypher);
-        }
-
-        return $cypher;
-    }
-
-    /**
-     * Get configurable query parameters for parameterization.
-     * Projects can add custom fields via config('ai.query_parameters').
-     *
-     * Each entry: ['field' => 'user_id', 'placeholder' => '$currentUserId', 'resolver' => fn() => auth()->id()]
-     */
-    private function getQueryParameters(): array
-    {
-        return static::resolveQueryParameters();
-    }
-
-    private static function resolveQueryParameters(): array
-    {
-        // Built-in parameters
-        $params = [
-            ['field' => 'user_id', 'placeholder' => '$currentUserId', 'value' => auth()->id()],
-            ['field' => 'team_id', 'placeholder' => '$currentTeamId', 'value' => function_exists('currentTeamId') ? currentTeamId() : null],
-        ];
-
-        // Project-specific parameters from config
-        foreach (config('ai.query_parameters', []) as $custom) {
-            if (!empty($custom['field']) && !empty($custom['placeholder'])) {
-                $value = is_callable($custom['resolver'] ?? null) ? ($custom['resolver'])() : ($custom['value'] ?? null);
-                $params[] = [
-                    'field' => $custom['field'],
-                    'placeholder' => $custom['placeholder'],
-                    'value' => $value,
-                ];
-            }
-        }
-
-        return $params;
+        return (new QueryParameterizer())->deparameterize($cypher);
     }
 
     // =========================================================================
@@ -1060,18 +916,71 @@ class AiManager
      *
      * @param string $question The question to retrieve file context for
      * @param mixed $user The user to check access for
+     * @param array $options Retrieval overrides forwarded to the provider (e.g. min_score, limit)
      * @return array File context array or empty if unavailable
      */
-    public function retrieveFileContext(string $question, mixed $user): array
+    public function retrieveFileContext(string $question, mixed $user, array $options = []): array
     {
         if ($this->fileContextProvider === null) {
             return [];
         }
 
         try {
-            return $this->fileContextProvider->getFileContext($question, $user);
+            return $this->fileContextProvider->getFileContext($question, $user, $options);
         } catch (\Throwable $e) {
             \Log::warning('Failed to retrieve file context: ' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Whether the question is a file-listing intent ("which files can I access?").
+     *
+     * Model-agnostic: read from the QU result's intent, matched against a
+     * config-driven set of enumeration intents (default ['file_listing']) — never
+     * a hardcoded English phrase. Gated by file_context.enumeration.enabled so the
+     * capability is opt-out per host.
+     */
+    private function isFileListingIntent(PipelineContext $ctx): bool
+    {
+        if (!config('ai.file_context.enumeration.enabled', true)) {
+            return false;
+        }
+
+        $intent = strtolower(trim((string) ($ctx->qu->intent ?? '')));
+        if ($intent === '') {
+            return false;
+        }
+
+        $enumerationIntents = config('ai.file_context.enumeration.intents', ['file_listing']);
+        if (!is_array($enumerationIntents)) {
+            return false;
+        }
+
+        $normalized = array_map(
+            fn ($i) => strtolower(trim((string) $i)),
+            array_filter($enumerationIntents, 'is_string')
+        );
+
+        return in_array($intent, $normalized, true);
+    }
+
+    /**
+     * Retrieve the ACL-respecting file-enumeration context for the user.
+     *
+     * @param mixed $user The user to enumerate accessible files for
+     * @return array File enumeration context, or empty on failure/no provider
+     */
+    private function retrieveFileEnumerationContext(mixed $user): array
+    {
+        if ($this->fileContextProvider === null) {
+            return [];
+        }
+
+        try {
+            return $this->fileContextProvider->getFileEnumerationContext($user);
+        } catch (\Throwable $e) {
+            \Log::warning('Failed to enumerate accessible files: ' . $e->getMessage());
             return [];
         }
     }

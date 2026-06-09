@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\Services\ResponseSections\ResponseEntityActionsSection;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Condoedge\Ai\Tests\TestCase;
@@ -24,6 +27,12 @@ class ResponseEntityActionsSectionTest extends TestCase
         $this->section = new ResponseEntityActionsSection();
     }
 
+    public function tearDown(): void
+    {
+        Mockery::close();
+        parent::tearDown();
+    }
+
     /** @test */
     public function it_uses_focused_entity_from_conversation_context(): void
     {
@@ -37,15 +46,15 @@ class ResponseEntityActionsSectionTest extends TestCase
             ]);
         $this->mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
 
-        $context = [
-            'cypher' => '', // Empty cypher for NO QUERY case
-            'data' => [],
-            'conversation_context' => [
-                'focused_entity' => 'Person',
-                'last_result_sample' => [
-                    ['id' => '152463', 'name' => 'John Doe'],
-                    ['id' => '152464', 'name' => 'Jane Smith'],
-                ],
+        // NO QUERY case: empty cypher + empty data, entity type/IDs come from conversation context.
+        $context = new PipelineContext();
+        $context->queryResult = new QueryGenerationResult(cypher: '');
+        $context->executionResult = new QueryExecutionResult(success: true, data: []);
+        $context->conversationContext = [
+            'focused_entity' => 'Person',
+            'last_result_sample' => [
+                ['id' => '152463', 'name' => 'John Doe'],
+                ['id' => '152464', 'name' => 'Jane Smith'],
             ],
         ];
 
@@ -72,12 +81,17 @@ class ResponseEntityActionsSectionTest extends TestCase
             ]);
         $this->mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
 
-        $context = [
-            'cypher' => 'MATCH (p:Person) WHERE p.name = "John" RETURN p',
-            'data' => [
+        // No conversation context: entity type parsed from cypher, IDs from execution data.
+        $context = new PipelineContext();
+        $context->queryResult = new QueryGenerationResult(
+            cypher: 'MATCH (p:Person) WHERE p.name = "John" RETURN p'
+        );
+        $context->executionResult = new QueryExecutionResult(
+            success: true,
+            data: [
                 ['id' => '152463', 'name' => 'John Doe'],
-            ],
-        ];
+            ]
+        );
 
         $result = $this->section->shouldInclude($context, []);
         $this->assertTrue($result);
@@ -101,16 +115,15 @@ class ResponseEntityActionsSectionTest extends TestCase
             ]);
         $this->mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
 
-        $context = [
-            'cypher' => '',
-            'data' => [],
-            'conversation_context' => [
-                'focused_entity' => 'Person',
-                'last_result_sample' => [
-                    ['id' => '100', 'name' => 'Alice'],
-                    ['id' => '101', 'name' => 'Bob'],
-                    ['id' => '102', 'name' => 'Charlie'],
-                ],
+        $context = new PipelineContext();
+        $context->queryResult = new QueryGenerationResult(cypher: '');
+        $context->executionResult = new QueryExecutionResult(success: true, data: []);
+        $context->conversationContext = [
+            'focused_entity' => 'Person',
+            'last_result_sample' => [
+                ['id' => '100', 'name' => 'Alice'],
+                ['id' => '101', 'name' => 'Bob'],
+                ['id' => '102', 'name' => 'Charlie'],
             ],
         ];
 

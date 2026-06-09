@@ -32,7 +32,6 @@ class DocxExtractor implements FileExtractorInterface
             $phpWord = IOFactory::load($filePath);
             $text = $this->extractTextFromDocument($phpWord);
 
-            // Clean up extracted text
             $text = $this->cleanExtractedText($text);
 
             return trim($text);
@@ -90,7 +89,6 @@ class DocxExtractor implements FileExtractorInterface
                 'section_count' => count($phpWord->getSections()),
             ];
 
-            // Remove null/empty values
             return array_filter($metadata, fn($value) => $value !== null && $value !== '');
         } catch (\Exception $e) {
             return [
@@ -165,7 +163,6 @@ class DocxExtractor implements FileExtractorInterface
             return $this->extractTextFromContainer($element);
         }
 
-        // For other element types, try to get text if method exists
         if (method_exists($element, 'getText')) {
             return $element->getText();
         }

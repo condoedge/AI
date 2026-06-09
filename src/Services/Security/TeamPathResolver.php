@@ -24,10 +24,13 @@ class TeamPathResolver
     public const TEAM_IDS_PARAM = 'ai_team_ids';
 
     /**
-     * Resolve team path config to Cypher filter.
+     * Resolve team path config to a Cypher filter together with the bound team IDs.
      *
      * The returned `filter` references the bound parameter `$ai_team_ids`; the
-     * caller binds the (validated, integer) IDs via the `parameters` key.
+     * caller binds the (validated, integer) IDs via the `parameters` key. The
+     * clause text is produced by {@see ruleFor()} (the single source of truth that
+     * the generator prompt section and the acceptance gate also consume), so the
+     * resolver, the generator and the gate agree on the filter shape by construction.
      *
      * @param string $entity Entity name
      * @param string $alias Cypher alias for entity (e.g., 'i' for Invoice)
@@ -36,42 +39,77 @@ class TeamPathResolver
      */
     public function resolve(string $entity, string $alias, array $teamIds): ?array
     {
+        $rule = $this->ruleFor($entity, $alias);
+
+        if ($rule === null) {
+            return null;
+        }
+
+        // Defence-in-depth: never trust the IDs as anything but integers.
+        $teamIds = $this->normalizeTeamIds($teamIds);
+
+        return [
+            'type' => $rule['type'],
+            'filter' => $rule['filter'],
+            'parameters' => [self::TEAM_IDS_PARAM => $teamIds],
+        ];
+    }
+
+    /**
+     * The team-ID-free filter TEMPLATE for an entity binding.
+     *
+     * This is the single source of truth for "how is this label tenant-scoped":
+     * it returns the Cypher clause that constrains $alias to $ai_team_ids WITHOUT
+     * needing the actual permitted team IDs (the user/permission resolution stays
+     * in {@see \Condoedge\Ai\Services\Security\AiSecurityService}). {@see resolve()}
+     * is reimplemented on top of it (so the executed filter is byte-identical), the
+     * generator prompt section renders it as an instruction, and the
+     * {@see ScopeAcceptanceGate} verifies the generator emitted exactly this shape.
+     *
+     * Returns null when the label is NOT tenant-scoped (no team_path / no default),
+     * which the caller treats as "this binding needs no predicate".
+     *
+     * @return array{type: string, kind: string, alias: string, column: ?string, filter: string}|null
+     */
+    public function ruleFor(string $entity, string $alias): ?array
+    {
         $teamPath = $this->getTeamPath($entity);
 
         if ($teamPath === null) {
             return null;
         }
 
-        // Defence-in-depth: never trust the IDs as anything but integers.
-        $teamIds = $this->normalizeTeamIds($teamIds);
         $param = '$' . self::TEAM_IDS_PARAM;
-        $parameters = [self::TEAM_IDS_PARAM => $teamIds];
 
         // Direct column: 'team_id'
         if (is_string($teamPath) && !str_contains($teamPath, '.') && $teamPath !== 'auto') {
             return [
                 'type' => 'direct',
+                'kind' => 'where',
+                'alias' => $alias,
+                'column' => $teamPath,
                 'filter' => "WHERE {$alias}.{$teamPath} IN {$param}",
-                'parameters' => $parameters,
             ];
         }
 
         // Auto-detect from relationships
         if ($teamPath === 'auto') {
-            return $this->autoDetect($entity, $alias, $teamIds);
+            return $this->autoDetectRule($entity, $alias);
         }
 
         // Parent path: 'invoice.team_id'
         if (is_string($teamPath) && str_contains($teamPath, '.')) {
-            return $this->resolveParentPath($entity, $alias, $teamPath, $teamIds);
+            return $this->resolveParentPathRule($entity, $alias, $teamPath);
         }
 
         // Relationship path: ['rel' => 'MEMBER_OF', 'target' => 'Team']
         if (is_array($teamPath) && isset($teamPath['rel'])) {
             return [
                 'type' => 'relationship',
+                'kind' => 'match',
+                'alias' => $alias,
+                'column' => null,
                 'filter' => "MATCH ({$alias})-[:{$teamPath['rel']}]->(t:{$teamPath['target']}) WHERE t.id IN {$param}",
-                'parameters' => $parameters,
             ];
         }
 
@@ -104,19 +142,19 @@ class TeamPathResolver
             return $entityConfig;
         }
 
-        // Use default if not configured
         return config('ai.security.default_team_path', 'auto');
     }
 
     /**
-     * Auto-detect team path from relationships config.
+     * Auto-detect team path TEMPLATE from relationships config.
+     *
+     * @return array{type: string, kind: string, alias: string, column: ?string, filter: string}|null
      */
-    private function autoDetect(string $entity, string $alias, array $teamIds): ?array
+    private function autoDetectRule(string $entity, string $alias): ?array
     {
         $configKey = $this->getEntityConfigKey($entity);
         $relationships = config("entities.{$configKey}.graph.relationships", []);
 
-        // Find relationship to Team
         $teamRel = collect($relationships)
             ->first(fn($r) => ($r['target_label'] ?? null) === 'Team');
 
@@ -125,29 +163,35 @@ class TeamPathResolver
         }
 
         $param = '$' . self::TEAM_IDS_PARAM;
-        $parameters = [self::TEAM_IDS_PARAM => $teamIds];
 
         // Has foreign_key = direct filter
         if (isset($teamRel['foreign_key'])) {
             return [
                 'type' => 'direct',
+                'kind' => 'where',
+                'alias' => $alias,
+                'column' => $teamRel['foreign_key'],
                 'filter' => "WHERE {$alias}.{$teamRel['foreign_key']} IN {$param}",
-                'parameters' => $parameters,
             ];
         }
 
         // No foreign_key = relationship traversal
         return [
             'type' => 'relationship',
+            'kind' => 'match',
+            'alias' => $alias,
+            'column' => null,
             'filter' => "MATCH ({$alias})-[:{$teamRel['type']}]->(t:Team) WHERE t.id IN {$param}",
-            'parameters' => $parameters,
         ];
     }
 
     /**
-     * Resolve parent path like 'union.team_id' or multi-hop 'unit.union.team_id'.
+     * Resolve parent path TEMPLATE like 'union.team_id' or multi-hop
+     * 'unit.union.team_id'.
+     *
+     * @return array{type: string, kind: string, alias: string, column: ?string, filter: string}|null
      */
-    private function resolveParentPath(string $entity, string $alias, string $path, array $teamIds): ?array
+    private function resolveParentPathRule(string $entity, string $alias, string $path): ?array
     {
         $parts = explode('.', $path);
         $finalColumn = array_pop($parts); // e.g., 'team_id'
@@ -166,7 +210,6 @@ class TeamPathResolver
         foreach ($parts as $i => $parentKey) {
             $parentEntity = ucfirst($parentKey);
 
-            // Find relationship from current entity to parent entity
             $configKey = $this->getEntityConfigKey($currentEntity);
             $relationships = config("entities.{$configKey}.graph.relationships", []);
 
@@ -195,8 +238,10 @@ class TeamPathResolver
 
         return [
             'type' => 'parent',
+            'kind' => 'match',
+            'alias' => $alias,
+            'column' => $finalColumn,
             'filter' => "{$matchChain}WHERE {$lastAlias}.{$finalColumn} IN \$" . self::TEAM_IDS_PARAM,
-            'parameters' => [self::TEAM_IDS_PARAM => $teamIds],
         ];
     }
 }

@@ -77,6 +77,8 @@ class QdrantChunkStore implements ChunkStoreInterface
                 throw new \InvalidArgumentException('All chunks must be FileChunk instances');
             }
 
+            $this->assertValidVector($chunk);
+
             $points[] = [
                 'id' => $chunk->getVectorId(),
                 'vector' => $chunk->embedding,
@@ -105,16 +107,10 @@ class QdrantChunkStore implements ChunkStoreInterface
         $target = $this->resolveCollection($collection);
         $this->ensureCollectionExists($target);
 
-        // Generate embedding for the query
         $queryEmbedding = $this->embeddingProvider->embed($query);
-
-        // Build Qdrant filter
         $qdrantFilter = $this->buildQdrantFilter($filters);
-
-        // Get minimum score threshold
         $scoreThreshold = $filters['min_score'] ?? 0.0;
 
-        // Search vector store
         $results = $this->vectorStore->search(
             $target,
             $queryEmbedding,
@@ -123,7 +119,6 @@ class QdrantChunkStore implements ChunkStoreInterface
             $scoreThreshold
         );
 
-        // Convert results to FileChunk objects with scores
         return array_map(function ($result) {
             $payload = $result['payload'] ?? [];
 
@@ -164,23 +159,21 @@ class QdrantChunkStore implements ChunkStoreInterface
 
         // PRIMARY: indexed text-match path. Wrapped so a missing/absent payload
         // index (or any Qdrant error) degrades to the scroll fallback below
-        // instead of throwing and wiping all file context (FILE-2).
+        // instead of throwing and wiping all file context.
         try {
             if (empty($qdrantFilter)) {
                 return [];
             }
 
-            // Count matching points
             $totalCount = $this->vectorStore->count($target, $qdrantFilter);
 
             if ($totalCount === 0) {
                 return [];
             }
 
-            // Use search with filter and dummy vector (similar to getFileChunks approach)
-            // We need a higher limit to account for multiple chunks per file
-            // Cap the request limit to prevent memory issues when totalCount is very high
-            // Absolute cap of 500 ensures large caller limits don't cause memory issues
+            // Filter-only search via a dummy vector. Request a higher limit to cover
+            // multiple chunks per file, capped at 500 to bound memory when totalCount
+            // is very large.
             $requestLimit = min(max($limit * 3, 100), $totalCount, 500);
             $results = $this->vectorStore->search(
                 $target,
@@ -266,7 +259,6 @@ class QdrantChunkStore implements ChunkStoreInterface
      */
     private function buildFilenameResults(array $results, string $filename, int $limit): array
     {
-        // Group by file_id and return unique files
         $seenFiles = [];
         $output = [];
 
@@ -309,7 +301,6 @@ class QdrantChunkStore implements ChunkStoreInterface
             }
         }
 
-        // Sort exact matches first
         usort($output, fn($a, $b) => $b['score'] <=> $a['score']);
 
         return $output;
@@ -331,13 +322,12 @@ class QdrantChunkStore implements ChunkStoreInterface
 
         $must = [];
 
-        // Qdrant text match searches within string values (substring match)
+        // Qdrant text match searches within string values (substring match).
         $must[] = [
             'key' => 'file_name',
             'match' => ['text' => $filename],
         ];
 
-        // Apply additional filters
         if (isset($filters['file_id'])) {
             $must[] = [
                 'key' => 'file_id',
@@ -356,7 +346,6 @@ class QdrantChunkStore implements ChunkStoreInterface
         $target = $this->resolveCollection($collection);
         $this->ensureCollectionExists($target);
 
-        // Use count to check if we need to paginate
         $totalCount = $this->vectorStore->count($target, [
             'must' => [
                 ['key' => 'file_id', 'match' => ['value' => $fileId]],
@@ -367,7 +356,6 @@ class QdrantChunkStore implements ChunkStoreInterface
             return [];
         }
 
-        // Search with file_id filter and high limit
         $results = $this->vectorStore->search(
             $target,
             array_fill(0, $this->vectorSize, 0.0), // Dummy vector for filter-only search
@@ -380,7 +368,6 @@ class QdrantChunkStore implements ChunkStoreInterface
             0.0 // No score threshold for fetching all chunks
         );
 
-        // Convert to FileChunk objects
         $chunks = array_map(function ($result) {
             $payload = $result['payload'] ?? [];
 
@@ -397,7 +384,6 @@ class QdrantChunkStore implements ChunkStoreInterface
             );
         }, $results);
 
-        // Sort by chunk index
         usort($chunks, fn($a, $b) => $a->chunkIndex <=> $b->chunkIndex);
 
         return $chunks;
@@ -410,7 +396,6 @@ class QdrantChunkStore implements ChunkStoreInterface
     {
         $target = $this->resolveCollection($collection);
 
-        // Get all chunk IDs for this file
         $chunks = $this->getFileChunks($fileId, $target);
 
         if (empty($chunks)) {
@@ -470,6 +455,41 @@ class QdrantChunkStore implements ChunkStoreInterface
             endPosition: $payload['end_position'],
             metadata: $payload['metadata'] ?? []
         );
+    }
+
+    /**
+     * Reject an empty or wrong-dimension embedding before it reaches Qdrant.
+     *
+     * An empty vector is unsearchable (and may be silently dropped/rejected by
+     * Qdrant), and a wrong-dimension vector corrupts the collection. Catching
+     * both here prevents a partial/failed embedding batch from silently
+     * misaligning chunk -> vector.
+     *
+     * @param FileChunk $chunk
+     * @return void
+     * @throws \InvalidArgumentException
+     */
+    private function assertValidVector(FileChunk $chunk): void
+    {
+        $dimension = count($chunk->embedding);
+
+        if ($dimension === 0) {
+            throw new \InvalidArgumentException(sprintf(
+                'Refusing to store an empty embedding for file %s chunk %d.',
+                (string) $chunk->fileId,
+                $chunk->chunkIndex
+            ));
+        }
+
+        if ($dimension !== $this->vectorSize) {
+            throw new \InvalidArgumentException(sprintf(
+                'Embedding dimension mismatch for file %s chunk %d: expected %d, got %d.',
+                (string) $chunk->fileId,
+                $chunk->chunkIndex,
+                $this->vectorSize,
+                $dimension
+            ));
+        }
     }
 
     /**
@@ -548,7 +568,6 @@ class QdrantChunkStore implements ChunkStoreInterface
     {
         $must = [];
 
-        // Filter by file_id
         if (isset($filters['file_id'])) {
             $must[] = [
                 'key' => 'file_id',
@@ -556,7 +575,7 @@ class QdrantChunkStore implements ChunkStoreInterface
             ];
         }
 
-        // Filter by file_types (extension extracted from filename)
+        // Match file_types by extension suffix in the filename.
         if (!empty($filters['file_types'])) {
             $should = [];
             foreach ($filters['file_types'] as $type) {

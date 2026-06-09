@@ -9,6 +9,7 @@ use Condoedge\Ai\Services\ContextRetriever;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\Support\AiLogger;
 use Mockery;
 
 /**
@@ -38,6 +39,7 @@ class ContextQualityTest extends TestCase
         parent::setUp();
 
         $this->mockVectorStore = Mockery::mock(VectorStoreInterface::class);
+        $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true)->byDefault();
         $this->mockGraphStore = Mockery::mock(GraphStoreInterface::class);
         $this->mockEmbeddingProvider = Mockery::mock(EmbeddingProviderInterface::class);
     }
@@ -57,6 +59,7 @@ class ContextQualityTest extends TestCase
             $this->mockVectorStore,
             $this->mockGraphStore,
             $this->mockEmbeddingProvider,
+            new AiLogger(),
             $entityConfigs
         );
     }
@@ -64,14 +67,14 @@ class ContextQualityTest extends TestCase
     /** @test */
     public function quality_is_high_when_all_four_sources_present(): void
     {
-        // Setup: all sources succeed
+        // Setup: all sources succeed (embed is also used by the schema-relevance fallback)
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1, 0.2, 0.3]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
+            ->with('questions', Mockery::any(), Mockery::any(), Mockery::any(), Mockery::any())
             ->once()
             ->andReturn([
                 [
@@ -82,6 +85,12 @@ class ContextQualityTest extends TestCase
                     ],
                 ],
             ]);
+
+        // Schema fallback queries the 'semantic_entities' collection (no selector configured)
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('semantic_entities', Mockery::any(), Mockery::any())
+            ->andReturn([]);
 
         $this->mockGraphStore
             ->shouldReceive('getSchema')
@@ -108,10 +117,10 @@ class ContextQualityTest extends TestCase
         $service = $this->makeService($entityConfigs);
         $context = $service->retrieveContext('Show me active teams');
 
-        $this->assertArrayHasKey('quality', $context);
-        $this->assertEquals('high', $context['quality']['level']);
-        $this->assertEquals(4, $context['quality']['score']);
-        $this->assertEquals(4, $context['quality']['max']);
+        $this->assertNotEmpty($context->quality);
+        $this->assertEquals('high', $context->quality['level']);
+        $this->assertEquals(4, $context->quality['score']);
+        $this->assertEquals(4, $context->quality['max']);
     }
 
     /** @test */
@@ -119,9 +128,9 @@ class ContextQualityTest extends TestCase
     {
         // Vector search fails (embedding error) -> no similar_queries, adds error
         // That costs us 2 sources: similar_queries + no_errors
+        // embed is invoked again by the schema-relevance fallback, which swallows its own failure
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andThrow(new \RuntimeException('API error'));
 
         // Graph still works -> has schema labels
@@ -150,12 +159,12 @@ class ContextQualityTest extends TestCase
         $service = $this->makeService($entityConfigs);
         $context = $service->retrieveContext('Show teams');
 
-        $this->assertArrayHasKey('quality', $context);
+        $this->assertNotEmpty($context->quality);
         // Should have: has_schema + has_detected_entities = 2 (medium)
         // Missing: has_similar_queries + no_errors
-        $this->assertEquals('medium', $context['quality']['level']);
-        $this->assertGreaterThanOrEqual(2, $context['quality']['score']);
-        $this->assertLessThanOrEqual(3, $context['quality']['score']);
+        $this->assertEquals('medium', $context->quality['level']);
+        $this->assertGreaterThanOrEqual(2, $context->quality['score']);
+        $this->assertLessThanOrEqual(3, $context->quality['score']);
     }
 
     /** @test */
@@ -175,22 +184,29 @@ class ContextQualityTest extends TestCase
         $service = $this->makeService([]);
         $context = $service->retrieveContext('Anything');
 
-        $this->assertArrayHasKey('quality', $context);
-        $this->assertEquals('low', $context['quality']['level']);
-        $this->assertLessThanOrEqual(1, $context['quality']['score']);
+        $this->assertNotEmpty($context->quality);
+        $this->assertEquals('low', $context->quality['level']);
+        $this->assertLessThanOrEqual(1, $context->quality['score']);
     }
 
     /** @test */
     public function quality_returns_expected_structure(): void
     {
+        // embed is also used by the schema-relevance fallback
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
+            ->with('questions', Mockery::any(), Mockery::any(), Mockery::any(), Mockery::any())
             ->once()
+            ->andReturn([]);
+
+        // Schema fallback queries the 'semantic_entities' collection (no selector configured)
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('semantic_entities', Mockery::any(), Mockery::any())
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -201,7 +217,7 @@ class ContextQualityTest extends TestCase
         $service = $this->makeService([]);
         $context = $service->retrieveContext('Test question');
 
-        $quality = $context['quality'];
+        $quality = $context->quality;
         $this->assertArrayHasKey('level', $quality);
         $this->assertArrayHasKey('score', $quality);
         $this->assertArrayHasKey('max', $quality);
@@ -216,14 +232,21 @@ class ContextQualityTest extends TestCase
     /** @test */
     public function quality_max_is_always_four(): void
     {
+        // embed is also used by the schema-relevance fallback
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
+            ->with('questions', Mockery::any(), Mockery::any(), Mockery::any(), Mockery::any())
             ->once()
+            ->andReturn([]);
+
+        // Schema fallback queries the 'semantic_entities' collection (no selector configured)
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('semantic_entities', Mockery::any(), Mockery::any())
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -234,20 +257,21 @@ class ContextQualityTest extends TestCase
         $service = $this->makeService([]);
         $context = $service->retrieveContext('Test');
 
-        $this->assertEquals(4, $context['quality']['max']);
+        $this->assertEquals(4, $context->quality['max']);
     }
 
     /** @test */
     public function quality_medium_when_three_sources_present(): void
     {
         // Similar queries present, schema present, no errors, but no entity_metadata
+        // embed is also used by the schema-relevance fallback
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1, 0.2]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
+            ->with('questions', Mockery::any(), Mockery::any(), Mockery::any(), Mockery::any())
             ->once()
             ->andReturn([
                 [
@@ -258,6 +282,12 @@ class ContextQualityTest extends TestCase
                     ],
                 ],
             ]);
+
+        // Schema fallback queries the 'semantic_entities' collection (no selector configured)
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('semantic_entities', Mockery::any(), Mockery::any())
+            ->andReturn([]);
 
         $this->mockGraphStore
             ->shouldReceive('getSchema')
@@ -276,12 +306,12 @@ class ContextQualityTest extends TestCase
         $service = $this->makeService([]);
         $context = $service->retrieveContext('Show users');
 
-        $this->assertArrayHasKey('quality', $context);
+        $this->assertNotEmpty($context->quality);
         // Score should be 3: has_similar_queries + has_schema + no_errors
         // Missing: has_detected_entities (no entity configs)
-        $score = $context['quality']['score'];
+        $score = $context->quality['score'];
         $this->assertGreaterThanOrEqual(2, $score);
         // Level should be medium (score >= 2 but < 4) or high if entity metadata was detected
-        $this->assertContains($context['quality']['level'], ['medium', 'high']);
+        $this->assertContains($context->quality['level'], ['medium', 'high']);
     }
 }

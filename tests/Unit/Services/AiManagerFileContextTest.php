@@ -16,6 +16,7 @@ use Condoedge\Ai\Contracts\QueryGeneratorInterface;
 use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
 use Mockery;
 
 /**
@@ -70,6 +71,50 @@ class AiManagerFileContextTest extends TestCase
         parent::tearDown();
     }
 
+    /**
+     * Build a real PipelineContext DTO for retrieveContext() mocks.
+     *
+     * The pipeline now flows the typed PipelineContext through every stage
+     * (AiManager reads $ctx->qu, $ctx->conversationContext, etc.), so the
+     * retrieveContext mock must return a DTO, not a plain array.
+     */
+    private function makePipelineContext(string $question, array $graphSchema = []): PipelineContext
+    {
+        $ctx = new PipelineContext();
+        $ctx->question = $question;
+        $ctx->similarQueries = [];
+        $ctx->graphSchema = $graphSchema;
+        $ctx->relevantEntities = [];
+
+        return $ctx;
+    }
+
+    /**
+     * Rebuild the AiManager with the file-context collaborators wired in.
+     *
+     * The optional FileContextProvider / ResponseFileEnricher are constructor
+     * dependencies of AiManager; binding them in the container is not enough
+     * because the manager under test is instantiated directly. Pass the mocks
+     * explicitly so retrieveFileContext()/enrichResponseWithFiles() exercise them.
+     */
+    private function rebuildManagerWithFileContext(
+        FileContextProvider $fileContextProvider,
+        ?ResponseFileEnricher $responseFileEnricher = null
+    ): void {
+        $this->manager = new AiManager(
+            $this->mockIngestion,
+            $this->mockContext,
+            $this->mockEmbedding,
+            $this->mockLlm,
+            $this->mockQueryGenerator,
+            $this->mockQueryExecutor,
+            $this->mockResponseGenerator,
+            $this->mockVectorStore,
+            $fileContextProvider,
+            $responseFileEnricher
+        );
+    }
+
     /** @test */
     public function it_has_answer_question_method_that_accepts_options(): void
     {
@@ -99,15 +144,19 @@ class AiManagerFileContextTest extends TestCase
             'AiManager should have retrieveFileContext method'
         );
 
-        // Use reflection to check it's protected
+        // retrieveFileContext is intentionally PUBLIC: it is part of the AiManager
+        // API and is called externally by PipelineEvalDriver via $this->ai()->retrieveFileContext().
         $reflection = new \ReflectionMethod($this->manager, 'retrieveFileContext');
-        $this->assertTrue($reflection->isProtected(), 'retrieveFileContext should be protected');
+        $this->assertTrue($reflection->isPublic(), 'retrieveFileContext should be public');
 
-        // Verify parameters
+        // Verify parameters: question, user, and an optional options array (forwarded
+        // to the provider — e.g. the recall net's lower min_score override).
         $parameters = $reflection->getParameters();
-        $this->assertCount(2, $parameters, 'retrieveFileContext should have 2 parameters');
+        $this->assertCount(3, $parameters, 'retrieveFileContext should have 3 parameters');
         $this->assertEquals('question', $parameters[0]->getName());
         $this->assertEquals('user', $parameters[1]->getName());
+        $this->assertEquals('options', $parameters[2]->getName());
+        $this->assertTrue($parameters[2]->isDefaultValueAvailable(), 'options should have a default value');
     }
 
     /** @test */
@@ -144,7 +193,7 @@ class AiManagerFileContextTest extends TestCase
         $mockFileContextProvider = Mockery::mock(FileContextProvider::class);
         $mockFileContextProvider->shouldReceive('getFileContext')
             ->once()
-            ->with($question, $mockUser)
+            ->with($question, $mockUser, [])
             ->andReturn([
                 'relevant_files' => [
                     [
@@ -178,14 +227,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->app->instance(ResponseFileEnricher::class, $mockEnricher);
 
+        // Wire the file-context collaborators into the manager under test.
+        $this->rebuildManagerWithFileContext($mockFileContextProvider, $mockEnricher);
+
         // Set up standard mocks for the pipeline
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => []],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question, ['labels' => []]));
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
@@ -243,14 +291,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->app->instance(FileContextProvider::class, $mockFileContextProvider);
 
+        // Wire the provider so the shouldNotReceive() guard is meaningful.
+        $this->rebuildManagerWithFileContext($mockFileContextProvider);
+
         // Set up standard mocks for the pipeline
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => ['Customer']],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question, ['labels' => ['Customer']]));
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
@@ -275,7 +322,10 @@ class AiManagerFileContextTest extends TestCase
                 'metadata' => [],
             ]);
 
-        $this->mockResponseGenerator->shouldReceive('generate')
+        // With no rows AND no document context the pipeline abstains via
+        // generateEmptyResponse() (the single no-source path) rather than
+        // narrating over an empty result with generate().
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
             ->once()
             ->andReturn([
                 'answer' => 'No customers found',
@@ -309,14 +359,14 @@ class AiManagerFileContextTest extends TestCase
 
         $this->app->instance(FileContextProvider::class, $mockFileContextProvider);
 
+        // Wire the provider so retrieveFileContext() actually invokes (and
+        // swallows) the throwing getFileContext().
+        $this->rebuildManagerWithFileContext($mockFileContextProvider);
+
         // Set up standard mocks for the pipeline
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => []],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question, ['labels' => []]));
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
@@ -341,7 +391,9 @@ class AiManagerFileContextTest extends TestCase
                 'metadata' => [],
             ]);
 
-        $this->mockResponseGenerator->shouldReceive('generate')
+        // File retrieval failed (swallowed) so there is no document context and
+        // the query returned no rows -> pipeline abstains via generateEmptyResponse().
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
             ->once()
             ->andReturn([
                 'answer' => 'No refund policy information found',
@@ -406,23 +458,24 @@ class AiManagerFileContextTest extends TestCase
 
         $this->app->instance(ResponseFileEnricher::class, $mockEnricher);
 
+        // Wire the file-context collaborators into the manager under test.
+        $this->rebuildManagerWithFileContext($mockFileContextProvider, $mockEnricher);
+
         // Verify that generateQuery receives context with file_context
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => []],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question, ['labels' => []]));
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
             ->with(
                 $question,
-                Mockery::on(function ($context) use ($fileContext) {
-                    // Context should include file_context
-                    return isset($context['file_context'])
-                        && $context['file_context'] === $fileContext;
+                // The query generator now receives the typed PipelineContext DTO;
+                // file context lives on $context->fileContext, not an array key.
+                Mockery::on(function ($context) {
+                    return $context instanceof PipelineContext
+                        && !empty($context->fileContext['relevant_files'])
+                        && ($context->fileContext['relevant_files'][0]['file_name'] ?? null) === 'guidelines.md';
                 }),
                 Mockery::any()
             )
@@ -523,14 +576,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->app->instance(ResponseFileEnricher::class, $mockEnricher);
 
+        // Wire the file-context collaborators into the manager under test.
+        $this->rebuildManagerWithFileContext($mockFileContextProvider, $mockEnricher);
+
         // Set up standard mocks for the pipeline
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => []],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question, ['labels' => []]));
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
@@ -555,6 +607,8 @@ class AiManagerFileContextTest extends TestCase
                 'metadata' => [],
             ]);
 
+        // Document context is present, so the pipeline produces a grounded
+        // answer via generate() (not the empty/abstain path).
         $this->mockResponseGenerator->shouldReceive('generate')
             ->once()
             ->andReturn([

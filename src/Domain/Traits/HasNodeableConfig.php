@@ -281,20 +281,57 @@ trait HasNodeableConfig
 
     /**
      * Get Neo4j graph configuration with auto-discovery fallback
+     *
+     * When no explicit configuration exists for the model:
+     * - If auto-discovery is ENABLED (the default), this throws a
+     *   RuntimeException prompting the developer to run `php artisan ai:discover`.
+     *   A misconfigured model in a discovery-enabled project is a setup error
+     *   that should surface loudly.
+     * - If auto-discovery is explicitly DISABLED, an unconfigured model degrades
+     *   gracefully to a safe minimal GraphConfig (class-name label, identifier-only
+     *   properties, no relationships). This is fail-closed for security/discovery
+     *   paths: an unconfigured model exposes nothing beyond its identity, rather
+     *   than fataling the caller.
      */
     public function getGraphConfig(): GraphConfig
     {
-        $config = $this->resolveConfig();
+        try {
+            $config = $this->resolveConfig();
+        } catch (\RuntimeException $e) {
+            // Only degrade gracefully when auto-discovery is explicitly disabled.
+            // With discovery enabled (default), keep throwing so missing config is
+            // surfaced as the setup error it is.
+            if (config('ai.auto_discovery.enabled', true)) {
+                throw $e;
+            }
+
+            return $this->defaultGraphConfig();
+        }
 
         if (!isset($config['graph'])) {
-            return GraphConfig::fromArray([
-                'label' => class_basename($this),
-                'properties' => [],
-                'relationships' => [],
-            ]);
+            return $this->defaultGraphConfig();
         }
 
         return GraphConfig::fromArray($config['graph']);
+    }
+
+    /**
+     * Build a safe minimal GraphConfig for an unconfigured model.
+     *
+     * Fail-closed default: exposes only the entity's identity. The label is the
+     * class basename and properties default to the identifier (plus $fillable when
+     * present) via ensureMinimumConfig(). No relationships are included, so an
+     * unconfigured model cannot leak data through graph traversal.
+     */
+    protected function defaultGraphConfig(): GraphConfig
+    {
+        $config = $this->ensureMinimumConfig([]);
+
+        return GraphConfig::fromArray([
+            'label' => $config['graph']['label'],
+            'properties' => $config['graph']['properties'],
+            'relationships' => [],
+        ]);
     }
 
     /**

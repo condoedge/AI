@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Services\Actions;
 
+use Condoedge\Ai\Services\Actions\ActionContext;
+use Condoedge\Ai\Services\Actions\ActionKind;
 use Condoedge\Ai\Services\Actions\BuiltIn\ExportExcelAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\OpenModalAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\RenderTableAction;
@@ -11,22 +13,22 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Built-in generative-UI actions: presentation contracts + offline (no-Kompo) behavior.
- * These run under pure PHPUnit so the _Link/_Button helpers are absent — actions fall back to
- * structured intents, which is the contract we assert here.
+ * Built-in generative-UI actions: typed-result contracts + offline (no-Kompo) behavior.
+ * These run under pure PHPUnit so the _Link/_Button helpers are absent — actions return typed
+ * DATA + INTENT (an ActionKind + payload), which is the contract we assert here. The renderable
+ * projection (the back-compat view of payload) is exercised via $result->renderable.
  */
 class BuiltInActionsTest extends TestCase
 {
     /** @test */
-    public function open_modal_declares_modal_presentation_and_requires_a_target(): void
+    public function open_modal_produces_an_element_result_and_requires_a_target(): void
     {
         $action = new OpenModalAction();
 
         $this->assertSame('open_modal', $action->key());
-        $this->assertSame('modal', $action->presentation());
 
         // No modal target → graceful error.
-        $err = $action->handle([], []);
+        $err = $action->handle([], new ActionContext());
         $this->assertInstanceOf(AiActionResult::class, $err);
         $this->assertTrue($err->isError);
     }
@@ -36,9 +38,13 @@ class BuiltInActionsTest extends TestCase
     {
         $action = new OpenModalAction();
 
-        $result = $action->handle(['modal' => 'editUnit', 'amount' => 450], ['text' => 'Open']);
+        $result = $action->handle(
+            ['modal' => 'editUnit', 'amount' => 450],
+            ActionContext::fromArray(['text' => 'Open'])
+        );
 
         $this->assertFalse($result->isError);
+        $this->assertSame(ActionKind::Element, $result->kind);
         // Offline → structured intent (no Kompo helpers available in pure phpunit).
         $this->assertIsArray($result->renderable);
         $this->assertSame('editUnit', $result->renderable['modal']);
@@ -55,9 +61,10 @@ class BuiltInActionsTest extends TestCase
             ['name' => 'Bob', 'amount' => 250],
         ];
 
-        $result = $action->handle(['limit' => 10], ['result_set' => $rows]);
+        $result = $action->handle(['limit' => 10], ActionContext::fromArray(['result_set' => $rows]));
 
         $this->assertFalse($result->isError);
+        $this->assertSame(ActionKind::Table, $result->kind);
         $this->assertSame('table', $result->renderable['type']);
         $this->assertSame(['name', 'amount'], $result->renderable['headers']);
         $this->assertCount(2, $result->renderable['rows']);
@@ -68,20 +75,19 @@ class BuiltInActionsTest extends TestCase
     public function render_table_degrades_when_no_data(): void
     {
         $action = new RenderTableAction();
-        $result = $action->handle([], ['result_set' => []]);
+        $result = $action->handle([], ActionContext::fromArray(['result_set' => []]));
 
         $this->assertTrue($result->isError);
     }
 
     /** @test */
-    public function export_excel_presentation_and_no_data_degrade(): void
+    public function export_excel_produces_an_export_result_and_no_data_degrades(): void
     {
         $action = new ExportExcelAction();
 
-        $this->assertSame('export', $action->presentation());
         $this->assertContains('export excel', $action->aliases());
 
-        $result = $action->handle(['title' => 'x'], ['result_set' => []]);
+        $result = $action->handle(['title' => 'x'], ActionContext::fromArray(['result_set' => []]));
         $this->assertTrue($result->isError);
     }
 }

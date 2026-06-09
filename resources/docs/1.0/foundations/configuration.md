@@ -771,11 +771,14 @@ Configure the sections included in the response generation prompt:
 
 ```php
 'response_generator_sections' => [
+    \Condoedge\Ai\Services\ResponseSections\IdentitySection::class,
     \Condoedge\Ai\Services\ResponseSections\SystemPromptSection::class,
     \Condoedge\Ai\Services\ResponseSections\PrivacyAndSecurityGuidelinesSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection::class,
     \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
-    \Condoedge\Ai\Services\ResponseSections\QueryInfoSection::class,
+    // QueryInfoSection is intentionally NOT registered: it leaked the executed Cypher
+    // (schema/table/property names) into the response prompt. Do not re-add it without
+    // gating it behind a 'technical' response style.
     \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,
@@ -790,11 +793,11 @@ Configure the sections included in the response generation prompt:
 
 | Section | Purpose |
 | --- | --- |
+| `IdentitySection` | Assistant identity and persona |
 | `SystemPromptSection` | System-level instructions |
 | `PrivacyAndSecurityGuidelinesSection` | PII handling rules |
 | `ResponseProjectContextSection` | Project context for response tone |
 | `OriginalQuestionSection` | The user's original question |
-| `QueryInfoSection` | Query that was executed |
 | `FileContextSection` | Relevant file content |
 | `ResponseConversationContextSection` | Chat history for follow-ups |
 | `ResultsDataSection` | Query results data |

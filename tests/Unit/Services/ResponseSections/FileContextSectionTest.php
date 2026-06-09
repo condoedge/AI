@@ -4,22 +4,29 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\ResponseSections\FileContextSection;
 use PHPUnit\Framework\TestCase;
 
 class FileContextSectionTest extends TestCase
 {
+    private function contextWithFileContext(array $fileContext): PipelineContext
+    {
+        $context = new PipelineContext();
+        $context->fileContext = $fileContext;
+
+        return $context;
+    }
+
     public function test_should_include_when_file_context_has_relevant_files(): void
     {
         $section = new FileContextSection();
 
-        $context = [
-            'file_context' => [
-                'relevant_files' => [
-                    ['filename' => 'doc.pdf', 'snippet' => 'Content here'],
-                ],
+        $context = $this->contextWithFileContext([
+            'relevant_files' => [
+                ['filename' => 'doc.pdf', 'snippet' => 'Content here'],
             ],
-        ];
+        ]);
 
         $this->assertTrue($section->shouldInclude($context, []));
     }
@@ -28,24 +35,25 @@ class FileContextSectionTest extends TestCase
     {
         $section = new FileContextSection();
 
-        $this->assertFalse($section->shouldInclude([], []));
-        $this->assertFalse($section->shouldInclude(['file_context' => []], []));
+        // Empty PipelineContext: fileContext defaults to [].
+        $this->assertFalse($section->shouldInclude(new PipelineContext(), []));
+        // fileContext present but with no relevant_files.
+        $this->assertFalse($section->shouldInclude($this->contextWithFileContext([]), []));
     }
 
     public function test_format_includes_file_content_with_citation_numbers(): void
     {
         $section = new FileContextSection();
 
-        $context = [
-            'file_context' => [
-                'relevant_files' => [
-                    ['filename' => 'policy.pdf', 'snippet' => 'Policy content...', 'relevance' => 0.95],
-                    ['filename' => 'guide.md', 'snippet' => 'Guide content...', 'relevance' => 0.8],
-                ],
+        $context = $this->contextWithFileContext([
+            'relevant_files' => [
+                ['filename' => 'policy.pdf', 'snippet' => 'Policy content...', 'relevance' => 0.95],
+                ['filename' => 'guide.md', 'snippet' => 'Guide content...', 'relevance' => 0.8],
             ],
-        ];
+        ]);
 
-        $result = $section->format($context, []);
+        // 'friendly' is a citation-enabled style, keeping the [N] markers under test.
+        $result = $section->format($context, ['style' => 'friendly']);
 
         $this->assertStringContainsString('[1]', $result);
         $this->assertStringContainsString('policy.pdf', $result);

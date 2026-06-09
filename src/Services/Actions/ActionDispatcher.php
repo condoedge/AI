@@ -15,10 +15,10 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
  *
  *   1. Filters params against the action's inputSchema (drops forbidden/unknown params),
  *   2. Re-checks authorize() server-side at RENDER time,
- *   3. If the action requiresApproval(): does NOT execute. Instead it issues a signed
- *      {@see PendingActionToken} (key + validated input + user) and returns an AiActionResult
- *      describing the deferred action — the renderer turns this into a confirmation card whose
- *      confirm round-trips back through approve().
+ *   3. If the action mutates(): does NOT execute. Instead it issues a signed
+ *      {@see PendingActionToken} (key + validated input + user) and returns a Pending-kind
+ *      AiActionResult — the presenter turns this into a confirmation card whose confirm
+ *      round-trips back through approve().
  *   4. Otherwise (read-only): executes handle() immediately and returns its result.
  *
  * approve() is the server-side second gate for mutating actions: it decodes + verifies the
@@ -27,6 +27,14 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
  */
 class ActionDispatcher
 {
+    /**
+     * In-process fallback record of consumed nonces, used only when no cache store is reachable
+     * (pure unit tests / unbooted container). Cross-request single-use rides Laravel's Cache.
+     *
+     * @var array<string, true>
+     */
+    private static array $consumedNonces = [];
+
     public function __construct(
         private AiActionRegistry $registry,
     ) {
@@ -58,6 +66,42 @@ class ActionDispatcher
     }
 
     /**
+     * Claim a token's single-use nonce, returning false if it was already consumed (a replay).
+     *
+     * Prefers Laravel's atomic Cache::add() so single-use holds across requests; falls back to a
+     * per-process record when no cache store is reachable (pure unit tests) so replay is still
+     * blocked within a request — the same container-tolerant guard pattern as currentUser().
+     */
+    private function claimNonce(string $nonce): bool
+    {
+        if ($nonce === '') {
+            // Nonce-less token: cannot single-use-protect it; allow once.
+            return true;
+        }
+
+        $key = 'ai.actions.nonce.' . $nonce;
+
+        if (function_exists('app')) {
+            try {
+                if (app()->bound('cache')) {
+                    $cache = app('cache');
+                    // add() is atomic: true only if the key was absent → first claim wins.
+                    return (bool) $cache->add($key, true, PendingActionToken::nonceLifetime());
+                }
+            } catch (\Throwable $e) {
+                // Cache not available — fall through to the in-process guard.
+            }
+        }
+
+        if (isset(self::$consumedNonces[$key])) {
+            return false;
+        }
+        self::$consumedNonces[$key] = true;
+
+        return true;
+    }
+
+    /**
      * Resolve + dispatch an action for rendering.
      *
      * @param array<string, mixed> $rawParams  Params parsed from the link query string.
@@ -66,7 +110,7 @@ class ActionDispatcher
      */
     public function dispatch(AiActionInterface $action, array $rawParams, array $context): ?AiActionResult
     {
-        $input = $this->registry->filterParams($action, $rawParams);
+        $input = $this->registry->filterParams($action, $this->seedEntityId($rawParams, $context));
         $user = $context['user'] ?? $this->currentUser();
 
         // RENDER-time authorization gate. A denied action renders nothing actionable.
@@ -74,11 +118,32 @@ class ActionDispatcher
             return AiActionResult::error('You are not authorized to perform this action.');
         }
 
-        if ($action->requiresApproval()) {
+        if ($action->mutates()) {
             return $this->defer($action, $input, $user, $context);
         }
 
-        return $this->run($action, $input, $context);
+        return $this->run($action, $input, $context, $user);
+    }
+
+    /**
+     * Seed the entity:// path id into the raw params under {@see ModelMethodMutationAction::ID_PARAM}
+     * so an action that declares it in inputSchema() keeps it after filtering — and thus carries it
+     * through the approval token (which stores input, not the link path) to re-resolve the exact
+     * target in authorize()/handle(). An explicit query param of the same name wins; an action that
+     * does NOT declare the id in its schema drops it (no behavior change for existing actions).
+     *
+     * @param array<string, mixed> $rawParams
+     * @param array<string, mixed> $context
+     * @return array<string, mixed>
+     */
+    private function seedEntityId(array $rawParams, array $context): array
+    {
+        $id = $context['entity_id'] ?? null;
+        if ($id !== null && $id !== '' && !array_key_exists(ModelMethodMutationAction::ID_PARAM, $rawParams)) {
+            $rawParams[ModelMethodMutationAction::ID_PARAM] = $id;
+        }
+
+        return $rawParams;
     }
 
     /**
@@ -101,38 +166,33 @@ class ActionDispatcher
             $userId,
         )->encode();
 
-        return AiActionResult::ok(
+        return AiActionResult::pending(
+            $token,
+            'This will ' . strtolower($action->label()) . '. Confirm?',
+            'Proposed (requires approval): ' . $action->label(),
             [
-                'pending' => true,
-                'token' => $token,
                 'action_key' => $action->key(),
                 'label' => $action->label(),
                 'text' => $context['text'] ?? $action->label(),
-                'confirm_message' => 'This will ' . strtolower($action->label()) . '. Confirm?',
             ],
-            'Proposed (requires approval): ' . $action->label()
         );
     }
 
     /**
-     * Execute a (read-only OR freshly re-authorized) action's handle().
+     * Execute a (read-only OR freshly re-authorized) action's handle() with a typed context.
      *
      * @param array<string, mixed> $input
      * @param array<string, mixed> $context
      */
-    private function run(AiActionInterface $action, array $input, array $context): AiActionResult
+    private function run(AiActionInterface $action, array $input, array $context, mixed $user): AiActionResult
     {
+        $ctx = ActionContext::fromArray(['user' => $user] + $context, $input);
+
         try {
-            $result = $action->handle($input, $context);
+            return $action->handle($input, $ctx);
         } catch (\Throwable $e) {
             return AiActionResult::error('The action failed to run: ' . $e->getMessage());
         }
-
-        if ($result instanceof AiActionResult) {
-            return $result;
-        }
-
-        return AiActionResult::ok($result, $action->label());
     }
 
     /**
@@ -157,6 +217,12 @@ class ActionDispatcher
             ? $user->getKey()
             : ($context['user_id'] ?? null);
 
+        // Reject a userless token whenever the approver IS authenticated: belongsTo(null) matches
+        // anyone, so a token minted with no user binding must not be confirmable by a logged-in user.
+        if ($decoded->userId === null && $userId !== null) {
+            return AiActionResult::error('This action request is not bound to a user and cannot be confirmed.');
+        }
+
         if (!$decoded->belongsTo($userId)) {
             return AiActionResult::error('This action request does not belong to the current user.');
         }
@@ -174,8 +240,15 @@ class ActionDispatcher
             return AiActionResult::error('You are no longer authorized to perform this action.');
         }
 
+        // SINGLE-USE: claim the token's nonce before running. A replayed (already-confirmed) token
+        // fails here, so a non-idempotent mutation ("charge $450") cannot fire twice. Claimed AFTER
+        // authorize so a denied attempt does not burn the token.
+        if (!$this->claimNonce($decoded->nonce)) {
+            return AiActionResult::error('This action has already been confirmed.');
+        }
+
         $context['entity_type'] = $decoded->entityType ?? ($context['entity_type'] ?? null);
 
-        return $this->run($action, $decoded->input, $context);
+        return $this->run($action, $decoded->input, $context, $user);
     }
 }

@@ -63,4 +63,20 @@ interface FileAccessResolverInterface
      * @return bool True if accessible, false otherwise
      */
     public function canAccessFile(int|string $fileId, mixed $user): bool;
+
+    /**
+     * Enumerate the user's accessible files as lightweight descriptors.
+     *
+     * Goes through the SAME access resolution as getAccessibleFileIds (closure
+     * resolver / scope / fallback team+user filter), then loads id/name/type for
+     * each accessible file. This is the ACL-respecting source for answering
+     * "which files do I have access to?" — it never returns a file the user may
+     * not access. Physical/documentation files are not enumerated here (they are
+     * surfaced via semantic retrieval, not the per-user file table).
+     *
+     * @param mixed $user The user to enumerate accessible files for
+     * @param int|null $limit Optional cap on the number of descriptors returned
+     * @return array<int,array{file_id:int|string,name:string,type:string}>
+     */
+    public function enumerateAccessibleFiles(mixed $user, ?int $limit = null): array;
 }

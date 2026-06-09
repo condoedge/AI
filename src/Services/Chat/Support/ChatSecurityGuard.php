@@ -14,9 +14,9 @@ use Illuminate\Support\Facades\Log;
  * Rule 1 (precondition): a chat turn MUST have a user unless the caller explicitly opted
  *         into anonymous access. Violations are a programmer/precondition error and throw.
  * Rule 2 (decline-and-continue): if the input looks like a prompt-injection attempt, we do
- *         NOT brick the conversation (the old "URGENCE mode" behavior). assertSafe() returns
- *         false so the use case can turn it into a per-request refusal (ChatTurnResult::failure)
- *         and the user can keep chatting on their next message.
+ *         NOT brick the conversation. assertSafe() returns false so the use case can turn it
+ *         into a per-request refusal (ChatTurnResult::failure) and the user can keep chatting
+ *         on their next message.
  */
 class ChatSecurityGuard
 {
@@ -38,7 +38,7 @@ class ChatSecurityGuard
      */
     public function assertSafe(string $question, mixed $user, bool $allowAnonymous = false): bool
     {
-        // Rule 1 — mandatory-user precondition (matches AiChatService.php:90-94).
+        // Rule 1 — mandatory-user precondition.
         if ($user === null && !$allowAnonymous) {
             throw new \InvalidArgumentException(
                 'User context required for AI queries. Pass user in options or set allow_anonymous=true for public queries.'

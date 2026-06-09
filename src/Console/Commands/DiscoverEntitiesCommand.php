@@ -48,7 +48,7 @@ class DiscoverEntitiesCommand extends Command
         $this->info('Discovering Nodeable entities...');
         $this->newLine();
 
-        // Run discovery through the service (single source of truth)
+        // The discovery service is the single source of truth.
         $result = $this->discovery->discoverAll(
             specificModel: $this->option('model')
         );
@@ -58,7 +58,6 @@ class DiscoverEntitiesCommand extends Command
         $stats = $result['stats'];
         $inheritance = $result['inheritance'] ?? [];
 
-        // Display stats
         $this->info("Found {$stats['total_models_found']} Nodeable model(s)");
 
         if ($stats['child_models_merged'] > 0) {
@@ -67,12 +66,10 @@ class DiscoverEntitiesCommand extends Command
 
         $this->newLine();
 
-        // Display discovered models
         foreach ($configurations as $modelClass => $config) {
             $this->line("Discovered: <fg=cyan>{$modelClass}</>");
             $this->displayConfig($config);
 
-            // Show merged children if any
             if (isset($inheritance[$modelClass])) {
                 foreach ($inheritance[$modelClass]['children'] as $child) {
                     $this->comment("    Merged: " . class_basename($child) . " (child model)");
@@ -80,7 +77,6 @@ class DiscoverEntitiesCommand extends Command
             }
         }
 
-        // Display errors
         foreach ($errors as $modelClass => $error) {
             $this->error("  Error in {$modelClass}: {$error}");
         }
@@ -130,7 +126,6 @@ class DiscoverEntitiesCommand extends Command
             return self::SUCCESS;
         }
 
-        // Dry run - just show what would be generated
         if ($this->option('dry-run')) {
             $this->info('DRY RUN - Configuration that would be generated:');
             $this->newLine();
@@ -138,7 +133,6 @@ class DiscoverEntitiesCommand extends Command
             return self::SUCCESS;
         }
 
-        // Write config file
         $configPath = config_path('entities.php');
 
         if (File::exists($configPath) && !$this->option('force')) {
@@ -204,7 +198,6 @@ class DiscoverEntitiesCommand extends Command
             $this->line("    Children: <fg=yellow>" . implode(', ', $children) . "</>");
         }
 
-        // Display security team_path
         if (!empty($config['security']['team_path'])) {
             $teamPath = $config['security']['team_path'];
             if (is_array($teamPath)) {

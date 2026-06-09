@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Actions\BuiltIn;
 
+use Condoedge\Ai\Services\Actions\ActionContext;
 use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 use Condoedge\Ai\Services\Chat\Exporter\ResultSetExporter;
 
@@ -11,16 +12,15 @@ use Condoedge\Ai\Services\Chat\Exporter\ResultSetExporter;
  * export_excel — generative-UI built-in.
  *
  * Exports the current/last result set as an .xlsx download. Backed by
- * {@see ResultSetExporter}, which degrades gracefully (returns an isError AiActionResult
+ * {@see ResultSetExporter}, which degrades gracefully (returns an error AiActionResult
  * telling the user to install maatwebsite/excel) when PhpSpreadsheet is absent.
  *
  * Link grammar:
  *   [Download Excel](action://export_excel?title=Overdue%20Invoices)
  *
- * The result set comes from the render context ('result_set'/'rows'); the action never
- * carries the data through the link. handle() produces the bytes wrapped in an
- * AiActionResult whose renderable (on success) is ['content','mime','filename'] — the
- * renderer turns that into a download _Link.
+ * The result set comes from the context; the action never carries the data through the link.
+ * handle() returns an Export-kind result ['content','mime','filename'] — the presenter turns
+ * that into a download link.
  */
 class ExportExcelAction extends AbstractBuiltInAction
 {
@@ -45,11 +45,6 @@ class ExportExcelAction extends AbstractBuiltInAction
         return 'Export the current result set as an Excel (.xlsx) file.';
     }
 
-    public function presentation(): string
-    {
-        return 'export';
-    }
-
     public function aliases(): array
     {
         return ['export excel', 'download excel', 'export to excel', 'xlsx', 'spreadsheet'];
@@ -62,10 +57,10 @@ class ExportExcelAction extends AbstractBuiltInAction
         ];
     }
 
-    public function handle(array $input, array $context): mixed
+    public function handle(array $input, ActionContext $context): AiActionResult
     {
-        $rows = $context['result_set'] ?? $context['rows'] ?? [];
-        if (!is_array($rows) || empty($rows)) {
+        $rows = $context->resultSet;
+        if (empty($rows)) {
             return AiActionResult::error('No data available to export to Excel.');
         }
 

@@ -10,21 +10,34 @@ use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\GraphStore\CypherSanitizer;
+use Condoedge\Ai\Services\GraphPropertyMapper;
+use Condoedge\Ai\Services\VectorPayloadBuilder;
 use Condoedge\Ai\Support\AiLogger;
 use Illuminate\Support\Facades\Log;
 
 class BatchDataIngestionService implements DataIngestionServiceInterface
 {
+    private readonly GraphPropertyMapper $propertyMapper;
+    private readonly VectorPayloadBuilder $payloadBuilder;
+
     public function __construct(
         private readonly DataIngestionServiceInterface $inner,
         private readonly VectorStoreInterface $vectorStore,
         private readonly GraphStoreInterface $graphStore,
         private readonly EmbeddingProviderInterface $embeddingProvider,
         private readonly AiLogger $logger,
-    ) {}
+        ?GraphPropertyMapper $propertyMapper = null,
+        ?VectorPayloadBuilder $payloadBuilder = null,
+    ) {
+        // Share the SAME graph-mapping and vector-payload logic as the single
+        // ingestion path so single and batch produce identical sanitization
+        // and payloads (sensible-column stripping + owner/security metadata).
+        $this->propertyMapper = $propertyMapper ?? new GraphPropertyMapper();
+        $this->payloadBuilder = $payloadBuilder ?? new VectorPayloadBuilder($this->propertyMapper);
+    }
 
     // =========================================================================
-    // Delegated single-entity methods (unchanged behavior)
+    // Delegated single-entity methods
     // =========================================================================
 
     public function ingest(Nodeable $entity): array
@@ -61,7 +74,6 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
             return $summary;
         }
 
-        // Validate all entities first
         $valid = [];
         foreach ($entities as $index => $entity) {
             if (!$entity instanceof Nodeable) {
@@ -222,11 +234,11 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
             try {
                 $graphConfig = $entity->getGraphConfig();
                 $data = $entity->toArray();
-                $properties = $this->extractProperties($data, $graphConfig->properties);
+                $properties = $this->propertyMapper->extractProperties($data, $graphConfig->properties);
                 $properties['id'] = $entity->getId();
 
-                // Sanitize all values for Neo4j
-                $properties = array_map(fn($v) => $this->sanitizeForGraph($v), $properties);
+                // Sanitize all values for Neo4j (id is added after extraction)
+                $properties = array_map(fn($v) => $this->propertyMapper->sanitizeForGraph($v), $properties);
 
                 $label = $graphConfig->label;
                 if (!isset($byLabel[$label])) {
@@ -387,18 +399,9 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
                     $config = $item['config'];
                     $data = $entity->toArray();
 
-                    $textParts = [];
-                    foreach ($config->embedFields as $field) {
-                        $value = $data[$field] ?? '';
-                        if (is_array($value)) {
-                            $value = json_encode($value, JSON_UNESCAPED_UNICODE);
-                        }
-                        if (!empty($value)) {
-                            $textParts[] = (string) $value;
-                        }
-                    }
-
-                    $textToEmbed = implode(' ', $textParts);
+                    // Shared embed-text building (strips sensible columns) so the
+                    // batch path embeds the exact same text as the single path.
+                    $textToEmbed = $this->payloadBuilder->buildEmbedTextFor($entity, $data, $config);
                     if (empty(trim($textToEmbed))) {
                         // No text to embed — graph-only entity, mark as success
                         $results[$item['index']] = true;
@@ -412,18 +415,9 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
                     $texts[] = $textToEmbed;
                     $indexes[] = $item['index'];
 
-                    // Build metadata
-                    $meta = ['id' => $entity->getId()];
-                    foreach ($config->metadata as $field) {
-                        if (isset($data[$field])) {
-                            $meta[$field] = is_array($data[$field])
-                                ? json_encode($data[$field], JSON_UNESCAPED_UNICODE)
-                                : $data[$field];
-                        }
-                    }
-                    $meta['_entity_type'] = class_basename($entity);
-                    $meta['_entity_class'] = get_class($entity);
-                    $metadata[] = $meta;
+                    // Shared payload building (id + metadata + owner/security
+                    // metadata) so the batch payload matches the single path.
+                    $metadata[] = $this->payloadBuilder->buildPayload($entity, $data, $config);
                 }
 
                 if (empty($texts)) continue;
@@ -480,47 +474,5 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
         }
 
         return $results;
-    }
-
-    // =========================================================================
-    // Pure helper functions (copied from DataIngestionService since they're private)
-    // =========================================================================
-
-    private function extractProperties(array $data, array $propertyNames): array
-    {
-        $properties = [];
-        foreach ($propertyNames as $propertyName) {
-            if (array_key_exists($propertyName, $data)) {
-                $value = $data[$propertyName];
-                if (is_object($value)) {
-                    if (method_exists($value, 'toArray')) {
-                        $value = $value->toArray();
-                    } elseif (method_exists($value, '__toString')) {
-                        $value = (string) $value;
-                    } else {
-                        continue;
-                    }
-                }
-                $value = $this->sanitizeForGraph($value);
-                $properties[$propertyName] = $value;
-            }
-        }
-        return $properties;
-    }
-
-    private function sanitizeForGraph(mixed $value): mixed
-    {
-        if (!is_array($value)) {
-            return $value;
-        }
-        if (!array_is_list($value)) {
-            return json_encode($value, JSON_UNESCAPED_UNICODE);
-        }
-        foreach ($value as $item) {
-            if (is_array($item) || is_object($item)) {
-                return json_encode($value, JSON_UNESCAPED_UNICODE);
-            }
-        }
-        return $value;
     }
 }

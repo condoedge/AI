@@ -93,9 +93,9 @@ class AiChatService implements AiChatServiceInterface
     ): array {
         $options = array_merge($this->config, $options);
 
-        // Orchestration now lives in AskQuestionUseCase (single home of chat-turn logic,
-        // security gate as step 0, DB::transaction, returns a created AiMessage). This
-        // service is config-`new`ed and has no DI, so resolve the use case via the container.
+        // AskQuestionUseCase owns chat-turn orchestration (security gate, DB::transaction,
+        // returns a created AiMessage). This service is config-`new`ed and has no DI, so
+        // resolve the use case via the container.
         $result = app(AskQuestionUseCase::class)->execute(new AskQuestionInput(
             question: $question,
             conversation: $conversation,
@@ -139,9 +139,9 @@ class AiChatService implements AiChatServiceInterface
     ): array {
         $options = array_merge($this->config, $options);
 
-        // Regeneration orchestration now lives in AskQuestionUseCase::regenerate (shared turn
-        // flow, persistUserMessage=false). Trailing-message truncation remains the caller's
-        // responsibility, matching the original regenerateResponse() behavior.
+        // AskQuestionUseCase::regenerate runs the shared turn flow with
+        // persistUserMessage=false. Trailing-message truncation is the caller's
+        // responsibility.
         $result = app(AskQuestionUseCase::class)->regenerate(
             conversation: $conversation,
             userMessage: $userMessage,

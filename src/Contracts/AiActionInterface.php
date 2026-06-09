@@ -4,26 +4,30 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Contracts;
 
+use Condoedge\Ai\Services\Actions\ActionContext;
+use Condoedge\Ai\Services\Actions\Results\AiActionResult;
+
 /**
  * AiAction — a model-agnostic, reusable unit of "doing something" the assistant can offer.
  *
  * This is the typed, registry-backed evolution of the legacy closure entries in
  * config('ai.entity_actions') / config('ai.generic_actions'). It deliberately stays
  * provider-agnostic: it carries enough metadata to (a) advertise the action to the LLM
- * via the existing markdown-link grammar, (b) validate + filter the params parsed out of
- * an action:// / entity:// link, (c) gate mutating actions behind a server-side
- * authorization re-check, and (d) render a Kompo element (link, modal, table, export,
- * button, or approval card).
+ * via a native tool spec / the markdown-link grammar, (b) validate + filter the params parsed
+ * out of an action:// / entity:// link, (c) gate mutating actions behind a server-side
+ * authorization re-check, and (d) return typed DATA + INTENT (never a Kompo element) that one
+ * presenter turns into a link, table, download, or approval card.
  *
  * Backward compatibility: today's array/closure config entries are wrapped automatically
  * in {@see \Condoedge\Ai\Services\Actions\ConfigAiAction}, which implements this interface
- * with SAFE DEFAULTS (no approval, authorize=true, empty schema). Nothing in config is
+ * with SAFE DEFAULTS (no mutation, authorize=true, empty schema). Nothing in config is
  * required — absent keys never throw.
  */
 interface AiActionInterface
 {
     /**
-     * Stable machine key used in links: action://{key} or entity://Type/id/{key}.
+     * Stable machine key used in links and as the native tool name: action://{key} or
+     * entity://Type/id/{key}. snake_case.
      */
     public function key(): string;
 
@@ -40,14 +44,16 @@ interface AiActionInterface
     public function aliases(): array;
 
     /**
-     * Short description of what the action does, advertised to the LLM.
+     * Short description of what the action does, advertised to the LLM (tool description AND
+     * markdown-fallback awareness).
      */
     public function description(): string;
 
     /**
-     * Typed schema for the params this action accepts in its link query string.
+     * Typed schema for the params this action accepts. This IS the provider tool/function
+     * schema — not a second description of params.
      *
-     * Shape: ['param_name' => ['type' => 'string|int|float|bool', 'default' => mixed,
+     * Shape: ['param_name' => ['type' => 'string|int|float|bool|array', 'default' => mixed,
      *                          'required' => bool, 'label' => string]].
      * Only params declared here survive parsing; everything else is DROPPED (security).
      * An empty schema means the action takes no params.
@@ -57,18 +63,11 @@ interface AiActionInterface
     public function inputSchema(): array;
 
     /**
-     * How this action should be rendered.
-     *
-     * One of: link | modal | table | export | button | approval.
+     * Whether executing this action mutates state. true => the dispatcher defers behind an
+     * approval gate + a fresh server-side re-authorize before {@see handle()} runs. Read-only
+     * actions return false and render/execute inline.
      */
-    public function presentation(): string;
-
-    /**
-     * Whether executing this action mutates state and therefore must be confirmed +
-     * re-authorized server-side before {@see handle()} runs. Read-only actions return false
-     * and render/execute inline.
-     */
-    public function requiresApproval(): bool;
+    public function mutates(): bool;
 
     /**
      * Server-side authorization gate. Re-checked at render time AND again right before a
@@ -80,13 +79,11 @@ interface AiActionInterface
     public function authorize(mixed $user, array $input): bool;
 
     /**
-     * Execute the action. For read-only/presentational actions this typically returns a
-     * Kompo element (or an AiActionResult wrapping one). For mutating actions, this only
-     * runs AFTER approval + a fresh authorize() pass.
+     * Execute the action. Typed in (filtered $input + {@see ActionContext}) AND typed out
+     * ({@see AiActionResult}). Returns DATA + INTENT (an ActionKind + payload), never a Kompo
+     * element. For mutating actions this only runs AFTER approval + a fresh authorize() pass.
      *
-     * @param array<string, mixed> $input    Validated params (filtered by inputSchema()).
-     * @param array<string, mixed> $context  Ambient context (entity_id, entity_type, text, user…).
-     * @return mixed Kompo element, AiActionResult, or any renderable.
+     * @param array<string, mixed> $input  Validated params (filtered by inputSchema()).
      */
-    public function handle(array $input, array $context): mixed;
+    public function handle(array $input, ActionContext $context): AiActionResult;
 }

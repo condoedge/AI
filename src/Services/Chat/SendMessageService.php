@@ -15,8 +15,8 @@ use Condoedge\Ai\Services\Chat\UseCases\AskQuestionUseCase;
  * 1. Validates the message is not empty
  * 2. Delegates orchestration to AskQuestionUseCase (the single home of chat-turn logic)
  *
- * It returns the legacy array shape so existing Kompo callers keep working unchanged
- * during the migration; the use case is the source of truth for behavior.
+ * It returns the array shape expected by existing Kompo callers; the use case is the
+ * source of truth for behavior.
  */
 class SendMessageService
 {

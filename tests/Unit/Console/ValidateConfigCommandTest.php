@@ -47,7 +47,7 @@ class ValidateConfigCommandTest extends TestCase
             ],
         ]]);
 
-        $this->artisan('ai:config:validate')
+        $this->artisan('ai:validate-config')
             ->assertSuccessful();
     }
 
@@ -61,7 +61,7 @@ class ValidateConfigCommandTest extends TestCase
             ],
         ]]);
 
-        $this->artisan('ai:config:validate')
+        $this->artisan('ai:validate-config')
             ->assertFailed()
             ->expectsOutputToContain('missing');
     }
@@ -71,7 +71,7 @@ class ValidateConfigCommandTest extends TestCase
     {
         config(['entities' => []]);
 
-        $this->artisan('ai:config:validate')
+        $this->artisan('ai:validate-config')
             ->assertFailed()
             ->expectsOutputToContain('No entities configured');
     }
@@ -91,7 +91,7 @@ class ValidateConfigCommandTest extends TestCase
             ],
         ]]);
 
-        $this->artisan('ai:config:validate')
+        $this->artisan('ai:validate-config')
             ->assertFailed()
             ->expectsOutputToContain('missing graph label');
     }
@@ -112,7 +112,7 @@ class ValidateConfigCommandTest extends TestCase
             ],
         ]]);
 
-        $this->artisan('ai:config:validate')
+        $this->artisan('ai:validate-config')
             ->assertFailed()
             ->expectsOutputToContain('missing vector collection');
     }
@@ -133,7 +133,7 @@ class ValidateConfigCommandTest extends TestCase
             ],
         ]]);
 
-        $this->artisan('ai:config:validate')
+        $this->artisan('ai:validate-config')
             ->assertSuccessful() // Warnings don't cause failure
             ->expectsOutputToContain('no properties configured');
     }
@@ -151,7 +151,7 @@ class ValidateConfigCommandTest extends TestCase
             ],
         ]]);
 
-        $this->artisan('ai:config:validate')
+        $this->artisan('ai:validate-config')
             ->assertSuccessful() // Warnings don't cause failure
             ->expectsOutputToContain("won't be searchable");
     }
@@ -172,7 +172,7 @@ class ValidateConfigCommandTest extends TestCase
             ],
         ]]);
 
-        $this->artisan('ai:config:validate')
+        $this->artisan('ai:validate-config')
             ->assertSuccessful() // Warnings don't cause failure
             ->expectsOutputToContain('no embed fields');
     }
@@ -192,7 +192,7 @@ class ValidateConfigCommandTest extends TestCase
             ],
         ]]);
 
-        $this->artisan('ai:config:validate')
+        $this->artisan('ai:validate-config')
             ->assertFailed()
             ->expectsOutputToContain('class does not exist');
     }

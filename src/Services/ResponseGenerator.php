@@ -14,110 +14,18 @@ use Condoedge\Ai\Services\ResponseSections\ResultsDataSection;
 use Condoedge\Ai\Services\ResponseSections\GuidelinesSection;
 
 /**
- * ResponseGenerator - Transforms Query Results to Natural Language
+ * ResponseGenerator — turns a PipelineContext into a natural-language answer.
  *
- * Converts raw database query results into human-readable explanations using LLM.
- * Uses the HasInternalModules trait for extensible prompt composition.
+ * generate() assembles a role-split prompt via the priority-ordered section
+ * pipeline (buildPrompts() returns {system, user}: identity + security policy in
+ * the system role, the untrusted question + data in the user role) and calls the
+ * LLM. Sections are configured under `config('ai.response_generator_sections')`
+ * and managed through the HasInternalModules trait (addModule/removeModule/
+ * replaceModule/extendAfter). Returns: answer, insights, visualizations, format,
+ * metadata.
  *
- * ## Architecture
- *
- * The generator uses a priority-based module pipeline where each section contributes
- * to the prompt sent to the LLM. Sections are processed in priority order (lower = first).
- *
- * Default sections (in priority order):
- * - system (10): System prompt setting the LLM's role
- * - security_restrictions (15): Security and data privacy guidelines
- * - project_context (20): Project name and description
- * - question (30): The user's original question
- * - query_info (40): The Cypher query that was executed
- * - data (50): The actual results data
- * - statistics (60): Statistics about the results
- * - guidelines (70): Guidelines for response formatting
- * - task (80): Final task instructions for the LLM
- *
- * ## Configuration
- *
- * Default sections are loaded from `config('ai.response_generator_sections')`.
- *
- * ```php
- * // config/ai.php
- * return [
- *     'response_generator_sections' => [
- *         \Condoedge\Ai\Services\ResponseSections\SystemPromptSection::class,
- *         \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
- *         // ... more sections
- *     ],
- * ];
- * ```
- *
- * ## Extension Methods
- *
- * ### Add a new section
- * ```php
- * $generator->addModule(new CustomInsightsSection());
- * ```
- *
- * ### Remove a section
- * ```php
- * $generator->removeModule('statistics');
- * ```
- *
- * ### Replace a section
- * ```php
- * $generator->replaceModule('guidelines', new MyGuidelinesSection());
- * ```
- *
- * ### Extend with callbacks
- * ```php
- * $generator->extendAfter('data', function($context, $options) {
- *     return "\n=== CUSTOM ANALYSIS ===\n\nYour analysis here\n\n";
- * });
- * ```
- *
- * ### Global extensions (applied to all instances)
- * ```php
- * ResponseGenerator::extendBuild(function($generator) {
- *     $generator->addModule(new GlobalCustomSection());
- * });
- * ```
- *
- * ## Usage Example
- *
- * ```php
- * $generator = new ResponseGenerator($llmProvider, $config);
- *
- * // Customize for your needs
- * $generator->setProjectContext([
- *     'name' => 'My CRM',
- *     'description' => 'Customer relationship management',
- * ]);
- * $generator->addGuideline('Always include percentage changes');
- *
- * // Generate response
- * $response = $generator->generate(
- *     originalQuestion: "How many customers do we have?",
- *     queryResult: ['data' => [...], 'stats' => [...]],
- *     cypherQuery: "MATCH (c:Customer) RETURN count(c) as count",
- *     options: ['format' => 'text', 'style' => 'detailed']
- * );
- *
- * // $response contains: answer, insights, visualizations, format, metadata
- * ```
- *
- * ## Response Structure
- *
- * The generate() method returns:
- * - `answer`: The natural language explanation
- * - `insights`: Array of automatically extracted insights
- * - `visualizations`: Suggested visualization types
- * - `format`: The output format used
- * - `metadata`: Additional info (style, result count, etc.)
- *
- * @uses HasInternalModules<ResponseSectionInterface> For module pipeline functionality
- *
- * @see HasInternalModules For module management methods
- * @see ResponseSectionInterface For creating custom sections
- * @see SemanticPromptBuilder For building query generation prompts
+ * @uses HasInternalModules<ResponseSectionInterface>
+ * @see ResponseSectionInterface For creating custom sections.
  */
 class ResponseGenerator implements ResponseGeneratorInterface
 {
@@ -219,7 +127,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
         PipelineContext $context,
         array $options = []
     ): array {
-        // Merge options with defaults
         $format = $options['format'] ?? $this->config['default_format'] ?? 'text';
         $style = $options['style'] ?? $this->config['default_style'] ?? 'detailed';
         $includeInsights = $options['include_insights'] ?? true;
@@ -248,10 +155,8 @@ class ResponseGenerator implements ResponseGeneratorInterface
                 'max_tokens' => $this->calculateMaxTokens($maxLength),
             ]);
 
-            // Extract insights
             $insights = $includeInsights ? $this->extractInsights($data) : [];
 
-            // Suggest visualizations
             $visualizations = $includeVisualization
                 ? $this->suggestVisualizations($data, $cypherQuery)
                 : [];
@@ -321,23 +226,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
     }
 
     /**
-     * Build the full prompt as a single string (system + user concatenated).
-     *
-     * Retained for backward compatibility with callers/tests that expect one string.
-     * The live generate() path uses buildPrompts() for true role separation.
-     *
-     * @param PipelineContext $context Pipeline context with question, data, etc.
-     * @param array $options Options for sections
-     * @return string Complete prompt
-     */
-    public function buildPrompt(PipelineContext $context, array $options = []): string
-    {
-        ['system' => $system, 'user' => $user] = $this->buildPrompts($context, $options);
-
-        return $system . $user;
-    }
-
-    /**
      * Generate response for empty results
      *
      * @param string $originalQuestion User's original question
@@ -353,13 +241,31 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $format = $options['format'] ?? 'text';
         $temperature = $options['temperature'] ?? 0.3;
 
-        $prompt = __('ai.prompt.user_asked', ['question' => $originalQuestion]) . "\n\n";
-        $prompt .= __('ai.prompt.executed_query') . "\n{$cypherQuery}\n\n";
-        $prompt .= __('ai.prompt.no_results') . "\n\n";
-        $prompt .= __('ai.prompt.explain_no_results');
+        // Carry the same system-role policy (identity, non-disclosure, privacy) as the
+        // grounded path — abstention must not run with a null system prompt, or a
+        // "which model are you?" question detours here and self-identifies the provider.
+        // The executed query is intentionally NOT placed in the prompt (schema must not leak).
+        $context = new PipelineContext();
+        $context->question = $originalQuestion;
+        ['system' => $systemPrompt] = $this->buildPrompts($context, ['format' => $format]);
+
+        // The LLM-facing scaffold is neutral English on purpose: localizing it (via __()) forces
+        // the model into the app locale even when the question was asked in another language. The
+        // reply language is driven by the question itself plus the system-prompt language policy.
+        $prompt = "The user asked: \"{$originalQuestion}\"\n\n";
+        $prompt .= "No matching records were found for this question. Briefly and helpfully tell the "
+            . "user that no results were found, and if useful suggest how they might rephrase or what "
+            . "else they could ask.\n\n";
+        // If the question is really a request to DO something the app supports (book/reserve/contact
+        // support/...), offer that action as a link instead of a dead-end "no results".
+        $actionsHint = $this->emptyResponseActionsHint();
+        if ($actionsHint !== '') {
+            $prompt .= $actionsHint . "\n\n";
+        }
+        $prompt .= "Respond in the SAME language as the user's question above.";
 
         try {
-            $answer = $this->llm->complete($prompt, null, [
+            $answer = $this->llm->complete($prompt, $systemPrompt !== '' ? $systemPrompt : null, [
                 'temperature' => $temperature,
                 'max_tokens' => 200,
             ]);
@@ -376,7 +282,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
             ];
 
         } catch (\Exception $e) {
-            // Fallback response
             return [
                 'answer' => __('ai.response.no_results_fallback', ['question' => $originalQuestion]),
                 'insights' => [__('ai.insight.no_results')],
@@ -389,6 +294,39 @@ class ResponseGenerator implements ResponseGeneratorInterface
                 ],
             ];
         }
+    }
+
+    /**
+     * A hint listing the available generic actions, so an action request that returns no data
+     * (e.g. "book a reservation") is answered with the matching action link instead of a dead-end
+     * "no results". The registry is the single source of truth (the same actions the response
+     * sections and the action link handler use). Returns '' when none are configured/resolvable.
+     */
+    private function emptyResponseActionsHint(): string
+    {
+        try {
+            $actions = app(\Condoedge\Ai\Services\Discovery\EntityAutoDiscovery::class)->getGenericActions();
+        } catch (\Throwable $e) {
+            return '';
+        }
+
+        $lines = [];
+        foreach ($actions as $action) {
+            $key = $action['action_key'] ?? null;
+            if (!$key) {
+                continue;
+            }
+            $label = $action['label'] ?? $key;
+            $aliases = !empty($action['aliases']) ? ' (e.g. ' . implode(', ', $action['aliases']) . ')' : '';
+            $lines[] = "- [{$label}](action://{$key}){$aliases}";
+        }
+
+        if (empty($lines)) {
+            return '';
+        }
+
+        return "If the user's request actually asks to DO one of these, offer it as a clickable "
+            . "markdown link instead of saying no results were found:\n" . implode("\n", $lines);
     }
 
     /**
@@ -438,22 +376,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
     }
 
     /**
-     * Summarize large result sets
-     *
-     * @param array $queryResult Large result set to summarize
-     * @param int $maxItems Max items to include in summary
-     * @return array Summarized results
-     */
-    public function summarize(array $queryResult, int $maxItems = 10): array
-    {
-        if (count($queryResult) <= $maxItems) {
-            return $queryResult;
-        }
-
-        return array_slice($queryResult, 0, $maxItems);
-    }
-
-    /**
      * Extract insights from data
      *
      * @param array $queryResult Query results to analyze
@@ -484,15 +406,9 @@ class ResponseGenerator implements ResponseGeneratorInterface
             }
         }
 
-        // Detect patterns in keys
-        if (!empty($queryResult)) {
-            $firstItem = $queryResult[0];
-            $keys = array_keys($firstItem);
-
-            if (count($keys) > 1) {
-                $insights[] = __('ai.insight.properties_count', ['count' => count($keys), 'properties' => implode(', ', $keys)]);
-            }
-        }
+        // Raw property/column names are schema details that must not leak into
+        // user-facing insights, so no "properties: id, name, ..." insight is emitted.
+        // The result count already conveys shape.
 
         return $insights;
     }

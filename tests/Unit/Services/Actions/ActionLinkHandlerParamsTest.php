@@ -79,9 +79,9 @@ class ActionLinkHandlerParamsTest extends TestCase
         );
 
         $this->assertSame(['field' => 'email'], $captured['input']);
-        $this->assertSame('Person', $captured['context']['entity_type']);
-        $this->assertSame('152463', $captured['context']['entity_id']);
-        $this->assertSame('John', $captured['context']['text']);
+        $this->assertSame('Person', $captured['context']->entityType);
+        $this->assertSame('152463', $captured['context']->entityId);
+        $this->assertSame('John', $captured['context']->text);
         $this->assertSame(['rendered'], $elements);
     }
 

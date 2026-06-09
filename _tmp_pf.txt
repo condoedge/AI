@@ -1,0 +1,10 @@
+PHPUnit 10.5.60 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.2.29
+Configuration: C:\Users\jkend\Documents\Projects\kompo\ai\phpunit.xml
+
+.                                                                   1 / 1 (100%)
+
+Time: 00:00.511, Memory: 14.00 MB
+
+OK (1 test, 1 assertion)

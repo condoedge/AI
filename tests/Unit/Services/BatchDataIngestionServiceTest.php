@@ -48,6 +48,19 @@ class BatchDataIngestionServiceTest extends TestCase
         $this->mockEmbeddingProvider = Mockery::mock(EmbeddingProviderInterface::class);
         $this->mockLogger = Mockery::mock(AiLogger::class)->shouldIgnoreMissing();
 
+        // The batch vector path ensures the target collection exists before
+        // upserting (BatchDataIngestionService::batchIngestToVector calls
+        // embeddingProvider->getDimensions() then vectorStore->ensureCollection()).
+        // Provide these so the real path runs; byDefault() lets a test override.
+        $this->mockEmbeddingProvider
+            ->shouldReceive('getDimensions')
+            ->andReturn(1536)
+            ->byDefault();
+
+        $this->mockVectorStore
+            ->shouldReceive('ensureCollection')
+            ->byDefault();
+
         $this->service = new BatchDataIngestionService(
             $this->mockInner,
             $this->mockVectorStore,

@@ -40,6 +40,9 @@ class KompoAuthAdapterTest extends TestCase
     public function get_teams_checks_ai_retrieving_first(): void
     {
         config(['ai.security.enabled' => true]);
+        // 'roles' exercises the permission_chain path; the default 'teams'
+        // short-circuits to getAllAccessibleTeamIds().
+        config(['ai.security.permission_level' => 'roles']);
         config(['ai.security.permission_chain' => ['{Entity}.AiRetrieving', '{Entity}']]);
 
         $user = Mockery::mock();
@@ -57,6 +60,9 @@ class KompoAuthAdapterTest extends TestCase
     public function get_teams_falls_back_to_entity_permission(): void
     {
         config(['ai.security.enabled' => true]);
+        // 'roles' exercises the permission_chain path; the default 'teams'
+        // short-circuits to getAllAccessibleTeamIds().
+        config(['ai.security.permission_level' => 'roles']);
         config(['ai.security.permission_chain' => ['{Entity}.AiRetrieving', '{Entity}']]);
 
         $user = Mockery::mock();

@@ -63,7 +63,6 @@ class FileAccessScopePlugin extends ModelPlugin
                 return $this->whereRaw('1 = 0');
             }
 
-            // Use OR logic: user_id matches OR team_id matches
             return $this->where(function ($q) use ($userId, $teamId, $useUserFilter, $useTeamFilter) {
                 if ($useUserFilter) {
                     $q->where('user_id', $userId);

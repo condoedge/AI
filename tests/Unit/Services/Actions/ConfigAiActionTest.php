@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Services\Actions;
 
+use Condoedge\Ai\Services\Actions\ActionContext;
 use Condoedge\Ai\Services\Actions\ConfigAiAction;
+use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -23,9 +25,11 @@ class ConfigAiActionTest extends TestCase
             'label' => 'View Profile',
         ], 'Person');
 
-        $result = $action->handle([], ['entity_id' => '152463', 'text' => 'John']);
+        $result = $action->handle([], ActionContext::fromArray(['entity_id' => '152463', 'text' => 'John']));
 
-        $this->assertSame('person:152463:John', $result);
+        // A legacy closure returns a raw value, wrapped once in an element result.
+        $this->assertInstanceOf(AiActionResult::class, $result);
+        $this->assertSame('person:152463:John', $result->payload);
     }
 
     /** @test */
@@ -35,7 +39,7 @@ class ConfigAiActionTest extends TestCase
             'action' => fn($text = 'Settings') => "go:{$text}",
         ]);
 
-        $this->assertSame('go:Prefs', $action->handle([], ['text' => 'Prefs']));
+        $this->assertSame('go:Prefs', $action->handle([], ActionContext::fromArray(['text' => 'Prefs']))->payload);
     }
 
     /** @test */
@@ -47,10 +51,11 @@ class ConfigAiActionTest extends TestCase
         $this->assertSame('quick', $action->label());
         $this->assertSame([], $action->aliases());
         $this->assertSame([], $action->inputSchema());
-        $this->assertSame('link', $action->presentation());
+        // mutates() is the evolved trigger; requiresApproval() survives as a one-release alias.
+        $this->assertFalse($action->mutates());
         $this->assertFalse($action->requiresApproval());
         $this->assertTrue($action->authorize(null, []));
-        $this->assertSame('q:hi', $action->handle([], ['text' => 'hi']));
+        $this->assertSame('q:hi', $action->handle([], ActionContext::fromArray(['text' => 'hi']))->payload);
     }
 
     /** @test */
@@ -61,9 +66,9 @@ class ConfigAiActionTest extends TestCase
             'input_schema' => ['amount' => ['type' => 'int']],
         ], 'Account');
 
-        $result = $action->handle(['amount' => 450], ['entity_id' => '7', 'text' => 'Charge']);
+        $result = $action->handle(['amount' => 450], ActionContext::fromArray(['entity_id' => '7', 'text' => 'Charge']));
 
-        $this->assertSame('charge:7:450', $result);
+        $this->assertSame('charge:7:450', $result->payload);
     }
 
     /** @test */
@@ -85,7 +90,10 @@ class ConfigAiActionTest extends TestCase
     {
         $action = new ConfigAiAction('broken', ['label' => 'Broken']);
 
-        $this->assertNull($action->handle([], []));
+        // A malformed entry (no action closure) yields a graceful error result, never throws.
+        $result = $action->handle([], new ActionContext());
+        $this->assertInstanceOf(AiActionResult::class, $result);
+        $this->assertTrue($result->isError);
         $this->assertNull($action->resolver());
     }
 
@@ -94,6 +102,6 @@ class ConfigAiActionTest extends TestCase
     {
         $action = new ConfigAiAction('ping', ['action' => fn() => 'pong']);
 
-        $this->assertSame('pong', $action->handle([], ['text' => 'ignored']));
+        $this->assertSame('pong', $action->handle([], ActionContext::fromArray(['text' => 'ignored']))->payload);
     }
 }

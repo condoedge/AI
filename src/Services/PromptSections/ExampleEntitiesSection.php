@@ -31,7 +31,6 @@ class ExampleEntitiesSection extends BasePromptSection
             return '';
         }
 
-        // Filter entities if semantic selection was used
         if (!empty($selectionInfo['selected_entities'])) {
             $selectedLabels = $selectionInfo['selected_entities'];
             $entities = array_filter(
@@ -41,7 +40,6 @@ class ExampleEntitiesSection extends BasePromptSection
             );
         }
 
-        // Return empty if all entities were filtered out
         if (empty($entities)) {
             return '';
         }
@@ -88,11 +86,9 @@ class ExampleEntitiesSection extends BasePromptSection
         }
 
         if (is_string($value)) {
-            // Check for date pattern
             if (preg_match('/^\d{4}-\d{2}-\d{2}/', $value)) {
                 return "'{$value}' (string date — compare with string operators: =, <, >, <=, >=)";
             }
-            // Truncate long strings
             if (strlen($value) > 50) {
                 $value = substr($value, 0, 47) . '...';
             }

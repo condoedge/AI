@@ -68,7 +68,6 @@ class ProcessFilesCommand extends Command
         $this->info('📄 Batch File Processing');
         $this->newLine();
 
-        // Check if file processing is enabled
         if (!config('ai.file_processing.enabled', true)) {
             $this->error('File processing is disabled in config/ai.php');
             $this->comment('Set AI_FILE_PROCESSING_ENABLED=true in your .env file');
@@ -77,25 +76,21 @@ class ProcessFilesCommand extends Command
 
         $modelClass = $this->option('model');
 
-        // Validate model class
         if (!class_exists($modelClass)) {
             $this->error("Model class not found: {$modelClass}");
             return self::FAILURE;
         }
 
-        // Check if table exists
         $model = $modelClass::newInstance();
         if (!$model->getConnection()->getSchemaBuilder()->hasTable($model->getTable())) {
             $this->error("Table does not exist: {$model->getTable()}");
             return self::FAILURE;
         }
 
-        // Get supported file types
         $supportedTypes = $this->fileProcessor->getSupportedFileTypes();
         $this->info('Supported file types: ' . implode(', ', $supportedTypes));
         $this->newLine();
 
-        // Filter by file types if specified
         $filterTypes = $this->option('types')
             ? explode(',', $this->option('types'))
             : null;
@@ -107,10 +102,8 @@ class ProcessFilesCommand extends Command
             }
         }
 
-        // Build query
         $query = $modelClass::query();
 
-        // Filter by extension if types specified
         if ($filterTypes) {
             $query->where(function ($q) use ($filterTypes) {
                 foreach ($filterTypes as $type) {
@@ -158,13 +151,11 @@ class ProcessFilesCommand extends Command
         $failed = 0;
         $skipped = 0;
 
-        // Progress bar
         $progressBar = $this->output->createProgressBar($total);
         $progressBar->setFormat('  [%bar%] %current%/%max% (%percent:3s%%) Processed: %message%');
         $progressBar->setMessage('0');
         $progressBar->start();
 
-        // Process in chunks
         $query->chunk($chunkSize, function ($files) use (
             &$processed,
             &$failed,
@@ -175,7 +166,6 @@ class ProcessFilesCommand extends Command
         ) {
             foreach ($files as $file) {
                 try {
-                    // Check if file type is supported
                     $extension = strtolower(pathinfo($file->name, PATHINFO_EXTENSION));
 
                     if ($filterTypes && !in_array($extension, $filterTypes)) {
@@ -190,14 +180,12 @@ class ProcessFilesCommand extends Command
                         continue;
                     }
 
-                    // Check if file exists on disk
                     if (method_exists($file, 'existsOnDisk') && !$file->existsOnDisk()) {
                         $skipped++;
                         $progressBar->advance();
                         continue;
                     }
 
-                    // Process file
                     $result = $this->option('force')
                         ? $this->fileProcessor->reprocessFile($file)
                         : $this->fileProcessor->processFile($file);
@@ -226,7 +214,6 @@ class ProcessFilesCommand extends Command
         $this->newLine();
         $this->newLine();
 
-        // Summary
         $this->info('✓ Processing Complete');
         $this->line("  Processed: {$processed}");
 
@@ -253,7 +240,6 @@ class ProcessFilesCommand extends Command
     {
         $this->newLine();
 
-        // Group by extension
         $filesByType = DB::table($query->getModel()->getTable())
             ->selectRaw('LOWER(SUBSTRING_INDEX(name, ".", -1)) as extension, COUNT(*) as count')
             ->whereIn('id', $query->pluck('id'))

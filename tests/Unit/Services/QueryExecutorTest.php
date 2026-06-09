@@ -90,15 +90,35 @@ class QueryExecutorTest extends TestCase
             }), [])
             ->andReturn([]);
 
-        $this->executor->execute($query);
+        $result = $this->executor->execute($query);
+
+        $this->assertTrue($result['success']);
     }
 
-    public function test_execute_throws_exception_for_empty_query(): void
+    public function test_execute_returns_no_query_success_for_empty_query(): void
     {
-        $this->expectException(QueryExecutionException::class);
-        $this->expectExceptionMessage('Query cannot be empty');
+        // An empty Cypher query is no longer an error: some flows (e.g. a direct
+        // answer that needs no graph lookup) intentionally pass "" so the
+        // executor short-circuits to a NO-QUERY success instead of throwing.
+        // The graph store must NOT be hit in this case.
+        $this->mockGraph->shouldNotReceive('query');
 
-        $this->executor->execute('');
+        $result = $this->executor->execute('');
+
+        $this->assertTrue($result['success']);
+        $this->assertSame([], $result['data']);
+        $this->assertSame('NO QUERY', $result['context']);
+    }
+
+    public function test_execute_returns_no_query_success_for_whitespace_query(): void
+    {
+        // Same short-circuit for whitespace-only / null-ish input.
+        $this->mockGraph->shouldNotReceive('query');
+
+        $result = $this->executor->execute('   ');
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('NO QUERY', $result['context']);
     }
 
     public function test_execute_respects_timeout_option(): void
@@ -125,7 +145,9 @@ class QueryExecutorTest extends TestCase
             }), [])
             ->andReturn([]);
 
-        $this->executor->execute($query, [], ['limit' => 50]);
+        $result = $this->executor->execute($query, [], ['limit' => 50]);
+
+        $this->assertTrue($result['success']);
     }
 
     public function test_execute_formats_results_as_table(): void
@@ -464,6 +486,8 @@ class QueryExecutorTest extends TestCase
             ->with($query, $params)
             ->andReturn([]);
 
-        $this->executor->execute($query, $params);
+        $result = $this->executor->execute($query, $params);
+
+        $this->assertTrue($result['success']);
     }
 }

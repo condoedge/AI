@@ -215,7 +215,7 @@ class RealBusinessScenarioStressTest extends TestCase
             protected $table = 'stress_time';
             public $started_at;
 
-            public function __construct($startDate)
+            public function __construct($startDate = null)
             {
                 parent::__construct();
                 $this->started_at = $startDate;
@@ -381,14 +381,14 @@ class RealBusinessScenarioStressTest extends TestCase
     {
         // EDGE CASE: Team name with 1000+ characters
 
-        $longName = str_repeat('Very Long Team Name ', 50); // 1000+ chars
+        $longName = str_repeat('Very Long Team Name ', 51); // 1000+ chars (51 * 20 = 1020)
 
         $model = new class($longName) extends Model implements Nodeable {
             use HasNodeableConfig;
             protected $table = 'stress_teams';
             public $name;
 
-            public function __construct($name)
+            public function __construct($name = null)
             {
                 parent::__construct();
                 $this->name = $name;
@@ -436,7 +436,7 @@ class RealBusinessScenarioStressTest extends TestCase
                 protected $table = 'stress_teams';
                 public $name;
 
-                public function __construct($name)
+                public function __construct($name = null)
                 {
                     parent::__construct();
                     $this->name = $name;
@@ -471,7 +471,7 @@ class RealBusinessScenarioStressTest extends TestCase
                 protected $table = 'stress_health';
                 public $severity;
 
-                public function __construct($sev)
+                public function __construct($sev = null)
                 {
                     parent::__construct();
                     $this->severity = $sev;

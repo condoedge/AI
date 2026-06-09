@@ -144,6 +144,7 @@ class RealBusinessScenarioTest extends TestCase
             $table->enum('severity', ['mild', 'moderate', 'severe'])->default('mild');
             $table->text('reaction')->nullable();
             $table->text('treatment')->nullable();
+            $table->text('notes')->nullable();
             $table->timestamps();
         });
 
@@ -184,8 +185,8 @@ class RealBusinessScenarioTest extends TestCase
         $this->assertArrayHasKey('vector', $config);
         $this->assertArrayHasKey('metadata', $config);
 
-        // Verify label
-        $this->assertEquals('TestPerson', $config['graph']['label']);
+        // Verify label (AliasGenerator strips the 'Test' prefix from test models)
+        $this->assertEquals('Person', $config['graph']['label']);
 
         // Verify properties discovered from fillable
         $properties = $config['graph']['properties'];
@@ -312,10 +313,10 @@ class RealBusinessScenarioTest extends TestCase
         $this->assertArrayHasKey('upcoming', $eventScopes);
         $this->assertStringContainsString('start_date', json_encode($eventScopes['upcoming']));
 
-        // Inscription model with thisYear scope
+        // Inscription model with thisYear scope (scope names are normalized to snake_case)
         $inscriptionScopes = $scopeAdapter->discoverScopes(TestInscription::class);
 
-        $this->assertArrayHasKey('thisYear', $inscriptionScopes);
+        $this->assertArrayHasKey('this_year', $inscriptionScopes);
 
         echo "\n✓ Temporal queries enabled:\n";
         echo "  - 'upcoming' scope for events\n";
@@ -614,7 +615,7 @@ class TestAllergy extends Model implements Nodeable
     use HasNodeableConfig;
 
     protected $table = 'allergies';
-    protected $fillable = ['person_id', 'allergen', 'severity', 'reaction', 'treatment'];
+    protected $fillable = ['person_id', 'allergen', 'severity', 'reaction', 'treatment', 'notes'];
 
     public function person() { return $this->belongsTo(TestPerson::class, 'person_id'); }
 }

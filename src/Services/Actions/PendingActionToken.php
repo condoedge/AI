@@ -19,17 +19,27 @@ namespace Condoedge\Ai\Services\Actions;
  * authorize() is re-run server-side BEFORE handle() executes — so a stale or tampered
  * token, or a user who lost permission, is rejected. Nothing mutating ever runs inline.
  *
+ * Beyond tamper-evidence, the token carries two replay defenses the HMAC alone cannot give:
+ *   - TTL: decode() rejects a token older than config('ai.actions.token_ttl'), so a captured
+ *     token is not valid forever (the signature stays valid until APP_KEY rotates).
+ *   - Single-use nonce: each token carries a unique nonce the dispatcher consumes on confirm,
+ *     so a non-idempotent mutation cannot be fired twice by replaying the same token.
+ *
  * This is intentionally dependency-light (no DB table) — it rides on existing message
  * metadata and Laravel's APP_KEY.
  */
 final class PendingActionToken
 {
+    /** Fallback TTL (seconds) when config('ai.actions.token_ttl') is unavailable. */
+    private const DEFAULT_TTL = 900;
+
     /**
      * @param string $actionKey   The action key to execute on approval.
      * @param string|null $entityType  Entity label (for entity:// actions) or null.
      * @param array<string, mixed> $input  Schema-validated params.
      * @param int|string|null $userId  The user this token is bound to.
      * @param int $issuedAt     Unix timestamp the token was issued.
+     * @param string $nonce     Per-token id that makes the token single-use (consumed on approve).
      */
     public function __construct(
         public readonly string $actionKey,
@@ -37,11 +47,12 @@ final class PendingActionToken
         public readonly array $input,
         public readonly int|string|null $userId,
         public readonly int $issuedAt,
+        public readonly string $nonce = '',
     ) {
     }
 
     /**
-     * Create a token bound to a user (timestamped now).
+     * Create a token bound to a user (timestamped now), with a fresh single-use nonce.
      *
      * @param array<string, mixed> $input
      */
@@ -51,7 +62,7 @@ final class PendingActionToken
         array $input,
         int|string|null $userId
     ): self {
-        return new self($actionKey, $entityType, $input, $userId, time());
+        return new self($actionKey, $entityType, $input, $userId, time(), self::newNonce());
     }
 
     /**
@@ -65,7 +76,19 @@ final class PendingActionToken
             'i' => $this->input,
             'u' => $this->userId,
             't' => $this->issuedAt,
+            'n' => $this->nonce,
         ];
+    }
+
+    /**
+     * Whether the token has aged past the configured TTL. Defense against replay of a captured
+     * token long after issue — the HMAC alone keeps a token valid until APP_KEY rotates.
+     */
+    public function isExpired(?int $now = null): bool
+    {
+        $now = $now ?? time();
+
+        return ($now - $this->issuedAt) > self::ttl();
     }
 
     /**
@@ -106,13 +129,21 @@ final class PendingActionToken
             return null;
         }
 
-        return new self(
+        $decoded = new self(
             (string) $payload['k'],
             isset($payload['e']) ? ($payload['e'] !== null ? (string) $payload['e'] : null) : null,
             (array) ($payload['i'] ?? []),
             $payload['u'] ?? null,
             (int) $payload['t'],
+            isset($payload['n']) ? (string) $payload['n'] : '',
         );
+
+        // Fail closed on an aged token even though its signature is intact.
+        if ($decoded->isExpired()) {
+            return null;
+        }
+
+        return $decoded;
     }
 
     /**
@@ -126,6 +157,46 @@ final class PendingActionToken
         }
 
         return (string) $this->userId === (string) $userId;
+    }
+
+    /**
+     * Max token age in seconds. Reads config('ai.actions.token_ttl') when a container is booted,
+     * falling back to a sane default so pure unit tests (no container) still enforce a TTL — same
+     * container-tolerant guard the secret() resolver uses.
+     */
+    private static function ttl(): int
+    {
+        if (function_exists('app') && function_exists('config')) {
+            try {
+                if (app()->bound('config')) {
+                    $ttl = config('ai.actions.token_ttl');
+                    if (is_int($ttl) && $ttl > 0) {
+                        return $ttl;
+                    }
+                    if (is_string($ttl) && ctype_digit($ttl) && (int) $ttl > 0) {
+                        return (int) $ttl;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Container not available — fall through to default.
+            }
+        }
+
+        return self::DEFAULT_TTL;
+    }
+
+    private static function newNonce(): string
+    {
+        return bin2hex(random_bytes(16));
+    }
+
+    /**
+     * How long a consumed-nonce record should be retained. The nonce only needs to outlive the
+     * token's own TTL — past that, decode() already rejects the token, so single-use is moot.
+     */
+    public static function nonceLifetime(): int
+    {
+        return self::ttl() + 60;
     }
 
     private static function sign(string $data, string $secret): string

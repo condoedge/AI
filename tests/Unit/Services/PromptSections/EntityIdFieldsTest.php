@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\PromptSections\EntityActionAwarenessSection;
 use Condoedge\Ai\Tests\TestCase;
 
@@ -21,12 +22,11 @@ class EntityIdFieldsTest extends TestCase
 
         $section = new EntityActionAwarenessSection();
 
-        $context = [
-            'conversation_context' => [
-                'focused_entity' => 'Person',
-                'last_result_sample' => [
-                    ['custom_id' => 'ABC123', 'name' => 'John'],  // Uses custom_id
-                ],
+        $context = new PipelineContext();
+        $context->conversationContext = [
+            'focused_entity' => 'Person',
+            'last_result_sample' => [
+                ['custom_id' => 'ABC123', 'name' => 'John'],  // Uses custom_id
             ],
         ];
 
@@ -48,12 +48,11 @@ class EntityIdFieldsTest extends TestCase
 
         $section = new EntityActionAwarenessSection();
 
-        $context = [
-            'conversation_context' => [
-                'focused_entity' => 'Person',
-                'last_result_sample' => [
-                    ['id' => '999', 'name' => 'Jane'],
-                ],
+        $context = new PipelineContext();
+        $context->conversationContext = [
+            'focused_entity' => 'Person',
+            'last_result_sample' => [
+                ['id' => '999', 'name' => 'Jane'],
             ],
         ];
 

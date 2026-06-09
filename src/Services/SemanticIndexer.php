@@ -20,19 +20,6 @@ use Illuminate\Support\Facades\Log;
  * - semantic_scopes: Scope names, descriptions, concepts
  * - semantic_templates: Query template descriptions
  *
- * Usage:
- * ```php
- * $indexer = new SemanticIndexer($embedding, $vectorStore, $entityConfigs);
- *
- * // Index everything
- * $indexer->rebuildIndexes();
- *
- * // Index specific type
- * $indexer->indexEntities();
- * $indexer->indexScopes();
- * $indexer->indexTemplates($templates);
- * ```
- *
  * @package Condoedge\Ai\Services
  */
 class SemanticIndexer
@@ -79,7 +66,6 @@ class SemanticIndexer
         ];
 
         try {
-            // Index entities
             $results['entities'] = $this->indexEntities(rebuild: true);
         } catch (\Exception $e) {
             $results['errors'][] = "Entities indexing failed: {$e->getMessage()}";
@@ -87,7 +73,6 @@ class SemanticIndexer
         }
 
         try {
-            // Index scopes
             $results['scopes'] = $this->indexScopes(rebuild: true);
         } catch (\Exception $e) {
             $results['errors'][] = "Scopes indexing failed: {$e->getMessage()}";
@@ -96,7 +81,6 @@ class SemanticIndexer
 
         if ($templates) {
             try {
-                // Index templates
                 $results['templates'] = $this->indexTemplates($templates, rebuild: true);
             } catch (\Exception $e) {
                 $results['errors'][] = "Templates indexing failed: {$e->getMessage()}";
@@ -400,12 +384,10 @@ class SemanticIndexer
      */
     private function recreateCollection(string $collection): bool
     {
-        // Delete if exists
         if ($this->vectorStore->collectionExists($collection)) {
             $this->vectorStore->deleteCollection($collection);
         }
 
-        // Create new
         return $this->createCollection($collection);
     }
 

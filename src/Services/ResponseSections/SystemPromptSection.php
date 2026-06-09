@@ -9,11 +9,10 @@ use Condoedge\Ai\DTOs\PipelineContext;
 /**
  * SystemPromptSection
  *
- * Historically this set a hardcoded generic "data analyst" persona. The assistant's
- * identity now lives in IdentitySection (config('ai.identity'), system role), so by
- * default this section emits NOTHING — it only contributes if the host app explicitly
- * sets a custom system prompt via setPrompt(). This keeps a single source of truth for
- * the persona and avoids the old hardcoded, non-project-branded string.
+ * The assistant's identity lives in IdentitySection (config('ai.identity'), system role),
+ * so by default this section emits NOTHING — it only contributes when the host app
+ * explicitly sets a custom system prompt via setPrompt(). This keeps a single source of
+ * truth for the persona.
  *
  * Delivered via the system role so any custom prompt frames the turn.
  * Priority: 10 (after IdentitySection at 5).

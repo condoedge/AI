@@ -11,8 +11,7 @@ use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
  * Response Entity Enricher
  *
  * Enriches query result rows with entity action metadata AND ready-to-render per-row action
- * links, so the enrichment actually DRIVES the UI (it previously computed action metadata
- * that nothing consumed).
+ * links that drive the UI.
  *
  * For each row carrying an entity label, it:
  *   - flags whether the entity type has actions,
@@ -59,7 +58,7 @@ class ResponseEntityEnricher
                 'has_actions' => !empty($actions),
                 'available_actions' => $actions,
                 'entity_type' => $entityLabel,
-                // Per-row chips: drives the UI instead of being computed-and-discarded.
+                // Per-row chips that drive the UI.
                 'action_links' => $this->buildActionLinks($entityLabel, $result, $actions),
             ]);
         }

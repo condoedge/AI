@@ -47,7 +47,7 @@ class MessagesQueryActionLinksTest extends TestCase
         $registry = new AiActionRegistry();
         $registry->registerEntity('Person', new CapturingAction(
             'profile',
-            fn($input, $context) => 'profile-element:' . $context['entity_id'],
+            fn($input, $context) => 'profile-element:' . $context->entityId,
         ));
 
         $elements = $this->handler($registry)

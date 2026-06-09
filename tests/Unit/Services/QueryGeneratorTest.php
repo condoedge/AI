@@ -9,6 +9,7 @@ use Mockery;
 use Condoedge\Ai\Services\QueryGenerator;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Exceptions\QueryValidationException;
 
@@ -48,6 +49,24 @@ class QueryGeneratorTest extends TestCase
         parent::tearDown();
     }
 
+    /**
+     * Build a PipelineContext DTO from the legacy array-shaped context fields.
+     *
+     * QueryGenerator::generate() takes the canonical PipelineContext DTO, so the
+     * tests map the schema/entity/query fields onto the corresponding properties.
+     */
+    private function makeContext(array $fields = []): PipelineContext
+    {
+        $context = new PipelineContext();
+        $context->graphSchema = $fields['graph_schema'] ?? [];
+        $context->similarQueries = $fields['similar_queries'] ?? [];
+        $context->relevantEntities = $fields['relevant_entities'] ?? [];
+        $context->entityMetadata = $fields['entity_metadata'] ?? [];
+        $context->conversationContext = $fields['conversation_context'] ?? [];
+
+        return $context;
+    }
+
     // =========================================================================
     // Query Generation Tests
     // =========================================================================
@@ -55,18 +74,18 @@ class QueryGeneratorTest extends TestCase
     public function test_generate_simple_query(): void
     {
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => [
                 'labels' => ['Customer', 'Order'],
                 'relationships' => ['PURCHASED'],
             ],
             'similar_queries' => [],
             'relevant_entities' => [],
-        ];
+        ]);
 
         $this->mockLlm->shouldReceive('complete')
             ->once()
-            ->with(Mockery::any(), null, Mockery::any())
+            ->with(Mockery::any(), Mockery::type('string'), Mockery::any())
             ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
 
         // Disable explanation to avoid second complete() call
@@ -84,12 +103,12 @@ class QueryGeneratorTest extends TestCase
     public function test_generate_uses_template_for_list_all(): void
     {
         $question = "Show all customers";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => [
                 'labels' => ['Customer'],
                 'relationships' => [],
             ],
-        ];
+        ]);
 
         $result = $this->generator->generate($question, $context);
 
@@ -102,12 +121,12 @@ class QueryGeneratorTest extends TestCase
     public function test_generate_uses_template_for_count(): void
     {
         $question = "How many orders";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => [
                 'labels' => ['Order'],
                 'relationships' => [],
             ],
-        ];
+        ]);
 
         $result = $this->generator->generate($question, $context);
 
@@ -119,20 +138,20 @@ class QueryGeneratorTest extends TestCase
     public function test_generate_retries_on_validation_failure(): void
     {
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
-        ];
+        ]);
 
         // First attempt returns invalid query
         $this->mockLlm->shouldReceive('complete')
             ->once()
-            ->with(Mockery::any(), null, Mockery::any())
+            ->with(Mockery::any(), Mockery::type('string'), Mockery::any())
             ->andReturn('INVALID QUERY');
 
         // Second attempt returns valid query
         $this->mockLlm->shouldReceive('complete')
             ->once()
-            ->with(Mockery::any(), null, Mockery::any())
+            ->with(Mockery::any(), Mockery::type('string'), Mockery::any())
             ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
 
         $result = $this->generator->generate($question, $context, ['explain' => false]);
@@ -146,14 +165,14 @@ class QueryGeneratorTest extends TestCase
         $this->expectException(QueryGenerationException::class);
 
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
-        ];
+        ]);
 
         // All attempts return invalid queries
         $this->mockLlm->shouldReceive('complete')
             ->times(3)
-            ->with(Mockery::any(), null, Mockery::any())
+            ->with(Mockery::any(), Mockery::type('string'), Mockery::any())
             ->andReturn('INVALID QUERY');
 
         $this->generator->generate($question, $context, ['explain' => false]);
@@ -162,13 +181,13 @@ class QueryGeneratorTest extends TestCase
     public function test_generate_respects_temperature_option(): void
     {
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
-        ];
+        ]);
 
         $this->mockLlm->shouldReceive('complete')
             ->once()
-            ->with(Mockery::any(), null, Mockery::on(function ($options) {
+            ->with(Mockery::any(), Mockery::type('string'), Mockery::on(function ($options) {
                 return isset($options['temperature']) && $options['temperature'] === 0.5;
             }))
             ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
@@ -182,14 +201,14 @@ class QueryGeneratorTest extends TestCase
     public function test_generate_includes_explanation_when_requested(): void
     {
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
-        ];
+        ]);
 
         // First call generates the query
         $this->mockLlm->shouldReceive('complete')
             ->once()
-            ->with(Mockery::any(), null, Mockery::on(function ($options) {
+            ->with(Mockery::any(), Mockery::type('string'), Mockery::on(function ($options) {
                 return isset($options['max_tokens']) && $options['max_tokens'] === 500;
             }))
             ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
@@ -414,11 +433,11 @@ class QueryGeneratorTest extends TestCase
     public function test_generate_with_empty_context(): void
     {
         $question = "What are the customers?";
-        $context = [];
+        $context = $this->makeContext();
 
         $this->mockLlm->shouldReceive('complete')
             ->once()
-            ->with(Mockery::any(), null, Mockery::any())
+            ->with(Mockery::any(), Mockery::type('string'), Mockery::any())
             ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
 
         $result = $this->generator->generate($question, $context, ['explain' => false]);
@@ -430,13 +449,13 @@ class QueryGeneratorTest extends TestCase
     public function test_generate_extracts_cypher_from_markdown(): void
     {
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
-        ];
+        ]);
 
         $this->mockLlm->shouldReceive('complete')
             ->once()
-            ->with(Mockery::any(), null, Mockery::any())
+            ->with(Mockery::any(), Mockery::type('string'), Mockery::any())
             ->andReturn("```cypher\nMATCH (n:Customer) RETURN n LIMIT 100\n```");
 
         $result = $this->generator->generate($question, $context, ['explain' => false]);

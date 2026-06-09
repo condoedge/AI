@@ -88,14 +88,13 @@ class FileContextIntegrationTest extends TestCase
     {
         $section = new FileContextSection();
 
-        $context = [
-            'file_context' => [
-                'relevant_files' => [
-                    [
-                        'filename' => 'bariloche.txt',
-                        'relevance' => 0.85,
-                        'snippet' => 'Trip expenses...',
-                    ],
+        $context = new \Condoedge\Ai\DTOs\PipelineContext();
+        $context->fileContext = [
+            'relevant_files' => [
+                [
+                    'filename' => 'bariloche.txt',
+                    'relevance' => 0.85,
+                    'snippet' => 'Trip expenses...',
                 ],
             ],
         ];
@@ -206,10 +205,9 @@ class FileContextIntegrationTest extends TestCase
     {
         $section = new FileContextSection();
 
-        $context = [
-            'file_context' => [
-                'relevant_files' => [],
-            ],
+        $context = new \Condoedge\Ai\DTOs\PipelineContext();
+        $context->fileContext = [
+            'relevant_files' => [],
         ];
 
         $output = $section->format('test question', $context);
@@ -223,19 +221,18 @@ class FileContextIntegrationTest extends TestCase
     {
         $section = new FileContextSection();
 
-        $context = [
-            'file_context' => [
-                'relevant_files' => [
-                    [
-                        'filename' => 'document1.pdf',
-                        'relevance' => 0.95,
-                        'snippet' => 'First document content...',
-                    ],
-                    [
-                        'filename' => 'document2.txt',
-                        'relevance' => 0.80,
-                        'snippet' => 'Second document content...',
-                    ],
+        $context = new \Condoedge\Ai\DTOs\PipelineContext();
+        $context->fileContext = [
+            'relevant_files' => [
+                [
+                    'filename' => 'document1.pdf',
+                    'relevance' => 0.95,
+                    'snippet' => 'First document content...',
+                ],
+                [
+                    'filename' => 'document2.txt',
+                    'relevance' => 0.80,
+                    'snippet' => 'Second document content...',
                 ],
             ],
         ];
@@ -749,10 +746,9 @@ class FileContextIntegrationTest extends TestCase
         $results = $provider->searchRelevantFiles('What is in report.pdf?', $user);
 
         // Step 2: Build context for FileContextSection
-        $context = [
-            'file_context' => [
-                'relevant_files' => $results,
-            ],
+        $context = new \Condoedge\Ai\DTOs\PipelineContext();
+        $context->fileContext = [
+            'relevant_files' => $results,
         ];
 
         // Step 3: Format with FileContextSection

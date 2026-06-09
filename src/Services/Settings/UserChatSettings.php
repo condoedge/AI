@@ -48,7 +48,6 @@ class UserChatSettings extends AbstractChatSettings
         if (auth()->check()) {
             $userSetting = AiUserSetting::forUser(auth()->id());
 
-            // Read from direct model property if it exists and is not null
             if ($userSetting->getAttribute($key) !== null) {
                 return $userSetting->getAttribute($key);
             }

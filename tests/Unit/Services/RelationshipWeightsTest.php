@@ -60,11 +60,13 @@ class RelationshipWeightsTest extends TestCase
 
     private function createMockedContextRetriever(): ContextRetriever
     {
-        // Create with mocked dependencies (order: VectorStore, GraphStore, EmbeddingProvider)
+        // Create with mocked dependencies
+        // (order: VectorStore, GraphStore, EmbeddingProvider, AiLogger)
         return new ContextRetriever(
             Mockery::mock(\Condoedge\Ai\Contracts\VectorStoreInterface::class),
             Mockery::mock(\Condoedge\Ai\Contracts\GraphStoreInterface::class),
-            Mockery::mock(\Condoedge\Ai\Contracts\EmbeddingProviderInterface::class)
+            Mockery::mock(\Condoedge\Ai\Contracts\EmbeddingProviderInterface::class),
+            new \Condoedge\Ai\Support\AiLogger()
         );
     }
 }

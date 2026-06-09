@@ -195,8 +195,7 @@ class SpyAction implements AiActionInterface
     public function aliases(): array { return []; }
     public function description(): string { return ''; }
     public function inputSchema(): array { return ['x' => ['type' => 'int']]; }
-    public function presentation(): string { return $this->requiresApproval ? 'approval' : 'link'; }
-    public function requiresApproval(): bool { return $this->requiresApproval; }
+    public function mutates(): bool { return $this->requiresApproval; }
 
     public function authorize(mixed $user, array $input): bool
     {
@@ -204,9 +203,9 @@ class SpyAction implements AiActionInterface
         return $this->authorized;
     }
 
-    public function handle(array $input, array $context): mixed
+    public function handle(array $input, \Condoedge\Ai\Services\Actions\ActionContext $context): AiActionResult
     {
         $this->handled = true;
-        return 'done';
+        return AiActionResult::element('done', 'Done.');
     }
 }

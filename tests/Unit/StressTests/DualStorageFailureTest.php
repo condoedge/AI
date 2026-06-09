@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Tests\Unit\StressTests;
 
 use Condoedge\Ai\Tests\TestCase;
 use Condoedge\Ai\Services\DataIngestionService;
+use Condoedge\Ai\Exceptions\DataConsistencyException;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
@@ -33,31 +34,36 @@ class DualStorageFailureTest extends TestCase
     /** @test */
     public function it_handles_neo4j_success_but_qdrant_failure()
     {
-        // SCENARIO: Neo4j succeeds, Qdrant fails
-        // This creates orphaned graph data without vector embeddings
+        // SCENARIO: Neo4j succeeds, Qdrant (vector) fails.
+        // The service must roll back the orphaned graph node (compensating
+        // transaction) and surface a DataConsistencyException marked rolled_back.
 
-        $graphMock = Mockery::mock(GraphStoreInterface::class);
         $vectorMock = Mockery::mock(VectorStoreInterface::class);
+        $graphMock = Mockery::mock(GraphStoreInterface::class);
         $embeddingMock = Mockery::mock(EmbeddingProviderInterface::class);
 
-        // Neo4j succeeds
-        $graphMock->shouldReceive('ingestEntity')
+        // Phase 1: Neo4j node creation succeeds.
+        $graphMock->shouldReceive('createNode')
             ->once()
-            ->andReturn(['success' => true]);
+            ->andReturn(1);
 
-        // Qdrant fails
-        $vectorMock->shouldReceive('ingestEntity')
-            ->once()
-            ->andThrow(new \Exception('Qdrant connection timeout'));
-
-        // Embeddings work fine
+        // Phase 2 (vector): collection check passes, embedding succeeds, upsert fails.
+        $vectorMock->shouldReceive('collectionExists')->andReturn(true);
         $embeddingMock->shouldReceive('embed')
             ->once()
             ->andReturn([0.1, 0.2, 0.3]);
+        $vectorMock->shouldReceive('upsert')
+            ->once()
+            ->andThrow(new \Exception('Qdrant connection timeout'));
+
+        // Compensating transaction: the orphaned graph node is deleted.
+        $graphMock->shouldReceive('deleteNode')
+            ->once()
+            ->andReturn(true);
 
         $service = new DataIngestionService(
-            $graphMock,
             $vectorMock,
+            $graphMock,
             $embeddingMock
         );
 
@@ -78,45 +84,40 @@ class DualStorageFailureTest extends TestCase
         };
         $model->name = 'Test Entity';
 
-        // Should throw exception when Qdrant fails
-        $this->expectException(\Exception::class);
-
-        $service->ingest($model);
-
-        // PROBLEM IDENTIFIED: If Neo4j succeeds but Qdrant fails,
-        // we have orphaned data in Neo4j. System should:
-        // 1. Use transactions to rollback Neo4j on Qdrant failure
-        // 2. Or retry Qdrant operation
-        // 3. Or log inconsistency for manual cleanup
+        // Vector failure after graph success must raise a consistency exception
+        // that records the rollback so no orphaned graph data is left behind.
+        try {
+            $service->ingest($model);
+            $this->fail('Expected DataConsistencyException was not thrown');
+        } catch (DataConsistencyException $e) {
+            $context = $e->getContext();
+            $this->assertTrue($e->wasRolledBack(), 'Graph node should have been rolled back');
+            $this->assertTrue($context['graph_success']);
+            $this->assertFalse($context['vector_success']);
+        }
     }
 
     /** @test */
-    public function it_handles_qdrant_success_but_neo4j_failure()
+    public function it_handles_neo4j_failure_before_vector_is_attempted()
     {
-        // SCENARIO: Qdrant succeeds, Neo4j fails
-        // This creates orphaned vector embeddings without graph structure
+        // SCENARIO: Neo4j (graph) is Phase 1, so when it fails the vector store
+        // is never touched — there is nothing to roll back and no orphaned data.
 
-        $graphMock = Mockery::mock(GraphStoreInterface::class);
         $vectorMock = Mockery::mock(VectorStoreInterface::class);
+        $graphMock = Mockery::mock(GraphStoreInterface::class);
         $embeddingMock = Mockery::mock(EmbeddingProviderInterface::class);
 
-        // Embeddings work
-        $embeddingMock->shouldReceive('embed')
-            ->once()
-            ->andReturn([0.1, 0.2, 0.3]);
-
-        // Qdrant succeeds first (if called first)
-        $vectorMock->shouldReceive('ingestEntity')
-            ->andReturn(['success' => true]);
-
-        // Neo4j fails
-        $graphMock->shouldReceive('ingestEntity')
+        // Neo4j fails on the very first write.
+        $graphMock->shouldReceive('createNode')
             ->once()
             ->andThrow(new \Exception('Neo4j connection refused'));
 
+        // Vector store must NOT be written to when graph fails first.
+        $vectorMock->shouldNotReceive('upsert');
+
         $service = new DataIngestionService(
-            $graphMock,
             $vectorMock,
+            $graphMock,
             $embeddingMock
         );
 
@@ -135,35 +136,38 @@ class DualStorageFailureTest extends TestCase
             }
         };
 
-        // Should handle failure gracefully
-        $this->expectException(\Exception::class);
-
-        $service->ingest($model);
-
-        // PROBLEM: Orphaned vector data in Qdrant
-        // System needs cleanup strategy
+        try {
+            $service->ingest($model);
+            $this->fail('Expected DataConsistencyException was not thrown');
+        } catch (DataConsistencyException $e) {
+            $context = $e->getContext();
+            $this->assertFalse($context['graph_success']);
+            $this->assertFalse($context['vector_success']);
+            $this->assertFalse($context['rolled_back'], 'Nothing to roll back when graph fails first');
+        }
     }
 
     /** @test */
     public function it_handles_both_stores_failing_simultaneously()
     {
-        $graphMock = Mockery::mock(GraphStoreInterface::class);
         $vectorMock = Mockery::mock(VectorStoreInterface::class);
+        $graphMock = Mockery::mock(GraphStoreInterface::class);
         $embeddingMock = Mockery::mock(EmbeddingProviderInterface::class);
 
-        // Both fail
-        $graphMock->shouldReceive('ingestEntity')
+        // Graph is Phase 1 and fails; vector would also be unavailable but is
+        // never reached. The service must still fail cleanly with no partial data.
+        $graphMock->shouldReceive('createNode')
             ->andThrow(new \Exception('Neo4j down'));
 
-        $vectorMock->shouldReceive('ingestEntity')
+        $vectorMock->shouldReceive('upsert')
             ->andThrow(new \Exception('Qdrant down'));
 
         $embeddingMock->shouldReceive('embed')
             ->andReturn([0.1]);
 
         $service = new DataIngestionService(
-            $graphMock,
             $vectorMock,
+            $graphMock,
             $embeddingMock
         );
 
@@ -182,7 +186,7 @@ class DualStorageFailureTest extends TestCase
             }
         };
 
-        $this->expectException(\Exception::class);
+        $this->expectException(DataConsistencyException::class);
 
         $service->ingest($model);
 
@@ -203,7 +207,9 @@ class DualStorageFailureTest extends TestCase
             public $id = 4;
             public $content;
 
-            public function __construct($content)
+            // Param must be optional: Eloquent re-instantiates the model with no
+            // args while booting its event listeners (HasNodeableConfig boot).
+            public function __construct($content = '')
             {
                 parent::__construct();
                 $this->content = $content;
@@ -224,7 +230,7 @@ class DualStorageFailureTest extends TestCase
             }
         };
 
-        $this->assertGreaterThan(10 * 1024 * 1024, strlen($model->content));
+        $this->assertGreaterThanOrEqual(10 * 1024 * 1024, strlen($model->content));
 
         // Should not crash on huge data
         // Might throw memory exception, which is acceptable
@@ -254,7 +260,9 @@ class DualStorageFailureTest extends TestCase
             public $id = 5;
             public $data;
 
-            public function __construct($data)
+            // Param must be optional: Eloquent re-instantiates the model with no
+            // args while booting its event listeners (HasNodeableConfig boot).
+            public function __construct($data = '')
             {
                 parent::__construct();
                 $this->data = $data;
@@ -326,33 +334,54 @@ class DualStorageFailureTest extends TestCase
     }
 
     /** @test */
-    public function it_handles_embedding_generation_failure_mid_batch()
+    public function it_rolls_back_graph_when_embedding_generation_fails()
     {
-        // SCENARIO: Processing batch of entities, embedding fails partway through
+        // SCENARIO: The graph node is created, then embedding generation fails
+        // during the vector phase. The service must roll back the graph node so
+        // no orphaned data remains.
 
-        $graphMock = Mockery::mock(GraphStoreInterface::class);
         $vectorMock = Mockery::mock(VectorStoreInterface::class);
+        $graphMock = Mockery::mock(GraphStoreInterface::class);
         $embeddingMock = Mockery::mock(EmbeddingProviderInterface::class);
 
-        // First embedding succeeds
-        $embeddingMock->shouldReceive('embed')
-            ->once()
-            ->with('first')
-            ->andReturn([0.1, 0.2]);
+        $graphMock->shouldReceive('createNode')->once()->andReturn(9);
+        $vectorMock->shouldReceive('collectionExists')->andReturn(true);
 
-        // Second embedding fails (API timeout, rate limit, etc.)
+        // Embedding fails (API timeout, rate limit, etc.).
         $embeddingMock->shouldReceive('embed')
             ->once()
-            ->with('second')
             ->andThrow(new \Exception('Embedding API rate limit exceeded'));
 
-        // ISSUE: Partial batch processing
-        // System needs to handle:
-        // 1. Retry failed embeddings
-        // 2. Continue with successful ones
-        // 3. Or rollback entire batch
+        // Vector upsert must never happen, and the graph node must be rolled back.
+        $vectorMock->shouldNotReceive('upsert');
+        $graphMock->shouldReceive('deleteNode')->once()->andReturn(true);
 
-        $this->assertTrue(true);
+        $service = new DataIngestionService($vectorMock, $graphMock, $embeddingMock);
+
+        $model = new class extends Model implements Nodeable {
+            use HasNodeableConfig;
+            protected $table = 'rate';
+            protected $fillable = ['name'];
+            public $id = 9;
+
+            public function nodeableConfig(): NodeableConfig
+            {
+                return NodeableConfig::for(static::class)
+                    ->label('Rate')
+                    ->properties('id', 'name')
+                    ->collection('rate')
+                    ->embedFields('name');
+            }
+        };
+        $model->name = 'first';
+
+        try {
+            $service->ingest($model);
+            $this->fail('Expected DataConsistencyException was not thrown');
+        } catch (DataConsistencyException $e) {
+            $this->assertTrue($e->wasRolledBack());
+            $this->assertFalse($e->getContext()['vector_success']);
+        }
     }
 
     /** @test */

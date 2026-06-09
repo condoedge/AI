@@ -66,7 +66,6 @@ class IngestEntitiesCommand extends Command
      */
     public function handle(): int
     {
-        // Handle --docs flag for physical file ingestion
         if ($this->option('docs')) {
             return $this->handleDocsIngestion();
         }
@@ -74,7 +73,6 @@ class IngestEntitiesCommand extends Command
         $this->info('Bulk Entity Ingestion');
         $this->newLine();
 
-        // Get models to ingest
         $models = $this->option('model')
             ? [$this->option('model')]
             : $this->findNodeableModels();
@@ -88,7 +86,6 @@ class IngestEntitiesCommand extends Command
         $this->info('Found ' . count($models) . ' Nodeable model(s)');
         $this->newLine();
 
-        // Fresh mode - clear stores
         if ($this->option('fresh') && !$this->option('dry-run')) {
             if ($this->confirm('⚠️  This will DELETE all data from Neo4j and Qdrant. Continue?', false)) {
                 $this->clearStores($models);
@@ -108,7 +105,6 @@ class IngestEntitiesCommand extends Command
         $fromModel = $this->option('from');
         $skipping = $fromModel !== null;
 
-        // Process each model
         foreach ($models as $modelClass) {
             if ($skipping) {
                 $shortName = class_basename($modelClass);
@@ -134,7 +130,6 @@ class IngestEntitiesCommand extends Command
         $this->newLine();
         $this->newLine();
 
-        // Summary
         if ($this->option('dry-run')) {
             $this->info("✓ DRY RUN - Would ingest {$totalIngested} entities");
         } else {
@@ -149,7 +144,6 @@ class IngestEntitiesCommand extends Command
             }
         }
 
-        // Show errors
         if (!empty($errors)) {
             $this->newLine();
             $this->error('Errors encountered:');
@@ -186,13 +180,11 @@ class IngestEntitiesCommand extends Command
             return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => ["Class not found"]];
         }
 
-        // Check if model implements Nodeable
         if (!in_array(Nodeable::class, class_implements($modelClass) ?: [])) {
             $this->error("  ✗ Model does not implement Nodeable interface");
             return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => ["Not a Nodeable model"]];
         }
 
-        // Get total count
         try {
             $total = $modelClass::count();
         } catch (\Throwable $e) {
@@ -212,8 +204,7 @@ class IngestEntitiesCommand extends Command
             return ['ingested' => $total, 'partial' => 0, 'failed' => 0, 'errors' => []];
         }
 
-        // Process in chunks with progress bar
-        // Note: Collections are automatically created by DataIngestionService on first use
+        // Collections are created automatically by DataIngestionService on first use.
         $progressBar = $this->output->createProgressBar($total);
         $progressBar->setFormat('  [%bar%] %current%/%max% (%percent:3s%%) %message%');
         $progressBar->setMessage('Ingesting...');
@@ -226,7 +217,6 @@ class IngestEntitiesCommand extends Command
 
         $modelClass::chunk($chunkSize, function ($entities) use (&$ingested, &$partial, &$failed, &$errors, $progressBar) {
             try {
-                // Use batch ingestion for efficiency
                 $results = $this->ingestionService->ingestBatch($entities->all());
 
                 $ingested += $results['succeeded'];
@@ -287,17 +277,15 @@ class IngestEntitiesCommand extends Command
     {
         $this->warn('Clearing stores...');
 
-        // Clear Neo4j - delete all nodes and relationships
         $this->line('  Clearing Neo4j...');
         try {
-            // Delete all nodes (this also deletes relationships)
+            // DETACH DELETE removes each node together with its relationships.
             $this->graphStore->query('MATCH (n) DETACH DELETE n');
             $this->line('    <fg=green>✓</> Neo4j cleared');
         } catch (\Throwable $e) {
             $this->error("    ✗ Failed to clear Neo4j: {$e->getMessage()}");
         }
 
-        // Clear Qdrant collections for each model
         $this->line('  Clearing Qdrant collections...');
         try {
             $collections = $this->vectorStore->listCollections();

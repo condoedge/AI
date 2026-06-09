@@ -67,7 +67,6 @@ class AiSecurityService
             return $none;
         }
 
-        // Get teams where user has permission
         $teamIds = $this->authAdapter->getTeamsWithPermission($user, $entity);
 
         if (empty($teamIds)) {
@@ -77,7 +76,6 @@ class AiSecurityService
             );
         }
 
-        // Resolve team path to filter
         $resolved = $this->pathResolver->resolve($entity, $alias, $teamIds);
 
         if ($resolved === null) {

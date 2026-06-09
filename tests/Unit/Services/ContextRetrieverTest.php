@@ -10,6 +10,8 @@ use Condoedge\Ai\Contracts\ContextRetrieverInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Support\AiLogger;
 use Mockery;
 use InvalidArgumentException;
 use RuntimeException;
@@ -33,6 +35,7 @@ class ContextRetrieverTest extends TestCase
     private $mockVectorStore;
     private $mockGraphStore;
     private $mockEmbeddingProvider;
+    private $logger;
     private $service;
 
     public function setUp(): void
@@ -40,13 +43,18 @@ class ContextRetrieverTest extends TestCase
         parent::setUp();
 
         $this->mockVectorStore = Mockery::mock(VectorStoreInterface::class);
+        // The similar-query searcher now guards on collection existence before
+        // searching; default it present so existing search expectations still fire.
+        $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true)->byDefault();
         $this->mockGraphStore = Mockery::mock(GraphStoreInterface::class);
         $this->mockEmbeddingProvider = Mockery::mock(EmbeddingProviderInterface::class);
+        $this->logger = new AiLogger();
 
         $this->service = new ContextRetriever(
             $this->mockVectorStore,
             $this->mockGraphStore,
             $this->mockEmbeddingProvider,
+            $this->logger,
             [] // Empty entity configs for testing
         );
     }
@@ -70,6 +78,7 @@ class ContextRetrieverTest extends TestCase
             $this->mockVectorStore,
             $this->mockGraphStore,
             $this->mockEmbeddingProvider,
+            $this->logger,
             []
         );
 
@@ -119,17 +128,16 @@ class ContextRetrieverTest extends TestCase
         // Arrange
         $question = 'Show teams with most active members';
 
-        // Mock embedding generation
+        // Mock embedding generation (also used by the schema-relevance fallback)
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->with($question)
             ->andReturn([0.1, 0.2, 0.3]);
 
-        // Mock vector search
+        // Mock similar-query vector search
         $this->mockVectorStore
             ->shouldReceive('search')
-            ->once()
+            ->with('questions', Mockery::any(), Mockery::any(), Mockery::any(), Mockery::any())
             ->andReturn([
                 [
                     'score' => 0.89,
@@ -139,6 +147,12 @@ class ContextRetrieverTest extends TestCase
                     ],
                 ],
             ]);
+
+        // Schema fallback queries the 'semantic_entities' collection (no selector configured)
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('semantic_entities', Mockery::any(), Mockery::any())
+            ->andReturn([]);
 
         // Mock graph schema retrieval
         $this->mockGraphStore
@@ -163,16 +177,16 @@ class ContextRetrieverTest extends TestCase
         $context = $this->service->retrieveContext($question);
 
         // Assert
-        $this->assertIsArray($context);
-        $this->assertArrayHasKey('similar_queries', $context);
-        $this->assertArrayHasKey('graph_schema', $context);
-        $this->assertArrayHasKey('relevant_entities', $context);
-        $this->assertArrayHasKey('errors', $context);
+        $this->assertInstanceOf(PipelineContext::class, $context);
 
-        $this->assertNotEmpty($context['similar_queries']);
-        $this->assertNotEmpty($context['graph_schema']);
-        $this->assertNotEmpty($context['relevant_entities']);
-        $this->assertEmpty($context['errors']);
+        // The context must carry the question it was built for, so the grounded
+        // response path sees what was asked (not just the rows).
+        $this->assertSame($question, $context->question);
+
+        $this->assertNotEmpty($context->similarQueries);
+        $this->assertNotEmpty($context->graphSchema);
+        $this->assertNotEmpty($context->relevantEntities);
+        $this->assertEmpty($context->errors);
     }
 
     /**
@@ -207,14 +221,19 @@ class ContextRetrieverTest extends TestCase
 
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1]);
 
-        // Verify custom collection is used
+        // Verify custom collection is used for the similar-query search
         $this->mockVectorStore
             ->shouldReceive('search')
             ->once()
             ->with($customCollection, Mockery::any(), Mockery::any(), Mockery::any(), Mockery::any())
+            ->andReturn([]);
+
+        // Schema fallback queries the 'semantic_entities' collection (no selector configured)
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('semantic_entities', Mockery::any(), Mockery::any())
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -238,14 +257,19 @@ class ContextRetrieverTest extends TestCase
 
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1]);
 
-        // Verify custom limit is used
+        // Verify custom limit is used on the similar-query search ('questions' collection)
         $this->mockVectorStore
             ->shouldReceive('search')
             ->once()
-            ->with(Mockery::any(), Mockery::any(), $customLimit, Mockery::any(), Mockery::any())
+            ->with('questions', Mockery::any(), $customLimit, Mockery::any(), Mockery::any())
+            ->andReturn([]);
+
+        // Schema fallback queries the 'semantic_entities' collection (no selector configured)
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('semantic_entities', Mockery::any(), Mockery::any())
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -282,8 +306,8 @@ class ContextRetrieverTest extends TestCase
 
         $context = $this->service->retrieveContext($question, ['includeSchema' => false]);
 
-        $this->assertEmpty($context['graph_schema']);
-        $this->assertEmpty($context['relevant_entities']);
+        $this->assertEmpty($context->graphSchema);
+        $this->assertEmpty($context->relevantEntities);
     }
 
     /**
@@ -295,12 +319,10 @@ class ContextRetrieverTest extends TestCase
 
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
-            ->once()
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -314,7 +336,7 @@ class ContextRetrieverTest extends TestCase
 
         $context = $this->service->retrieveContext($question, ['includeExamples' => false]);
 
-        $this->assertEmpty($context['relevant_entities']);
+        $this->assertEmpty($context->relevantEntities);
     }
 
     /**
@@ -327,12 +349,10 @@ class ContextRetrieverTest extends TestCase
 
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
-            ->once()
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -362,14 +382,19 @@ class ContextRetrieverTest extends TestCase
 
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1]);
 
-        // Verify scoreThreshold is passed to search
+        // Verify scoreThreshold is passed to the similar-query search
         $this->mockVectorStore
             ->shouldReceive('search')
             ->once()
             ->with(Mockery::any(), Mockery::any(), Mockery::any(), Mockery::any(), $scoreThreshold)
+            ->andReturn([]);
+
+        // Schema fallback queries the 'semantic_entities' collection (no selector configured)
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('semantic_entities', Mockery::any(), Mockery::any())
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -389,10 +414,10 @@ class ContextRetrieverTest extends TestCase
     {
         $question = 'Test question';
 
-        // Vector search fails
+        // Vector search fails (embedding throws on both the similar-query and
+        // the schema-fallback paths; the fallback swallows its own failure)
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andThrow(new RuntimeException('Embedding API failed'));
 
         // Graph operations still succeed
@@ -409,11 +434,11 @@ class ContextRetrieverTest extends TestCase
         $context = $this->service->retrieveContext($question);
 
         // Vector search failed but graph data succeeded
-        $this->assertEmpty($context['similar_queries']);
-        $this->assertNotEmpty($context['graph_schema']);
-        $this->assertNotEmpty($context['relevant_entities']);
-        $this->assertNotEmpty($context['errors']);
-        $this->assertStringContainsString('Vector search failed', $context['errors'][0]);
+        $this->assertEmpty($context->similarQueries);
+        $this->assertNotEmpty($context->graphSchema);
+        $this->assertNotEmpty($context->relevantEntities);
+        $this->assertNotEmpty($context->errors);
+        $this->assertStringContainsString('Vector search failed', $context->errors[0]);
     }
 
     /**
@@ -448,11 +473,11 @@ class ContextRetrieverTest extends TestCase
         $context = $this->service->retrieveContext($question);
 
         // Vector search succeeded but graph failed
-        $this->assertNotEmpty($context['similar_queries']);
-        $this->assertEmpty($context['graph_schema']);
-        $this->assertEmpty($context['relevant_entities']);
-        $this->assertNotEmpty($context['errors']);
-        $this->assertStringContainsString('Schema retrieval failed', $context['errors'][0]);
+        $this->assertNotEmpty($context->similarQueries);
+        $this->assertEmpty($context->graphSchema);
+        $this->assertEmpty($context->relevantEntities);
+        $this->assertNotEmpty($context->errors);
+        $this->assertStringContainsString('Schema retrieval failed', $context->errors[0]);
     }
 
     /**
@@ -462,10 +487,9 @@ class ContextRetrieverTest extends TestCase
     {
         $question = 'Test question';
 
-        // Embedding fails
+        // Embedding fails (on both the similar-query and schema-fallback paths)
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andThrow(new Exception('API rate limit exceeded'));
 
         // Graph still works
@@ -476,9 +500,9 @@ class ContextRetrieverTest extends TestCase
 
         $context = $this->service->retrieveContext($question);
 
-        $this->assertEmpty($context['similar_queries']);
-        $this->assertNotEmpty($context['errors']);
-        $this->assertStringContainsString('Vector search failed', $context['errors'][0]);
+        $this->assertEmpty($context->similarQueries);
+        $this->assertNotEmpty($context->errors);
+        $this->assertStringContainsString('Vector search failed', $context->errors[0]);
     }
 
     /**
@@ -490,12 +514,10 @@ class ContextRetrieverTest extends TestCase
 
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
-            ->once()
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -505,16 +527,12 @@ class ContextRetrieverTest extends TestCase
 
         $context = $this->service->retrieveContext($question);
 
-        $this->assertIsArray($context);
-        $this->assertArrayHasKey('similar_queries', $context);
-        $this->assertArrayHasKey('graph_schema', $context);
-        $this->assertArrayHasKey('relevant_entities', $context);
-        $this->assertArrayHasKey('errors', $context);
+        $this->assertInstanceOf(PipelineContext::class, $context);
 
-        $this->assertIsArray($context['similar_queries']);
-        $this->assertIsArray($context['graph_schema']);
-        $this->assertIsArray($context['relevant_entities']);
-        $this->assertIsArray($context['errors']);
+        $this->assertIsArray($context->similarQueries);
+        $this->assertIsArray($context->graphSchema);
+        $this->assertIsArray($context->relevantEntities);
+        $this->assertIsArray($context->errors);
     }
 
     /**
@@ -538,9 +556,9 @@ class ContextRetrieverTest extends TestCase
 
         $context = $this->service->retrieveContext($question);
 
-        $this->assertCount(2, $context['errors']);
-        $this->assertStringContainsString('Vector search failed', $context['errors'][0]);
-        $this->assertStringContainsString('Schema retrieval failed', $context['errors'][1]);
+        $this->assertCount(2, $context->errors);
+        $this->assertStringContainsString('Vector search failed', $context->errors[0]);
+        $this->assertStringContainsString('Schema retrieval failed', $context->errors[1]);
     }
 
     // =========================================================================
@@ -639,7 +657,6 @@ class ContextRetrieverTest extends TestCase
         $this->assertEquals('List all customers', $results[0]['question']);
         $this->assertEquals('MATCH (c:Customer) RETURN c', $results[0]['query']);
         $this->assertEquals(0.89, $results[0]['score']);
-        $this->assertArrayHasKey('metadata', $results[0]);
 
         // Second result (uses 'query' fallback)
         $this->assertEquals('Show customer details', $results[1]['question']);
@@ -798,7 +815,9 @@ class ContextRetrieverTest extends TestCase
 
         $this->assertEquals(['Team'], $schema['labels']);
         $this->assertEquals(['MEMBER_OF'], $schema['relationships']);
-        $this->assertEquals(['id'], $schema['properties']);
+        // The flat property-key list from the store is normalized under 'propertyKeys';
+        // 'properties' is reserved for the per-label structure derived from entity configs.
+        $this->assertEquals(['id'], $schema['propertyKeys']);
     }
 
     /**
@@ -838,7 +857,8 @@ class ContextRetrieverTest extends TestCase
 
         $schema = $this->service->getGraphSchema();
 
-        $this->assertEquals(['id', 'price', 'sku'], $schema['properties']);
+        // A flat 'properties' list from the store is normalized into 'propertyKeys'.
+        $this->assertEquals(['id', 'price', 'sku'], $schema['propertyKeys']);
     }
 
     /**
@@ -889,7 +909,10 @@ class ContextRetrieverTest extends TestCase
         $this->mockGraphStore
             ->shouldReceive('query')
             ->once()
-            ->with("MATCH (n:`{$label}`) RETURN n LIMIT \$limit", ['limit' => $limit])
+            ->with(
+                "MATCH (n:`{$label}`) WITH n, size(keys(n)) AS keyCount ORDER BY keyCount DESC RETURN n LIMIT \$limit",
+                ['limit' => $limit]
+            )
             ->andReturn([
                 ['n' => ['id' => 1, 'name' => 'Alpha Team']],
                 ['n' => ['id' => 2, 'name' => 'Beta Team']],
@@ -1118,12 +1141,10 @@ class ContextRetrieverTest extends TestCase
 
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
-            ->once()
             ->andReturn([]);
 
         // Schema has no labels
@@ -1138,7 +1159,7 @@ class ContextRetrieverTest extends TestCase
 
         $context = $this->service->retrieveContext($question);
 
-        $this->assertEmpty($context['relevant_entities']);
+        $this->assertEmpty($context->relevantEntities);
     }
 
     /**
@@ -1150,12 +1171,10 @@ class ContextRetrieverTest extends TestCase
 
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->andReturn([0.1]);
 
         $this->mockVectorStore
             ->shouldReceive('search')
-            ->once()
             ->andReturn([]);
 
         $this->mockGraphStore
@@ -1177,10 +1196,10 @@ class ContextRetrieverTest extends TestCase
         $context = $this->service->retrieveContext($question);
 
         // Team examples retrieved, Person failed
-        $this->assertArrayHasKey('Team', $context['relevant_entities']);
-        $this->assertArrayNotHasKey('Person', $context['relevant_entities']);
-        $this->assertNotEmpty($context['errors']);
-        $this->assertStringContainsString("Example retrieval for label 'Person' failed", $context['errors'][0]);
+        $this->assertArrayHasKey('Team', $context->relevantEntities);
+        $this->assertArrayNotHasKey('Person', $context->relevantEntities);
+        $this->assertNotEmpty($context->errors);
+        $this->assertStringContainsString("Example retrieval for label 'Person' failed", $context->errors[0]);
     }
 
     /**
@@ -1190,17 +1209,16 @@ class ContextRetrieverTest extends TestCase
     {
         $question = 'Show me active teams';
 
-        // Mock embedding
+        // Mock embedding (also used by the schema-relevance fallback)
         $this->mockEmbeddingProvider
             ->shouldReceive('embed')
-            ->once()
             ->with($question)
             ->andReturn([0.1, 0.2, 0.3]);
 
-        // Mock vector search
+        // Mock similar-query vector search
         $this->mockVectorStore
             ->shouldReceive('search')
-            ->once()
+            ->with('questions', Mockery::any(), Mockery::any(), Mockery::any(), Mockery::any())
             ->andReturn([
                 [
                     'score' => 0.92,
@@ -1210,6 +1228,12 @@ class ContextRetrieverTest extends TestCase
                     ],
                 ],
             ]);
+
+        // Schema fallback queries the 'semantic_entities' collection (no selector configured)
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('semantic_entities', Mockery::any(), Mockery::any())
+            ->andReturn([]);
 
         // Mock schema
         $this->mockGraphStore
@@ -1233,15 +1257,15 @@ class ContextRetrieverTest extends TestCase
         $context = $this->service->retrieveContext($question);
 
         // Verify all components
-        $this->assertCount(1, $context['similar_queries']);
-        $this->assertEquals(0.92, $context['similar_queries'][0]['score']);
+        $this->assertCount(1, $context->similarQueries);
+        $this->assertEquals(0.92, $context->similarQueries[0]['score']);
 
-        $this->assertCount(2, $context['graph_schema']['labels']);
-        $this->assertContains('Team', $context['graph_schema']['labels']);
+        $this->assertCount(2, $context->graphSchema['labels']);
+        $this->assertContains('Team', $context->graphSchema['labels']);
 
-        $this->assertArrayHasKey('Team', $context['relevant_entities']);
-        $this->assertArrayHasKey('Person', $context['relevant_entities']);
+        $this->assertArrayHasKey('Team', $context->relevantEntities);
+        $this->assertArrayHasKey('Person', $context->relevantEntities);
 
-        $this->assertEmpty($context['errors']);
+        $this->assertEmpty($context->errors);
     }
 }

@@ -62,7 +62,6 @@ class RemoveEntityJob implements ShouldQueue
     public function handle(): void
     {
         try {
-            // Remove the entity from Neo4j and Qdrant
             AI::remove($this->entity);
 
             Log::info('AI entity removed successfully', [

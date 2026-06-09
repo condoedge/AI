@@ -437,8 +437,12 @@ class CypherScopeAdapter
     /**
      * Extract filter information from calls (for simple property filters)
      *
+     * Produces a simple {column => value} map matching the record shape the
+     * CypherQueryBuilderSpy actually emits (column/operator/value keys), which
+     * is the format the DetectedScopesSection consumer expects.
+     *
      * @param array $calls Recorded calls
-     * @return array Filter data
+     * @return array Filter data keyed by property/column name
      */
     private function extractFilterFromCalls(array $calls): array
     {
@@ -446,63 +450,36 @@ class CypherScopeAdapter
 
         foreach ($calls as $call) {
             $method = $call['method'] ?? '';
-            $args = $call['arguments'] ?? [];
+            $type = $call['type'] ?? '';
+            $column = $call['column'] ?? '';
+
+            if ($column === '') {
+                continue;
+            }
 
             switch ($method) {
                 case 'where':
                 case 'orWhere':
-                    if (($call['type'] ?? '') === 'basic' && isset($args[0], $args[2])) {
-                        $filters[] = [
-                            'property' => $args[0],
-                            'operator' => $args[1] ?? '=',
-                            'value' => $args[2],
-                            'boolean' => $method === 'orWhere' ? 'or' : 'and',
-                        ];
+                    // Only capture simple equality property filters; skip nested
+                    // closures and other complex where types.
+                    if ($type === 'basic') {
+                        $filters[$column] = $call['value'] ?? null;
                     }
                     break;
 
                 case 'whereIn':
-                    if (isset($args[0], $args[1]) && is_array($args[1])) {
-                        $filters[] = [
-                            'property' => $args[0],
-                            'operator' => 'IN',
-                            'value' => $args[1],
-                            'boolean' => 'and',
-                        ];
-                    }
+                    $filters[$column] = $call['values'] ?? [];
                     break;
 
                 case 'whereBetween':
-                    if (isset($args[0], $args[1]) && is_array($args[1]) && count($args[1]) === 2) {
-                        $filters[] = [
-                            'property' => $args[0],
-                            'operator' => 'BETWEEN',
-                            'value' => $args[1],
-                            'boolean' => 'and',
-                        ];
+                    $values = $call['values'] ?? [];
+                    if (is_array($values) && count($values) === 2) {
+                        $filters[$column] = $values;
                     }
                     break;
 
                 case 'whereNull':
-                    if (isset($args[0])) {
-                        $filters[] = [
-                            'property' => $args[0],
-                            'operator' => 'IS NULL',
-                            'value' => null,
-                            'boolean' => 'and',
-                        ];
-                    }
-                    break;
-
-                case 'whereNotNull':
-                    if (isset($args[0])) {
-                        $filters[] = [
-                            'property' => $args[0],
-                            'operator' => 'IS NOT NULL',
-                            'value' => null,
-                            'boolean' => 'and',
-                        ];
-                    }
+                    $filters[$column] = null;
                     break;
             }
         }

@@ -372,11 +372,15 @@ php artisan ai:index-semantic --rebuild
 ### 5. Test Scope Detection
 
 ```php
-use Condoedge\Ai\Services\SemanticMatcher;
+use Condoedge\Ai\Services\ScopeSemanticMatcher;
 
-$matcher = app(SemanticMatcher::class);
-$scopes = $matcher->detectScopes("Show me VIP customers who are active");
-// Returns detected scopes with confidence scores
+$matcher = app(ScopeSemanticMatcher::class);
+$scopes = $matcher->findMatchingScopes(
+    'Show me VIP customers who are active',
+    config('ai.entities')
+);
+// Returns matched scopes keyed by scope, each with a 'match_score',
+// 'entity', 'scope', 'match_type' and 'matched_example'.
 ```
 
 ---

@@ -75,8 +75,8 @@ abstract class BasePromptSection implements PromptSectionInterface
     /**
      * Wrap untrusted content (the user's question, retrieved file/document text)
      * in tamper-evident delimiters so the model treats it as data to analyze
-     * rather than instructions to follow. Any stray closing tag inside the
-     * content is neutralized so it cannot break out of the wrapper.
+     * rather than instructions to follow. Any stray opening OR closing tag inside
+     * the content is neutralized so it cannot break out of (or forge) the wrapper.
      *
      * @param string $text The untrusted content
      * @param string $tag  The delimiter tag, e.g. 'user_question' or 'retrieved_document'
@@ -89,8 +89,20 @@ abstract class BasePromptSection implements PromptSectionInterface
             $attrString .= ' ' . $key . '=' . $value;
         }
 
-        $safe = str_replace('</' . $tag . '>', '<\\/' . $tag . '>', $text);
+        return "<{$tag}{$attrString}>\n" . $this->neutralizeDelimiterTags($text, $tag) . "\n</{$tag}>";
+    }
 
-        return "<{$tag}{$attrString}>\n{$safe}\n</{$tag}>";
+    /**
+     * Neutralize any forged delimiter tag (open or close) for $tag inside untrusted
+     * content. Matching is case-insensitive and tolerant of whitespace inside the
+     * tag (e.g. `</user_question >`, `< USER_QUESTION>`) so a crafted variant cannot
+     * break out of the spotlight wrapper. The leading `<` is escaped to `<\` so the
+     * model still sees the text but it can no longer act as a delimiter.
+     */
+    private function neutralizeDelimiterTags(string $text, string $tag): string
+    {
+        $pattern = '/<(\s*\/?\s*' . preg_quote($tag, '/') . '\s*)>/i';
+
+        return preg_replace($pattern, '<\\\\$1>', $text);
     }
 }

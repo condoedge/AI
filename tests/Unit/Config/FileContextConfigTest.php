@@ -82,9 +82,23 @@ class FileContextConfigTest extends TestCase
         $this->assertEquals(['md', 'mdx', 'txt', 'rst'], $config['supported_extensions']);
         $this->assertEquals('documentation_chunks', $config['physical_collection']);
         $this->assertEquals(5, $config['max_references']);
-        $this->assertEquals(0.7, $config['min_relevance_score']);
+        $this->assertEquals(0.4, $config['min_relevance_score']);
         $this->assertTrue($config['include_snippets']);
-        $this->assertEquals(200, $config['snippet_length']);
+        // Snippet budget was raised so the model can quote the actual clause; the
+        // multi-chunk stitch count is also configurable.
+        $this->assertEquals(1200, $config['snippet_length']);
+        $this->assertEquals(3, $config['snippet_chunks']);
         $this->assertNull($config['access_resolver']);
+    }
+
+    /** @test */
+    public function it_has_enumeration_config_defaults(): void
+    {
+        $enumeration = config('ai.file_context.enumeration');
+
+        $this->assertIsArray($enumeration);
+        $this->assertTrue($enumeration['enabled']);
+        $this->assertEquals(['file_listing'], $enumeration['intents']);
+        $this->assertEquals(50, $enumeration['max_files']);
     }
 }

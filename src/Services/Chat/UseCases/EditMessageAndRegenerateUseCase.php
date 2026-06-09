@@ -10,12 +10,9 @@ use Condoedge\Ai\Services\Chat\Results\ChatTurnResult;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Edit an existing user message and regenerate the answer in one transaction.
- *
- * Collapses EditMessageModal's two near-duplicate methods (updateMessage /
- * updateMessageAndGetResponse, EditMessageModal.php:137-167 / :173-...) and their double
- * truncate-then-regenerate into a single atomic flow: update the content, then delegate to
- * RegenerateAnswerUseCase (which owns trailing-message truncation + the shared turn flow).
+ * Edit an existing user message and regenerate the answer in one transaction:
+ * update the content, then delegate to RegenerateAnswerUseCase (which owns
+ * trailing-message truncation + the shared turn flow).
  *
  * Concrete, container-autowired (not bound, not interfaced) per the Sisc UseCase convention.
  */

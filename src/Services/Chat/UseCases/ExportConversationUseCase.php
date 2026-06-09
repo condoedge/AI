@@ -13,12 +13,10 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
  * Use case: export a conversation in a given format.
  *
  * Concrete, container-autowired (never bound, never interfaced) per the clean-architecture
- * design. Read-only: no DB::transaction. Owns the ownership/authorization gate (step 0)
- * that the controller previously inlined as `where('user_id', auth()->id())`, but uses the
- * passed-in $user instead of the auth() global. Resolves the exporter through the factory
- * (which uses the container, so exporters get dependency injection) and assembles the
- * content + mime + filename into an immutable ExportResult, fixing the controller's
- * hardcoded "text/markdown" Content-Type.
+ * design. Read-only: no DB::transaction. Owns the ownership/authorization gate (step 0),
+ * scoping by the passed-in $user rather than the auth() global. Resolves the exporter
+ * through the factory (which uses the container, so exporters get dependency injection) and
+ * assembles the content + mime + filename into an immutable ExportResult.
  */
 class ExportConversationUseCase
 {
@@ -37,8 +35,7 @@ class ExportConversationUseCase
      */
     public function execute(int $conversationId, string $format, $user): ExportResult
     {
-        // Step 0: authorize — scope by ownership exactly like the controller's
-        // `where('user_id', auth()->id())`, but against the passed $user.
+        // Step 0: authorize — scope by ownership against the passed $user.
         $conversation = AiConversation::query()
             ->where('user_id', $user->id ?? null)
             ->find($conversationId);

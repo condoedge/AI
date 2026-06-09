@@ -1,5 +1,4 @@
 <?php
-// src/Kompo/Modals/ChatSettingsModal.php
 
 namespace Condoedge\Ai\Kompo\Modals;
 
@@ -28,7 +27,6 @@ class ChatSettingsModal extends Modal
     public function created()
     {
         if (!$this->model->id) {
-            // On boot we automatically set the columns with their default values based on config
             $model = auth()->check()
                 ? AiUserSetting::forUser(auth()->id())
                 : new AiUserSetting();
@@ -55,13 +53,11 @@ class ChatSettingsModal extends Modal
         $themeAllowUserOverrides = property_exists($factory, 'allowUserOverrides') ? $factory->allowUserOverrides : false;
 
         return _Rows(
-            // Theme section
             !$themeAllowUserOverrides ? null : _Rows(
                 $this->sectionHeader(__('ai.settings.theme'), __('ai.settings.theme-description')),
                 $this->themeSelector(),
             ),
-            
-            // Appearance section
+
             $this->sectionHeader(__('ai.settings.appearance'), __('ai.settings.appearance-description')),
             _Rows(
                 $this->toggleSetting('show_avatars', __('ai.settings.show-avatars'), __('ai.settings.show-avatars-desc')),
@@ -69,7 +65,6 @@ class ChatSettingsModal extends Modal
                 $this->toggleSetting('show_metrics', __('ai.settings.show-metrics'), __('ai.settings.show-metrics-desc')),
             )->class('space-y-3 mb-6'),
 
-            // Features section
             $this->sectionHeader(__('ai.settings.features'), __('ai.settings.features-description')),
             _Rows(
                 $this->toggleSetting('show_suggestions', __('ai.settings.follow-up-suggestions'), __('ai.settings.follow-up-suggestions-desc')),
@@ -103,7 +98,6 @@ class ChatSettingsModal extends Modal
             //     ->default('dots')
             //     ->class('w-full border border-gray-200 rounded-xl p-3 transition-all mb-6'),
 
-            // Response style section
             $this->sectionHeader(__('ai.settings.response-style'), __('ai.settings.response-style-description')),
             _Select()->name('response_style')
                 ->options([

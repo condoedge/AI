@@ -29,7 +29,6 @@ class IndexScopesCommand extends Command
         $this->info('Indexing scope examples for semantic matching...');
         $this->newLine();
 
-        // Load entity configs
         $entityConfigs = config('entities', []);
 
         if (empty($entityConfigs)) {
@@ -37,7 +36,6 @@ class IndexScopesCommand extends Command
             return self::FAILURE;
         }
 
-        // Count scopes
         $totalScopes = 0;
         $totalExamples = 0;
 
@@ -59,7 +57,6 @@ class IndexScopesCommand extends Command
         $this->info("Found {$totalScopes} scopes with {$totalExamples} examples/concepts to index");
         $this->newLine();
 
-        // Index scopes
         $this->output->write('Indexing... ');
 
         try {

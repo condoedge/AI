@@ -69,7 +69,6 @@ class SyncRelationshipsCommand extends Command
         $this->info('🔗 Relationship Synchronization');
         $this->newLine();
 
-        // Get models to sync
         $models = $this->option('model')
             ? [$this->option('model')]
             : $this->findNodeableModels();
@@ -97,7 +96,6 @@ class SyncRelationshipsCommand extends Command
         $totalSkipped = 0;
         $totalFailed = 0;
 
-        // Process each model
         foreach ($models as $modelClass) {
             $result = $this->syncModelRelationships($modelClass, $chunkSize);
 
@@ -106,7 +104,6 @@ class SyncRelationshipsCommand extends Command
             $totalFailed += $result['failed'];
         }
 
-        // Summary
         $this->newLine();
         $this->info('✓ Synchronization Complete');
         $this->line("  Created: {$totalCreated}");
@@ -149,7 +146,6 @@ class SyncRelationshipsCommand extends Command
             return ['created' => 0, 'skipped' => 0, 'failed' => 0];
         }
 
-        // Get total count
         $total = $modelClass::count();
 
         if ($total === 0) {
@@ -163,13 +159,11 @@ class SyncRelationshipsCommand extends Command
         $skipped = 0;
         $failed = 0;
 
-        // Progress bar
         $progressBar = $this->output->createProgressBar($total);
         $progressBar->setFormat('  [%bar%] %current%/%max% (%percent:3s%%) Created: %message%');
         $progressBar->setMessage('0');
         $progressBar->start();
 
-        // Process in chunks
         $modelClass::chunk($chunkSize, function ($entities) use (
             &$created,
             &$skipped,
@@ -177,7 +171,7 @@ class SyncRelationshipsCommand extends Command
             $progressBar
         ) {
             if ($this->option('dry-run')) {
-                // In dry-run, just count without syncing
+                // Dry-run only counts; it never writes.
                 $progressBar->advance(count($entities));
                 return;
             }
@@ -234,7 +228,6 @@ class SyncRelationshipsCommand extends Command
 
             $reflection = new \ReflectionClass($className);
 
-            // Check if class implements Nodeable
             if ($reflection->implementsInterface(Nodeable::class)) {
                 $models[] = $className;
             }

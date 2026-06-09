@@ -50,7 +50,6 @@ class PhysicalFileIndexer
             $discoveredFiles = array_merge($discoveredFiles, $files);
         }
 
-        // Remove duplicates while preserving keys, then re-index
         return array_values(array_unique($discoveredFiles));
     }
 
@@ -67,11 +66,9 @@ class PhysicalFileIndexer
     {
         $basePath = $this->getBasePath();
 
-        // Normalize path separators
         $normalizedPath = str_replace('\\', '/', $path);
         $normalizedBasePath = str_replace('\\', '/', $basePath);
 
-        // Remove base path to get relative path
         $relativePath = $normalizedPath;
         if (str_starts_with($normalizedPath, $normalizedBasePath)) {
             $relativePath = substr($normalizedPath, strlen($normalizedBasePath));
@@ -142,15 +139,12 @@ class PhysicalFileIndexer
      */
     private function findFilesForPattern(string $basePath, string $pattern, array $supportedExtensions): array
     {
-        // Normalize pattern separators
         $pattern = str_replace('\\', '/', $pattern);
 
-        // Handle recursive patterns using Symfony Finder
         if (str_contains($pattern, '**')) {
             return $this->findFilesRecursive($basePath, $pattern, $supportedExtensions);
         }
 
-        // Handle simple patterns
         return $this->findFilesSimple($basePath, $pattern, $supportedExtensions);
     }
 
@@ -175,7 +169,6 @@ class PhysicalFileIndexer
             $searchPath = $basePath . '/' . $directoryPrefix;
         }
 
-        // Normalize the search path
         $searchPath = str_replace('\\', '/', $searchPath);
 
         if (!is_dir($searchPath)) {
@@ -191,9 +184,7 @@ class PhysicalFileIndexer
         foreach ($finder as $file) {
             $extension = $file->getExtension();
 
-            // Filter by supported extensions
             if (in_array($extension, $supportedExtensions, true)) {
-                // Normalize path separators
                 $files[] = str_replace('\\', '/', $file->getRealPath());
             }
         }
@@ -213,7 +204,6 @@ class PhysicalFileIndexer
     {
         $fullPattern = $basePath . '/' . $pattern;
 
-        // Normalize path
         $fullPattern = str_replace('\\', '/', $fullPattern);
 
         $matchedFiles = glob($fullPattern, GLOB_BRACE);
@@ -230,9 +220,7 @@ class PhysicalFileIndexer
 
             $extension = pathinfo($filePath, PATHINFO_EXTENSION);
 
-            // Filter by supported extensions
             if (in_array($extension, $supportedExtensions, true)) {
-                // Normalize path separators
                 $files[] = str_replace('\\', '/', $filePath);
             }
         }

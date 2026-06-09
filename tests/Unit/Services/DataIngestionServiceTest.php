@@ -48,6 +48,26 @@ class DataIngestionServiceTest extends TestCase
         $this->mockGraphStore = Mockery::mock(GraphStoreInterface::class);
         $this->mockEmbeddingProvider = Mockery::mock(EmbeddingProviderInterface::class);
 
+        // Single-entity ingest/sync lazily ensures the target collection exists
+        // before embedding (DataIngestionService::ingestToVector ->
+        // VectorPayloadBuilder::ensureCollectionExists -> collectionExists()).
+        // Report the collection as already present so the real vector path is
+        // exercised instead of failing on an un-mocked call. byDefault() lets a
+        // specific test override this if it ever needs to.
+        $this->mockVectorStore
+            ->shouldReceive('collectionExists')
+            ->andReturn(true)
+            ->byDefault();
+
+        // ingestBatch() first filters out entities already present in the graph
+        // via graphStore->query(MATCH ... WHERE n.id IN $ids). Default to "none
+        // already ingested" so every entity flows through batchIngestToGraph,
+        // matching each batch test's createNode/embedBatch expectations.
+        $this->mockGraphStore
+            ->shouldReceive('query')
+            ->andReturn([])
+            ->byDefault();
+
         $this->service = new DataIngestionService(
             $this->mockVectorStore,
             $this->mockGraphStore,
@@ -211,6 +231,19 @@ class DataIngestionServiceTest extends TestCase
         $this->mockGraphStore
             ->shouldReceive('createNode')
             ->once();
+
+        // RelationshipSyncer guards each relationship: the target node must
+        // exist (nodeExists) and the relationship must not already exist
+        // (relationshipExists) before createRelationship is called. Report the
+        // target as present and no duplicate so the real path reaches creation.
+        $this->mockGraphStore
+            ->shouldReceive('nodeExists')
+            ->with('Team', 42)
+            ->andReturn(true);
+
+        $this->mockGraphStore
+            ->shouldReceive('relationshipExists')
+            ->andReturn(false);
 
         $this->mockGraphStore
             ->shouldReceive('createRelationship')

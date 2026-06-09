@@ -62,7 +62,6 @@ class SyncEntityJob implements ShouldQueue
     public function handle(): void
     {
         try {
-            // Sync the entity in Neo4j and Qdrant
             AI::sync($this->entity);
 
             Log::info('AI entity synced successfully', [

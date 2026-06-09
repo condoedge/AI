@@ -33,7 +33,9 @@ class RelatedModelSyncObserver
 
     public function __construct()
     {
-        $this->syncTriggers = config('ai.sync_triggers', []);
+        // config() returns the stored value (here null) for an explicitly-null
+        // key, bypassing the default; coalesce so the typed array property holds.
+        $this->syncTriggers = config('ai.sync_triggers') ?? [];
     }
 
     /**
@@ -104,7 +106,6 @@ class RelatedModelSyncObserver
         array $config,
         string $event
     ): void {
-        // Determine the foreign key to find the parent
         $foreignKey = $config['foreign_key'] ?? strtolower($parentEntity) . '_id';
         $parentId = $relatedModel->getAttribute($foreignKey);
 
@@ -117,7 +118,6 @@ class RelatedModelSyncObserver
             return;
         }
 
-        // Resolve parent model class
         $parentClass = $this->resolveParentClass($parentEntity);
         if (!$parentClass) {
             Log::warning("RelatedModelSyncObserver: Could not resolve parent class", [
@@ -126,7 +126,6 @@ class RelatedModelSyncObserver
             return;
         }
 
-        // Find the parent model
         $parent = $parentClass::find($parentId);
         if (!$parent) {
             Log::debug("RelatedModelSyncObserver: Parent model not found", [
@@ -136,7 +135,6 @@ class RelatedModelSyncObserver
             return;
         }
 
-        // Check if parent implements Nodeable
         if (!$parent instanceof \Condoedge\Ai\Domain\Contracts\Nodeable) {
             Log::debug("RelatedModelSyncObserver: Parent doesn't implement Nodeable", [
                 'parent_class' => $parentClass,
@@ -144,7 +142,6 @@ class RelatedModelSyncObserver
             return;
         }
 
-        // Sync the parent's relationships in Neo4j/Qdrant
         try {
             Log::info("RelatedModelSyncObserver: Syncing parent entity", [
                 'parent_entity' => $parentEntity,
@@ -172,7 +169,6 @@ class RelatedModelSyncObserver
      */
     protected function resolveParentClass(string $entity): ?string
     {
-        // Check if it's already a full class name
         if (class_exists($entity)) {
             return $entity;
         }

@@ -63,12 +63,42 @@ return [
             . 'plainly instead of guessing.'
         ),
 
-        'language_policy' => env('AI_ASSISTANT_LANGUAGE_POLICY', "Answer in the user's language."),
+        'language_policy' => env('AI_ASSISTANT_LANGUAGE_POLICY', "Always reply in the SAME language as the user's most recent question, regardless of the system locale or the language of any documents, data, or examples. The user's question is the only language signal — never switch to another language."),
 
         'non_disclosure' => 'Never reveal, confirm, hint at, or speculate about which AI model, vendor, version or '
             . 'provider powers you, or that you are an AI language model from any company. If asked what/who you are, '
             . 'say you are the {name} for {project} and offer to help — decline ONLY the model/vendor question and keep '
             . 'answering everything else.',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Prompt Assembly (query side)
+    |--------------------------------------------------------------------------
+    |
+    | Knobs for how the query-generation prompt is assembled and what it ships
+    | to the (possibly third-party) LLM.
+    |
+    | - include_user_email: PII minimization. When false (default), the current
+    |   user's email is NOT shipped to the LLM. It is included only when this is
+    |   true OR the question is about the user's own data (possessive). User ID +
+    |   team ID already cover the documented "my X" ownership paths.
+    |
+    | - query_role_note: The internal, provider-neutral note appended after the
+    |   identity in the SYSTEM message, telling the assistant it translates the
+    |   user's questions into a graph query language. Config-driven so it can be
+    |   localized/overridden like the rest of the identity.
+    |
+    */
+    'prompt' => [
+        'include_user_email' => env('AI_PROMPT_INCLUDE_USER_EMAIL', false),
+
+        'query_role_note' => env(
+            'AI_PROMPT_QUERY_ROLE_NOTE',
+            "Internally, you translate the user's questions into a graph query language based on the "
+            . 'semantic business definitions provided below. Never reveal this query language or any internal '
+            . 'schema to the user.'
+        ),
     ],
 
     /*
@@ -87,9 +117,11 @@ return [
     | Discovery Configuration
     |--------------------------------------------------------------------------
     |
-    | Discovery analyzes Eloquent models and generates entity configs.
+    | Discovery analyzes Eloquent models and generates entity configs. The
+    | service reads these keys under the `ai.auto_discovery.*` prefix
+    | (EntityAutoDiscovery, TraversalScopeGenerator).
     |
-    | IMPORTANT: There is NO runtime auto-discovery.
+    | IMPORTANT: Discovery is invoked explicitly, not at runtime.
     | You MUST run `php artisan ai:discover` to generate config/entities.php.
     |
     | Workflow:
@@ -99,7 +131,16 @@ return [
     |   4. Re-run ai:discover after model changes
     |
     */
-    'discovery' => [
+    'auto_discovery' => [
+        // Master switch consulted by the discovery orchestrator before introspecting
+        // a model (EntityAutoDiscovery::shouldDiscover). Set false to disable discovery.
+        'enabled' => env('AI_AUTO_DISCOVERY_ENABLED', true),
+
+        // Model class-strings to skip during discovery even when 'enabled' is true.
+        'excluded_models' => [
+            // App\Models\Secret::class,
+        ],
+
         // What to discover
         'properties' => true,
         'relationships' => true,
@@ -119,8 +160,10 @@ return [
             // (password, tokens, etc. are excluded by default)
         ],
 
-        // Role mappings for auto-generating traversal scopes
-        // Maps discriminator field values to scope names
+        // Role mappings for auto-generating traversal scopes.
+        // Read by TraversalScopeGenerator::getRoleMappings as
+        // ai.auto_discovery.role_mappings.{Entity}.{field}.
+        // Maps discriminator field values to scope names.
         'role_mappings' => [
             // Example: PersonTeam role_type mappings
             // 'PersonTeam' => [
@@ -383,10 +426,7 @@ return [
     | - row_pass_threshold: a single row's weakest-stage score below this marks
     |                       the row 'failed' in the report.
     | - judge: which LLM role + sampling the LLM-as-judge uses (temp 0 = stable).
-    | - generation: how many questions to synthesise per entity/source.
     | - report_path: where the JSON report is written (null = only print).
-    | - offline_default: when true, ai:eval skips the judge unless --offline is
-    |                    explicitly negated by reachable credentials.
     |
     */
     'eval' => [
@@ -405,15 +445,7 @@ return [
             'max_tokens' => env('AI_EVAL_JUDGE_MAX_TOKENS', 800),
         ],
 
-        'generation' => [
-            'questions_per_entity' => env('AI_EVAL_QUESTIONS_PER_ENTITY', 2),
-            'include_scopes' => env('AI_EVAL_INCLUDE_SCOPES', true),
-            'include_properties' => env('AI_EVAL_INCLUDE_PROPERTIES', true),
-        ],
-
         'report_path' => env('AI_EVAL_REPORT_PATH', storage_path('app/ai-eval-report.json')),
-
-        'offline_default' => env('AI_EVAL_OFFLINE_DEFAULT', false),
     ],
 
     /*
@@ -491,6 +523,35 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Resilience Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Circuit breaker + retry tuning for external LLM calls. The providers wrap
+    | every request in a circuit breaker named 'llm' and retry ONLY transient
+    | HTTP failures (429 / 5xx / network errors); permanent errors fail fast.
+    |
+    | NOTE: cross-process breaker state requires a shared, atomic cache driver
+    | (redis/memcached). On array/file drivers it degrades to per-process.
+    |
+    */
+    'resilience' => [
+        'llm' => [
+            'circuit_breaker' => [
+                'failure_threshold' => env('AI_LLM_CB_FAILURE_THRESHOLD', 5),
+                'recovery_timeout_seconds' => env('AI_LLM_CB_RECOVERY_TIMEOUT', 30),
+                'success_threshold' => env('AI_LLM_CB_SUCCESS_THRESHOLD', 2),
+            ],
+            'retry' => [
+                'max_attempts' => env('AI_LLM_RETRY_MAX_ATTEMPTS', 3),
+                'base_delay_ms' => env('AI_LLM_RETRY_BASE_DELAY_MS', 500),
+                'max_delay_ms' => env('AI_LLM_RETRY_MAX_DELAY_MS', 10000),
+                'jitter' => env('AI_LLM_RETRY_JITTER', 0.3),
+            ],
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Response Generation Settings
     |--------------------------------------------------------------------------
     |
@@ -534,11 +595,18 @@ return [
         'include_schema' => env('AI_INCLUDE_SCHEMA', true),
         'include_examples' => env('AI_INCLUDE_EXAMPLES', true),
 
-        // Second-stage re-ranking of retrieved document candidates for precision.
-        // When true, over-fetched candidates are re-scored by a model-agnostic LLM
-        // reranker (via the configured LLM provider) before the final limit is applied.
-        // When false, a NullReranker passes candidates through unchanged (no cost).
+        // Second-stage re-ranking of retrieved candidates for precision. Applies to
+        // BOTH file search and the graph/RAG path (similar-query examples). When true,
+        // an over-fetched pool is re-scored by a model-agnostic LLM reranker (via the
+        // configured LLM provider) before the final limit is applied; when false, a
+        // NullReranker passes candidates through unchanged (no cost, no extra fetch).
         'rerank_enabled' => env('AI_RAG_RERANK_ENABLED', false),
+
+        // Hybrid retrieval: fuse a sparse/lexical signal (BM25-style token overlap over
+        // entity names/aliases/scope terminology) with the dense semantic ranking using
+        // Reciprocal Rank Fusion. Lifts recall on exact name/alias/acronym/ID queries the
+        // embedding misses. When false, semantic selection uses the dense ranking only.
+        'hybrid_enabled' => env('AI_RAG_HYBRID_ENABLED', false),
     ],
 
     /*
@@ -666,6 +734,11 @@ return [
         // in follow-up queries. Lower = less dominant when user switches topics.
         'conversation_focus_score' => (float) env('AI_SEMANTIC_CONTEXT_CONVERSATION_FOCUS_SCORE', 0.55),
 
+        // Score assigned to the page-context entity type (which page/record the chat was opened
+        // from) when soft-included. Soft prior, never a hard filter — same default as the
+        // conversation focus so it ranks the current record without dominating other topics.
+        'page_context_focus_score' => (float) env('AI_SEMANTIC_CONTEXT_PAGE_CONTEXT_FOCUS_SCORE', 0.55),
+
         // Score assigned to entities injected by Query Understanding.
         // Should be high enough to ensure they're included in context.
         'qu_entity_score' => (float) env('AI_SEMANTIC_CONTEXT_QU_ENTITY_SCORE', 0.8),
@@ -716,13 +789,10 @@ return [
     |
     */
     'query_understanding' => [
-        // Enable query understanding pre-processing
+        // Enable query understanding pre-processing. When enabled, QU runs on every
+        // question (it is STEP 1, before semantic selection produces any score), so
+        // this on/off switch is the gate. Disable it to skip the extra LLM round-trip.
         'enabled' => env('AI_QUERY_UNDERSTANDING_ENABLED', true),
-
-        // Confidence threshold: QU only runs when semantic selection's top entity
-        // score is below this value. Higher = QU runs more often. Lower = QU runs rarely.
-        // Set to 1.0 to always run QU. Set to 0.0 to never run QU.
-        'confidence_threshold' => (float) env('AI_QUERY_UNDERSTANDING_CONFIDENCE', 0.55),
 
         // Maximum tokens for the QU LLM response
         'max_tokens' => (int) env('AI_QUERY_UNDERSTANDING_MAX_TOKENS', 500),
@@ -844,14 +914,68 @@ return [
         // Maximum file references to include in response
         'max_references' => 5,
 
-        // Minimum relevance score for file inclusion
-        'min_relevance_score' => 0.4,
+        // Minimum relevance score for file inclusion.
+        // Tunable per corpus: French legalese can score low for an English query,
+        // so lower it (e.g. 0.3) when the right document is retrieved but cut.
+        'min_relevance_score' => env('AI_FILE_MIN_RELEVANCE', 0.4),
+
+        // Recall safety net. When NO document clears min_relevance_score across every
+        // retrieval angle, the pipeline retries once at this lower floor and grounds on
+        // the strongest borderline document(s) instead of giving a generic, ungrounded
+        // answer. It only fires when retrieval would otherwise be empty, so it cannot
+        // dilute a confident match; the response layer still grounds or abstains.
+        // Set recall_floor >= min_relevance_score (or to 0) to disable.
+        'recall_floor' => env('AI_FILE_RECALL_FLOOR', 0.3),
+
+        // Max borderline documents the recall net may admit (per angle and overall).
+        'recall_limit' => env('AI_FILE_RECALL_LIMIT', 2),
+
+        // Corpus languages for cross-lingual retrieval. When the indexed documents
+        // are in language(s) other than the question, set the corpus language codes
+        // here (e.g. ['fr', 'en']). The Query-Understanding layer then translates
+        // the question into each — already in its single LLM call — and each
+        // translation is added as a separate file-search fan-out angle so a
+        // question in one language still retrieves documents written in another.
+        // Empty (default) = monolingual behaviour, zero added cost.
+        'corpus_languages' => [],
 
         // Include file snippets in response metadata
         'include_snippets' => true,
 
-        // Maximum snippet length (characters)
-        'snippet_length' => 200,
+        // Maximum snippet length (characters). Raised from a single ~200-char
+        // slice so the model can quote the actual clause it is grounding on.
+        'snippet_length' => env('AI_FILE_SNIPPET_LENGTH', 1200),
+
+        // How many of the best file's top chunks to stitch into one snippet
+        // (within snippet_length). 1 keeps the legacy single-chunk behaviour;
+        // higher values give the model more of the surrounding clause.
+        'snippet_chunks' => env('AI_FILE_SNIPPET_CHUNKS', 3),
+
+        // Context window (small-to-big / sentence-window retrieval). When the best
+        // chunk of a file is chosen, also pull in its INDEX-ADJACENT neighbors
+        // (+/-N by chunk_index from the same file/collection) — even neighbors the
+        // vector search did not independently return — stitched in reading order so
+        // the model reads the full passage (e.g. an article's rule plus the next
+        // article's compensation clause), not a lone fragment. The window clamps to
+        // the file's real index range, so a hit at the start/end or a single-chunk
+        // file is a safe no-op. 0 disables expansion (behaviour identical to the
+        // legacy single-chunk retrieval).
+        'context_window' => env('AI_FILE_CONTEXT_WINDOW', 2),
+
+        // File enumeration ("which files do I have access to?"). When a question is
+        // classified by Query Understanding as a file-listing intent, list the
+        // user's accessible files (ACL-respecting) instead of semantic snippets.
+        'enumeration' => [
+            // Enable/disable the file-listing capability.
+            'enabled' => env('AI_FILE_ENUMERATION_ENABLED', true),
+
+            // QU intent values that trigger enumeration. Model-agnostic: matched
+            // against the QU result's `intent` field, NOT a hardcoded phrase.
+            'intents' => ['file_listing'],
+
+            // Maximum files listed in an enumeration answer.
+            'max_files' => env('AI_FILE_ENUMERATION_MAX', 50),
+        ],
 
         /*
         |--------------------------------------------------------------------------
@@ -903,6 +1027,12 @@ return [
         // Service class for chat functionality
         'service' => env('AI_CHAT_SERVICE', \Condoedge\Ai\Services\Chat\AiChatService::class),
 
+        // Surface the floating button opens: 'modal' | 'drawer' | 'screen'.
+        // - modal  => AiChatModal in a modal overlay (default, today's behaviour)
+        // - drawer => AiChatDrawer in a slide-over
+        // - screen => navigates to the routed AiChatScreen full page (ai.chat.screen)
+        'surface' => env('AI_CHAT_SURFACE', 'modal'),
+
         // Welcome screen
         'welcome' => [
             'title' => env('AI_CHAT_WELCOME_TITLE', 'AI Assistant'),
@@ -915,6 +1045,14 @@ return [
             'Show me recent activity',
             'What are the top items?',
             'Give me a summary',
+        ],
+
+        // Per-entity-type welcome examples for page-context awareness. When the chat is opened
+        // from a page whose page_context.entity_type matches a key here, these suggestions
+        // replace the global example_questions on the welcome screen (config-only, no LLM call).
+        // Falls back to example_questions above when the type is absent.
+        // e.g. 'Unit' => ['Show this unit\'s payment history', 'Who are the owners of this unit?'],
+        'page_examples' => [
         ],
 
         // Conversation persistence
@@ -1042,6 +1180,39 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Agentic Actions
+    |--------------------------------------------------------------------------
+    |
+    | Register host actions the SAME way you register a condoedge/utils Plugin:
+    | list each AiAction class-string in this flat array. On boot the registry
+    | instantiates every class-string (new $class()) beside the built-ins — no
+    | service-provider code, no core edit. A class implements AiActionInterface
+    | (or extends a base that does); mutating actions return mutates()===true and
+    | get the signed-token approval gate for free.
+    |
+    |   'actions' => [
+    |       \App\Ai\Actions\CreateEventAction::class,
+    |       \App\Ai\Actions\ExportRollCallAction::class,
+    |       'token_ttl' => env('AI_ACTION_TOKEN_TTL', 900),
+    |   ],
+    |
+    | The reserved 'token_ttl' key tunes the deferred-action approval flow and
+    | coexists in this same array (it is ignored as a non-class entry). A
+    | state-mutating action is never run inline: it is deferred behind a signed
+    | PendingActionToken the user confirms. 'token_ttl' is the max age (seconds)
+    | such a token is accepted for — past it, decode() rejects the token so a
+    | captured token cannot be replayed long after issue. Single-use is enforced
+    | separately (the token's nonce is consumed on confirm), so a token also
+    | cannot fire a non-idempotent action twice.
+    |
+    */
+    'actions' => [
+        // \App\Ai\Actions\CreateEventAction::class,
+        'token_ttl' => env('AI_ACTION_TOKEN_TTL', 900),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Entity Actions
     |--------------------------------------------------------------------------
     |
@@ -1074,6 +1245,25 @@ return [
         //         'aliases' => ['quick view', 'preview', 'details'],
         //         'label' => 'Quick View',
         //     ],
+        // ],
+        //
+        // An entry may ALSO be a ready-made AiActionInterface instance. The approval-gated write
+        // pattern is ModelMethodMutationAction: it wraps an EXISTING domain method (the state
+        // transition your UI already calls) so the assistant can offer it WITHOUT a raw write. It
+        // mutates() => the dispatcher defers it behind a signed approval card and re-runs
+        // authorize() server-side before executing. The entity id rides the approval token, so
+        // authorize() re-resolves the exact row:
+        // 'Reservation' => [
+        //     'approve_reservation' => new \Condoedge\Ai\Services\Actions\ModelMethodMutationAction(
+        //         key: 'approve_reservation',
+        //         label: 'Approve reservation',
+        //         finder: \App\Models\Reservation::class,            // resolved via ::find($id)
+        //         mutator: fn ($reservation, array $input) => $reservation->approve(), // existing method
+        //         authorizer: fn ($user, $reservation, array $input) => $user?->can('update', $reservation),
+        //         aliases: ['approve reservation', 'confirm booking'],
+        //         description: 'Approve a pending reservation.',
+        //         entityType: 'Reservation',
+        //     ),
         // ],
     ],
 
@@ -1113,6 +1303,7 @@ return [
     'query_generator_sections' => [
         \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
         \Condoedge\Ai\Services\PromptSections\GenericContextSection::class,
+        \Condoedge\Ai\Services\PromptSections\PageContextSection::class, // Priority 16: page/record the chat was opened from (zero tokens when absent), before CurrentUserContext (17)
         \Condoedge\Ai\Services\PromptSections\CurrentUserContextSection::class,
         \Condoedge\Ai\Services\PromptSections\NameResolutionSection::class,
         \Condoedge\Ai\Services\PromptSections\SchemaSection::class,
@@ -1126,6 +1317,7 @@ return [
         \Condoedge\Ai\Services\PromptSections\DetectedScopesSection::class,
         fn(SemanticPromptBuilder $promptBuilder) => new \Condoedge\Ai\Services\PromptSections\PatternLibrarySection($promptBuilder->getPatternLibrary()),
         \Condoedge\Ai\Services\PromptSections\QueryRulesSection::class,
+        \Condoedge\Ai\Services\PromptSections\TenantScopingRulesSection::class, // Priority 76: per-entity $ai_team_ids predicates the acceptance gate verifies (after query_rules/75, before question/80)
         \Condoedge\Ai\Services\PromptSections\QuestionSection::class,
         \Condoedge\Ai\Services\PromptSections\TaskInstructionsSection::class,
     ],
@@ -1134,6 +1326,7 @@ return [
         \Condoedge\Ai\Services\ResponseSections\IdentitySection::class,
         \Condoedge\Ai\Services\ResponseSections\SystemPromptSection::class,
         \Condoedge\Ai\Services\ResponseSections\PrivacyAndSecurityGuidelinesSection::class,
+        \Condoedge\Ai\Services\ResponseSections\ResponseGuardrailsSection::class, // Priority 1100: after the security policy; anti-over-claim + out-of-domain scoping
         \Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection::class,
         \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
         // QueryInfoSection removed from defaults: it fed the executed Cypher into the

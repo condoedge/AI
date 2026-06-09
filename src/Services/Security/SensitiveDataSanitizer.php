@@ -108,25 +108,20 @@ class SensitiveDataSanitizer
         $sanitized = [];
 
         foreach ($data as $key => $value) {
-            // Check if key is sensitive
             if (self::isSensitiveKey($key)) {
                 $sanitized[$key] = '***REDACTED***';
                 continue;
             }
 
-            // Recursively sanitize nested arrays
             if (is_array($value)) {
                 $sanitized[$key] = self::sanitizeArray($value, $maxDepth, $currentDepth + 1);
             }
-            // Recursively sanitize objects
             elseif (is_object($value)) {
                 $sanitized[$key] = self::sanitizeObject($value, $maxDepth, $currentDepth + 1);
             }
-            // Sanitize string values
             elseif (is_string($value)) {
                 $sanitized[$key] = self::sanitizeString($value);
             }
-            // Keep other values as-is
             else {
                 $sanitized[$key] = $value;
             }
@@ -145,7 +140,6 @@ class SensitiveDataSanitizer
      */
     public static function sanitizeObject(object $obj, int $maxDepth = 5, int $currentDepth = 0): array
     {
-        // Convert object to array
         $array = (array) $obj;
 
         return self::sanitizeArray($array, $maxDepth, $currentDepth);
@@ -181,7 +175,7 @@ class SensitiveDataSanitizer
     {
         $sanitized = [];
 
-        foreach (array_slice($trace, 0, 10) as $frame) { // Limit to 10 frames
+        foreach (array_slice($trace, 0, 10) as $frame) {
             $sanitized[] = [
                 'file' => isset($frame['file']) ? self::sanitizePath($frame['file']) : 'unknown',
                 'line' => $frame['line'] ?? 0,

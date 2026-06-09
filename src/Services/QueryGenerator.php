@@ -10,7 +10,7 @@ use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
-use Condoedge\Ai\GraphStore\CypherSanitizer;
+use Condoedge\Ai\Services\Security\CypherScopeAnalyzer;
 use Condoedge\Ai\Support\AiLogger;
 
 /**
@@ -19,69 +19,28 @@ use Condoedge\Ai\Support\AiLogger;
  * Transforms natural language questions into safe, valid Cypher queries
  * using LLM and context from RAG (graph schema, similar queries, examples).
  *
+ * Validation/sanitization is delegated to {@see CypherValidator} and the
+ * deterministic template path to {@see TemplateMatcher}; this class owns the
+ * LLM retry/validate loop and prompt assembly.
+ *
  * @package Condoedge\Ai\Services
  */
 class QueryGenerator implements QueryGeneratorInterface
 {
     /**
-     * Dangerous keywords that modify or delete data
-     */
-    private array $dangerousKeywords = [
-        'DELETE', 'REMOVE', 'DROP', 'CREATE', 'MERGE', 'SET', 'DETACH'
-    ];
-
-    /**
-     * Query templates for common patterns
-     */
-    private array $templates = [
-        'list_all' => [
-            'pattern' => '/^(show|list|get|display|find)\s+all\s+(\w+)\s*[?.!]?$/i',
-            'cypher' => 'MATCH (n:{label}) RETURN n LIMIT 100',
-            'description' => 'List all entities of a type',
-            'example_question' => 'Show all customers',
-            'example_cypher' => 'MATCH (n:Customer) RETURN n LIMIT 100'
-        ],
-        'count' => [
-            'pattern' => '/^(how many|count|number of)\s+(\w+)\s*(are there|do we have|exist|total)?\s*[?.!]?$/i',
-            'cypher' => 'MATCH (n:{label}) RETURN count(n) as count',
-            'description' => 'Count entities of a type',
-            'example_question' => 'How many orders?',
-            'example_cypher' => 'MATCH (n:Order) RETURN count(n) as count'
-        ],
-        'find_by_property' => [
-            'pattern' => '/^find\s+(\w+)\s+(with|where|having)\s+(\w+)\s*(=|is|equals)\s*(.+)/i',
-            'cypher' => 'MATCH (n:{label} {{{property}: $value}}) RETURN n LIMIT 100',
-            'description' => 'Find entities by property value',
-            'example_question' => 'Find customers with email john@example.com',
-            'example_cypher' => 'MATCH (n:Customer {{email: $value}}) RETURN n LIMIT 100'
-        ],
-        'relationship_query' => [
-            'pattern' => '/^(show|find|get)\s+(\w+)\s+(connected to|related to|linked to)\s+(\w+)/i',
-            'cypher' => 'MATCH (a:{label1})-[r]-(b:{label2}) RETURN a, r, b LIMIT 100',
-            'description' => 'Find related entities',
-            'example_question' => 'Show customers connected to orders',
-            'example_cypher' => 'MATCH (a:Customer)-[r]-(b:Order) RETURN a, r, b LIMIT 100'
-        ],
-        'aggregation' => [
-            'pattern' => '/^(sum|total|average|avg|max|min)\s+(.+)/i',
-            'cypher' => 'MATCH (n:{label}) RETURN {aggregation}(n.{property}) as result',
-            'description' => 'Aggregate property values',
-            'example_question' => 'What is the average order total?',
-            'example_cypher' => 'MATCH (n:Order) RETURN avg(n.total) as result'
-        ],
-        'filtering' => [
-            'pattern' => '/^(\w+)\s+where\s+(.+)/i',
-            'cypher' => 'MATCH (n:{label}) WHERE {condition} RETURN n LIMIT 100',
-            'description' => 'Filter entities by condition',
-            'example_question' => 'Customers where age > 30',
-            'example_cypher' => 'MATCH (n:Customer) WHERE n.age > 30 RETURN n LIMIT 100'
-        ],
-    ];
-
-    /**
      * Semantic prompt builder (optional - for semantic metadata support)
      */
     private ?SemanticPromptBuilder $promptBuilder = null;
+
+    /**
+     * Cypher validation / sanitization (canonical keyword list lives here)
+     */
+    private CypherValidator $validator;
+
+    /**
+     * Deterministic, LLM-free template generation path
+     */
+    private TemplateMatcher $templateMatcher;
 
     /**
      * Rate limiter for LLM API calls
@@ -94,6 +53,14 @@ class QueryGenerator implements QueryGeneratorInterface
     private AiLogger $logger;
 
     /**
+     * Recognizer for the tenant-scopeable subset. Used in the validate step to
+     * teach the LLM to regenerate in-subset (usefulness layer), so the execution
+     * security boundary rarely has to reject. Safety does NOT depend on this — the
+     * SecurityFilterInjector re-analyzes and fails closed at execution time.
+     */
+    private CypherScopeAnalyzer $scopeAnalyzer;
+
+    /**
      * Constructor
      *
      * @param LlmProviderInterface $llm LLM provider for query generation
@@ -101,24 +68,28 @@ class QueryGenerator implements QueryGeneratorInterface
      * @param array $config Configuration options
      * @param SemanticPromptBuilder|null $promptBuilder Optional semantic prompt builder
      * @param AiLogger|null $logger Optional logger instance
+     * @param CypherValidator|null $validator Optional validator (canonical keyword list)
+     * @param TemplateMatcher|null $templateMatcher Optional template matcher
+     * @param CypherScopeAnalyzer|null $scopeAnalyzer Optional subset recognizer
      */
     public function __construct(
         private readonly LlmProviderInterface $llm,
         private readonly GraphStoreInterface $graphStore,
         private readonly array $config = [],
         ?SemanticPromptBuilder $promptBuilder = null,
-        ?AiLogger $logger = null
+        ?AiLogger $logger = null,
+        ?CypherValidator $validator = null,
+        ?TemplateMatcher $templateMatcher = null,
+        ?CypherScopeAnalyzer $scopeAnalyzer = null
     ) {
-        // Initialize semantic prompt builder if not provided
         $this->promptBuilder = $promptBuilder ?? new SemanticPromptBuilder(
             new PatternLibrary()
         );
-
-        // Initialize rate limiter for LLM API calls
         $this->rateLimiter = RateLimiter::forLlm();
-
-        // Initialize logger
         $this->logger = $logger ?? app(AiLogger::class);
+        $this->validator = $validator ?? new CypherValidator();
+        $this->templateMatcher = $templateMatcher ?? new TemplateMatcher();
+        $this->scopeAnalyzer = $scopeAnalyzer ?? new CypherScopeAnalyzer();
     }
 
     /**
@@ -134,7 +105,6 @@ class QueryGenerator implements QueryGeneratorInterface
     {
         $this->logger->startTimer('query_generation');
 
-        // Merge options with defaults
         $temperature = $options['temperature'] ?? $this->config['temperature'] ?? 0.1;
         $maxRetries = $options['max_retries'] ?? $this->config['max_retries'] ?? 3;
         $allowWrite = $options['allow_write'] ?? $this->config['allow_write_operations'] ?? false;
@@ -162,7 +132,7 @@ class QueryGenerator implements QueryGeneratorInterface
                     'template' => $template,
                 ]);
 
-                $result = $this->generateFromTemplate($question, $template, $context);
+                $result = $this->templateMatcher->generateFromTemplate($question, $template, $context);
                 if ($result !== null) {
                     $durationMs = $this->logger->stopTimer('query_generation');
                     $this->logger->info('query_generator', 'Query generated via template', [
@@ -199,7 +169,6 @@ class QueryGenerator implements QueryGeneratorInterface
                     'attempt' => $retryCount + 1,
                 ]);
 
-                // Check rate limit before calling LLM
                 if (!$this->rateLimiter->waitAndAttempt(10)) {
                     throw new QueryGenerationException('Rate limit exceeded for LLM API');
                 }
@@ -235,11 +204,22 @@ class QueryGenerator implements QueryGeneratorInterface
                     ];
                 }
 
-                // Extract and clean Cypher
                 $cypher = $this->extractCypher($response);
 
-                // Validate
                 $validation = $this->validate($cypher, ['allow_write' => $allowWrite]);
+
+                // Tenant-scopeability gate (usefulness layer): if security is on, a
+                // draft outside the safe-scopeable subset would fail closed at
+                // execution. Reject it here with a teachable reason so the EXISTING
+                // retry loop regenerates an in-subset query instead of erroring.
+                // (Safety still lives in the injector; this only reduces over-DENY.)
+                if ($validation['valid'] && $this->subsetEnforcementEnabled($options)) {
+                    $subset = $this->scopeAnalyzer->validateSubset($cypher);
+                    if (!$subset['valid']) {
+                        $validation['valid'] = false;
+                        $validation['errors'] = array_merge($validation['errors'] ?? [], $subset['errors']);
+                    }
+                }
 
                 $this->logger->debug('query_generator', 'Validation result', [
                     'valid' => $validation['valid'],
@@ -249,7 +229,6 @@ class QueryGenerator implements QueryGeneratorInterface
                 ]);
 
                 if ($validation['valid']) {
-                    // Success!
                     $confidence = $this->calculateConfidence($cypher, $context);
                     $durationMs = $this->logger->stopTimer('query_generation');
                     $this->logger->info('query_generator', 'Query generated via LLM', [
@@ -323,55 +302,29 @@ class QueryGenerator implements QueryGeneratorInterface
      */
     public function validate(?string $cypherQuery, array $options = []): array
     {
-        if (empty(trim($cypherQuery))) {
-            throw new \InvalidArgumentException('Query cannot be empty');
+        $options['max_complexity'] = $options['max_complexity']
+            ?? $this->config['max_complexity']
+            ?? 100;
+
+        return $this->validator->validate($cypherQuery, $options);
+    }
+
+    /**
+     * Whether the generation loop should reject out-of-subset drafts. Enabled
+     * whenever team security is enabled (so generation targets the shape the
+     * execution boundary will accept), unless explicitly turned off.
+     */
+    private function subsetEnforcementEnabled(array $options): bool
+    {
+        if (($options['skip_security'] ?? false) === true) {
+            return false;
         }
 
-        $allowWrite = $options['allow_write'] ?? false;
-        $maxComplexity = $options['max_complexity'] ?? $this->config['max_complexity'] ?? 100;
-
-        $errors = [];
-        $warnings = [];
-
-        // Check for dangerous operations (word boundary match to avoid false positives like "deleted_at")
-        foreach ($this->dangerousKeywords as $keyword) {
-            if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/i', $cypherQuery) && !$allowWrite) {
-                $errors[] = "Query contains forbidden keyword: {$keyword}";
-            }
+        if (!config('ai.security.enabled', true)) {
+            return false;
         }
 
-        // Check for LIMIT clause
-        if (!preg_match('/\bLIMIT\b/i', $cypherQuery)) {
-            $warnings[] = "Query missing LIMIT clause - may return large result set";
-        }
-
-        // Basic syntax validation
-        if (!preg_match('/\bMATCH\b/i', $cypherQuery) && !preg_match('/\bRETURN\b/i', $cypherQuery)) {
-            $errors[] = "Query must contain MATCH or RETURN clause";
-        }
-
-        // Check complexity
-        $complexity = $this->calculateComplexityScore($cypherQuery);
-        if ($complexity > $maxComplexity) {
-            $warnings[] = "Query complexity ({$complexity}) exceeds threshold ({$maxComplexity})";
-        }
-
-        // Determine if read-only (word boundary match to avoid false positives)
-        $isReadOnly = true;
-        foreach ($this->dangerousKeywords as $keyword) {
-            if (preg_match('/\b' . preg_quote($keyword, '/') . '\b/i', $cypherQuery)) {
-                $isReadOnly = false;
-                break;
-            }
-        }
-
-        return [
-            'valid' => empty($errors),
-            'errors' => $errors,
-            'warnings' => $warnings,
-            'complexity' => $complexity,
-            'is_read_only' => $isReadOnly,
-        ];
+        return (bool) config('ai.security.enforce_scopeable_subset', true);
     }
 
     /**
@@ -382,27 +335,11 @@ class QueryGenerator implements QueryGeneratorInterface
      */
     public function sanitize(?string $cypherQuery): string
     {
-        // Remove dangerous keywords
-        foreach ($this->dangerousKeywords as $keyword) {
-            $cypherQuery = preg_replace('/\b' . $keyword . '\b[^;]*(;|$)/i', '', $cypherQuery);
-        }
-
-        // Add LIMIT if missing
-        if (!preg_match('/\bLIMIT\b/i', $cypherQuery)) {
-            $defaultLimit = $this->config['default_limit'] ?? 100;
-            if (preg_match('/\bRETURN\b/i', $cypherQuery)) {
-                $cypherQuery = preg_replace('/(\bRETURN\b.*)$/i', "$1 LIMIT {$defaultLimit}", $cypherQuery);
-            }
-        }
-
-        return trim($cypherQuery);
+        return $this->validator->sanitize($cypherQuery, $this->config['default_limit'] ?? 100);
     }
 
     /**
      * Check if a label exists in the graph schema.
-     *
-     * Used to validate labels extracted from user input before
-     * using them in template-generated queries.
      *
      * @param string $label The label to validate
      * @param array $validLabels Array of valid labels from schema
@@ -410,11 +347,7 @@ class QueryGenerator implements QueryGeneratorInterface
      */
     public function isValidLabel(string $label, array $validLabels): bool
     {
-        if (empty($validLabels)) {
-            return false;
-        }
-
-        return in_array($label, $validLabels, true);
+        return $this->templateMatcher->isValidLabel($label, $validLabels);
     }
 
     /**
@@ -424,15 +357,7 @@ class QueryGenerator implements QueryGeneratorInterface
      */
     public function getTemplates(): array
     {
-        return array_map(function ($name, $template) {
-            return [
-                'name' => $name,
-                'description' => $template['description'],
-                'pattern' => $template['pattern'],
-                'example_question' => $template['example_question'] ?? '',
-                'example_cypher' => $template['example_cypher'] ?? '',
-            ];
-        }, array_keys($this->templates), $this->templates);
+        return $this->templateMatcher->getTemplates();
     }
 
     /**
@@ -443,83 +368,7 @@ class QueryGenerator implements QueryGeneratorInterface
      */
     public function detectTemplate(string $question): ?string
     {
-        foreach ($this->templates as $name => $template) {
-            if (preg_match($template['pattern'], $question)) {
-                return $name;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Generate query from template
-     *
-     * Security: Template queries bypass LLM, so labels extracted from user input
-     * must be validated against schema and sanitized before interpolation.
-     *
-     * @param string $question Original question
-     * @param string $templateName Template name
-     * @param PipelineContext $context Pipeline context
-     * @return array|null Generation result, or null to fall through to LLM
-     * @throws \InvalidArgumentException If label is not in schema
-     */
-    private function generateFromTemplate(string $question, string $templateName, PipelineContext $context): ?array
-    {
-        $template = $this->templates[$templateName];
-
-        // Extract parameters from question
-        preg_match($template['pattern'], $question, $matches);
-
-        // Get valid labels from both Neo4j schema and entity config
-        $schema = $context->graphSchema;
-        $validLabels = $schema['labels'] ?? [];
-
-        // Also include labels from entity config properties (covers entities not yet ingested)
-        $configLabels = array_keys($schema['properties'] ?? []);
-        $validLabels = array_unique(array_merge($validLabels, $configLabels));
-
-        // Also include labels from entity configs if available
-        $entityConfigs = config('entities', []);
-        foreach ($entityConfigs as $config) {
-            $label = $config['graph']['label'] ?? null;
-            if ($label && !in_array($label, $validLabels)) {
-                $validLabels[] = $label;
-            }
-        }
-
-        // Security: If no valid labels at all, fall through to LLM generation
-        if (empty($validLabels)) {
-            return null;
-        }
-
-        // Infer the label from user input
-        $label = $this->inferLabel($matches, $schema);
-
-        // Security: Validate the label exists in schema
-        // This prevents injection of arbitrary labels from user input
-        if (!$this->isValidLabel($label, $validLabels)) {
-            throw new \InvalidArgumentException("Unknown label: {$label}");
-        }
-
-        // Security: Defense in depth - sanitize even after validation
-        // This ensures no special characters can slip through
-        $sanitizedLabel = CypherSanitizer::escapeLabel($label);
-
-        // Generate query from template with sanitized label
-        $cypher = str_replace('{label}', $sanitizedLabel, $template['cypher']);
-
-        return [
-            'cypher' => $cypher,
-            'explanation' => "This query uses the '{$templateName}' template to {$template['description']}.",
-            'confidence' => 0.9,
-            'warnings' => [],
-            'metadata' => [
-                'template_used' => $templateName,
-                'retry_count' => 0,
-                'complexity' => 10,
-            ],
-        ];
+        return $this->templateMatcher->detectTemplate($question);
     }
 
     /**
@@ -617,54 +466,5 @@ class QueryGenerator implements QueryGeneratorInterface
 
         // Cap at 1.0
         return min($confidence, 1.0);
-    }
-
-    /**
-     * Calculate complexity score
-     *
-     * @param string $cypher Query to analyze
-     * @return int Complexity score
-     */
-    private function calculateComplexityScore(string $cypher): int
-    {
-        $complexity = 0;
-
-        // Count MATCH clauses
-        $complexity += substr_count(strtoupper($cypher), 'MATCH') * 10;
-
-        // Count WHERE clauses
-        $complexity += substr_count(strtoupper($cypher), 'WHERE') * 5;
-
-        // Count joins
-        $complexity += substr_count($cypher, ']-') * 8;
-
-        // Count aggregations
-        $complexity += preg_match_all('/\b(count|sum|avg|max|min)\b/i', $cypher) * 3;
-
-        return $complexity;
-    }
-
-    /**
-     * Infer label from matches and schema
-     *
-     * @param array $matches Regex matches
-     * @param array $schema Graph schema
-     * @return string Label name
-     */
-    private function inferLabel(array $matches, array $schema): string
-    {
-        // Get potential label from regex match
-        $potentialLabel = $matches[2] ?? $matches[1] ?? 'Node';
-
-        // Capitalize and singularize
-        $label = ucfirst(rtrim(strtolower($potentialLabel), 's'));
-
-        // Check if label exists in schema
-        if (!empty($schema['labels']) && in_array($label, $schema['labels'])) {
-            return $label;
-        }
-
-        // Return as-is if not in schema
-        return $label;
     }
 }

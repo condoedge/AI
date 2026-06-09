@@ -55,16 +55,13 @@ class ScopeSemanticMatcher
     ): array {
         $collectionName = $this->config['collection'] ?? $this->collectionName;
 
-        // Check if collection exists and has data
+        // Fall back to string matching when the scope index isn't available.
         if (!$this->collectionExists($collectionName)) {
-            // Fall back to string matching if not indexed
             return $this->fallbackStringMatch($question, $entityConfigs);
         }
 
-        // Embed the question
         $questionEmbedding = $this->embeddingProvider->embed($question);
 
-        // Search for similar scope examples
         $results = $this->vectorStore->search(
             $collectionName,
             $questionEmbedding,
@@ -72,7 +69,6 @@ class ScopeSemanticMatcher
             [] // No metadata filter
         );
 
-        // Filter by threshold and deduplicate by scope
         $matchedScopes = [];
         $seenScopes = [];
 
@@ -102,7 +98,6 @@ class ScopeSemanticMatcher
             }
             $seenScopes[$uniqueKey] = true;
 
-            // Get the full scope config
             $scopeConfig = $this->getScopeConfig($entityConfigs, $entityName, $scopeKey);
 
             if ($scopeConfig) {
@@ -120,7 +115,6 @@ class ScopeSemanticMatcher
             }
         }
 
-        // Sort by score descending
         uasort($matchedScopes, fn($a, $b) => ($b['match_score'] ?? 0) <=> ($a['match_score'] ?? 0));
 
         return $matchedScopes;
@@ -137,10 +131,7 @@ class ScopeSemanticMatcher
         $collectionName = $this->config['collection'] ?? $this->collectionName;
         $dimension = $this->config['dimension'] ?? 1536;
 
-        // Ensure collection exists
         $this->vectorStore->ensureCollection($collectionName, $dimension);
-
-        // Clear existing data
         $this->vectorStore->deleteAll($collectionName);
 
         $indexed = 0;
@@ -251,7 +242,6 @@ class ScopeSemanticMatcher
      */
     private function getScopeConfig(array $entityConfigs, string $entityName, string $scopeKey): ?array
     {
-        // Try exact entity name match
         if (isset($entityConfigs[$entityName]['metadata']['scopes'][$scopeKey])) {
             return $entityConfigs[$entityName]['metadata']['scopes'][$scopeKey];
         }

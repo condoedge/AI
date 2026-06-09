@@ -106,7 +106,6 @@ class RelationshipsSection extends BasePromptSection
     {
         $allConfigs = config('entities', []);
 
-        // If semantic selection identified specific entities, use only those
         $selectedEntities = $context->selectionInfo['selected_entities'] ?? [];
         if (!empty($selectedEntities)) {
             return array_filter($allConfigs, function ($config) use ($selectedEntities) {
@@ -115,7 +114,6 @@ class RelationshipsSection extends BasePromptSection
             });
         }
 
-        // If entity_metadata has detected entities, resolve them to configs
         $metadata = $context->entityMetadata;
         $detectedEntities = $metadata['detected_entities'] ?? [];
         if (!empty($detectedEntities)) {

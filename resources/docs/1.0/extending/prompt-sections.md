@@ -209,11 +209,15 @@ Sections are configured in `config/ai.php`:
 
 ```php
 'response_generator_sections' => [
+    \Condoedge\Ai\Services\ResponseSections\IdentitySection::class,
     \Condoedge\Ai\Services\ResponseSections\SystemPromptSection::class,
     \Condoedge\Ai\Services\ResponseSections\PrivacyAndSecurityGuidelinesSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection::class,
     \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
-    \Condoedge\Ai\Services\ResponseSections\QueryInfoSection::class,
+    // QueryInfoSection is intentionally NOT registered: it fed the executed Cypher
+    // (schema/table/property names) into the response prompt, contradicting the
+    // PrivacyAndSecurityGuidelinesSection policy. Do not re-add it without gating it
+    // behind a 'technical' response style.
     \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,
@@ -259,10 +263,10 @@ The response generator pipeline builds prompts for converting query results into
 
 | Priority | Section | Name | Purpose |
 |----------|---------|------|---------|
+| 5 | IdentitySection | `identity` | Establishes the assistant's identity and persona |
 | 10 | SystemPromptSection | `system` | Sets the LLM's role as a data analyst who explains query results |
 | 20 | ResponseProjectContextSection | `project_context` | Adds project context to help explain results in business domain terms |
 | 30 | OriginalQuestionSection | `question` | Shows the user's original question for context |
-| 40 | QueryInfoSection | `query` | Shows the Cypher query that was executed |
 | 45 | FileContextSection | `file_context` | Adds relevant file content with citation markers for the LLM to reference |
 | 45 | ResponseConversationContextSection | `conversation_context` | Adds conversation context including file references for follow-up questions |
 | 50 | ResultsDataSection | `data` | Shows the query results data (with configurable max items) |

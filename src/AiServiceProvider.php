@@ -44,7 +44,6 @@ use Condoedge\Ai\Services\Extractors\PdfExtractor;
 use Condoedge\Ai\Services\Extractors\DocxExtractor;
 use Condoedge\Ai\Services\PatternLibrary;
 use Condoedge\Ai\Services\SemanticPromptBuilder;
-use Condoedge\Ai\Services\SemanticMatcher;
 use Condoedge\Ai\Services\SemanticIndexer;
 use Condoedge\Ai\Services\ScopeSemanticMatcher;
 use Condoedge\Ai\Services\SemanticContextSelector;
@@ -95,59 +94,9 @@ use Condoedge\Utils\Facades\FileModel;
  * AI System Service Provider
  *
  * Registers AI system services in the Laravel container for automatic
- * dependency injection throughout your application.
- *
- * **Installation:**
- * Add to `config/app.php` providers array:
- * ```php
- * 'providers' => [
- *     // ...
- *     Condoedge\Ai\AiServiceProvider::class,
- * ]
- * ```
- *
- * **Usage with Facade (Recommended):**
- * ```php
- * use Condoedge\Ai\Facades\AI;
- *
- * AI::ingest($customer);
- * $context = AI::retrieveContext("Show all teams");
- * $response = AI::chat("What is 2+2?");
- * ```
- *
- * **Usage with Dependency Injection:**
- * ```php
- * use Condoedge\Ai\Services\AiManager;
- *
- * class CustomerController extends Controller
- * {
- *     public function __construct(private AiManager $ai) {}
- *
- *     public function store(Request $request)
- *     {
- *         $customer = Customer::create($request->all());
- *         $this->ai->ingest($customer);
- *     }
- * }
- * ```
- *
- * **Usage with Direct Services:**
- * ```php
- * use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
- *
- * class CustomerController extends Controller
- * {
- *     public function __construct(
- *         private DataIngestionServiceInterface $ingestion
- *     ) {}
- *
- *     public function store(Request $request)
- *     {
- *         $customer = Customer::create($request->all());
- *         $this->ingestion->ingest($customer);
- *     }
- * }
- * ```
+ * dependency injection throughout the application. Services are consumable via
+ * the AI facade, constructor injection of AiManager, or the individual
+ * contract interfaces.
  *
  * @package Condoedge\Ai
  */
@@ -160,16 +109,13 @@ class AiServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        // Register configuration
         $this->mergeConfigFrom(
             __DIR__ . '/../config/ai.php',
             'ai'
         );
 
-        // Register AiLogger (singleton, available to all services)
         $this->app->singleton(\Condoedge\Ai\Support\AiLogger::class);
 
-        // Register Vector Store
         $this->app->singleton(VectorStoreInterface::class, function ($app) {
             $defaultStore = config('ai.vector.default', 'qdrant');
 
@@ -179,8 +125,7 @@ class AiServiceProvider extends ServiceProvider
             };
         });
 
-        // Register Graph Store
-        // Uses factory to auto-select Bolt or HTTP driver based on URI scheme
+        // Factory auto-selects the Bolt or HTTP driver based on URI scheme.
         $this->app->singleton(GraphStoreInterface::class, function ($app) {
             $defaultStore = config('ai.graph.default', 'neo4j');
 
@@ -190,7 +135,6 @@ class AiServiceProvider extends ServiceProvider
             };
         });
 
-        // Register Embedding Provider
         $this->app->singleton(EmbeddingProviderInterface::class, function ($app) {
             $defaultProvider = config('ai.embedding.default', 'openai');
 
@@ -204,7 +148,6 @@ class AiServiceProvider extends ServiceProvider
             return new \Condoedge\Ai\EmbeddingProviders\MemoizedEmbeddingProvider($provider);
         });
 
-        // Register LLM Provider
         $this->app->singleton(LlmProviderInterface::class, function ($app) {
             $defaultProvider = config('ai.llm.default', 'openai');
 
@@ -215,7 +158,7 @@ class AiServiceProvider extends ServiceProvider
             };
         });
 
-        // Register LLM Resolver (per-role model selection)
+        // Per-role model selection.
         $this->app->singleton(LlmResolver::class, function ($app) {
             return new LlmResolver(
                 defaultProvider: $app->make(LlmProviderInterface::class),
@@ -223,7 +166,6 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Register Data Ingestion Service
         $this->app->singleton(DataIngestionServiceInterface::class, function ($app) {
             return new DataIngestionService(
                 vectorStore: $app->make(VectorStoreInterface::class),
@@ -232,10 +174,9 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Alias for easier access
         $this->app->alias(DataIngestionServiceInterface::class, DataIngestionService::class);
 
-        // Register Batch Data Ingestion Service (decorates the base service)
+        // Decorates the base ingestion service.
         $this->app->singleton(\Condoedge\Ai\Services\BatchDataIngestionService::class, function ($app) {
             return new \Condoedge\Ai\Services\BatchDataIngestionService(
                 inner: $app->make(\Condoedge\Ai\Contracts\DataIngestionServiceInterface::class),
@@ -246,7 +187,6 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Register Context Retriever
         $this->app->singleton(ContextRetrieverInterface::class, function ($app) {
             $retriever = new ContextRetriever(
                 vectorStore: $app->make(VectorStoreInterface::class),
@@ -255,10 +195,10 @@ class AiServiceProvider extends ServiceProvider
                 logger: $app->make(AiLogger::class),
                 entityConfigs: null, // Load from config
                 scopeMatcher: $app->make(ScopeSemanticMatcher::class),
-                contextSelector: $app->make(SemanticContextSelector::class)
+                contextSelector: $app->make(SemanticContextSelector::class),
+                reranker: $app->make(\Condoedge\Ai\Services\Retrieval\RerankerInterface::class),
             );
 
-            // Wire Query Understanding service
             if (config('ai.query_understanding.enabled', true)) {
                 $retriever->setQueryUnderstanding($app->make(QueryUnderstandingService::class));
             }
@@ -266,16 +206,13 @@ class AiServiceProvider extends ServiceProvider
             return $retriever;
         });
 
-        // Alias for easier access
         $this->app->alias(ContextRetrieverInterface::class, ContextRetriever::class);
 
-        // Register Pattern Library
         $this->app->singleton(PatternLibrary::class, function ($app) {
             $patterns = config('ai.query_patterns', []);
             return new PatternLibrary($patterns);
         });
 
-        // Register Semantic Prompt Builder
         $this->app->singleton(SemanticPromptBuilder::class, function ($app) {
             return new SemanticPromptBuilder(
                 patternLibrary: $app->make(PatternLibrary::class)
@@ -285,10 +222,9 @@ class AiServiceProvider extends ServiceProvider
         // The way to add a new section to the Semantic Prompt Builders
         // $this->app->make(SemanticPromptBuilder::class)->addSection($section);
 
-        // Register Query Generator
         $this->app->singleton(QueryGeneratorInterface::class, function ($app) {
             return new QueryGenerator(
-                llm: $app->make(LlmProviderInterface::class),
+                llm: $app->make(LlmResolver::class)->forRole('query_generation'),
                 graphStore: $app->make(GraphStoreInterface::class),
                 config: config('ai.query_generation', []),
                 promptBuilder: $app->make(SemanticPromptBuilder::class),
@@ -296,10 +232,8 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Alias for easier access
         $this->app->alias(QueryGeneratorInterface::class, QueryGenerator::class);
 
-        // Register Query Executor
         $this->app->singleton(QueryExecutorInterface::class, function ($app) {
             return new QueryExecutor(
                 graphStore: $app->make(GraphStoreInterface::class),
@@ -307,26 +241,21 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Alias for easier access
         $this->app->alias(QueryExecutorInterface::class, QueryExecutor::class);
 
-        // Register Response Generator
         $this->app->singleton(ResponseGeneratorInterface::class, function ($app) {
             return new ResponseGenerator(
-                llm: $app->make(LlmProviderInterface::class),
+                llm: $app->make(LlmResolver::class)->forRole('response_generation'),
                 config: config('ai.response_generation', [])
             );
         });
 
-        // Alias for easier access
         $this->app->alias(ResponseGeneratorInterface::class, ResponseGenerator::class);
 
-        // Register File Chunker
         $this->app->singleton(FileChunkerInterface::class, function ($app) {
             return new SemanticChunker();
         });
 
-        // Register Chunk Store
         $this->app->singleton(ChunkStoreInterface::class, function ($app) {
             return new QdrantChunkStore(
                 vectorStore: $app->make(VectorStoreInterface::class),
@@ -339,11 +268,9 @@ class AiServiceProvider extends ServiceProvider
             return new OcrPdfParser();
         });
 
-        // Register File Extractor Registry
         $this->app->singleton(FileExtractorRegistry::class, function ($app) {
             $registry = new FileExtractorRegistry();
 
-            // Register default extractors
             $registry->registerMany([
                 new TextExtractor(),
                 new MarkdownExtractor(),
@@ -354,7 +281,6 @@ class AiServiceProvider extends ServiceProvider
             return $registry;
         });
 
-        // Register File Processor
         $this->app->singleton(FileProcessorInterface::class, function ($app) {
             return new FileProcessor(
                 extractorRegistry: $app->make(FileExtractorRegistry::class),
@@ -364,10 +290,8 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Alias for easier access
         $this->app->alias(FileProcessorInterface::class, FileProcessor::class);
 
-        // Register File Search Service
         $this->app->singleton('file-search', function ($app) {
             return new FileSearchService(
                 chunkStore: $app->make(ChunkStoreInterface::class),
@@ -376,10 +300,8 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Alias for dependency injection
         $this->app->alias('file-search', FileSearchService::class);
 
-        // Register AI Manager as singleton
         $this->app->singleton('ai', function ($app) {
             return new AiManager(
                 ingestion: $app->make(DataIngestionServiceInterface::class),
@@ -396,37 +318,17 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Alias for dependency injection
         $this->app->alias('ai', AiManager::class);
 
-        // Register Semantic Matching Services
         $this->registerSemanticServices();
-
-        // Register Discovery Services
         $this->registerDiscoveryServices();
-
-        // Register Chat Service
         $this->registerChatServices();
-
-        // Register Context Management Services
         $this->registerContextServices();
-
-        // Register File Context Services
         $this->registerFileContextServices();
-
-        // Register UI Theming Services
         $this->registerUiServices();
-
-        // Register Settings Services
         $this->registerSettingsServices();
-
-        // Register Security Services
         $this->registerSecurityServices();
-
-        // Register Retrieval (second-stage re-ranking) Services
         $this->registerRetrievalServices();
-
-        // Register Agentic Action Services
         $this->registerActionServices();
     }
 
@@ -448,6 +350,10 @@ class AiServiceProvider extends ServiceProvider
 
     /**
      * Register agentic action services (action registry + dispatcher).
+     *
+     * The registry self-ingests config('ai.actions') class-strings on boot the house-Plugin way
+     * (new $class()), so a host registers an action exactly like it registers a Plugin — by
+     * listing the class-string in config, with NO bespoke service-provider code here.
      */
     private function registerActionServices(): void
     {
@@ -462,15 +368,6 @@ class AiServiceProvider extends ServiceProvider
      */
     private function registerSemanticServices(): void
     {
-        // Register SemanticMatcher
-        $this->app->singleton(SemanticMatcher::class, function ($app) {
-            return new SemanticMatcher(
-                embedding: $app->make(EmbeddingProviderInterface::class),
-                vectorStore: $app->make(VectorStoreInterface::class)
-            );
-        });
-
-        // Register SemanticIndexer
         $this->app->singleton(SemanticIndexer::class, function ($app) {
             return new SemanticIndexer(
                 embedding: $app->make(EmbeddingProviderInterface::class),
@@ -479,7 +376,6 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Register ScopeSemanticMatcher
         $this->app->singleton(ScopeSemanticMatcher::class, function ($app) {
             return new ScopeSemanticMatcher(
                 vectorStore: $app->make(VectorStoreInterface::class),
@@ -488,7 +384,6 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Register SemanticContextSelector
         $this->app->singleton(SemanticContextSelector::class, function ($app) {
             return new SemanticContextSelector(
                 vectorStore: $app->make(VectorStoreInterface::class),
@@ -498,12 +393,17 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Register QueryUnderstandingService
         $this->app->singleton(QueryUnderstandingService::class, function ($app) {
+            // Corpus languages live under file_context (where retrieval reads them);
+            // surface them into the QU config so the single QU LLM call can emit the
+            // question translated into each — the cross-lingual fan-out angles.
+            $quConfig = config('ai.query_understanding', []);
+            $quConfig['corpus_languages'] = config('ai.file_context.corpus_languages', []);
+
             return new QueryUnderstandingService(
                 llm: $app->make(LlmResolver::class)->forRole('query_understanding'),
                 logger: $app->make(AiLogger::class),
-                config: config('ai.query_understanding', [])
+                config: $quConfig
             );
         });
     }
@@ -515,16 +415,12 @@ class AiServiceProvider extends ServiceProvider
      */
     private function registerDiscoveryServices(): void
     {
-        // Register SchemaInspector
         $this->app->singleton(SchemaInspector::class);
 
-        // Register CypherQueryBuilderSpy
         $this->app->bind(CypherQueryBuilderSpy::class);
 
-        // Register CypherPatternGenerator
         $this->app->singleton(CypherPatternGenerator::class);
 
-        // Register CypherScopeAdapter
         $this->app->singleton(CypherScopeAdapter::class, function ($app) {
             return new CypherScopeAdapter(
                 spy: $app->make(CypherQueryBuilderSpy::class),
@@ -532,37 +428,30 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Register PropertyDiscoverer
         $this->app->singleton(PropertyDiscoverer::class, function ($app) {
             return new PropertyDiscoverer(
                 schema: $app->make(SchemaInspector::class)
             );
         });
 
-        // Register RelationshipDiscoverer
         $this->app->singleton(RelationshipDiscoverer::class, function ($app) {
             return new RelationshipDiscoverer(
                 schema: $app->make(SchemaInspector::class)
             );
         });
 
-        // Register AliasGenerator
         $this->app->singleton(AliasGenerator::class);
 
-        // Register EmbedFieldDetector
         $this->app->singleton(EmbedFieldDetector::class, function ($app) {
             return new EmbedFieldDetector(
                 schema: $app->make(SchemaInspector::class)
             );
         });
 
-        // Register TraversalScopeGenerator
         $this->app->singleton(TraversalScopeGenerator::class);
 
-        // Register InheritanceResolver
         $this->app->singleton(InheritanceResolver::class);
 
-        // Register EntityAutoDiscovery
         $this->app->singleton(EntityAutoDiscovery::class, function ($app) {
             return new EntityAutoDiscovery(
                 schema: $app->make(SchemaInspector::class),
@@ -576,7 +465,6 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Register AiConfigEnhancer
         $this->app->singleton(\Condoedge\Ai\Services\Discovery\AiConfigEnhancer::class, function ($app) {
             return new \Condoedge\Ai\Services\Discovery\AiConfigEnhancer(
                 llm: $app->make(LlmProviderInterface::class)
@@ -591,7 +479,6 @@ class AiServiceProvider extends ServiceProvider
      */
     private function registerChatServices(): void
     {
-        // Register AI Chat Service
         $this->app->singleton(AiChatServiceInterface::class, function ($app) {
             $aiChatService = config('ai.chat.service', AiChatService::class);
             
@@ -600,11 +487,10 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Alias for easier access
         $this->app->alias(AiChatServiceInterface::class, AiChatService::class);
 
-        // Register Regenerate Message Service (thin guard over RegenerateAnswerUseCase;
-        // the use case is container-autowired, so let the container resolve dependencies).
+        // Thin guard over RegenerateAnswerUseCase; the use case is container-autowired,
+        // so let the container resolve its dependencies.
         $this->app->singleton(RegenerateMessageService::class);
     }
 
@@ -635,10 +521,14 @@ class AiServiceProvider extends ServiceProvider
      */
     private function registerFileContextServices(): void
     {
-        // File access resolver (singleton for consistent security checks)
-        $this->app->singleton(FileAccessResolverInterface::class, FileAccessResolver::class);
+        // File access resolver (singleton for consistent security checks).
+        // Bind the concrete as the shared singleton, then alias the interface to it so that
+        // app(FileAccessResolverInterface::class) and app(FileAccessResolver::class) return the
+        // exact same instance. (Aliasing the interface->concrete on a class-string singleton
+        // binding would recurse infinitely, so bind concrete + alias interface instead.)
+        $this->app->singleton(FileAccessResolver::class);
+        $this->app->alias(FileAccessResolver::class, FileAccessResolverInterface::class);
 
-        // Physical file indexer
         $this->app->singleton(PhysicalFileIndexer::class);
 
         // File context enricher (override in project service provider for priority logic)
@@ -647,21 +537,20 @@ class AiServiceProvider extends ServiceProvider
             \Condoedge\Ai\Services\Context\DefaultFileContextEnricher::class
         );
 
-        // File context provider
         $this->app->singleton(FileContextProvider::class, function ($app) {
             return new FileContextProvider(
                 $app->make(FileSearchService::class),
                 $app->make(FileAccessResolverInterface::class),
                 null,
-                $app->make(\Condoedge\Ai\Contracts\FileContextEnricherInterface::class)
+                $app->make(\Condoedge\Ai\Contracts\FileContextEnricherInterface::class),
+                null,
+                $app->make(ChunkStoreInterface::class)
             );
         });
 
-        // Response enrichers
         $this->app->singleton(ResponseFileEnricher::class);
         $this->app->singleton(ResponseEntityEnricher::class);
 
-        // Content link processors
         $this->app->singleton(ActionLinkHandler::class);
         $this->app->singleton(FileCitationHandler::class);
         $this->app->singleton(ContentLinkProcessor::class, function ($app) {
@@ -677,16 +566,13 @@ class AiServiceProvider extends ServiceProvider
      */
     private function registerUiServices(): void
     {
-        // Register the configured factory implementation
         $this->app->singleton(ChatThemeFactoryInterface::class, function ($app) {
             $factoryClass = config('ai.ui.factory', ConfigChatThemeFactory::class);
             return new $factoryClass();
         });
 
-        // Alias for convenience
         $this->app->alias(ChatThemeFactoryInterface::class, 'chat-theme-factory');
 
-        // Register the default theme from factory
         $this->app->singleton(ChatThemeInterface::class, function ($app) {
             return $app->make(ChatThemeFactoryInterface::class)->create();
         });
@@ -707,7 +593,6 @@ class AiServiceProvider extends ServiceProvider
      */
     private function registerSecurityServices(): void
     {
-        // Register Auth Adapter (abstract interface for swappable implementations).
         // KompoAuthAdapter depends on kompo/auth globals/classes that are not a
         // dependency of this package; bind it only when kompo/auth is present so
         // standalone installs fail closed via NullAuthAdapter instead of fataling.
@@ -720,10 +605,8 @@ class AiServiceProvider extends ServiceProvider
             return new \Condoedge\Ai\Auth\NullAuthAdapter();
         });
 
-        // Register TeamPathResolver
         $this->app->singleton(TeamPathResolver::class);
 
-        // Register AiSecurityService (main orchestrator)
         $this->app->singleton(AiSecurityService::class, function ($app) {
             return new AiSecurityService(
                 $app->make(AiAuthAdapterInterface::class),
@@ -739,25 +622,19 @@ class AiServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        // Register policies
         Gate::policy(AiConversation::class, AiConversationPolicy::class);
 
-        // Load routes
         $this->loadRoutesFrom(__DIR__."/../routes/api.php");
         $this->loadRoutesFrom(__DIR__."/../routes/web.php");
 
-        // Load migrations
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
 
-        // Load translations
         $this->loadJsonTranslationsFrom(__DIR__ . '/../resources/lang');
 
-        // Publish configuration
         $this->publishes([
             __DIR__ . '/../config/ai.php' => config_path('ai.php'),
         ], 'ai-config');
 
-        // Publish entity configuration
         $this->publishes([
             __DIR__ . '/../config/entities.php' => config_path('entities.php'),
         ], 'ai-entities');
@@ -768,19 +645,16 @@ class AiServiceProvider extends ServiceProvider
             __DIR__ . '/../public' => base_path('public'),
         ], 'ai-docs');
 
-        // Publish translations
         $this->publishes([
             __DIR__ . '/../resources/lang' => $this->app->langPath('vendor/ai'),
         ], 'ai-lang');
 
-        // Register chat assets (JS and CSS)
         $this->publishes([
             __DIR__.'/../resources/js/chat-scroll.js' => public_path('vendor/condoedge/ai/js/chat-scroll.js'),
             __DIR__.'/../resources/js/chat-message-injector.js' => public_path('vendor/condoedge/ai/js/chat-message-injector.js'),
             __DIR__.'/../resources/css/ai-chat.css' => public_path('vendor/condoedge/ai/css/ai-chat.css'),
         ], 'ai-assets');
 
-        // Register console commands
         if ($this->app->runningInConsole()) {
             $this->commands([
                 \Condoedge\Ai\Console\Commands\DiagnoseCommand::class,
@@ -800,7 +674,6 @@ class AiServiceProvider extends ServiceProvider
             ]);
         }
 
-        // Register sync observers for related models
         $this->registerSyncObservers();
 
         // Register FileModel plugins if the facade is available
@@ -833,7 +706,6 @@ class AiServiceProvider extends ServiceProvider
             return;
         }
 
-        // Collect all related models that need observers
         $relatedModels = [];
         foreach ($syncTriggers as $config) {
             $relatedModels = array_merge($relatedModels, $config['on_related'] ?? []);
@@ -841,7 +713,6 @@ class AiServiceProvider extends ServiceProvider
 
         $relatedModels = array_unique($relatedModels);
 
-        // Register observer for each related model
         $observer = $this->app->make(\Condoedge\Ai\Observers\RelatedModelSyncObserver::class);
         $namespaces = config('ai.model_namespaces', ['App\\Models']);
 

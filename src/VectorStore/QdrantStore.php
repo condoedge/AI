@@ -157,7 +157,11 @@ class QdrantStore implements VectorStoreInterface
                 $this->createCollection($collection, count($points[0]['vector']));
             }
 
-            $response = $this->request('PUT', "/collections/{$collection}/points", [
+            // wait=true makes the upsert synchronous so points are immediately
+            // searchable/readable. Without it Qdrant returns 'acknowledged' and
+            // applies the write asynchronously, causing read-after-write misses
+            // (empty search/count results) for ingestion that verifies right away.
+            $response = $this->request('PUT', "/collections/{$collection}/points?wait=true", [
                 'points' => $points
             ]);
 
@@ -225,7 +229,9 @@ class QdrantStore implements VectorStoreInterface
     public function deletePoints(string $collection, array $ids): bool
     {
         try {
-            $response = $this->request('POST', "/collections/{$collection}/points/delete", [
+            // wait=true makes the delete synchronous so removed points are gone
+            // for any immediately-following read (mirrors the upsert behavior).
+            $response = $this->request('POST', "/collections/{$collection}/points/delete?wait=true", [
                 'points' => $ids
             ]);
 
@@ -272,12 +278,10 @@ class QdrantStore implements VectorStoreInterface
      */
     protected function buildFilter(array $filter): array
     {
-        // Detect if already in Qdrant filter format
         if (isset($filter['must']) || isset($filter['should']) || isset($filter['must_not'])) {
             return $filter;
         }
 
-        // Convert simple key-value pairs to Qdrant format
         $must = [];
 
         foreach ($filter as $key => $value) {
@@ -313,8 +317,7 @@ class QdrantStore implements VectorStoreInterface
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
 
         if (in_array($method, ['POST', 'PUT', 'PATCH'])) {
-            // Always send JSON body for POST/PUT/PATCH, even if empty
-            // Convert empty arrays to objects so they encode as {} not []
+            // Convert empty arrays to objects so they encode as {} not [].
             $cleanedData = $this->prepareJsonData($data);
             curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($cleanedData, JSON_PRESERVE_ZERO_FRACTION));
         }
@@ -347,18 +350,16 @@ class QdrantStore implements VectorStoreInterface
      */
     protected function prepareJsonData($data, string $parentKey = '')
     {
-        // If it's already an object, return as-is
         if (is_object($data)) {
             return $data;
         }
 
         if (is_array($data)) {
-            // Special case: empty array in 'payload' field should become {}
+            // An empty 'payload' must encode as {} rather than [].
             if (empty($data) && $parentKey === 'payload') {
                 return new \stdClass();
             }
 
-            // Recursively process array elements
             $result = [];
             foreach ($data as $key => $value) {
                 $result[$key] = $this->prepareJsonData($value, (string)$key);
@@ -419,7 +420,6 @@ class QdrantStore implements VectorStoreInterface
      */
     public function upsertBatch(string $collection, array $points): bool
     {
-        // Transform points to Qdrant format if needed
         $qdrantPoints = array_map(function ($point) {
             return [
                 'id' => $point['id'],

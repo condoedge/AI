@@ -10,10 +10,6 @@ namespace Condoedge\Ai\Services\Chat\Exporter;
  * Exports a whole conversation (one row per message) to PDF via {@see ResultSetExporter},
  * which is GUARDED: when Dompdf is absent it degrades. This service surfaces that degradation
  * by throwing a clear, actionable exception rather than producing nothing.
- *
- * NOTE FOR THE MAIN SESSION: register this in ExporterConversationFactory (config-driven) —
- * this slice intentionally does NOT edit the factory's type map. Add:
- *     'pdf' => ExportConversationPdfService::class,
  */
 class ExportConversationPdfService implements ExportConversationServiceInterface
 {

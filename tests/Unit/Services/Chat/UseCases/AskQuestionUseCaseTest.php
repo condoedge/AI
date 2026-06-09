@@ -157,6 +157,85 @@ class AskQuestionUseCaseTest extends TestCase
     }
 
     /** @test */
+    public function it_forwards_page_context_to_the_ai_options(): void
+    {
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        $page = new \Condoedge\Ai\DTOs\PageContext(
+            route: 'units.show',
+            entityType: 'Unit',
+            entityId: 402,
+            filters: ['status' => 'active'],
+            label: 'Unit 402',
+        );
+
+        $ai = $this->mockAi();
+        $ai->shouldReceive('getSchema')->andReturn(['labels' => [], 'relationships' => []]);
+
+        // answerQuestion must receive the page_context as the DTO's toArray() form.
+        $ai->shouldReceive('answerQuestion')
+            ->once()
+            ->withArgs(function ($question, $options) use ($page) {
+                return is_array($options)
+                    && array_key_exists('page_context', $options)
+                    && $options['page_context'] === $page->toArray();
+            })
+            ->andReturn([
+                'answer' => 'Here is the payment history.',
+                'cypher' => null,
+                'data' => [['amount' => 100]],
+                'suggestions' => [],
+                'referenced_files' => [],
+            ]);
+
+        $result = $this->useCase()->execute(new AskQuestionInput(
+            question: 'Show this unit payment history',
+            conversation: $conversation,
+            style: 'friendly',
+            user: $this->user(),
+            allowAnonymous: false,
+            pageContext: $page,
+        ));
+
+        $this->assertFalse($result->failed());
+    }
+
+    /** @test */
+    public function page_context_is_null_in_ai_options_when_not_provided(): void
+    {
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        $ai = $this->mockAi();
+        $ai->shouldReceive('getSchema')->andReturn(['labels' => [], 'relationships' => []]);
+
+        // No page context => the option is present but null (additive, never bricks the call).
+        $ai->shouldReceive('answerQuestion')
+            ->once()
+            ->withArgs(function ($question, $options) {
+                return is_array($options)
+                    && array_key_exists('page_context', $options)
+                    && $options['page_context'] === null;
+            })
+            ->andReturn([
+                'answer' => 'ok',
+                'cypher' => null,
+                'data' => [['x' => 1]],
+                'suggestions' => [],
+                'referenced_files' => [],
+            ]);
+
+        $result = $this->useCase()->execute(new AskQuestionInput(
+            question: 'Show all units',
+            conversation: $conversation,
+            style: 'friendly',
+            user: $this->user(),
+        ));
+
+        // The withArgs matcher above is the real assertion; assert the turn succeeded too.
+        $this->assertFalse($result->failed());
+    }
+
+    /** @test */
     public function it_marks_degraded_when_data_and_files_are_both_empty(): void
     {
         $conversation = AiConversation::create(['user_id' => 1]);

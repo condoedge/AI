@@ -463,34 +463,68 @@ interface EntityConfigInterface
 
 ---
 
-## Matching Interfaces
+## Semantic Matching Services
 
-### MatcherInterface
+These are concrete service classes (no shared interface). Resolve them from the
+container with `app(...)` and pass `config('ai.entities')` as the entity configs.
 
-Interface for semantic matchers.
+### ScopeSemanticMatcher
+
+Matches a question against the scopes defined on your entities.
 
 ```php
 <?php
 
-namespace Condoedge\Ai\Contracts;
+namespace Condoedge\Ai\Services;
 
-interface MatcherInterface
+class ScopeSemanticMatcher
 {
     /**
-     * Find matches for a query.
+     * Find scopes that semantically match the user's question.
      *
-     * @param string $query Search query
-     * @param array $candidates Candidate items
-     * @param float $threshold Minimum similarity
-     * @return array Matches with scores
+     * @param string $question     User's question
+     * @param array  $entityConfigs Entity configurations (e.g. config('ai.entities'))
+     * @param float  $threshold     Minimum similarity score (0-1)
+     * @param int    $topK          Maximum number of matches to return
+     * @return array Matched scopes keyed by scope, each with 'match_score',
+     *               'entity', 'scope', 'match_type' and 'matched_example'
      */
-    public function match(string $query, array $candidates, float $threshold = 0.7): array;
+    public function findMatchingScopes(
+        string $question,
+        array $entityConfigs,
+        float $threshold = 0.7,
+        int $topK = 5
+    ): array;
 }
 ```
 
-**Implementations:**
-- `SemanticMatcher`
-- `ScopeSemanticMatcher`
+### SemanticContextSelector
+
+Selects the relevant entities, relationships and scopes for a question.
+
+```php
+<?php
+
+namespace Condoedge\Ai\Services;
+
+use Condoedge\Ai\DTOs\SemanticSelectionResult;
+
+class SemanticContextSelector
+{
+    /**
+     * Select relevant context components for a question.
+     *
+     * @param string $question      User's question
+     * @param array  $entityConfigs Entity configurations (e.g. config('ai.entities'))
+     * @param array  $options       ['threshold' => float, 'top_k' => int]
+     */
+    public function selectRelevantContext(
+        string $question,
+        array $entityConfigs,
+        array $options = []
+    ): SemanticSelectionResult;
+}
+```
 
 ---
 

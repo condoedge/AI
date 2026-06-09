@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Actions;
 
 use Condoedge\Ai\Contracts\AiActionInterface;
+use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 
 /**
  * Adapter that wraps a legacy config('ai.entity_actions') / config('ai.generic_actions')
@@ -13,21 +14,20 @@ use Condoedge\Ai\Contracts\AiActionInterface;
  * A config entry is either:
  *   - a bare \Closure (oldest format), OR
  *   - an array: ['action' => \Closure, 'aliases' => [...], 'label' => '...',
- *                'description' => '...', 'presentation' => 'link',
- *                'requires_approval' => false, 'input_schema' => [...],
- *                'authorize' => \Closure(?$user, array $input): bool ]
+ *                'description' => '...', 'requires_approval' => false,
+ *                'input_schema' => [...], 'authorize' => \Closure(?$user, array $input): bool ]
  *
  * SAFE DEFAULTS (everything optional — absent keys never throw):
- *   - requiresApproval() = false
+ *   - mutates() = false   (requires_approval => false)
  *   - authorize() = true
  *   - inputSchema() = [] (no params)
- *   - presentation() = 'link'
  *
- * The wrapped closure is invoked with backward-compatible positional args:
- *   - Entity action closure:  fn($id, $text)            (legacy) — params appended if it accepts them
- *   - Generic action closure: fn($text)                 (legacy)
- * We additionally pass the validated $input array as the trailing argument when the closure's
- * arity allows it, so new closures can opt into params without breaking old ones.
+ * The wrapped closure is invoked with ONE of two signatures:
+ *   - NEW (preferred):   fn(ActionContext $ctx): AiActionResult   — single typed param.
+ *   - LEGACY positional: fn($id, $text)  (entity)  /  fn($text)  (generic), with the validated
+ *     $input appended when the closure's arity allows it.
+ * The signature is chosen by ONE reflection check on the first param's type hint, not per-render
+ * arity juggling. A legacy closure that returns a raw value is wrapped in an element result.
  */
 class ConfigAiAction implements AiActionInterface
 {
@@ -84,22 +84,22 @@ class ConfigAiAction implements AiActionInterface
         return (array) ($this->config['input_schema'] ?? []);
     }
 
-    public function presentation(): string
-    {
-        if ($this->config instanceof \Closure) {
-            return 'link';
-        }
-
-        return (string) ($this->config['presentation'] ?? 'link');
-    }
-
-    public function requiresApproval(): bool
+    public function mutates(): bool
     {
         if ($this->config instanceof \Closure) {
             return false;
         }
 
         return (bool) ($this->config['requires_approval'] ?? false);
+    }
+
+    /**
+     * Backward-compatible alias of {@see mutates()} for the old config method name. The
+     * dispatcher reads mutates().
+     */
+    public function requiresApproval(): bool
+    {
+        return $this->mutates();
     }
 
     public function authorize(mixed $user, array $input): bool
@@ -136,46 +136,63 @@ class ConfigAiAction implements AiActionInterface
         return $action instanceof \Closure ? $action : null;
     }
 
-    public function handle(array $input, array $context): mixed
+    public function handle(array $input, ActionContext $context): AiActionResult
     {
         $resolver = $this->resolver();
         if ($resolver === null) {
-            return null;
+            return AiActionResult::error('This action is not available.');
         }
 
-        $text = $context['text'] ?? $this->label();
+        $raw = $this->expectsActionContext($resolver)
+            ? $resolver($context)
+            : $this->invokeLegacy($resolver, $context, $input);
 
-        // Build positional args matching the legacy contract, then append $input so new
-        // closures can opt into params. ReflectionFunction lets us pass only what the
-        // closure declares, keeping old `fn($id, $text)` / `fn($text)` closures intact.
-        if ($this->entityType !== null) {
-            $entityId = $context['entity_id'] ?? null;
-            $positional = [$entityId, $text, $input];
-        } else {
-            $positional = [$text, $input];
-        }
-
-        return $this->invokeWithArity($resolver, $positional);
+        // A new-style closure already returns a typed result; a legacy closure returns a raw
+        // renderable/value we wrap once so consumers always get a typed result.
+        return $raw instanceof AiActionResult
+            ? $raw
+            : AiActionResult::element($raw, $this->label());
     }
 
     /**
-     * Invoke a closure passing only as many leading args as it declares.
-     *
-     * @param array<int, mixed> $args
+     * Whether the closure opts into the new typed signature fn(ActionContext $ctx).
      */
-    private function invokeWithArity(\Closure $resolver, array $args): mixed
+    private function expectsActionContext(\Closure $resolver): bool
     {
         try {
-            $ref = new \ReflectionFunction($resolver);
-            $count = $ref->getNumberOfParameters();
+            $params = (new \ReflectionFunction($resolver))->getParameters();
         } catch (\ReflectionException $e) {
-            $count = count($args);
+            return false;
+        }
+
+        $first = $params[0] ?? null;
+        $type = $first?->getType();
+
+        return $type instanceof \ReflectionNamedType && $type->getName() === ActionContext::class;
+    }
+
+    /**
+     * Invoke a legacy positional closure: entity → ($id, $text[, $input]); generic → ($text[, $input]).
+     * Passes only as many leading args as the closure declares.
+     */
+    private function invokeLegacy(\Closure $resolver, ActionContext $context, array $input): mixed
+    {
+        $text = $context->text ?? $this->label();
+
+        $positional = $this->entityType !== null
+            ? [$context->entityId, $text, $input]
+            : [$text, $input];
+
+        try {
+            $count = (new \ReflectionFunction($resolver))->getNumberOfParameters();
+        } catch (\ReflectionException $e) {
+            $count = count($positional);
         }
 
         if ($count <= 0) {
             return $resolver();
         }
 
-        return $resolver(...array_slice($args, 0, $count));
+        return $resolver(...array_slice($positional, 0, $count));
     }
 }

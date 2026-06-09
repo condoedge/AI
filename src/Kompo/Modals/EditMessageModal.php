@@ -1,5 +1,4 @@
 <?php
-// src/Kompo/Modals/EditMessageModal.php
 
 namespace Condoedge\Ai\Kompo\Modals;
 
@@ -32,7 +31,6 @@ class EditMessageModal extends Modal
         $this->messageId = $this->prop('message_id');
         $this->conversationId = $this->prop('conversation_id');
 
-        // Only query for conversation if auth is available
         if ($this->messageId && $this->conversationId) {
             // Only allow editing own messages
             $conversation = AiConversation::where('user_id', auth()->id())
@@ -101,14 +99,12 @@ class EditMessageModal extends Modal
 
                             if (!newContent) return;
 
-                            // Update message content immediately
                             updateMessageContent(messageId, newContent);
 
                             // Close modal via .vlModalClose
                             const closeBtn = document.querySelector(".vlModalClose");
                             if (closeBtn) closeBtn.click();
 
-                            // Remove old messages and show typing dots
                             removeMessagesAfter(messageId);
                             showTypingAfterMessage(messageId);
                         }')

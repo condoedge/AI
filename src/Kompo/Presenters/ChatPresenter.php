@@ -8,6 +8,7 @@ use Condoedge\Ai\Exceptions\CircuitBreakerOpenException;
 use Condoedge\Ai\Exceptions\QueryExecutionException;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Exceptions\QueryTimeoutException;
+use Condoedge\Ai\DTOs\PageContext;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Chat\Inputs\AskQuestionInput;
@@ -50,22 +51,26 @@ class ChatPresenter
      * calling component can drive the Kompo refresh (the user/assistant messages are persisted
      * and re-rendered from the DB). On $result->failed() the caller surfaces friendlyError.
      *
-     * @param AiConversation $conversation The conversation to append the turn to.
-     * @param string         $message      The user's raw message text.
-     * @param string         $style        Response style (friendly|professional|concise|...).
-     * @param mixed          $user         The acting user (Authenticatable|null).
+     * @param AiConversation   $conversation The conversation to append the turn to.
+     * @param string           $message      The user's raw message text.
+     * @param string           $style        Response style (friendly|professional|concise|...).
+     * @param mixed            $user         The acting user (Authenticatable|null).
+     * @param PageContext|null $pageContext  The page/record the chat was opened from. Null
+     *                                       (default) keeps every existing caller working unchanged.
      */
     public function handleSend(
         AiConversation $conversation,
         string $message,
         string $style,
-        mixed $user
+        mixed $user,
+        ?PageContext $pageContext = null
     ): ChatTurnResult {
         return $this->askQuestionUseCase->execute(new AskQuestionInput(
             question: $message,
             conversation: $conversation,
             style: $style,
             user: $user,
+            pageContext: $pageContext,
         ));
     }
 

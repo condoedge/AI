@@ -44,6 +44,11 @@ class DataConsistencyTest extends TestCase
             ->once()
             ->andReturn('node-123');
 
+        // ingestToVector lazily ensures the collection exists before embedding;
+        // report it as present so the failure under test is the embed() call.
+        $vectorStore->shouldReceive('collectionExists')
+            ->andReturn(true);
+
         // Vector insert fails
         $embeddingProvider->shouldReceive('embed')
             ->once()
@@ -88,6 +93,11 @@ class DataConsistencyTest extends TestCase
             ->once()
             ->andReturn('node-123');
 
+        // ingestToVector lazily ensures the collection exists before embedding;
+        // report it as present so the failure under test is the embed() call.
+        $vectorStore->shouldReceive('collectionExists')
+            ->andReturn(true);
+
         // Vector insert fails
         $embeddingProvider->shouldReceive('embed')
             ->once()
@@ -121,6 +131,11 @@ class DataConsistencyTest extends TestCase
         $graphStore->shouldReceive('createNode')
             ->once()
             ->andReturn('node-123');
+
+        // ingestToVector lazily ensures the collection exists before embedding;
+        // report it as present so the real success path is exercised.
+        $vectorStore->shouldReceive('collectionExists')
+            ->andReturn(true);
 
         $embeddingProvider->shouldReceive('embed')
             ->once()

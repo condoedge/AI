@@ -34,6 +34,13 @@ class PipelineContext
     /** Conversation context from chat pipeline */
     public array $conversationContext = [];
 
+    /**
+     * Page context (the soft prior for "which page/record the chat was opened from").
+     * The array form of a PageContext DTO; default [] keeps the PageContextSection emitting
+     * zero tokens when absent. Symmetric to $conversationContext.
+     */
+    public array $pageContext = [];
+
     public function __construct()
     {
         $this->qu = new QueryUnderstandingResult();

@@ -42,10 +42,8 @@ class MarkdownExtractor implements FileExtractorInterface
         $content = str_replace(["\r\n", "\r"], "\n", $content);
 
         if ($this->preserveStructure) {
-            // Keep markdown structure but clean up
             $content = $this->cleanMarkdown($content);
         } else {
-            // Strip all markdown formatting
             $content = $this->stripMarkdown($content);
         }
 

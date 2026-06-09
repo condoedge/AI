@@ -401,15 +401,53 @@ class CypherPatternGenerator
     }
 
     /**
-     * Escape string for Cypher
+     * Escape and sanitize a string literal for safe embedding in Cypher.
+     *
+     * Two layers of defense for values discovered from Eloquent scope defaults
+     * (which are developer-authored config artifacts, not exact user data that
+     * must round-trip):
+     *
+     *  1. Strip injection-control sequences that let an attacker truncate or
+     *     re-shape the surrounding query — SQL/Cypher line comments (`--`, `//`),
+     *     block comments (`/* ... *​/`), statement separators (`;`), and stray
+     *     backslash escapes. These have no legitimate place in a property-filter
+     *     literal, so removing them neutralizes payloads like
+     *     `active' OR 1=1 --` without affecting normal values.
+     *  2. Escape any remaining single quotes by doubling them, which is the
+     *     correct Cypher literal escaping and keeps legitimate apostrophes
+     *     (e.g. O'Brien -> O''Brien) intact so they cannot break out of quotes.
      *
      * @param string $value Value to escape
-     * @return string Escaped value
+     * @return string Sanitized, escaped value
      */
     private function escapeString(string $value): string
     {
-        // Escape single quotes by doubling them
+        $value = $this->stripInjectionSequences($value);
+
+        // Escape single quotes by doubling them (Cypher literal escaping).
         return str_replace("'", "''", $value);
+    }
+
+    /**
+     * Remove injection-control sequences from a literal value.
+     *
+     * Strips comment markers, statement terminators, and backslash escapes that
+     * could otherwise be used to break out of or truncate the generated query.
+     *
+     * @param string $value Raw value
+     * @return string Value with injection-control sequences removed
+     */
+    private function stripInjectionSequences(string $value): string
+    {
+        // Remove block comments first so their contents can't reassemble into
+        // other control sequences.
+        $value = preg_replace('#/\*.*?\*/#s', '', $value) ?? $value;
+
+        // Remove line-comment markers (-- and //) and statement separators (;),
+        // plus any stray backslashes used to escape the closing quote.
+        $value = str_replace(['--', '//', ';', '\\'], '', $value);
+
+        return $value;
     }
 
     /**

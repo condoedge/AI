@@ -117,24 +117,12 @@ class ConversationContextManager
         // Store result sample (first 10 results for context)
         $resultSample = array_slice($queryResult['data'] ?? [], 0, 10);
 
-        // Extract referenced files for follow-up resolution
-        // Only include if there are new files - don't overwrite previous with empty
         $referencedFiles = $queryResult['referenced_files'] ?? [];
-
-        // Extract template detection info from query result
         $detectedTemplate = $queryResult['detected_template'] ?? null;
         $queryType = $queryResult['query_type'] ?? null;
-
-        // Extract insights from query result
         $insights = $queryResult['insights'] ?? [];
-
-        // Extract execution stats if available
         $executionStats = $queryResult['stats'] ?? [];
-
-        // Extract available actions for entity types
         $availableActions = $queryResult['available_actions'] ?? [];
-
-        // Extract visualization metadata from query result
         $visualizations = $queryResult['visualizations'] ?? [];
 
         // Build snapshot update - only include non-empty values to preserve previous context

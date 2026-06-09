@@ -130,7 +130,9 @@ class CypherScopeAdapterTest extends TestCase
 
         $this->assertStringContainsString('MATCH', $cypher);
         $this->assertStringContainsString('Customer', $cypher);
-        $this->assertStringContainsString('HAS_ORDERS', $cypher);
+        // Forward relationship type for 'orders' is ORDERS (no HAS_ prefix),
+        // matching RelationshipDiscoverer's snake_case-uppercased convention.
+        $this->assertStringContainsString('ORDERS', $cypher);
         $this->assertStringContainsString('RETURN DISTINCT n', $cypher);
     }
 
@@ -160,7 +162,9 @@ class CypherScopeAdapterTest extends TestCase
 
         // Check relationships
         $this->assertNotEmpty($structure['relationships']);
-        $this->assertEquals('HAS_ORDERS', $structure['relationships'][0]['type']);
+        // Relationship type for 'orders' is ORDERS (no HAS_ prefix), matching
+        // RelationshipDiscoverer's snake_case-uppercased convention.
+        $this->assertEquals('ORDERS', $structure['relationships'][0]['type']);
 
         // Check conditions
         $this->assertNotEmpty($structure['conditions']);

@@ -33,10 +33,8 @@ class FileContextSection extends BasePromptSection
 
         $output = $this->header('FILE CONTEXT');
 
-        // Add citation instructions
         $output .= $this->getCitationInstructions();
 
-        // Add relevant files section
         $output .= "**Relevant Files:**\n\n";
 
         foreach ($files as $index => $file) {
