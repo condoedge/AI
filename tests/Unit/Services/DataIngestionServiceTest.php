@@ -141,6 +141,39 @@ class DataIngestionServiceTest extends TestCase
         $this->assertEmpty($result['errors']);
     }
 
+    public function test_ingest_syncs_decimal_cast_attributes_as_floats()
+    {
+        // Arrange - an Eloquent-like entity whose decimal:2 cast yields a string amount.
+        // The graph node must receive a float (Cypher SUM/comparisons), while the
+        // numeric-string account code (no decimal cast) must stay a string.
+        $entity = $this->createDecimalCastEntity();
+
+        $capturedProperties = null;
+        $this->mockGraphStore
+            ->shouldReceive('createNode')
+            ->once()
+            ->with('Invoice', Mockery::on(function ($properties) use (&$capturedProperties) {
+                $capturedProperties = $properties;
+                return true;
+            }));
+
+        $this->mockEmbeddingProvider
+            ->shouldReceive('embed')
+            ->once()
+            ->andReturn([0.1]);
+
+        $this->mockVectorStore
+            ->shouldReceive('upsert')
+            ->once();
+
+        // Act
+        $this->service->ingest($entity);
+
+        // Assert
+        $this->assertSame(1234.5, $capturedProperties['calc_due_amount']);
+        $this->assertSame('2410', $capturedProperties['account_code']);
+    }
+
     public function test_ingest_continues_when_graph_store_fails()
     {
         // Arrange
@@ -745,6 +778,43 @@ class DataIngestionServiceTest extends TestCase
         $this->assertTrue($result['vector_synced']);
     }
 
+    public function test_sync_update_path_syncs_decimal_cast_attributes_as_floats()
+    {
+        // Arrange - the update path must coerce decimal-cast strings exactly like create.
+        $entity = $this->createDecimalCastEntity();
+
+        $this->mockGraphStore
+            ->shouldReceive('nodeExists')
+            ->once()
+            ->with('Invoice', 7)
+            ->andReturn(true);
+
+        $capturedProperties = null;
+        $this->mockGraphStore
+            ->shouldReceive('updateNode')
+            ->once()
+            ->with('Invoice', 7, Mockery::on(function ($properties) use (&$capturedProperties) {
+                $capturedProperties = $properties;
+                return true;
+            }));
+
+        $this->mockEmbeddingProvider
+            ->shouldReceive('embed')
+            ->once()
+            ->andReturn([0.1]);
+
+        $this->mockVectorStore
+            ->shouldReceive('upsert')
+            ->once();
+
+        // Act
+        $this->service->sync($entity);
+
+        // Assert
+        $this->assertSame(1234.5, $capturedProperties['calc_due_amount']);
+        $this->assertSame('2410', $capturedProperties['account_code']);
+    }
+
     public function test_sync_returns_correct_action_type_created()
     {
         // Arrange
@@ -917,6 +987,54 @@ class DataIngestionServiceTest extends TestCase
         );
 
         return $entity;
+    }
+
+    /**
+     * Create an Eloquent-like Nodeable whose getCasts() declares a decimal:2 amount.
+     * toArray() yields the amount as a string, the way PDO/decimal casts do.
+     */
+    private function createDecimalCastEntity(): Nodeable
+    {
+        return new class implements Nodeable {
+            public function getId(): string|int
+            {
+                return 7;
+            }
+
+            public function toArray(): array
+            {
+                return [
+                    'id' => 7,
+                    'name' => 'Invoice 7',
+                    'description' => 'Test invoice',
+                    'calc_due_amount' => '1234.50',
+                    'account_code' => '2410',
+                ];
+            }
+
+            public function getCasts(): array
+            {
+                return ['calc_due_amount' => 'decimal:2'];
+            }
+
+            public function getGraphConfig(): GraphConfig
+            {
+                return new GraphConfig(
+                    label: 'Invoice',
+                    properties: ['id', 'calc_due_amount', 'account_code'],
+                    relationships: []
+                );
+            }
+
+            public function getVectorConfig(): VectorConfig
+            {
+                return new VectorConfig(
+                    collection: 'test_collection',
+                    embedFields: ['name', 'description'],
+                    metadata: ['id']
+                );
+            }
+        };
     }
 
     /**

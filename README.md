@@ -757,6 +757,8 @@ tests/
 
 ## Documentation
 
+- **New developers — start here** (`docs/onboarding/00-START-HERE.md`): Orientation, vocabulary, and invariants, then the architecture walkthrough, local development, host integration, and production runbook (docs 00-04).
+- **Audit & design record** (`docs/audit/`): C4 overview, 17 per-subsystem layer audits, design docs, and the execution summary.
 - **Foundations Track** (`resources/docs/1.0/foundations/`): Requirements, installation, infrastructure, configuration, and troubleshooting (rendered at `/ai-docs/foundations`).
 - **Usage & Extension Track** (`resources/docs/1.0/usage/`): Quick start, AI facade APIs, ingestion/context guides, Laravel integration, testing, and extension playbooks.
 - **Internals & Architecture Track** (`resources/docs/1.0/internals/`): Architecture diagrams, component deep dives, data flows, storage reference, resilience/security details.

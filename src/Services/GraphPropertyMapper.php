@@ -22,12 +22,21 @@ class GraphPropertyMapper
     /**
      * Extract and sanitize properties from entity data.
      *
+     * When the source entity is provided, its Eloquent cast definitions are consulted:
+     * decimal:N casts return strings ('1234.50'), which would land in Neo4j as strings
+     * and break SUM()/numeric comparisons — those are coerced to float. Only properties
+     * the model explicitly declares as decimal are coerced; numeric-looking strings
+     * without a decimal cast (ids, account codes like '2410') stay strings.
+     *
      * @param array $data Entity data (from Nodeable::toArray())
      * @param array $propertyNames Property names to extract
+     * @param object|null $entity Source entity, consulted for cast metadata (getCasts())
      * @return array Extracted, Neo4j-safe properties
      */
-    public function extractProperties(array $data, array $propertyNames): array
+    public function extractProperties(array $data, array $propertyNames, ?object $entity = null): array
     {
+        $casts = $entity !== null && method_exists($entity, 'getCasts') ? $entity->getCasts() : [];
+
         $properties = [];
 
         foreach ($propertyNames as $propertyName) {
@@ -46,6 +55,10 @@ class GraphPropertyMapper
                     }
                 }
 
+                if (is_string($value) && is_numeric($value) && $this->isDecimalCast($casts[$propertyName] ?? null)) {
+                    $value = (float) $value;
+                }
+
                 $value = $this->sanitizeForGraph($value);
 
                 $properties[$propertyName] = $value;
@@ -53,6 +66,14 @@ class GraphPropertyMapper
         }
 
         return $properties;
+    }
+
+    /**
+     * Whether a cast definition is Eloquent's decimal cast (decimal:N).
+     */
+    private function isDecimalCast(mixed $cast): bool
+    {
+        return is_string($cast) && ($cast === 'decimal' || str_starts_with($cast, 'decimal:'));
     }
 
     /**

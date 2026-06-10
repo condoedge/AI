@@ -98,7 +98,7 @@ class SetupCommand extends Command
         if (!$this->option('skip-ingest')) {
             $steps[] = [
                 'label' => 'Ingest entities into Neo4j + Qdrant',
-                'command' => 'ai:ingest-entities',
+                'command' => 'ai:ingest',
                 'args' => $this->option('fresh') ? ['--fresh' => true] : [],
                 'check' => fn() => !empty(config('entities', [])),
                 'skip_reason' => 'No entities configured. Run ai:discover first.',

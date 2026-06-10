@@ -1205,10 +1205,25 @@ return [
     | separately (the token's nonce is consumed on confirm), so a token also
     | cannot fire a non-idempotent action twice.
     |
+    | Native tool-calling is tuned by three more reserved (non-class) keys:
+    |
+    |   'native_tools'   (default false) — the kill switch. When true AND the
+    |                    response_generation provider supports tool calling,
+    |                    registered actions are offered to the model as native
+    |                    provider tools instead of the markdown link grammar.
+    |                    Mutating actions stay behind the SAME signed-token
+    |                    approval gate on both channels.
+    |   'tool_rounds'    (default 2) — max tool-enabled LLM rounds per turn;
+    |                    on exhaustion one forced no-tools call closes the prose.
+    |   'max_tool_calls' (default 5) — max action dispatches per turn.
+    |
     */
     'actions' => [
         // \App\Ai\Actions\CreateEventAction::class,
         'token_ttl' => env('AI_ACTION_TOKEN_TTL', 900),
+        'native_tools' => (bool) env('AI_ACTION_NATIVE_TOOLS', false),
+        'tool_rounds' => (int) env('AI_ACTION_TOOL_ROUNDS', 2),
+        'max_tool_calls' => (int) env('AI_ACTION_MAX_TOOL_CALLS', 5),
     ],
 
     /*

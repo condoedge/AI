@@ -9,6 +9,8 @@ use Illuminate\Support\ServiceProvider;
 use Condoedge\Ai\Services\AiManager;
 use Condoedge\Ai\Services\LlmResolver;
 use Condoedge\Ai\Services\DataIngestionService;
+use Condoedge\Ai\Services\PolymorphicTargetResolver;
+use Condoedge\Ai\Services\RelationshipSyncer;
 use Condoedge\Ai\Services\ContextRetriever;
 use Condoedge\Ai\Services\QueryGenerator;
 use Condoedge\Ai\Services\QueryExecutor;
@@ -166,11 +168,19 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
+        // One shared memo cache for morph-value -> catalog-label resolution
+        // across the per-entity and batch ingestion paths.
+        $this->app->singleton(PolymorphicTargetResolver::class);
+
         $this->app->singleton(DataIngestionServiceInterface::class, function ($app) {
             return new DataIngestionService(
                 vectorStore: $app->make(VectorStoreInterface::class),
                 graphStore: $app->make(GraphStoreInterface::class),
-                embeddingProvider: $app->make(EmbeddingProviderInterface::class)
+                embeddingProvider: $app->make(EmbeddingProviderInterface::class),
+                relationshipSyncer: new RelationshipSyncer(
+                    $app->make(GraphStoreInterface::class),
+                    $app->make(PolymorphicTargetResolver::class),
+                ),
             );
         });
 
@@ -184,6 +194,7 @@ class AiServiceProvider extends ServiceProvider
                 graphStore: $app->make(\Condoedge\Ai\Contracts\GraphStoreInterface::class),
                 embeddingProvider: $app->make(\Condoedge\Ai\Contracts\EmbeddingProviderInterface::class),
                 logger: $app->make(\Condoedge\Ai\Support\AiLogger::class),
+                polymorphicResolver: $app->make(PolymorphicTargetResolver::class),
             );
         });
 
@@ -246,7 +257,9 @@ class AiServiceProvider extends ServiceProvider
         $this->app->singleton(ResponseGeneratorInterface::class, function ($app) {
             return new ResponseGenerator(
                 llm: $app->make(LlmResolver::class)->forRole('response_generation'),
-                config: config('ai.response_generation', [])
+                config: config('ai.response_generation', []),
+                toolGate: $app->make(\Condoedge\Ai\Services\Actions\ActionToolGate::class),
+                toolLoop: $app->make(\Condoedge\Ai\Services\Actions\ToolLoopRunner::class)
             );
         });
 
@@ -359,6 +372,8 @@ class AiServiceProvider extends ServiceProvider
     {
         $this->app->singleton(\Condoedge\Ai\Services\Actions\AiActionRegistry::class);
         $this->app->singleton(\Condoedge\Ai\Services\Actions\ActionDispatcher::class);
+        $this->app->singleton(\Condoedge\Ai\Services\Actions\ActionToolGate::class);
+        $this->app->singleton(\Condoedge\Ai\Services\Actions\ToolLoopRunner::class);
     }
 
     /**

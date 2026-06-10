@@ -447,7 +447,7 @@ class DataIngestionService implements DataIngestionServiceInterface
     private function ingestToGraph(Nodeable $entity, GraphConfig $config): void
     {
         $data = $entity->toArray();
-        $properties = $this->propertyMapper->extractProperties($data, $config->properties);
+        $properties = $this->propertyMapper->extractProperties($data, $config->properties, $entity);
         $properties['id'] = $entity->getId();
 
         $this->graphStore->createNode($config->label, $properties);
@@ -463,7 +463,7 @@ class DataIngestionService implements DataIngestionServiceInterface
     private function updateGraph(Nodeable $entity, GraphConfig $config): void
     {
         $data = $entity->toArray();
-        $properties = $this->propertyMapper->extractProperties($data, $config->properties);
+        $properties = $this->propertyMapper->extractProperties($data, $config->properties, $entity);
 
         // Don't include ID in update properties (it's used for matching)
         unset($properties['id']);

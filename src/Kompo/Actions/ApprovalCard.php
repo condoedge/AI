@@ -24,6 +24,16 @@ class ApprovalCard
     public const PANEL_ID = 'ai-approval-result';
 
     /**
+     * Panel id for one card's approval result — unique per token so multiple pending actions
+     * in one bubble don't collide. Shared with external confirm wiring (e.g. the bubble
+     * renderer's invocation cards) so the round-trip lands in the card's own panel.
+     */
+    public static function panelIdFor(string $token): string
+    {
+        return self::PANEL_ID . '-' . substr(hash('crc32b', $token), 0, 8);
+    }
+
+    /**
      * Build the approval card element.
      *
      * @param array<string, mixed> $pending  The deferred-action payload from ActionDispatcher::defer():
@@ -69,7 +79,7 @@ class ApprovalCard
             ->removeSelf();
 
         // Unique panel id per token so multiple pending actions in one bubble don't collide.
-        $panelId = self::PANEL_ID . '-' . substr(hash('crc32b', $token), 0, 8);
+        $panelId = self::panelIdFor($token);
         $confirm = $confirmWiring === null ? $confirm->inPanel($panelId) : $confirm;
 
         return _Rows(

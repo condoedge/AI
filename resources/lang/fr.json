@@ -12,6 +12,8 @@
     "ai.actions.confirm": "Confirmer",
     "ai.actions.cancel": "Annuler",
     "ai.actions.failed": "L'action n'a pas pu etre effectuee.",
+    "ai.actions.approved-note": "Cette action a ete approuvee.",
+    "ai.actions.no-longer-available": "Cette action n'est plus disponible.",
 
     "ai.settings.title": "Parametres du chat",
     "ai.settings.theme": "Theme",

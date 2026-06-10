@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
 use Condoedge\Ai\DTOs\PipelineContext;
 
 /**
@@ -76,7 +77,18 @@ class RelationshipsSection extends BasePromptSection
                 }
                 $shown[$relSignature] = true;
 
-                if ($direction === 'incoming') {
+                // Polymorphic targets: the '_polymorphic' sentinel is a
+                // sync-layer detail — a label that never exists in Neo4j —
+                // so render an unlabeled node instead of leaking it.
+                if ($targetLabel === RelationshipConfig::POLYMORPHIC_TARGET) {
+                    if ($direction === 'incoming') {
+                        $output .= "  ({$label})<-[:{$type}]-(x)  // polymorphic: x may be any entity type\n";
+                        $output .= "    Cypher: MATCH (x:{$label})<-[:{$type}]-(y)\n";
+                    } else {
+                        $output .= "  ({$label})-[:{$type}]->(x)  // polymorphic: x may be any entity type\n";
+                        $output .= "    Cypher: MATCH (x:{$label})-[:{$type}]->(y)\n";
+                    }
+                } elseif ($direction === 'incoming') {
                     $output .= "  ({$label})<-[:{$type}]-({$targetLabel})\n";
                     $output .= "    Cypher: MATCH (x:{$label})<-[:{$type}]-(y:{$targetLabel})\n";
                 } else {

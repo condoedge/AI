@@ -136,7 +136,8 @@
       "Bash(find C:/Users/jkend/Documents/Projects/kompo/CondoEdge -type f \\\\\\(-name ai.php -o -name *ai*.php -o -name *entities* \\\\\\))",
       "Bash(find C:/Users/jkend/Documents/Projects/kompo/CondoEdge -type f \\\\\\(-name *.md -o -name *.txt \\\\\\) -path *laws*)",
       "Bash(wc:*)",
-      "Bash(do php:*)"
+      "Bash(do php:*)",
+      "mcp__code-index__build_deep_index"
     ],
     "deny": [],
     "ask": []

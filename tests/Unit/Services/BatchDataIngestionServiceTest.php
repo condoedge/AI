@@ -15,6 +15,7 @@ use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
 use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
 use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
 use Condoedge\Ai\Support\AiLogger;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Mockery;
 
 /**
@@ -72,6 +73,7 @@ class BatchDataIngestionServiceTest extends TestCase
 
     public function tearDown(): void
     {
+        Relation::morphMap([], false);
         Mockery::close();
         parent::tearDown();
     }
@@ -327,6 +329,106 @@ class BatchDataIngestionServiceTest extends TestCase
     }
 
     // =========================================================================
+    // syncRelationships() Polymorphic Tests
+    // =========================================================================
+
+    public function test_syncRelationships_initializes_unresolved_morphs_counter()
+    {
+        $result = $this->service->syncRelationships([]);
+
+        $this->assertArrayHasKey('relationships_unresolved_morphs', $result);
+        $this->assertEquals(0, $result['relationships_unresolved_morphs']);
+    }
+
+    public function test_syncRelationships_fans_out_polymorphic_rows_per_resolved_label()
+    {
+        // Arrange - one PRICEABLE polymorphic config, rows resolving to two labels
+        $this->registerPolymorphicCatalog();
+
+        $entityA = $this->createMockEntityWithRelationships(
+            id: 1,
+            label: 'Price',
+            data: ['id' => 1, 'priceable_id' => 7, 'priceable_type' => 'service'],
+            relationships: [$this->polymorphicPriceableConfig()],
+        );
+        $entityB = $this->createMockEntityWithRelationships(
+            id: 2,
+            label: 'Price',
+            data: ['id' => 2, 'priceable_id' => 9, 'priceable_type' => 'plan'],
+            relationships: [$this->polymorphicPriceableConfig()],
+        );
+
+        // Expect two UNWIND groups — one per resolved target label
+        $capturedCyphers = [];
+        $this->mockGraphStore
+            ->shouldReceive('query')
+            ->twice()
+            ->with(
+                Mockery::on(function ($cypher) use (&$capturedCyphers) {
+                    $capturedCyphers[] = $cypher;
+                    return str_contains($cypher, 'UNWIND');
+                }),
+                Mockery::type('array')
+            )
+            ->andReturn([['total' => 1]]);
+
+        // Act
+        $result = $this->service->syncRelationships([$entityA, $entityB]);
+
+        // Assert
+        $this->assertEquals(2, $result['total_relationships_checked']);
+        $this->assertEquals(2, $result['relationships_created']);
+        $this->assertEquals(0, $result['relationships_unresolved_morphs']);
+
+        $allCypher = implode("\n", $capturedCyphers);
+        $this->assertStringContainsString('MATCH (to:`Service`', $allCypher);
+        $this->assertStringContainsString('MATCH (to:`Plan`', $allCypher);
+        $this->assertStringNotContainsString('_polymorphic', $allCypher);
+    }
+
+    public function test_syncRelationships_excludes_and_counts_unresolvable_morph_rows()
+    {
+        // Arrange - one resolvable row, one with an unmapped morph alias
+        $this->registerPolymorphicCatalog();
+
+        $resolvable = $this->createMockEntityWithRelationships(
+            id: 1,
+            label: 'Price',
+            data: ['id' => 1, 'priceable_id' => 7, 'priceable_type' => 'service'],
+            relationships: [$this->polymorphicPriceableConfig()],
+        );
+        $unresolvable = $this->createMockEntityWithRelationships(
+            id: 2,
+            label: 'Price',
+            data: ['id' => 2, 'priceable_id' => 9, 'priceable_type' => 'unmapped-thing'],
+            relationships: [$this->polymorphicPriceableConfig()],
+        );
+
+        // Only the resolvable row produces a group/query — with exactly one pair
+        $capturedPairs = null;
+        $this->mockGraphStore
+            ->shouldReceive('query')
+            ->once()
+            ->with(
+                Mockery::on(fn($cypher) => str_contains($cypher, 'MATCH (to:`Service`')),
+                Mockery::on(function ($params) use (&$capturedPairs) {
+                    $capturedPairs = $params['pairs'];
+                    return true;
+                })
+            )
+            ->andReturn([['total' => 1]]);
+
+        // Act
+        $result = $this->service->syncRelationships([$resolvable, $unresolvable]);
+
+        // Assert
+        $this->assertEquals(1, $result['relationships_created']);
+        $this->assertEquals(1, $result['relationships_unresolved_morphs']);
+        $this->assertCount(1, $capturedPairs);
+        $this->assertEquals(1, $capturedPairs[0]['fromId']);
+    }
+
+    // =========================================================================
     // sanitizeForGraph() Tests
     // =========================================================================
 
@@ -393,6 +495,84 @@ class BatchDataIngestionServiceTest extends TestCase
         $this->assertEquals(json_encode($translationMap, JSON_UNESCAPED_UNICODE), $storedTranslations);
     }
 
+    public function test_batch_path_syncs_decimal_cast_attributes_as_floats()
+    {
+        // Arrange - same coercion rule as the single path: an entity whose getCasts()
+        // declares decimal:2 must land its amount as a float in the UNWIND batch, while
+        // the numeric-string account code (no decimal cast) stays a string.
+        $entity = new class implements Nodeable {
+            public function getId(): string|int
+            {
+                return 7;
+            }
+
+            public function toArray(): array
+            {
+                return [
+                    'id' => 7,
+                    'name' => 'Invoice 7',
+                    'calc_due_amount' => '1234.50',
+                    'account_code' => '2410',
+                ];
+            }
+
+            public function getCasts(): array
+            {
+                return ['calc_due_amount' => 'decimal:2'];
+            }
+
+            public function getGraphConfig(): GraphConfig
+            {
+                return new GraphConfig(
+                    label: 'Invoice',
+                    properties: ['id', 'calc_due_amount', 'account_code'],
+                    relationships: [],
+                );
+            }
+
+            public function getVectorConfig(): VectorConfig
+            {
+                return new VectorConfig(
+                    collection: 'test_collection',
+                    embedFields: ['name'],
+                    metadata: ['id'],
+                );
+            }
+        };
+
+        // Capture what gets sent to graph store
+        $capturedBatch = null;
+        $this->mockGraphStore
+            ->shouldReceive('query')
+            ->once()
+            ->with(
+                Mockery::type('string'),
+                Mockery::on(function ($params) use (&$capturedBatch) {
+                    $capturedBatch = $params['batch'];
+                    return true;
+                })
+            )
+            ->andReturn([]);
+
+        // Vector expectations
+        $this->mockEmbeddingProvider
+            ->shouldReceive('embedBatch')
+            ->once()
+            ->andReturn([[0.1, 0.2]]);
+
+        $this->mockVectorStore
+            ->shouldReceive('upsert')
+            ->once();
+
+        // Act
+        $this->service->ingestBatch([$entity]);
+
+        // Assert
+        $this->assertNotNull($capturedBatch);
+        $this->assertSame(1234.5, $capturedBatch[0]['calc_due_amount']);
+        $this->assertSame('2410', $capturedBatch[0]['account_code']);
+    }
+
     // =========================================================================
     // Helper Methods
     // =========================================================================
@@ -432,6 +612,31 @@ class BatchDataIngestionServiceTest extends TestCase
         );
 
         return $entity;
+    }
+
+    /**
+     * Register a morph map + entity catalog for polymorphic resolution tests.
+     */
+    private function registerPolymorphicCatalog(): void
+    {
+        Relation::morphMap([
+            'service' => 'App\\Models\\Billing\\Service',
+            'plan' => 'App\\Models\\Billing\\Plan',
+        ]);
+        config(['entities' => [
+            'App\\Models\\Billing\\Service' => ['graph' => ['label' => 'Service']],
+            'App\\Models\\Billing\\Plan' => ['graph' => ['label' => 'Plan']],
+        ]]);
+    }
+
+    private function polymorphicPriceableConfig(): RelationshipConfig
+    {
+        return new RelationshipConfig(
+            type: 'PRICEABLE',
+            targetLabel: RelationshipConfig::POLYMORPHIC_TARGET,
+            foreignKey: 'priceable_id',
+            properties: [],
+        );
     }
 
     /**

@@ -158,6 +158,16 @@ class ContentLinkProcessor
     }
 
     /**
+     * Get a registered handler by name (e.g. 'actions'), for callers that need
+     * handler-specific capabilities beyond the interface — the message renderer reads the
+     * action handler's parsed-link fingerprints to dedupe persisted invocations.
+     */
+    public function getHandler(string $name): ?ContentLinkHandlerInterface
+    {
+        return $this->handlers[$name] ?? null;
+    }
+
+    /**
      * Get registered handler names.
      */
     public function getHandlerNames(): array

@@ -2,6 +2,7 @@
 
 namespace Condoedge\Ai\Tests\Unit\Kompo;
 
+use Condoedge\Ai\DTOs\PageContext;
 use Condoedge\Ai\Kompo\MessagesQuery;
 use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
 use Condoedge\Ai\Models\AiConversation;
@@ -212,6 +213,78 @@ class MessagesQueryTest extends TestCase
         // No error, and the presenter was not called
         $this->assertTrue(true);
     }
+
+    /**
+     * Test that a clicked suggestion delivers the IDENTICAL PageContext the surface was
+     * mounted with — askSuggestion must thread it exactly like the typed-question path
+     * (ChatMessageForm::sendMessage), so a suggestion clicked from a floating chat on a
+     * record page keeps its "this unit/invoice" binding.
+     *
+     * @test
+     */
+    public function ask_suggestion_forwards_the_mounted_page_context_to_the_presenter(): void
+    {
+        $conversation = AiConversation::create(['user_id' => $this->user->id]);
+
+        $pageContext = new PageContext(
+            route: 'units.show',
+            entityType: 'Unit',
+            entityId: 402,
+            filters: ['status' => 'active'],
+            label: 'Unit 402',
+        );
+
+        $mockPresenter = Mockery::mock(ChatPresenter::class);
+        $mockPresenter->shouldReceive('handleSend')
+            ->once()
+            ->with(
+                Mockery::on(fn($c) => $c->id === $conversation->id),
+                'Show this unit payment history',
+                'friendly',
+                Mockery::on(fn($u) => $u->id === $this->user->id),
+                Mockery::on(fn($pc) => $pc === $pageContext),
+            )
+            ->andReturn(new ChatTurnResult(answer: 'ok'));
+
+        $this->app->instance(ChatPresenter::class, $mockPresenter);
+
+        $query = new TestableMessagesQuery($conversation, $this->createMockSettings(), $pageContext);
+
+        $query->askSuggestion('Show this unit payment history');
+
+        $this->assertTrue(true, 'Presenter received the identical PageContext (verified by Mockery)');
+    }
+
+    /**
+     * Test that a suggestion clicked on a surface WITHOUT page context stays unchanged:
+     * handleSend receives a null pageContext.
+     *
+     * @test
+     */
+    public function ask_suggestion_without_page_context_passes_null_to_the_presenter(): void
+    {
+        $conversation = AiConversation::create(['user_id' => $this->user->id]);
+
+        $mockPresenter = Mockery::mock(ChatPresenter::class);
+        $mockPresenter->shouldReceive('handleSend')
+            ->once()
+            ->with(
+                Mockery::on(fn($c) => $c->id === $conversation->id),
+                'Show all units',
+                'friendly',
+                Mockery::on(fn($u) => $u->id === $this->user->id),
+                null,
+            )
+            ->andReturn(new ChatTurnResult(answer: 'ok'));
+
+        $this->app->instance(ChatPresenter::class, $mockPresenter);
+
+        $query = new TestableMessagesQuery($conversation, $this->createMockSettings());
+
+        $query->askSuggestion('Show all units');
+
+        $this->assertTrue(true, 'Presenter received a null PageContext (verified by Mockery)');
+    }
 }
 
 /**
@@ -221,11 +294,12 @@ class TestableMessagesQuery extends MessagesQuery
 {
     private $testSettings;
 
-    public function __construct($conversation, $settings)
+    public function __construct($conversation, $settings, ?PageContext $pageContext = null)
     {
         // Don't call parent constructor to avoid Kompo boot
         $this->conversation = $conversation;
         $this->testSettings = $settings;
+        $this->pageContext = $pageContext;
     }
 
     public function settings(): ChatSettingsInterface

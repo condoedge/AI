@@ -15,6 +15,9 @@ use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Kompo\Traits\HasFilePreview;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
+use Condoedge\Ai\Services\Actions\ActionInvocation;
+use Condoedge\Ai\Services\Actions\ModelMethodMutationAction;
+use Condoedge\Ai\Services\Actions\PendingActionToken;
 use Condoedge\Utils\Kompo\Common\Query;
 
 /**
@@ -349,11 +352,15 @@ class MessagesQuery extends Query
         }
 
         try {
+            // Thread the page context the surface was mounted with, exactly like the
+            // typed-question path (ChatMessageForm::sendMessage) — a suggestion clicked
+            // from a record page must keep its "this unit/invoice" binding.
             app(ChatPresenter::class)->handleSend(
                 $this->conversation,
                 $question,
                 $this->settings()->responseStyle(),
                 auth()->user(),
+                $this->pageContext,
             );
         } catch (\Throwable $e) {
             \Log::error('Suggestion question failed: ' . $e->getMessage());
@@ -379,8 +386,13 @@ class MessagesQuery extends Query
      * executes handle(). A mutating action is NEVER executed during render — only here, after
      * this explicit confirmation. Forged/stale/unauthorized tokens are rejected with an alert
      * and nothing is mutated.
+     *
+     * Cards built from a persisted native invocation also post the owning message id + the
+     * invocation fingerprint, so a confirmed approval stamps a resolution marker on the
+     * message and later renders show a done-note instead of re-offering the card. The
+     * markdown-path cards post only the token; both extras are optional.
      */
-    public function approveAiAction(string $token)
+    public function approveAiAction(string $token, $messageId = null, $fingerprint = null)
     {
         $result = app(\Condoedge\Ai\Services\Actions\ActionDispatcher::class)->approve($token, [
             'user' => auth()->user(),
@@ -392,10 +404,85 @@ class MessagesQuery extends Query
                 ->class('mt-2 px-3 py-2 text-sm text-red-600 bg-red-50 rounded-lg');
         }
 
+        $this->markInvocationApproved($token, $messageId, $fingerprint);
+
         // Successful mutation: surface the action's renderable (often a link/confirmation),
         // falling back to a brief acknowledgement when the action returns nothing visual.
         return $result->renderable ?? _Html(e($result->summaryForLlm))
             ->class('mt-2 px-3 py-2 text-sm text-emerald-700 bg-emerald-50 rounded-lg');
+    }
+
+    /**
+     * Stamp resolved_invocations[fingerprint] = 'approved' on the (ownership-scoped) message
+     * after a confirmed approval. Best-effort: absent ids and unknown messages are ignored —
+     * the approval itself already succeeded and must not be reported as failed. The fingerprint
+     * is client-supplied, so it is only stamped once it matches an invocation actually
+     * persisted on the message that proposes the very action the token carried; a mismatch
+     * skips the stamp (logged), so a tampered fingerprint cannot mark an unrelated proposal
+     * as done.
+     */
+    protected function markInvocationApproved(string $token, $messageId, $fingerprint): void
+    {
+        if (!$this->conversation || !$messageId || !is_string($fingerprint) || $fingerprint === '') {
+            return;
+        }
+
+        $message = $this->conversation->messages()->find($messageId);
+        if (!$message) {
+            return;
+        }
+
+        $metadata = $message->metadata ?? [];
+
+        if (!$this->fingerprintMatchesApprovedAction($token, $fingerprint, $metadata['invocations'] ?? null)) {
+            \Log::warning('AI action approval: supplied fingerprint matches no persisted invocation for the approved action — resolution stamp skipped.', [
+                'message_id' => $message->id,
+                'fingerprint' => $fingerprint,
+            ]);
+            return;
+        }
+
+        $resolved = is_array($metadata['resolved_invocations'] ?? null) ? $metadata['resolved_invocations'] : [];
+        $resolved[$fingerprint] = 'approved';
+        $metadata['resolved_invocations'] = $resolved;
+        $message->metadata = $metadata;
+        $message->save();
+    }
+
+    /**
+     * Whether the client-supplied fingerprint identifies an invocation persisted in the
+     * message's metadata AND that invocation proposes the same action the just-approved token
+     * carried — key, entity type, and entity id (the token stores it in its input). The stamp
+     * must never outrun what was actually approved.
+     */
+    protected function fingerprintMatchesApprovedAction(string $token, string $fingerprint, $records): bool
+    {
+        if (!is_array($records)) {
+            return false;
+        }
+
+        $approved = PendingActionToken::decode($token);
+        if ($approved === null) {
+            return false;
+        }
+
+        $approvedEntityId = $approved->input[ModelMethodMutationAction::ID_PARAM] ?? null;
+
+        foreach ($records as $record) {
+            $invocation = ActionInvocation::fromArray($record);
+            if ($invocation === null || $invocation->fingerprint() !== $fingerprint) {
+                continue;
+            }
+
+            if ($invocation->key === $approved->actionKey
+                && $invocation->entityType === $approved->entityType
+                && (string) ($invocation->entityId ?? '') === (string) ($approvedEntityId ?? '')
+            ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

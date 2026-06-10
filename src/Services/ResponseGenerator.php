@@ -7,7 +7,11 @@ namespace Condoedge\Ai\Services;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\ResponseSectionInterface;
+use Condoedge\Ai\Contracts\ToolCallingLlmInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\Actions\ActionToolChannel;
+use Condoedge\Ai\Services\Actions\ActionToolGate;
+use Condoedge\Ai\Services\Actions\ToolLoopRunner;
 use Condoedge\Ai\Services\ResponseSections\SystemPromptSection;
 use Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection;
 use Condoedge\Ai\Services\ResponseSections\ResultsDataSection;
@@ -24,6 +28,11 @@ use Condoedge\Ai\Services\ResponseSections\GuidelinesSection;
  * replaceModule/extendAfter). Returns: answer, insights, visualizations, format,
  * metadata.
  *
+ * Action channel: when an {@see ActionToolGate} + {@see ToolLoopRunner} are wired,
+ * generate() consults the gate ONCE per turn — Native runs the bounded tool loop
+ * instead of complete(); Markdown/None (and legacy construction without the
+ * collaborators) keep today's single complete() call byte-identical.
+ *
  * @uses HasInternalModules<ResponseSectionInterface>
  * @see ResponseSectionInterface For creating custom sections.
  */
@@ -38,10 +47,14 @@ class ResponseGenerator implements ResponseGeneratorInterface
      *
      * @param LlmProviderInterface $llm LLM provider for response generation
      * @param array $config Configuration options
+     * @param ActionToolGate|null $toolGate Channel decision point (null = markdown-only legacy behavior)
+     * @param ToolLoopRunner|null $toolLoop Native tool loop (null = markdown-only legacy behavior)
      */
     public function __construct(
         private readonly LlmProviderInterface $llm,
-        private readonly array $config = []
+        private readonly array $config = [],
+        private readonly ?ActionToolGate $toolGate = null,
+        private readonly ?ToolLoopRunner $toolLoop = null
     ) {
         $this->registerDefaultModules();
         $this->applyGlobalExtensions();
@@ -140,6 +153,17 @@ class ResponseGenerator implements ResponseGeneratorInterface
             'max_length' => $maxLength,
         ];
 
+        // THE channel decision — once per turn, one call. Absent collaborators (legacy
+        // construction) and the default-off kill switch both mean Markdown: the pre-existing
+        // path, byte-identical, with no spec construction paid. The channel rides the section
+        // options so the model is never taught the link grammar while holding real tools.
+        $toolSpecs = [];
+        $channel = ActionToolChannel::Markdown;
+        if ($this->toolGate !== null && $this->toolLoop !== null) {
+            [$channel, $toolSpecs] = $this->toolGate->decide($this->llm, $context, $sectionOptions);
+        }
+        $sectionOptions[ActionToolChannel::OPTION] = $channel;
+
         // Build prompt using section pipeline, split into a system message
         // (identity + security policy) and a user message (context + data).
         ['system' => $systemPrompt, 'user' => $userPrompt] = $this->buildPrompts($context, $sectionOptions);
@@ -147,13 +171,29 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $data = $context->executionResult->data;
         $cypherQuery = $context->queryResult->cypher;
 
+        $llmOptions = [
+            'temperature' => $temperature,
+            'max_tokens' => $this->calculateMaxTokens($maxLength),
+        ];
+
         try {
-            // Generate response — identity/security ride in the real system role,
-            // untrusted context/data stays in the user role.
-            $answer = $this->llm->complete($userPrompt, $systemPrompt !== '' ? $systemPrompt : null, [
-                'temperature' => $temperature,
-                'max_tokens' => $this->calculateMaxTokens($maxLength),
-            ]);
+            $loopResult = null;
+            if ($channel === ActionToolChannel::Native && $this->llm instanceof ToolCallingLlmInterface) {
+                // A loop failure with nothing accumulated propagates into this method's
+                // wrap — never a markdown complete() call against a possibly-open breaker.
+                $loopResult = $this->toolLoop->run(
+                    $this->llm,
+                    $this->toolLoopMessages($systemPrompt, $userPrompt),
+                    $toolSpecs,
+                    $this->toolLoopContext($context, $options),
+                    $llmOptions,
+                );
+                $answer = $loopResult->answer;
+            } else {
+                // Generate response — identity/security ride in the real system role,
+                // untrusted context/data stays in the user role.
+                $answer = $this->llm->complete($userPrompt, $systemPrompt !== '' ? $systemPrompt : null, $llmOptions);
+            }
 
             $insights = $includeInsights ? $this->extractInsights($data) : [];
 
@@ -161,16 +201,28 @@ class ResponseGenerator implements ResponseGeneratorInterface
                 ? $this->suggestVisualizations($data, $cypherQuery)
                 : [];
 
+            $metadata = [
+                'style' => $style,
+                'result_count' => count($data),
+                'summarized' => count($data) > 10,
+            ];
+            if ($loopResult !== null) {
+                // Riding the metadata keeps AiManager untouched: buildFinalResponse already
+                // passes response metadata through, where the chat persistence layer reads
+                // the filtered invocations to store beside response_data/suggestions.
+                $metadata['tool_calling'] = $loopResult->telemetry;
+                $metadata['invocations'] = array_map(
+                    static fn ($invocation) => $invocation->toArray(),
+                    $loopResult->invocations
+                );
+            }
+
             return [
                 'answer' => trim($answer),
                 'insights' => $insights,
                 'visualizations' => $visualizations,
                 'format' => $format,
-                'metadata' => [
-                    'style' => $style,
-                    'result_count' => count($data),
-                    'summarized' => count($data) > 10,
-                ],
+                'metadata' => $metadata,
             ];
 
         } catch (\Exception $e) {
@@ -180,6 +232,40 @@ class ResponseGenerator implements ResponseGeneratorInterface
                 $e
             );
         }
+    }
+
+    /**
+     * The native loop starts from the SAME role-split section prompt as the markdown
+     * path, expressed as chat messages.
+     *
+     * @return array<int, array{role: string, content: string}>
+     */
+    private function toolLoopMessages(string $systemPrompt, string $userPrompt): array
+    {
+        $messages = [];
+        if ($systemPrompt !== '') {
+            $messages[] = ['role' => 'system', 'content' => $systemPrompt];
+        }
+        $messages[] = ['role' => 'user', 'content' => $userPrompt];
+
+        return $messages;
+    }
+
+    /**
+     * Dispatch context for in-loop action execution — the same keys the render-time link
+     * path passes (user, result_set). The runner adds entity_type/entity_id per call.
+     *
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>
+     */
+    private function toolLoopContext(PipelineContext $context, array $options): array
+    {
+        $dispatch = ['result_set' => $context->executionResult->data];
+        if (isset($options['user'])) {
+            $dispatch['user'] = $options['user'];
+        }
+
+        return $dispatch;
     }
 
     /**

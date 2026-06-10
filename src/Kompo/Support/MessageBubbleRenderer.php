@@ -4,6 +4,14 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Kompo\Support;
 
+use Condoedge\Ai\Contracts\AiActionInterface;
+use Condoedge\Ai\Kompo\Actions\ApprovalCard;
+use Condoedge\Ai\Services\Actions\ActionDispatcher;
+use Condoedge\Ai\Services\Actions\ActionInvocation;
+use Condoedge\Ai\Services\Actions\AiActionRegistry;
+use Condoedge\Ai\Services\Actions\Results\AiActionResult;
+use Condoedge\Ai\Services\Response\ActionLinkHandler;
+use Condoedge\Ai\Services\Response\ActionResultPresenter;
 use Condoedge\Ai\Services\Response\ContentLinkProcessor;
 use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
 use Condoedge\Ai\Services\UI\ChatThemeInterface;
@@ -28,6 +36,19 @@ use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
  */
 class MessageBubbleRenderer
 {
+    protected ActionDispatcher $dispatcher;
+
+    protected ActionResultPresenter $presenter;
+
+    /**
+     * Per-request dispatch memo for persisted invocations, keyed by fingerprint. The renderer
+     * is built once per request (MessagesQuery::bubbleRenderer), so a thread re-rendering the
+     * same invocation in N bubbles pays authorize() once per request, not N times.
+     *
+     * @var array<string, AiActionResult|null>
+     */
+    protected array $invocationResults = [];
+
     public function __construct(
         protected ChatThemeInterface $theme,
         protected ChatSettingsInterface $settings,
@@ -35,7 +56,13 @@ class MessageBubbleRenderer
         protected ContentLinkProcessor $contentLinkProcessor,
         protected string $userAvatarHtml,
         protected string $assistantAvatarHtml,
+        ?ActionDispatcher $dispatcher = null,
+        ?ActionResultPresenter $presenter = null,
     ) {
+        // Same container-tolerant fallback as ActionLinkHandler: resolve the shared dispatcher,
+        // degrade to a self-built one so the renderer works without DI wiring.
+        $this->dispatcher = $dispatcher ?? $this->resolveDispatcher();
+        $this->presenter = $presenter ?? new ActionResultPresenter();
     }
 
     /**
@@ -92,26 +119,34 @@ class MessageBubbleRenderer
         // Process content: strip action links, strip citations, create elements.
         // We pass the result set so render_table/export_* actions can build tables/exports
         // from the data without the LLM shipping it through the link.
+        $linkContext = [
+            'files' => $files,
+            'result_set' => $resultSet,
+            'user' => auth()->user(),
+        ];
         $processed = $this->contentLinkProcessor->processForDirectRendering(
             $message->content,
-            [
-                'files' => $files,
-                'result_set' => $resultSet,
-                'user' => auth()->user(),
-            ]
+            $linkContext
         );
 
         $content[] = _Html($this->renderMarkdown($processed['content']))
             ->class('prose prose-sm max-w-none [&_a]:font-medium [&_a]:underline [&_a]:underline-offset-2' . $contentRevealClass);
 
-        if ($processed['has_links']) {
+        // Persisted native-turn invocations render beside the parsed links through the same
+        // presenter, fingerprint-deduped so a link the model copied verbatim renders once.
+        $actionElements = array_merge(
+            $processed['elements'],
+            $this->renderPersistedInvocations($message, $linkContext),
+        );
+
+        if (!empty($actionElements)) {
             // Action links arrive as bare _Link()s from config closures with no styling, so a
             // viewer cannot tell they are clickable. Render each as a clearly-actionable chip:
             // the row carries the theme's accent text colour (anchors inherit it), and every
             // direct child anchor becomes a bordered button with a hover lift and accent border.
             // Scoped to `> a` so non-link renderables in the same row (tables, approval cards)
             // are untouched.
-            $content[] = _Flex(...$processed['elements'])
+            $content[] = _Flex(...$actionElements)
                 ->class(
                     $this->theme->primaryText()
                     . ' mt-3 pt-2 border-t border-gray-100 gap-2 flex-wrap'
@@ -215,6 +250,161 @@ class MessageBubbleRenderer
 
         return _Flex(...$actions)
             ->class('mt-3 pt-2 border-t border-gray-50 gap-1 opacity-0 group-hover:opacity-100 transition-opacity');
+    }
+
+    /**
+     * Render the native-turn invocations persisted on the assistant message metadata.
+     *
+     * Mirrors the markdown link path: each invocation re-dispatches through the SAME
+     * ActionDispatcher at every render (fresh authorize(), fresh token, fresh TTL) and
+     * renders through the shared ActionResultPresenter. Fail-closed throughout: malformed
+     * records, unknown keys and read-only failures render nothing. Parsed action:// /
+     * entity:// links render first and win by fingerprint, so a history-imitating model
+     * emitting both transports for the same action yields one element. An invocation marked
+     * approved in resolved_invocations skips dispatch and shows a static done-note.
+     *
+     * @param mixed $message            The assistant AiMessage (metadata, content, id).
+     * @param array<string, mixed> $context  The same context array the link path uses
+     *                                       (files, result_set, user).
+     * @return array<int, mixed>
+     */
+    public function renderPersistedInvocations($message, array $context): array
+    {
+        $records = $message->metadata['invocations'] ?? null;
+        if (!is_array($records) || $records === []) {
+            return [];
+        }
+
+        $linkFingerprints = $this->parsedLinkFingerprints((string) $message->content);
+        $resolved = $message->metadata['resolved_invocations'] ?? null;
+        $resolved = is_array($resolved) ? $resolved : [];
+
+        $elements = [];
+        $seen = [];
+
+        foreach ($records as $record) {
+            $invocation = ActionInvocation::fromArray($record);
+            if ($invocation === null) {
+                continue;
+            }
+
+            $fingerprint = $invocation->fingerprint();
+            if (isset($linkFingerprints[$fingerprint]) || isset($seen[$fingerprint])) {
+                continue;
+            }
+            $seen[$fingerprint] = true;
+
+            if (($resolved[$fingerprint] ?? null) === 'approved') {
+                $elements[] = $this->presenter->approvedNote();
+                continue;
+            }
+
+            $action = $invocation->entityType !== null
+                ? $this->dispatcher->registry()->getEntity($invocation->entityType, $invocation->key)
+                : $this->dispatcher->registry()->getGeneric($invocation->key);
+            if ($action === null) {
+                continue;
+            }
+
+            $element = $this->presenter->present(
+                $this->memoizedDispatch($fingerprint, $action, $invocation, $context),
+                $invocation->key,
+                $this->approvalConfirmWiring($message, $fingerprint),
+                $action->mutates(),
+            );
+
+            if ($element !== null) {
+                $elements[] = $element;
+            }
+        }
+
+        return $elements;
+    }
+
+    /**
+     * Fingerprints of the action/entity links parsed out of the message content — the
+     * dedupe set persisted invocations are checked against (links render first and win).
+     *
+     * @return array<string, true>
+     */
+    protected function parsedLinkFingerprints(string $content): array
+    {
+        $handler = $this->contentLinkProcessor->getHandler('actions');
+        if (!$handler instanceof ActionLinkHandler) {
+            return [];
+        }
+
+        $fingerprints = [];
+        foreach ($handler->parseInvocations($content) as $invocation) {
+            $fingerprints[$invocation->fingerprint()] = true;
+        }
+
+        return $fingerprints;
+    }
+
+    /**
+     * Dispatch an invocation through the shared pipeline, memoized per fingerprint for the
+     * life of this (once-per-request) renderer. The context mirrors the link path exactly:
+     * text rides for the card label, entity_type/entity_id ride for seedEntityId.
+     *
+     * @param array<string, mixed> $context
+     */
+    protected function memoizedDispatch(
+        string $fingerprint,
+        AiActionInterface $action,
+        ActionInvocation $invocation,
+        array $context
+    ): ?AiActionResult {
+        if (!array_key_exists($fingerprint, $this->invocationResults)) {
+            if ($invocation->text !== '') {
+                $context['text'] = $invocation->text;
+            }
+            if ($invocation->entityType !== null) {
+                $context['entity_type'] = $invocation->entityType;
+                $context['entity_id'] = $invocation->entityId;
+            }
+
+            $this->invocationResults[$fingerprint] = $this->dispatcher->dispatch(
+                $action,
+                $invocation->params,
+                $context
+            );
+        }
+
+        return $this->invocationResults[$fingerprint];
+    }
+
+    /**
+     * Confirm wiring for invocation-backed ApprovalCards: posts the message id + fingerprint
+     * beside the signed token so approveAiAction can stamp resolved_invocations[fingerprint]
+     * on success — later renders show the done-note instead of re-offering the card.
+     */
+    protected function approvalConfirmWiring($message, string $fingerprint): callable
+    {
+        return fn ($link, string $token) => $link
+            ->selfPost('approveAiAction', [
+                'token' => $token,
+                'messageId' => $message->id,
+                'fingerprint' => $fingerprint,
+            ])
+            ->inPanel(ApprovalCard::panelIdFor($token));
+    }
+
+    /**
+     * Resolve the shared dispatcher, tolerating a missing container (pure unit context) —
+     * the same fallback ActionLinkHandler uses, so both render paths share one registry.
+     */
+    protected function resolveDispatcher(): ActionDispatcher
+    {
+        if (function_exists('app')) {
+            try {
+                return app(ActionDispatcher::class);
+            } catch (\Throwable $e) {
+                // Container not bound yet — build a standalone instance below.
+            }
+        }
+
+        return new ActionDispatcher(new AiActionRegistry());
     }
 
     protected function renderMarkdown(string $text): string

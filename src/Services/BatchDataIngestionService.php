@@ -19,6 +19,7 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
 {
     private readonly GraphPropertyMapper $propertyMapper;
     private readonly VectorPayloadBuilder $payloadBuilder;
+    private readonly PolymorphicTargetResolver $polymorphicResolver;
 
     public function __construct(
         private readonly DataIngestionServiceInterface $inner,
@@ -28,12 +29,14 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
         private readonly AiLogger $logger,
         ?GraphPropertyMapper $propertyMapper = null,
         ?VectorPayloadBuilder $payloadBuilder = null,
+        ?PolymorphicTargetResolver $polymorphicResolver = null,
     ) {
         // Share the SAME graph-mapping and vector-payload logic as the single
         // ingestion path so single and batch produce identical sanitization
         // and payloads (sensible-column stripping + owner/security metadata).
         $this->propertyMapper = $propertyMapper ?? new GraphPropertyMapper();
         $this->payloadBuilder = $payloadBuilder ?? new VectorPayloadBuilder($this->propertyMapper);
+        $this->polymorphicResolver = $polymorphicResolver ?? new PolymorphicTargetResolver();
     }
 
     // =========================================================================
@@ -145,6 +148,7 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
             'relationships_created' => 0,
             'relationships_skipped' => 0,
             'relationships_failed' => 0,
+            'relationships_unresolved_morphs' => 0,
             'errors' => [],
         ];
 
@@ -168,11 +172,26 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
 
                     $summary['total_relationships_checked']++;
 
-                    $groupKey = $graphConfig->label . '|' . $relConfig->targetLabel . '|' . $relConfig->type;
+                    // Polymorphic targets: resolve the concrete label per row,
+                    // so one config fans out into one UNWIND group per distinct
+                    // resolved label present in the batch.
+                    $targetLabel = $relConfig->targetLabel;
+                    if ($relConfig->isPolymorphic()) {
+                        $targetLabel = $this->polymorphicResolver->resolveLabel(
+                            $data[$relConfig->morphTypeColumn()] ?? null
+                        );
+
+                        if ($targetLabel === null) {
+                            $summary['relationships_unresolved_morphs']++;
+                            continue;
+                        }
+                    }
+
+                    $groupKey = $graphConfig->label . '|' . $targetLabel . '|' . $relConfig->type;
                     if (!isset($groups[$groupKey])) {
                         $groups[$groupKey] = [
                             'fromLabel' => $graphConfig->label,
-                            'toLabel' => $relConfig->targetLabel,
+                            'toLabel' => $targetLabel,
                             'type' => $relConfig->type,
                             'pairs' => [],
                         ];
@@ -234,7 +253,7 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
             try {
                 $graphConfig = $entity->getGraphConfig();
                 $data = $entity->toArray();
-                $properties = $this->propertyMapper->extractProperties($data, $graphConfig->properties);
+                $properties = $this->propertyMapper->extractProperties($data, $graphConfig->properties, $entity);
                 $properties['id'] = $entity->getId();
 
                 // Sanitize all values for Neo4j (id is added after extraction)

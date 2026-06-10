@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\ResponseSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\Actions\ActionToolChannel;
+use Condoedge\Ai\Services\Actions\ActionToolGate;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 
 /**
@@ -34,8 +36,9 @@ class ResponseEntityActionsSection extends BaseResponseSection
 
     /**
      * Styles that want just the answer; action-link instructions don't apply.
+     * Single-sourced with the channel gate, whose None channel mirrors this rule.
      */
-    private const TERSE_STYLES = ['minimal', 'concise'];
+    private const TERSE_STYLES = ActionToolGate::TERSE_STYLES;
 
     private ?EntityAutoDiscovery $discovery = null;
 
@@ -47,10 +50,19 @@ class ResponseEntityActionsSection extends BaseResponseSection
 
     /**
      * Include when there are entity types with actions OR generic actions,
-     * but never for terse styles where action links would be unwanted noise.
+     * but never for terse styles where action links would be unwanted noise,
+     * and ONLY on the markdown channel.
      */
     public function shouldInclude(PipelineContext $context, array $options = []): bool
     {
+        // On the native channel the model holds real tool definitions; teaching the link
+        // grammar at the same time would be double-advertising — the whole block (grammar,
+        // per-row ID enumeration, CRITICAL rules) is suppressed. Absent channel = legacy
+        // caller = Markdown, unchanged.
+        if (($options[ActionToolChannel::OPTION] ?? ActionToolChannel::Markdown) !== ActionToolChannel::Markdown) {
+            return false;
+        }
+
         // Terse styles ask for just the answer; action-link instructions contradict that.
         if ($this->isTerseStyle($options)) {
             return false;

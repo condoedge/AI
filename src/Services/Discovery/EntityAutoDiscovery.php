@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Discovery;
 
 use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -489,6 +490,12 @@ class EntityAutoDiscovery
                 continue;
             }
 
+            // Polymorphic sentinel has no single concrete label — it must
+            // never leak into generated traversal scopes.
+            if ($targetEntity === RelationshipConfig::POLYMORPHIC_TARGET) {
+                continue;
+            }
+
             // For each discriminator field, generate scopes
             foreach ($discriminatorFields as $discriminatorField) {
                 // Get role mappings from configuration
@@ -637,6 +644,12 @@ class EntityAutoDiscovery
         foreach ($relationships as $relationship) {
             $targetLabel = $relationship['target_label'] ?? '';
             $relType = $relationship['type'] ?? '';
+
+            // Polymorphic sentinel must never become a team path segment
+            // ('_polymorphic.team_id' could never resolve).
+            if ($targetLabel === RelationshipConfig::POLYMORPHIC_TARGET) {
+                continue;
+            }
 
             // Skip if this is not a "belongs to" type relationship
             if (!str_contains(strtoupper($relType), 'BELONGS') && !str_contains(strtoupper($relType), 'OF')) {

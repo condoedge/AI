@@ -21,9 +21,13 @@ use Illuminate\Support\Facades\Log;
  */
 class RelationshipSyncer
 {
+    private readonly PolymorphicTargetResolver $polymorphicResolver;
+
     public function __construct(
         private readonly GraphStoreInterface $graphStore,
+        ?PolymorphicTargetResolver $polymorphicResolver = null,
     ) {
+        $this->polymorphicResolver = $polymorphicResolver ?? new PolymorphicTargetResolver();
     }
 
     /**
@@ -55,10 +59,30 @@ class RelationshipSyncer
                 continue;
             }
 
+            // Polymorphic targets: resolve the concrete label from the row's
+            // morph-type value, then run the identical pipeline below.
+            $targetLabel = $relationshipConfig->targetLabel;
+            if ($relationshipConfig->isPolymorphic()) {
+                $morphValue = $data[$relationshipConfig->morphTypeColumn()] ?? null;
+                $targetLabel = $this->polymorphicResolver->resolveLabel($morphValue);
+
+                if ($targetLabel === null) {
+                    Log::debug("Skipping polymorphic relationship: morph value has no catalog label", [
+                        'from_label' => $config->label,
+                        'from_id' => $entity->getId(),
+                        'morph_column' => $relationshipConfig->morphTypeColumn(),
+                        'morph_value' => $morphValue,
+                        'relationship_type' => $relationshipConfig->type,
+                    ]);
+                    $skipped++;
+                    continue;
+                }
+            }
+
             // Check if target node exists before creating relationship
             try {
                 $targetExists = $this->graphStore->nodeExists(
-                    $relationshipConfig->targetLabel,
+                    $targetLabel,
                     $foreignKeyValue
                 );
 
@@ -66,7 +90,7 @@ class RelationshipSyncer
                     Log::debug("Skipping relationship: target node not found", [
                         'from_label' => $config->label,
                         'from_id' => $entity->getId(),
-                        'to_label' => $relationshipConfig->targetLabel,
+                        'to_label' => $targetLabel,
                         'to_id' => $foreignKeyValue,
                         'relationship_type' => $relationshipConfig->type,
                         'message' => 'Target node will be created later. Run ai:sync-relationships after bulk ingestion.',
@@ -78,7 +102,7 @@ class RelationshipSyncer
                 Log::warning("Failed to check if target node exists, skipping relationship", [
                     'from_label' => $config->label,
                     'from_id' => $entity->getId(),
-                    'to_label' => $relationshipConfig->targetLabel,
+                    'to_label' => $targetLabel,
                     'to_id' => $foreignKeyValue,
                     'error' => $e->getMessage(),
                 ]);
@@ -101,7 +125,7 @@ class RelationshipSyncer
                 $relationshipExists = $this->graphStore->relationshipExists(
                     fromLabel: $config->label,
                     fromId: $entity->getId(),
-                    toLabel: $relationshipConfig->targetLabel,
+                    toLabel: $targetLabel,
                     toId: $foreignKeyValue,
                     type: $relationshipConfig->type
                 );
@@ -110,7 +134,7 @@ class RelationshipSyncer
                     Log::debug("Relationship already exists, skipping", [
                         'from_label' => $config->label,
                         'from_id' => $entity->getId(),
-                        'to_label' => $relationshipConfig->targetLabel,
+                        'to_label' => $targetLabel,
                         'to_id' => $foreignKeyValue,
                         'type' => $relationshipConfig->type,
                     ]);
@@ -120,7 +144,7 @@ class RelationshipSyncer
                 $this->graphStore->createRelationship(
                     fromLabel: $config->label,
                     fromId: $entity->getId(),
-                    toLabel: $relationshipConfig->targetLabel,
+                    toLabel: $targetLabel,
                     toId: $foreignKeyValue,
                     type: $relationshipConfig->type,
                     properties: $relationshipProperties
@@ -131,7 +155,7 @@ class RelationshipSyncer
                 Log::warning("Failed to create relationship", [
                     'from_label' => $config->label,
                     'from_id' => $entity->getId(),
-                    'to_label' => $relationshipConfig->targetLabel,
+                    'to_label' => $targetLabel,
                     'to_id' => $foreignKeyValue,
                     'type' => $relationshipConfig->type,
                     'error' => $e->getMessage(),
@@ -167,6 +191,7 @@ class RelationshipSyncer
             'relationships_created' => 0,
             'relationships_skipped' => 0,
             'relationships_failed' => 0,
+            'relationships_unresolved_morphs' => 0,
             'errors' => [],
         ];
 
@@ -212,10 +237,33 @@ class RelationshipSyncer
                         continue;
                     }
 
+                    // Polymorphic targets: resolve the concrete label per row.
+                    // Unresolved morphs are counted separately from
+                    // relationships_failed — "failed" means the target isn't
+                    // ingested YET (re-running fixes it); an unmapped morph
+                    // value is permanent until config/morph map changes.
+                    $targetLabel = $relationshipConfig->targetLabel;
+                    if ($relationshipConfig->isPolymorphic()) {
+                        $morphValue = $data[$relationshipConfig->morphTypeColumn()] ?? null;
+                        $targetLabel = $this->polymorphicResolver->resolveLabel($morphValue);
+
+                        if ($targetLabel === null) {
+                            Log::debug("Skipping polymorphic relationship: morph value has no catalog label", [
+                                'from_label' => $graphConfig->label,
+                                'from_id' => $entityId,
+                                'morph_column' => $relationshipConfig->morphTypeColumn(),
+                                'morph_value' => $morphValue,
+                                'relationship_type' => $relationshipConfig->type,
+                            ]);
+                            $summary['relationships_unresolved_morphs']++;
+                            continue;
+                        }
+                    }
+
                     try {
                         // Check if target node exists
                         $targetExists = $this->graphStore->nodeExists(
-                            $relationshipConfig->targetLabel,
+                            $targetLabel,
                             $foreignKeyValue
                         );
 
@@ -223,7 +271,7 @@ class RelationshipSyncer
                             Log::debug("Target node still doesn't exist", [
                                 'from_label' => $graphConfig->label,
                                 'from_id' => $entityId,
-                                'to_label' => $relationshipConfig->targetLabel,
+                                'to_label' => $targetLabel,
                                 'to_id' => $foreignKeyValue,
                             ]);
                             $summary['relationships_failed']++;
@@ -234,7 +282,7 @@ class RelationshipSyncer
                         $relationshipExists = $this->graphStore->relationshipExists(
                             fromLabel: $graphConfig->label,
                             fromId: $entityId,
-                            toLabel: $relationshipConfig->targetLabel,
+                            toLabel: $targetLabel,
                             toId: $foreignKeyValue,
                             type: $relationshipConfig->type
                         );
@@ -243,7 +291,7 @@ class RelationshipSyncer
                             Log::debug("Relationship already exists", [
                                 'from_label' => $graphConfig->label,
                                 'from_id' => $entityId,
-                                'to_label' => $relationshipConfig->targetLabel,
+                                'to_label' => $targetLabel,
                                 'to_id' => $foreignKeyValue,
                                 'type' => $relationshipConfig->type,
                             ]);
@@ -265,7 +313,7 @@ class RelationshipSyncer
                         $this->graphStore->createRelationship(
                             fromLabel: $graphConfig->label,
                             fromId: $entityId,
-                            toLabel: $relationshipConfig->targetLabel,
+                            toLabel: $targetLabel,
                             toId: $foreignKeyValue,
                             type: $relationshipConfig->type,
                             properties: $relationshipProperties
@@ -274,7 +322,7 @@ class RelationshipSyncer
                         Log::info("Relationship created during sync", [
                             'from_label' => $graphConfig->label,
                             'from_id' => $entityId,
-                            'to_label' => $relationshipConfig->targetLabel,
+                            'to_label' => $targetLabel,
                             'to_id' => $foreignKeyValue,
                             'type' => $relationshipConfig->type,
                         ]);
@@ -285,7 +333,7 @@ class RelationshipSyncer
                         Log::error("Failed to sync relationship", [
                             'from_label' => $graphConfig->label,
                             'from_id' => $entityId,
-                            'to_label' => $relationshipConfig->targetLabel,
+                            'to_label' => $targetLabel,
                             'to_id' => $foreignKeyValue,
                             'type' => $relationshipConfig->type,
                             'error' => $e->getMessage(),
@@ -295,7 +343,7 @@ class RelationshipSyncer
                         $summary['errors'][$entityId][] = sprintf(
                             "Failed to create %s relationship to %s:%s - %s",
                             $relationshipConfig->type,
-                            $relationshipConfig->targetLabel,
+                            $targetLabel,
                             $foreignKeyValue,
                             $e->getMessage()
                         );

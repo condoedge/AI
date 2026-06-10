@@ -143,6 +143,14 @@ class AskQuestionUseCase
             $referencedFiles = $aiResponse['referenced_files'] ?? [];
             $suggestions = $aiResponse['suggestions'] ?? [];
 
+            // Native tool-loop invocations (already schema-FILTERED, toArray() rows) ride the
+            // response metadata; persisted on the assistant message so every render can
+            // re-dispatch them — fresh authorize(), fresh approval token.
+            $invocations = $aiResponse['metadata']['response']['invocations'] ?? [];
+            if (!is_array($invocations)) {
+                $invocations = [];
+            }
+
             // Record response: single context-snapshot write (even without cypher), so
             // follow-ups can resolve referenced files / entities.
             $this->contextManager->recordResponse(
@@ -162,6 +170,7 @@ class AskQuestionUseCase
                 'suggestions' => $suggestions,
                 'referenced_files' => $referencedFiles,
                 'regenerated' => $regenerated,
+                'metadata' => $invocations !== [] ? ['invocations' => $invocations] : [],
             ]);
 
             // ABSTENTION: no data AND no referenced files → flag the turn as degraded so the

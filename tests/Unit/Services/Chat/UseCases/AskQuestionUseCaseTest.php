@@ -236,6 +236,72 @@ class AskQuestionUseCaseTest extends TestCase
     }
 
     /** @test */
+    public function it_persists_filtered_native_invocations_on_the_assistant_message_metadata(): void
+    {
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        // The toArray() rows of already-FILTERED invocations, riding metadata.response from
+        // the native tool loop (design 94b §6.1) — persisted verbatim for render-time revival.
+        $rows = [
+            [
+                'key' => 'archive',
+                'entity_type' => null,
+                'entity_id' => null,
+                'params' => ['confirm' => true],
+                'text' => '',
+            ],
+        ];
+
+        $ai = $this->mockAi();
+        $ai->shouldReceive('getSchema')->andReturn(['labels' => [], 'relationships' => []]);
+        $ai->shouldReceive('answerQuestion')->once()->andReturn([
+            'answer' => 'I can archive that for you — please confirm.',
+            'cypher' => null,
+            'data' => [['id' => 7]],
+            'suggestions' => [],
+            'referenced_files' => [],
+            'metadata' => ['response' => ['invocations' => $rows]],
+        ]);
+
+        $result = $this->useCase()->execute(new AskQuestionInput(
+            question: 'Archive record 7',
+            conversation: $conversation,
+            style: 'friendly',
+            user: $this->user(),
+        ));
+
+        $this->assertFalse($result->failed());
+        $this->assertSame($rows, $result->assistantMessage->metadata['invocations'] ?? null);
+        $this->assertSame($rows, $result->assistantMessage->fresh()->metadata['invocations'] ?? null);
+    }
+
+    /** @test */
+    public function no_invocations_key_is_persisted_for_turns_without_native_invocations(): void
+    {
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        $ai = $this->mockAi();
+        $ai->shouldReceive('getSchema')->andReturn(['labels' => [], 'relationships' => []]);
+        $ai->shouldReceive('answerQuestion')->once()->andReturn([
+            'answer' => 'You have 42 active customers.',
+            'cypher' => null,
+            'data' => [['count' => 42]],
+            'suggestions' => [],
+            'referenced_files' => [],
+        ]);
+
+        $result = $this->useCase()->execute(new AskQuestionInput(
+            question: 'How many active customers do we have?',
+            conversation: $conversation,
+            style: 'friendly',
+            user: $this->user(),
+        ));
+
+        $this->assertFalse($result->failed());
+        $this->assertArrayNotHasKey('invocations', $result->assistantMessage->metadata ?? []);
+    }
+
+    /** @test */
     public function it_marks_degraded_when_data_and_files_are_both_empty(): void
     {
         $conversation = AiConversation::create(['user_id' => 1]);

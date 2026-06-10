@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Response;
 
-use Condoedge\Ai\Kompo\Actions\ApprovalCard;
 use Condoedge\Ai\Services\Actions\ActionDispatcher;
+use Condoedge\Ai\Services\Actions\ActionInvocation;
 use Condoedge\Ai\Services\Actions\AiActionRegistry;
 use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
@@ -38,14 +38,18 @@ class ActionLinkHandler extends AbstractContentLinkHandler
 
     private ?ActionDispatcher $dispatcher;
 
+    private ActionResultPresenter $presenter;
+
     public function __construct(
         private ?EntityAutoDiscovery $discovery = null,
         ?ActionDispatcher $dispatcher = null,
+        ?ActionResultPresenter $presenter = null,
     ) {
         $this->discovery = $discovery ?? app(EntityAutoDiscovery::class);
         // Resolve a dispatcher with the shared registry; fall back to a self-built one with
         // safe defaults so the handler works even without DI wiring.
         $this->dispatcher = $dispatcher ?? $this->resolveDispatcher();
+        $this->presenter = $presenter ?? new ActionResultPresenter();
     }
 
     public function getPatterns(): array
@@ -130,62 +134,36 @@ class ActionLinkHandler extends AbstractContentLinkHandler
     }
 
     /**
-     * Turn an AiActionResult into the element to drop into the message.
-     *
-     * - Approval-required (deferred) results render an ApprovalCard instead of executing.
-     * - Export errors (e.g. phpspreadsheet/dompdf absent) render a VISIBLE honest-failure notice
-     *   instead of vanishing — a silently inert download link is a worse UX than a clear message.
-     * - Other errors render nothing (the caller already logs / degrades, and a generic action
-     *   failure must not leak its internal reason into the chat bubble).
-     * - Plain renderables (Kompo elements) pass straight through.
+     * Turn an AiActionResult into the element to drop into the message — delegated to the
+     * shared {@see ActionResultPresenter} so the markdown link path and the persisted
+     * native-invocation path render through identical lines.
      */
     private function renderResult(?AiActionResult $result, string $actionKey = ''): mixed
     {
-        if ($result === null) {
-            return null;
-        }
-
-        if ($result->isError) {
-            // HONEST FAILURE: only the export actions surface their reason to the user; every
-            // other action keeps failing closed (no inert link, no leaked internals).
-            return $this->isExportAction($actionKey)
-                ? $this->renderExportFailure($result->summaryForLlm)
-                : null;
-        }
-
-        $renderable = $result->renderable;
-
-        // Deferred mutating action → confirmation card, NEVER inline execution.
-        if (is_array($renderable) && !empty($renderable['pending'])) {
-            return ApprovalCard::make($renderable);
-        }
-
-        return $renderable;
+        return $this->presenter->present($result, $actionKey);
     }
 
     /**
-     * The built-in export actions whose failure (missing host library) must be shown, not hidden.
+     * Parse the action/entity links out of content as canonical ActionInvocations WITHOUT
+     * dispatching or rendering anything. This is the render-side dedupe source: persisted
+     * native-turn invocations whose fingerprint already appears among the parsed links are
+     * skipped (links render first), so a model imitating its own history never doubles up.
+     *
+     * @return ActionInvocation[]
      */
-    private function isExportAction(string $actionKey): bool
+    public function parseInvocations(string $content): array
     {
-        return str_starts_with($actionKey, 'export_');
-    }
+        $invocations = [];
 
-    /**
-     * Render an export failure as a small, visible inline notice carrying the user-facing reason.
-     */
-    private function renderExportFailure(string $message): mixed
-    {
-        $message = trim($message) !== ''
-            ? $message
-            : 'This export is unavailable in the current environment.';
-
-        if (function_exists('_Html')) {
-            return _Html(e($message))->class('cdge-export-error text-sm text-red-600');
+        foreach ($this->getPatterns() as $pattern) {
+            if (preg_match_all($pattern, $content, $matches, PREG_SET_ORDER)) {
+                foreach ($matches as $match) {
+                    $invocations[] = ActionInvocation::fromLinkMatch($match);
+                }
+            }
         }
 
-        // No Kompo runtime (unit context) — return the message text so the failure is never silent.
-        return $message;
+        return $invocations;
     }
 
     protected function getStripReplacement(array $match): string
