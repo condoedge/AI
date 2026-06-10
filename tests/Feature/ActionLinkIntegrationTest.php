@@ -22,12 +22,12 @@ class ActionLinkIntegrationTest extends TestCase
         $mockDiscovery->shouldReceive('hasEntityActions')
             ->with('Person')
             ->andReturn(true);
-        $mockDiscovery->shouldReceive('getEntityActions')
-            ->with('Person')
+        $mockDiscovery->shouldReceive('getAuthorizedEntityActions')
+            ->with('Person', Mockery::any())
             ->andReturn([
                 ['action_key' => 'profile', 'aliases' => ['profile link', 'profile page'], 'label' => 'View Profile'],
             ]);
-        $mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
+        $mockDiscovery->shouldReceive('getAuthorizedGenericActions')->andReturn([]);
 
         $this->app->instance(EntityAutoDiscovery::class, $mockDiscovery);
 
@@ -66,12 +66,12 @@ class ActionLinkIntegrationTest extends TestCase
         $mockDiscovery->shouldReceive('hasEntityActions')
             ->with('Person')
             ->andReturn(true);
-        $mockDiscovery->shouldReceive('getEntityActions')
-            ->with('Person')
+        $mockDiscovery->shouldReceive('getAuthorizedEntityActions')
+            ->with('Person', Mockery::any())
             ->andReturn([
                 ['action_key' => 'profile', 'aliases' => ['profile link'], 'label' => 'View Profile'],
             ]);
-        $mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
+        $mockDiscovery->shouldReceive('getAuthorizedGenericActions')->andReturn([]);
 
         $this->app->instance(EntityAutoDiscovery::class, $mockDiscovery);
 

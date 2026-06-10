@@ -73,11 +73,11 @@ class ResponseEntityActionsSectionStyleTest extends TestCase
     {
         $this->mockDiscovery->shouldReceive('hasEntityActions')
             ->with('Person')->andReturn(true);
-        $this->mockDiscovery->shouldReceive('getEntityActions')
-            ->with('Person')->andReturn([
+        $this->mockDiscovery->shouldReceive('getAuthorizedEntityActions')
+            ->with('Person', Mockery::any())->andReturn([
                 ['action_key' => 'profile', 'aliases' => ['profile link'], 'label' => 'View Profile'],
             ]);
-        $this->mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
+        $this->mockDiscovery->shouldReceive('getAuthorizedGenericActions')->andReturn([]);
 
         $context = $this->contextWithEntities();
 

@@ -819,6 +819,78 @@ class EntityAutoDiscovery
     }
 
     /**
+     * Generic actions the given principal may actually trigger.
+     *
+     * Advertisement-time gate (90c W6): the response prompt used to advertise every
+     * generic action and let the renderer strip unauthorized links afterwards — the
+     * user then saw the stripped offer as dead text (e.g. "Owners registry" shown to
+     * a board member who fails its staff gate). Generic actions take no row, so
+     * authorize($user, []) is exactly the check the renderer applies; advertising only
+     * what survives it keeps prompt and render consistent. An authorize() that throws
+     * is not advertisable — fail closed.
+     *
+     * @return array Array of ['action_key','aliases','label'].
+     */
+    public function getAuthorizedGenericActions(mixed $user): array
+    {
+        $result = [];
+        foreach ($this->actionRegistry()->genericActions() as $action) {
+            if (!$this->authorizesForAdvertisement($action, $user)) {
+                continue;
+            }
+
+            $result[] = [
+                'action_key' => $action->key(),
+                'aliases' => $action->aliases(),
+                'label' => $action->label(),
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Entity actions advertisable to the given principal.
+     *
+     * Mutating actions authorize against the RESOLVED ROW; no row exists at
+     * advertisement time, so an empty-input check would always fail closed and hide
+     * them — they pass through unfiltered and keep their render + approval-time gates.
+     * Non-mutating actions are role-gated (input-independent closures), so the same
+     * authorize($user, []) the renderer applies decides advertisement.
+     *
+     * @return array Array of ['action_key','aliases','label'].
+     */
+    public function getAuthorizedEntityActions(string $entityLabel, mixed $user): array
+    {
+        $result = [];
+        foreach ($this->actionRegistry()->entityActions($entityLabel) as $action) {
+            if (!$action->mutates() && !$this->authorizesForAdvertisement($action, $user)) {
+                continue;
+            }
+
+            $result[] = [
+                'action_key' => $action->key(),
+                'aliases' => $action->aliases(),
+                'label' => $action->label(),
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Whether an action may be advertised to the principal (input-less authorize).
+     */
+    private function authorizesForAdvertisement(\Condoedge\Ai\Contracts\AiActionInterface $action, mixed $user): bool
+    {
+        try {
+            return (bool) $action->authorize($user, []);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
      * Check if an entity type has any actions configured/registered.
      */
     public function hasEntityActions(string $entityLabel): bool

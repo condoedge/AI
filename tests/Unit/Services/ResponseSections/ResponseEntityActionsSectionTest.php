@@ -39,12 +39,12 @@ class ResponseEntityActionsSectionTest extends TestCase
         $this->mockDiscovery->shouldReceive('hasEntityActions')
             ->with('Person')
             ->andReturn(true);
-        $this->mockDiscovery->shouldReceive('getEntityActions')
-            ->with('Person')
+        $this->mockDiscovery->shouldReceive('getAuthorizedEntityActions')
+            ->with('Person', Mockery::any())
             ->andReturn([
                 ['action_key' => 'profile', 'aliases' => ['profile link'], 'label' => 'View Profile'],
             ]);
-        $this->mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
+        $this->mockDiscovery->shouldReceive('getAuthorizedGenericActions')->andReturn([]);
 
         // NO QUERY case: empty cypher + empty data, entity type/IDs come from conversation context.
         $context = new PipelineContext();
@@ -74,12 +74,12 @@ class ResponseEntityActionsSectionTest extends TestCase
         $this->mockDiscovery->shouldReceive('hasEntityActions')
             ->with('Person')
             ->andReturn(true);
-        $this->mockDiscovery->shouldReceive('getEntityActions')
-            ->with('Person')
+        $this->mockDiscovery->shouldReceive('getAuthorizedEntityActions')
+            ->with('Person', Mockery::any())
             ->andReturn([
                 ['action_key' => 'profile', 'aliases' => ['profile link'], 'label' => 'View Profile'],
             ]);
-        $this->mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
+        $this->mockDiscovery->shouldReceive('getAuthorizedGenericActions')->andReturn([]);
 
         // No conversation context: entity type parsed from cypher, IDs from execution data.
         $context = new PipelineContext();
@@ -108,12 +108,12 @@ class ResponseEntityActionsSectionTest extends TestCase
         $this->mockDiscovery->shouldReceive('hasEntityActions')
             ->with('Person')
             ->andReturn(true);
-        $this->mockDiscovery->shouldReceive('getEntityActions')
-            ->with('Person')
+        $this->mockDiscovery->shouldReceive('getAuthorizedEntityActions')
+            ->with('Person', Mockery::any())
             ->andReturn([
                 ['action_key' => 'profile', 'aliases' => ['profile link'], 'label' => 'View Profile'],
             ]);
-        $this->mockDiscovery->shouldReceive('getGenericActions')->andReturn([]);
+        $this->mockDiscovery->shouldReceive('getAuthorizedGenericActions')->andReturn([]);
 
         $context = new PipelineContext();
         $context->queryResult = new QueryGenerationResult(cypher: '');

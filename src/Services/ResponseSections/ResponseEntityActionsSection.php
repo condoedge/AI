@@ -76,7 +76,9 @@ class ResponseEntityActionsSection extends BaseResponseSection
             }
         }
 
-        $genericActions = $this->discovery->getGenericActions();
+        // Only authorized actions count (90c W6) — a user with nothing advertisable
+        // gets no action-link instructions at all.
+        $genericActions = $this->discovery->getAuthorizedGenericActions($this->currentUser());
         return !empty($genericActions);
     }
 
@@ -88,8 +90,13 @@ class ResponseEntityActionsSection extends BaseResponseSection
         $entityTypes = $this->resolveEntityTypes($context);
         $entityData = $this->resolveEntityData($context);
 
+        // 90c W6: advertise only what THIS user survives authorize() on — an action the
+        // renderer would strip anyway must not be offered in the prompt (it renders as a
+        // dead offer to exactly the user it was stripped from).
+        $user = $this->currentUser();
+
         foreach ($entityTypes as $entityType) {
-            $actions = $this->discovery->getEntityActions($entityType);
+            $actions = $this->discovery->getAuthorizedEntityActions($entityType, $user);
             if (empty($actions)) {
                 continue;
             }
@@ -119,7 +126,7 @@ class ResponseEntityActionsSection extends BaseResponseSection
             $output .= "\n";
         }
 
-        $genericActions = $this->discovery->getGenericActions();
+        $genericActions = $this->discovery->getAuthorizedGenericActions($user);
         if (!empty($genericActions)) {
             $output .= "**Generic Actions:**\n";
             foreach ($genericActions as $action) {
@@ -142,6 +149,19 @@ class ResponseEntityActionsSection extends BaseResponseSection
         $output .= "- You may add params after the action key as a query string for default values: `[Open form](action://open_modal?modal=editUnit&amount=450)`.\n\n";
 
         return $output;
+    }
+
+    /**
+     * The principal actions are advertised to — same resolution the dispatcher's
+     * render-time gate falls back to (auth user; null when no auth context).
+     */
+    private function currentUser(): mixed
+    {
+        try {
+            return function_exists('auth') ? auth()->user() : null;
+        } catch (\Throwable $e) {
+            return null; // no auth context (console/queue) — gated actions fail closed
+        }
     }
 
     /**

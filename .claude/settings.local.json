@@ -137,7 +137,11 @@
       "Bash(find C:/Users/jkend/Documents/Projects/kompo/CondoEdge -type f \\\\\\(-name *.md -o -name *.txt \\\\\\) -path *laws*)",
       "Bash(wc:*)",
       "Bash(do php:*)",
-      "mcp__code-index__build_deep_index"
+      "mcp__code-index__build_deep_index",
+      "mcp__code-index__search_code_advanced",
+      "mcp__code-index__set_project_path",
+      "mcp__code-index__find_files",
+      "mcp__code-index__get_file_summary"
     ],
     "deny": [],
     "ask": []

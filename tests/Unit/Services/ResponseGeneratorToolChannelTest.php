@@ -60,6 +60,13 @@ class ResponseGeneratorToolChannelTest extends TestCase
         $this->discovery->allows('getGenericActions')->andReturn([
             ['action_key' => 'open_modal', 'label' => 'Open a modal', 'aliases' => []],
         ]);
+        // The advertisement sites consult the authorize-filtered variants (90c W6).
+        $this->discovery->allows('getAuthorizedEntityActions')->andReturn([
+            ['action_key' => 'profile', 'aliases' => ['profile link'], 'label' => 'View Profile'],
+        ]);
+        $this->discovery->allows('getAuthorizedGenericActions')->andReturn([
+            ['action_key' => 'open_modal', 'label' => 'Open a modal', 'aliases' => []],
+        ]);
         $this->app->instance(EntityAutoDiscovery::class, $this->discovery);
     }
 

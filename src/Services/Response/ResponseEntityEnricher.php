@@ -52,7 +52,9 @@ class ResponseEntityEnricher
                 continue;
             }
 
-            $actions = $this->discovery->getEntityActions($entityLabel);
+            // 90c W6: per-row chips only for actions THIS user survives authorize() on
+            // (mutating actions pass through — they re-authorize against the resolved row).
+            $actions = $this->discovery->getAuthorizedEntityActions($entityLabel, $this->currentUser());
 
             $enriched[] = array_merge($result, [
                 'has_actions' => !empty($actions),
@@ -94,6 +96,19 @@ class ResponseEntityEnricher
         }
 
         return $links;
+    }
+
+    /**
+     * The principal chips are built for — same resolution the dispatcher's
+     * render-time gate falls back to (auth user; null when no auth context).
+     */
+    private function currentUser(): mixed
+    {
+        try {
+            return function_exists('auth') ? auth()->user() : null;
+        } catch (\Throwable $e) {
+            return null; // no auth context (console/queue) — gated actions fail closed
+        }
     }
 
     /**

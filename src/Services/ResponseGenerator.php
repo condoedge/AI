@@ -391,7 +391,17 @@ class ResponseGenerator implements ResponseGeneratorInterface
     private function emptyResponseActionsHint(): string
     {
         try {
-            $actions = app(\Condoedge\Ai\Services\Discovery\EntityAutoDiscovery::class)->getGenericActions();
+            // 90c W6: only actions THIS user survives authorize() on are offered — the
+            // renderer strips the rest, which would read as a dead offer. Same principal
+            // resolution as the dispatcher's render-time gate (auth user, null if no context).
+            $user = null;
+            try {
+                $user = function_exists('auth') ? auth()->user() : null;
+            } catch (\Throwable $e) {
+                // no auth context (console/queue) — gated actions fail closed
+            }
+
+            $actions = app(\Condoedge\Ai\Services\Discovery\EntityAutoDiscovery::class)->getAuthorizedGenericActions($user);
         } catch (\Throwable $e) {
             return '';
         }
