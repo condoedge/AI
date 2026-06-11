@@ -38,6 +38,8 @@ class IngestEntitiesCommand extends Command
                             {--from= : Skip models until this one (e.g., InboundEmail or App\\Models\\Messaging\\InboundEmail)}
                             {--fresh : Clear all data from stores before ingesting}
                             {--chunk=2000 : Batch size for processing}
+                            {--min-id= : Only ingest rows with primary key >= this value (manual range restriction)}
+                            {--max-id= : Only ingest rows with primary key < this value (manual range restriction)}
                             {--dry-run : Show what would be ingested without actually ingesting}
                             {--docs : Index physical documentation files from configured paths}';
 
@@ -66,6 +68,25 @@ class IngestEntitiesCommand extends Command
      */
     public function handle(): int
     {
+        // Bulk ingestion needs more than the typical 512M CLI default (chunks of Eloquent
+        // models + embedding vectors + store payloads), and every observed OOM happened on
+        // runs where the operator's `-d memory_limit=` flag was missing — so the command
+        // raises its own limit instead of depending on the invocation.
+        @ini_set('memory_limit', (string) config('ai.ingestion.memory_limit', '2G'));
+
+        // Memory hygiene for a long-running process: anything listening to QueryExecuted
+        // (debug toolbars and similar collectors) retains every query + bindings for the
+        // whole run — tens of KB per ingested row that gc_collect_cycles() can never
+        // reclaim because it is referenced, not garbage. Detach the framework query log
+        // and the DB connection's event dispatcher inside THIS process only; Eloquent
+        // model events (auto_sync) live on the model dispatcher and are unaffected.
+        try {
+            \Illuminate\Support\Facades\DB::connection()->disableQueryLog();
+            \Illuminate\Support\Facades\DB::connection()->unsetEventDispatcher();
+        } catch (\Throwable $e) {
+            // No default DB connection (docs-only setups) — nothing to detach.
+        }
+
         if ($this->option('docs')) {
             return $this->handleDocsIngestion();
         }
@@ -87,35 +108,50 @@ class IngestEntitiesCommand extends Command
         $this->newLine();
 
         if ($this->option('fresh') && !$this->option('dry-run')) {
-            if ($this->confirm('⚠️  This will DELETE all data from Neo4j and Qdrant. Continue?', false)) {
-                $this->clearStores($models);
-            } else {
+            // In a non-interactive run (spawned by ai:setup, CI, cron) there is no TTY to
+            // prompt on — confirm() would silently pick the default (no) and "succeed"
+            // without wiping OR ingesting. An explicit --fresh flag IS the consent there.
+            $proceed = !$this->input->isInteractive()
+                || $this->confirm('⚠️  This will DELETE all data from Neo4j and Qdrant. Continue?', false);
+
+            if (!$proceed) {
                 $this->warn('Ingestion cancelled.');
                 return self::SUCCESS;
             }
+
+            if (!$this->input->isInteractive()) {
+                $this->warn('Non-interactive --fresh: clearing stores without prompting.');
+            }
+
+            $this->clearStores($models);
         }
 
         $chunkSize = (int) $this->option('chunk');
+
+        // Handle --from flag: skip models until we reach the specified one (inclusive)
+        $fromModel = $this->option('from');
+        if ($fromModel !== null) {
+            $remaining = [];
+            $skipping = true;
+            foreach ($models as $modelClass) {
+                if ($skipping && (class_basename($modelClass) === $fromModel || $modelClass === $fromModel)) {
+                    $skipping = false;
+                }
+                if ($skipping) {
+                    $this->comment("Skipping: {$modelClass} (--from)");
+                    continue;
+                }
+                $remaining[] = $modelClass;
+            }
+            $models = $remaining;
+        }
+
         $totalIngested = 0;
         $totalPartial = 0;
         $totalFailed = 0;
         $errors = [];
 
-        // Handle --from flag: skip models until we reach the specified one
-        $fromModel = $this->option('from');
-        $skipping = $fromModel !== null;
-
         foreach ($models as $modelClass) {
-            if ($skipping) {
-                $shortName = class_basename($modelClass);
-                if ($shortName === $fromModel || $modelClass === $fromModel) {
-                    $skipping = false;
-                } else {
-                    $this->comment("Skipping: {$modelClass} (--from)");
-                    continue;
-                }
-            }
-
             $result = $this->ingestModel($modelClass, $chunkSize);
 
             $totalIngested += $result['ingested'];
@@ -185,8 +221,15 @@ class IngestEntitiesCommand extends Command
             return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => ["Not a Nodeable model"]];
         }
 
+        // Segmentation window (--min-id/--max-id): restrict to a primary-key range so a
+        // parent can split one large model across several bounded child processes.
+        $keyName = (new $modelClass)->getKeyName();
+        $query = $modelClass::query()
+            ->when($this->option('min-id') !== null, fn ($q) => $q->where($keyName, '>=', $this->option('min-id')))
+            ->when($this->option('max-id') !== null, fn ($q) => $q->where($keyName, '<', $this->option('max-id')));
+
         try {
-            $total = $modelClass::count();
+            $total = (clone $query)->count();
         } catch (\Throwable $e) {
             $this->error("  ✗ Failed to count entities: {$e->getMessage()}");
             return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => [$e->getMessage()]];
@@ -215,7 +258,7 @@ class IngestEntitiesCommand extends Command
         $failed = 0;
         $errors = [];
 
-        $modelClass::chunk($chunkSize, function ($entities) use (&$ingested, &$partial, &$failed, &$errors, $progressBar) {
+        $query->chunk($chunkSize, function ($entities) use (&$ingested, &$partial, &$failed, &$errors, $progressBar) {
             try {
                 $results = $this->ingestionService->ingestBatch($entities->all());
 
@@ -230,12 +273,21 @@ class IngestEntitiesCommand extends Command
                 }
 
                 $progressBar->advance($entities->count());
-                $progressBar->setMessage("Ingested: {$ingested}, Partial: {$partial}, Failed: {$failed}");
+                // Memory telemetry: a steadily climbing Mem across chunks means something
+                // process-wide is retaining per-row data (e.g. a debug query collector) —
+                // chunk-local work alone keeps this flat.
+                $mem = round(memory_get_usage(true) / 1048576);
+                $peak = round(memory_get_peak_usage(true) / 1048576);
+                $progressBar->setMessage("Ingested: {$ingested}, Partial: {$partial}, Failed: {$failed} | Mem: {$mem}MB (peak {$peak}MB)");
             } catch (\Throwable $e) {
                 $failed += $entities->count();
                 $errors[] = "Batch error: {$e->getMessage()}";
                 $progressBar->advance($entities->count());
             }
+
+            // Eloquent models + their relations form reference cycles; collect them
+            // deterministically each chunk instead of waiting for GC root-buffer pressure.
+            gc_collect_cycles();
         });
 
         $progressBar->finish();
@@ -277,11 +329,42 @@ class IngestEntitiesCommand extends Command
     {
         $this->warn('Clearing stores...');
 
-        $this->line('  Clearing Neo4j...');
+        $this->line('  Clearing Neo4j (batched)...');
         try {
-            // DETACH DELETE removes each node together with its relationships.
-            $this->graphStore->query('MATCH (n) DETACH DELETE n');
-            $this->line('    <fg=green>✓</> Neo4j cleared');
+            // A single `MATCH (n) DETACH DELETE n` holds the WHOLE graph's delete set in ONE
+            // transaction — on a real dataset the server heap fills, GC thrashes, and the query
+            // never returns (observed: a 6h hang on the first full CondoEdge wipe). query() runs
+            // each call as its own auto-commit transaction, so loop small bounded batches
+            // instead: relationships first (a node batch can still drag an unbounded number of
+            // rels via DETACH), then nodes. Each iteration commits, so progress is real and
+            // memory stays flat regardless of graph size.
+            $totalRels = 0;
+            do {
+                $result = $this->graphStore->query(
+                    'MATCH ()-[r]->() WITH r LIMIT 50000 DELETE r RETURN count(r) AS deleted'
+                );
+                $deleted = (int) ($result[0]['deleted'] ?? 0);
+                $totalRels += $deleted;
+                if ($deleted > 0) {
+                    $this->line("    … {$totalRels} relationships deleted");
+                }
+            } while ($deleted > 0);
+
+            $totalNodes = 0;
+            do {
+                // DETACH DELETE in the node phase too: auto_sync app traffic can create new
+                // relationships while the wipe runs; a plain DELETE would then error out.
+                $result = $this->graphStore->query(
+                    'MATCH (n) WITH n LIMIT 50000 DETACH DELETE n RETURN count(n) AS deleted'
+                );
+                $deleted = (int) ($result[0]['deleted'] ?? 0);
+                $totalNodes += $deleted;
+                if ($deleted > 0) {
+                    $this->line("    … {$totalNodes} nodes deleted");
+                }
+            } while ($deleted > 0);
+
+            $this->line("    <fg=green>✓</> Neo4j cleared ({$totalNodes} nodes, {$totalRels} relationships)");
         } catch (\Throwable $e) {
             $this->error("    ✗ Failed to clear Neo4j: {$e->getMessage()}");
         }

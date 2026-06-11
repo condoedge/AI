@@ -234,11 +234,11 @@ class AiActionRegistryTest extends TestCase
     public function it_applies_schema_defaults_for_missing_params(): void
     {
         $registry = new AiActionRegistry();
-        $action = $registry->getGeneric('export_excel'); // title default 'export'
+        $action = $registry->getGeneric('export_excel'); // title default 'export', mode default 'table'
 
         $clean = $registry->filterParams($action, []);
 
-        $this->assertSame(['title' => 'export'], $clean);
+        $this->assertSame(['title' => 'export', 'mode' => 'table'], $clean);
     }
 
     /** @test */

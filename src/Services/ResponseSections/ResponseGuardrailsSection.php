@@ -52,6 +52,13 @@ class ResponseGuardrailsSection extends BaseResponseSection
             "2. If the question is out-of-scope — off-topic, or with no relevant data or files for {$project} — politely say it is outside what you can help with for {$project} and, where useful, point to what you can do. Keep your persona: do not present an out-of-scope question as a database miss and do not tell the user to rephrase.",
         ];
 
+        // Host-specific domain statement (config 'ai.guardrails.domain_scope') so the decline
+        // can NAME what is in scope for this software instead of only the project name.
+        $scope = trim((string) config('ai.guardrails.domain_scope', ''));
+        if ($scope !== '') {
+            $lines[] = "   The domain of {$project} is: {$scope} Anything outside it is out-of-scope per rule 2.";
+        }
+
         if (($options[ActionToolChannel::OPTION] ?? null) === ActionToolChannel::Native) {
             $lines[] = "3. Never write action:// or entity:// links in your response — your tools are the only way to propose actions.";
         }

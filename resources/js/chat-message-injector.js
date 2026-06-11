@@ -10,9 +10,12 @@
  * the panel refresh replaces them with the DB-rendered messages.
  *
  * Templates are injected by PHP with theme-aware classes:
- * - $USER_BUBBLE_TEMPLATE - User message bubble HTML
+ * - $USER_BUBBLE_TEMPLATE - User message bubble HTML (shared chat-kit own-bubble template
+ *   with $HTML / $TIME placeholders; avatar baked in server-side)
  * - $TYPING_INDICATOR_TEMPLATE - Typing indicator HTML
- * - $USER_AVATAR_HTML - User avatar HTML
+ *
+ * Scrolling delegates to the shared chat-kit library (window.KompoChatKit, loaded first
+ * by the same PHP carrier - AbstractChatSurface::js()).
  */
 
 const ChatMessageInjector = {
@@ -23,8 +26,6 @@ const ChatMessageInjector = {
     // Using backticks to avoid quote escaping issues with SVG attributes
     userBubbleTemplate: `$USER_BUBBLE_TEMPLATE`,
     typingIndicatorTemplate: `$TYPING_INDICATOR_TEMPLATE`,
-    userAvatarHtml: `$USER_AVATAR_HTML`,
-    dotColor: `$DOT_COLOR`,
 
     // Typing animation settings (injected by PHP from user settings)
     typingStyle: `$TYPING_STYLE`,
@@ -71,7 +72,7 @@ const ChatMessageInjector = {
      * Create a placeholder for a new user message + typing indicator
      * Called immediately when user clicks send
      */
-    precreateMessagePlaceholder(userMessage, avatarHtml) {
+    precreateMessagePlaceholder(userMessage) {
         // Hide welcome/empty state content when sending first message
         const welcomeState = document.getElementById('chat-welcome-state');
         const emptyState = document.getElementById('chat-empty-state');
@@ -84,14 +85,15 @@ const ChatMessageInjector = {
             return;
         }
 
-        // Create user message from template
+        // Create user message from the chat-kit template ($TIME / $HTML placeholders).
+        // Function replacements avoid $-pattern substitution bugs with user content;
+        // $TIME goes first so a literal '$TIME' typed in the message can't hijack it.
         const timestamp = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-        const avatar = avatarHtml || this.userAvatarHtml;
+        const escapedMessage = this.escapeHtml(userMessage);
 
-        let userBubbleHtml = this.userBubbleTemplate
-            .replace('$MESSAGE', this.escapeHtml(userMessage))
-            .replace('$TIMESTAMP', timestamp)
-            .replace('$AVATAR', avatar ? `<div class="ml-3 flex-shrink-0">${avatar}</div>` : '');
+        const userBubbleHtml = this.userBubbleTemplate
+            .replace('$TIME', () => timestamp)
+            .replace('$HTML', () => escapedMessage);
 
         const userBubble = document.createElement('div');
         userBubble.setAttribute('data-placeholder', 'user-message');
@@ -498,17 +500,20 @@ const ChatMessageInjector = {
     },
 
     /**
-     * Scroll to bottom of chat
+     * Scroll to bottom of chat - delegates to the shared chat-kit library
+     * (with a minimal inline fallback if the kit was not injected)
      */
     scrollToBottom() {
+        if (window.KompoChatKit) {
+            window.KompoChatKit.snapToBottom('#' + this.panelId, true);
+            return;
+        }
+
         const panel = document.getElementById(this.panelId);
         const wrapper = panel?.querySelector('.vlQueryWrapper');
         if (wrapper) {
             setTimeout(() => {
-                wrapper.scrollTo({
-                    top: wrapper.scrollHeight,
-                    behavior: 'smooth'
-                });
+                wrapper.scrollTo({ top: wrapper.scrollHeight, behavior: 'smooth' });
             }, 100);
         }
     },
@@ -556,8 +561,8 @@ window.ChatMessageInjector = ChatMessageInjector;
 /**
  * Helper functions for Kompo run() calls
  */
-function precreateMessagePlaceholder(message, avatarHtml) {
-    ChatMessageInjector.precreateMessagePlaceholder(message, avatarHtml || '');
+function precreateMessagePlaceholder(message) {
+    ChatMessageInjector.precreateMessagePlaceholder(message);
 }
 
 function scrollChatToBottom() {

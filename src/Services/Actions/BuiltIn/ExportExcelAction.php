@@ -42,7 +42,10 @@ class ExportExcelAction extends AbstractBuiltInAction
 
     public function description(): string
     {
-        return 'Export the current result set as an Excel (.xlsx) file.';
+        return 'Export as an Excel (.xlsx) file. mode=table (default) exports the current result set; '
+            . 'mode=document renders the markdown TABLES of YOUR composed answer — your header row becomes '
+            . 'the column headers (rename/reorder/derive freely), each table becomes a worksheet named after '
+            . 'its preceding heading, and cells like =SUM(C2:C10) become live Excel formulas for totals.';
     }
 
     public function aliases(): array
@@ -54,17 +57,22 @@ class ExportExcelAction extends AbstractBuiltInAction
     {
         return [
             'title' => ['type' => 'string', 'default' => 'export', 'label' => 'File title'],
+            'mode' => ['type' => 'string', 'default' => 'table', 'label' => "Export source: 'table' (result set) or 'document' (the composed answer's markdown tables)"],
         ];
     }
 
     public function handle(array $input, ActionContext $context): AiActionResult
     {
+        $title = (string) ($input['title'] ?? 'export');
+
+        if (strtolower((string) ($input['mode'] ?? 'table')) === 'document') {
+            return $this->exporter->documentToExcel((string) ($context->answer ?? ''), $title);
+        }
+
         $rows = $context->resultSet;
         if (empty($rows)) {
             return AiActionResult::error('No data available to export to Excel.');
         }
-
-        $title = (string) ($input['title'] ?? 'export');
 
         return $this->exporter->toExcel($rows, $title);
     }

@@ -171,7 +171,7 @@ class EntityActionAwarenessSectionTest extends TestCase
         $this->assertStringContainsString('export_pdf', $output);
 
         // And their description (registry metadata) must surface, not just the bare key.
-        $this->assertStringContainsString('Export the current result set as an Excel', $output);
+        $this->assertStringContainsString('Export as an Excel (.xlsx) file.', $output);
     }
 
     /** @test */

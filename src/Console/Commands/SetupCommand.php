@@ -27,6 +27,7 @@ class SetupCommand extends Command
         {--discover : Also run ai:discover before ingestion (overwrites existing config)}
         {--fresh : Clear all stores before ingestion}
         {--skip-ingest : Skip data ingestion (useful for re-indexing only)}
+        {--chunk= : Batch size passed through to ai:ingest}
         {--dry-run : Show what would be executed without running}';
 
     protected $description = 'Run the full AI pipeline setup: ingest → sync → index. Run ai:discover separately first.';
@@ -96,10 +97,18 @@ class SetupCommand extends Command
         ];
 
         if (!$this->option('skip-ingest')) {
+            $ingestArgs = [];
+            if ($this->option('fresh')) {
+                $ingestArgs['--fresh'] = true;
+            }
+            if ($this->option('chunk')) {
+                $ingestArgs['--chunk'] = $this->option('chunk');
+            }
+
             $steps[] = [
                 'label' => 'Ingest entities into Neo4j + Qdrant',
                 'command' => 'ai:ingest',
-                'args' => $this->option('fresh') ? ['--fresh' => true] : [],
+                'args' => $ingestArgs,
                 'check' => fn() => !empty(config('entities', [])),
                 'skip_reason' => 'No entities configured. Run ai:discover first.',
             ];
@@ -107,6 +116,18 @@ class SetupCommand extends Command
             $steps[] = [
                 'label' => 'Sync relationships in Neo4j',
                 'command' => 'ai:sync-relationships',
+            ];
+
+            // The physical doc corpus (file_context.physical_paths -> documentation_chunks)
+            // is a separate ingestion path from ai:process-files (DB attachments ->
+            // file_chunks); without this step a "successful" setup still leaves every
+            // corpus-grounded question unanswerable.
+            $steps[] = [
+                'label' => 'Ingest physical documentation corpus',
+                'command' => 'ai:ingest',
+                'args' => array_merge(['--docs' => true], $this->option('fresh') ? ['--fresh' => true] : []),
+                'check' => fn() => !empty(config('ai.file_context.physical_paths', [])),
+                'skip_reason' => 'No file_context.physical_paths configured.',
             ];
         }
 

@@ -12,7 +12,9 @@ use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
 use Condoedge\Ai\Kompo\Modals\ChatHelpModal;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
+use Condoedge\Ai\Kompo\Support\ThemedChatBubbleRenderer;
 use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
+use Condoedge\Utils\Kompo\Chat\ChatScripts;
 use Condoedge\Utils\Kompo\Common\Form;
 
 /**
@@ -179,23 +181,24 @@ abstract class AbstractChatSurface extends Form
     // ========== JAVASCRIPT ==========
 
     /**
-     * Include JavaScript for chat scroll and message injection
-     * Must be on parent component so JS is available when child components need it
+     * Include JavaScript for the chat: the shared chat-kit library (scrolling) and the
+     * ai message injector (optimistic placeholder + typing indicator + edit helpers).
+     * Must be on parent component so JS is available when child components need it.
+     *
+     * The kit library (window.KompoChatKit, self-guarded) loads FIRST so the injector can
+     * delegate its scroll-to-bottom to KompoChatKit.snapToBottom; the snap after each panel
+     * refresh comes from the kit carrier in MessagesQuery::bottom() (snapToBottomOnLoad).
      */
     public function js()
     {
-        $scrollJs = file_get_contents(__DIR__ . '/../../resources/js/chat-scroll.js');
         $injectorJs = file_get_contents(__DIR__ . '/../../resources/js/chat-message-injector.js');
 
         $userBubbleTemplate = $this->userBubblePlaceholderHtml();
         $typingIndicatorTemplate = $this->typingIndicatorHtml();
-        $userAvatarHtml = $this->settings()->showAvatars() ? $this->userAvatarHtml() : '';
 
         // JS uses backtick template literals, so only backticks and ${ need escaping
         $injectorJs = str_replace('$USER_BUBBLE_TEMPLATE', $this->escapeForBackticks($userBubbleTemplate), $injectorJs);
         $injectorJs = str_replace('$TYPING_INDICATOR_TEMPLATE', $this->escapeForBackticks($typingIndicatorTemplate), $injectorJs);
-        $injectorJs = str_replace('$USER_AVATAR_HTML', $this->escapeForBackticks($userAvatarHtml), $injectorJs);
-        $injectorJs = str_replace('$DOT_COLOR', $this->escapeForBackticks($this->theme()->primarySolid()), $injectorJs);
 
         $injectorJs = str_replace('$TYPING_STYLE', $this->escapeForBackticks($this->settings()->typingAnimationStyle()), $injectorJs);
         $injectorJs = str_replace('$DOTS_ANIMATION_HTML', $this->escapeForBackticks($this->dotsAnimationHtml()), $injectorJs);
@@ -203,7 +206,7 @@ abstract class AbstractChatSurface extends Form
         $injectorJs = str_replace('$PULSE_ANIMATION_HTML', $this->escapeForBackticks($this->pulseAnimationHtml()), $injectorJs);
         $injectorJs = str_replace('$BRAIN_ANIMATION_HTML', $this->escapeForBackticks($this->brainAnimationHtml()), $injectorJs);
 
-        return $scrollJs . "\n\n" . $injectorJs;
+        return ChatScripts::libJs() . "\n\n" . $injectorJs;
     }
 
     /**
@@ -219,17 +222,18 @@ abstract class AbstractChatSurface extends Form
     }
 
     /**
-     * Generate user bubble placeholder HTML matching the actual PHP component
-     * Uses animate-message-user class for entrance animation
-     * Includes edit button with js-edit-message class for event delegation
+     * The optimistic user-bubble template: the shared chat kit's own-bubble markup
+     * (ThemedChatBubbleRenderer carries the ai theme gradient and drops the delivery
+     * ticks), with $HTML / $TIME placeholders substituted by the injector at send time.
+     * The avatar is baked in server-side, so it exactly mirrors the persisted bubble
+     * MessageBubbleRenderer renders after the panel refresh.
      */
     protected function userBubblePlaceholderHtml(): string
     {
-        $editButton = $this->settings()->enableEdit()
-            ? '<div class="flex justify-end"><button type="button" class="js-edit-message opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-gray-600 mt-1 transition-opacity flex items-center gap-1"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>' . __('ai.common.edit') . '</button></div>'
-            : '';
+        $avatarHtml = $this->settings()->showAvatars() ? $this->userAvatarHtml() : null;
 
-        return '<div class="group"><div class="flex justify-end items-end animate-message-user"><div class="group px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md animate-new-message-highlight"><div class="whitespace-pre-wrap">$MESSAGE</div><div class="text-xs opacity-60 mt-2">$TIMESTAMP</div></div>$AVATAR</div>' . $editButton . '</div>';
+        return (new ThemedChatBubbleRenderer($this->theme()))
+            ->ownBubbleTemplate(null, $avatarHtml, 'whitespace-pre-wrap');
     }
 
     /**

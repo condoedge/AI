@@ -137,10 +137,8 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
             }
         }
 
-        // Adaptive batch size: use large batches for short texts (entity ingestion)
-        // and smaller batches for long texts (PDF chunks) to avoid payload size limits.
         $avgLength = array_sum(array_map('strlen', $texts)) / count($texts);
-        $batchSize = $avgLength > 500 ? 50 : 2000;
+        $batchSize = $avgLength > 500 ? 50 : 200;
         $chunks = array_chunk($texts, $batchSize);
         $allEmbeddings = [];
 

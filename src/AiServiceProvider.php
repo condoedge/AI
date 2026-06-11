@@ -665,7 +665,8 @@ class AiServiceProvider extends ServiceProvider
         ], 'ai-lang');
 
         $this->publishes([
-            __DIR__.'/../resources/js/chat-scroll.js' => public_path('vendor/condoedge/ai/js/chat-scroll.js'),
+            // chat-scroll.js was retired: scrolling now comes from the shared chat kit
+            // (condoedge/utils ChatScripts / window.KompoChatKit), injected by the komponents
             __DIR__.'/../resources/js/chat-message-injector.js' => public_path('vendor/condoedge/ai/js/chat-message-injector.js'),
             __DIR__.'/../resources/css/ai-chat.css' => public_path('vendor/condoedge/ai/css/ai-chat.css'),
         ], 'ai-assets');

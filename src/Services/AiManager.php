@@ -814,7 +814,9 @@ class AiManager
             $responseResult = $this->responseGenerator->generateEmptyResponse(
                 $question,
                 $ctx->queryResult->cypher,
-                $options
+                // Thread the conversation context through: "make a PDF of that" follow-ups
+                // reference the PREVIOUS turn and would otherwise dead-end in "no results".
+                $options + ['conversation_context' => $ctx->conversationContext],
             );
         } else {
             $responseResult = $this->generateResponse($ctx, $options);

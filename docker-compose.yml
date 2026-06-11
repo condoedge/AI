@@ -39,11 +39,18 @@ services:
     environment:
       # change these in a .env file or here
       NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:-neo4j_password}"
-      # Optional: preload useful plugins (APOC is common)
-      NEO4JLABS_PLUGINS: '["apoc"]'
-      NEO4J_server_memory_heap_initial__size: 1G
-      NEO4J_server_memory_heap_max__size: 2G
+      # Plugins. NB: NEO4JLABS_PLUGINS is the 4.x-era name and is silently IGNORED by
+      # neo4j:5 images — with it, APOC was never actually installed. 5.x reads NEO4J_PLUGINS
+      # (downloaded into the neo4j_plugins volume on container start; needs internet once).
+      NEO4J_PLUGINS: '["apoc"]'
+      # Memory. The global transaction pool (dbms.memory.transaction.total.max) defaults to
+      # 70% of heap — the 1.4 GiB MemoryPoolOutOfMemory hit during the first full-graph wipe
+      # was exactly that limit on the old 2G heap. Batched deletes/ingest stay small, but the
+      # explicit pool + larger heap give headroom against zombie/rollback transactions.
+      NEO4J_server_memory_heap_initial__size: 2G
+      NEO4J_server_memory_heap_max__size: 4G
       NEO4J_server_memory_pagecache_size: 1G
+      NEO4J_dbms_memory_transaction_total_max: 3G
       # Allow APOC procedures that need file/URL access (tune as needed)
       NEO4J_apoc_export_file_enabled: "true"
       NEO4J_apoc_import_file_enabled: "true"

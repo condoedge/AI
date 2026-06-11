@@ -33,6 +33,21 @@ class ResultSetExporter
     private const SPREADSHEET_CLASS = '\\PhpOffice\\PhpSpreadsheet\\Spreadsheet';
     private const XLSX_WRITER_CLASS = '\\PhpOffice\\PhpSpreadsheet\\Writer\\Xlsx';
     private const DOMPDF_CLASS = '\\Dompdf\\Dompdf';
+    private const MARKDOWN_CONVERTER_CLASS = '\\League\\CommonMark\\GithubFlavoredMarkdownConverter';
+
+    /**
+     * Print stylesheet for documentToPdf() (override via config('ai.export.pdf_document_styles')).
+     * DejaVu Sans is dompdf's bundled unicode font — required for accented (FR) text.
+     */
+    private const DEFAULT_DOCUMENT_STYLES =
+        'body{font-family:"DejaVu Sans",sans-serif;font-size:12px;color:#1a202c;margin:28px}'
+        . 'h1{font-size:20px;border-bottom:2px solid #2d3748;padding-bottom:6px;margin-bottom:12px}'
+        . 'h2{font-size:16px;margin-top:18px}h3{font-size:13px;margin-top:14px}'
+        . 'table{width:100%;border-collapse:collapse;margin:10px 0}'
+        . 'th,td{border:1px solid #cbd5e0;padding:6px 8px;text-align:left;font-size:11px}'
+        . 'th{background:#edf2f7}'
+        . 'blockquote{border-left:3px solid #cbd5e0;margin:8px 0;padding:4px 12px;color:#4a5568}'
+        . 'hr{border:0;border-top:1px solid #cbd5e0;margin:14px 0}';
 
     /**
      * Internal id-ish column names always dropped from an export (case-insensitive). These are
@@ -145,6 +160,273 @@ class ResultSetExporter
             $this->safeFilename($title, 'pdf'),
             'Generated a PDF export with ' . count($matrix) . ' row(s).'
         );
+    }
+
+    /**
+     * Render an LLM-COMPOSED markdown document (the chat answer) to a PDF.
+     *
+     * Unlike toPdf() (fixed tabular dump of the result set), this renders whatever document
+     * the assistant wrote — contact sheets, summaries, formatted reports — so the layout
+     * varies with the ask. The markdown is the already-privacy-governed chat answer;
+     * action://-style links are stripped to their text so the file carries no internal URIs.
+     */
+    public function documentToPdf(string $markdown, string $title = 'document'): AiActionResult
+    {
+        if (trim($markdown) === '') {
+            return AiActionResult::error('Nothing to export: there is no composed answer to render.');
+        }
+
+        if (!$this->canExportPdf()) {
+            return AiActionResult::error(
+                'PDF export is unavailable: install the "barryvdh/laravel-dompdf" (dompdf/dompdf) package to enable it.'
+            );
+        }
+
+        $html = $this->documentHtml($markdown, $title);
+
+        $dompdfClass = self::DOMPDF_CLASS;
+        /** @var object $dompdf */
+        $dompdf = new $dompdfClass();
+        $dompdf->loadHtml($html);
+        $dompdf->setPaper('A4', 'portrait');
+        $dompdf->render();
+        $bytes = (string) $dompdf->output();
+
+        return AiActionResult::export(
+            $bytes,
+            'application/pdf',
+            $this->safeFilename($title, 'pdf'),
+            'Generated a PDF document from the composed answer.'
+        );
+    }
+
+    /**
+     * The full HTML document documentToPdf() renders — public so hosts and tests can
+     * inspect the markup without dompdf installed.
+     */
+    public function documentHtml(string $markdown, string $title): string
+    {
+        $body = $this->markdownToHtml($this->stripAppLinks($markdown));
+
+        $styles = (string) ($this->safeConfig('ai.export.pdf_document_styles') ?? self::DEFAULT_DOCUMENT_STYLES);
+
+        $safeTitle = htmlspecialchars($title, ENT_QUOTES, 'UTF-8');
+
+        return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' . $safeTitle . '</title>'
+            . '<style>' . $styles . '</style></head><body>' . $body . '</body></html>';
+    }
+
+    /**
+     * [text](action://…) / [text](entity://…) → text — app-internal URIs never reach a file.
+     */
+    private function stripAppLinks(string $markdown): string
+    {
+        return (string) preg_replace('/\[([^\]]*)\]\((?:action|entity):\/\/[^)]*\)/', '$1', $markdown);
+    }
+
+    /**
+     * Markdown → HTML via league/commonmark when available (ships with laravel/framework),
+     * with raw HTML escaped and unsafe links disallowed; plain escaped-text fallback otherwise.
+     */
+    private function markdownToHtml(string $markdown): string
+    {
+        $converterClass = self::MARKDOWN_CONVERTER_CLASS;
+        if (class_exists($converterClass)) {
+            try {
+                /** @var object $converter */
+                $converter = new $converterClass([
+                    'html_input' => 'escape',
+                    'allow_unsafe_links' => false,
+                ]);
+
+                return (string) $converter->convert($markdown);
+            } catch (\Throwable $e) {
+                // fall through to the escaped-text fallback
+            }
+        }
+
+        return nl2br(htmlspecialchars($markdown, ENT_QUOTES, 'UTF-8'));
+    }
+
+    /**
+     * Render the markdown TABLES of an LLM-composed answer to an .xlsx workbook.
+     *
+     * The harness contract (vs toExcel()'s raw result-set dump):
+     *   - the LLM designs the spreadsheet: each markdown table becomes one worksheet, named
+     *     after the nearest preceding heading; the table's header row IS the column headers
+     *     (so the model freely renames/reorders/derives columns);
+     *   - "extra calculations" are REAL Excel formulas, not LLM arithmetic: a cell like
+     *     `=SUM(C2:C10)` (allowlisted aggregate functions over a cell range) is written as a
+     *     live formula. Any other leading `=`/`+`/`-`/`@` cell is neutralized to literal text
+     *     (formula-injection guard) — a spreadsheet must never gain an exfiltration vector
+     *     from model output;
+     *   - numeric-looking cells become real numbers so the formulas can compute over them.
+     */
+    public function documentToExcel(string $markdown, string $title = 'document'): AiActionResult
+    {
+        if (trim($markdown) === '') {
+            return AiActionResult::error('Nothing to export: there is no composed answer to render.');
+        }
+
+        // Parse BEFORE the library check: "compose a markdown table first" is actionable
+        // guidance for the LLM regardless of which export libraries the host installed.
+        $tables = $this->extractMarkdownTables($this->stripAppLinks($markdown));
+        if (empty($tables)) {
+            return AiActionResult::error(
+                'Nothing to export: the composed answer contains no markdown table. Compose the data as a markdown table first.'
+            );
+        }
+
+        if (!$this->canExportExcel()) {
+            return AiActionResult::error(
+                'Excel export is unavailable: install the "maatwebsite/excel" (phpoffice/phpspreadsheet) package to enable it.'
+            );
+        }
+
+        $spreadsheetClass = self::SPREADSHEET_CLASS;
+        $writerClass = self::XLSX_WRITER_CLASS;
+
+        /** @var object $spreadsheet */
+        $spreadsheet = new $spreadsheetClass();
+
+        foreach ($tables as $i => $table) {
+            $sheet = $i === 0 ? $spreadsheet->getActiveSheet() : $spreadsheet->createSheet();
+            $sheet->setTitle($this->safeSheetTitle($table['name'] ?? null, $i));
+
+            $rowIndex = 1;
+            $this->writeRow($sheet, $rowIndex++, $table['headers']);
+            foreach ($table['rows'] as $dataRow) {
+                $col = 1;
+                foreach ($dataRow as $cell) {
+                    $this->writeTypedCell($sheet, $this->columnLetter($col++) . $rowIndex, (string) $cell);
+                }
+                $rowIndex++;
+            }
+        }
+
+        $writer = new $writerClass($spreadsheet);
+        $bytes = $this->captureWriterOutput($writer);
+
+        return AiActionResult::export(
+            $bytes,
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            $this->safeFilename($title, 'xlsx'),
+            'Generated an Excel workbook with ' . count($tables) . ' sheet(s) from the composed answer.'
+        );
+    }
+
+    /**
+     * Extract GFM tables from markdown: a header `| … |` line, a `|---|…` separator line,
+     * then data lines. The nearest preceding `#` heading names the table (worksheet).
+     *
+     * Public so the parsing contract is testable without PhpSpreadsheet installed.
+     *
+     * @return array<int, array{name: ?string, headers: string[], rows: array<int, string[]>}>
+     */
+    public function extractMarkdownTables(string $markdown): array
+    {
+        $lines = preg_split('/\R/', $markdown) ?: [];
+        $tables = [];
+        $heading = null;
+        $i = 0;
+        $count = count($lines);
+
+        while ($i < $count) {
+            $line = trim($lines[$i]);
+
+            if (preg_match('/^#{1,6}\s+(.+)$/', $line, $m)) {
+                $heading = trim($m[1]);
+                $i++;
+                continue;
+            }
+
+            $isHeaderRow = str_contains($line, '|')
+                && isset($lines[$i + 1])
+                && preg_match('/^\|?[\s:|-]+\|?$/', trim($lines[$i + 1]))
+                && str_contains($lines[$i + 1], '-');
+
+            if (!$isHeaderRow) {
+                $i++;
+                continue;
+            }
+
+            $headers = $this->splitTableRow($line);
+            $rows = [];
+            $i += 2; // past header + separator
+
+            while ($i < $count && str_contains(trim($lines[$i]), '|') && trim($lines[$i]) !== '') {
+                $cells = $this->splitTableRow(trim($lines[$i]));
+                // Normalize row width to the header width.
+                $rows[] = array_pad(array_slice($cells, 0, count($headers)), count($headers), '');
+                $i++;
+            }
+
+            if (!empty($headers) && !empty($rows)) {
+                $tables[] = ['name' => $heading, 'headers' => $headers, 'rows' => $rows];
+            }
+            $heading = null;
+        }
+
+        return $tables;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function splitTableRow(string $line): array
+    {
+        $line = trim($line);
+        $line = preg_replace('/^\||\|$/', '', $line) ?? $line;
+
+        return array_map('trim', explode('|', $line));
+    }
+
+    /**
+     * Write one cell with type detection: numerics become numbers (so formulas can compute
+     * over them), allowlisted formulas stay live, anything else formula-bearing is
+     * neutralized to a literal string.
+     */
+    private function writeTypedCell(object $sheet, string $coordinate, string $value): void
+    {
+        if (is_numeric(str_replace([',', ' '], ['', ''], $value)) && $value !== '') {
+            $numeric = (float) str_replace([',', ' '], ['', ''], $value);
+            $sheet->setCellValueExplicit($coordinate, $numeric, 'n'); // DataType::TYPE_NUMERIC
+            return;
+        }
+
+        if ($this->isSafeFormula($value)) {
+            $sheet->setCellValue($coordinate, $value); // interpreted as a formula
+            return;
+        }
+
+        // Formula-injection guard: leading = + - @ would be interpreted by spreadsheet apps.
+        if ($value !== '' && in_array($value[0], ['=', '+', '-', '@'], true) && !is_numeric($value)) {
+            $value = "'" . $value;
+        }
+
+        $sheet->setCellValueExplicit($coordinate, $value, 's'); // DataType::TYPE_STRING
+    }
+
+    /**
+     * Only simple aggregate formulas over a single cell range are allowed live — everything
+     * else (incl. anything with strings, semicolons, or external references) stays text.
+     */
+    private function isSafeFormula(string $value): bool
+    {
+        return (bool) preg_match(
+            '/^=(?:SUM|AVERAGE|COUNT|COUNTA|MIN|MAX)\(\s*[A-Z]{1,3}[0-9]{1,7}\s*:\s*[A-Z]{1,3}[0-9]{1,7}\s*\)$/i',
+            trim($value)
+        );
+    }
+
+    /**
+     * Excel sheet titles: max 31 chars, no []*?:\/ — fall back to a numbered sheet name.
+     */
+    private function safeSheetTitle(?string $name, int $index): string
+    {
+        $clean = trim((string) preg_replace('/[\[\]\*\?:\\\\\/]+/', ' ', (string) $name));
+
+        return $clean !== '' ? mb_substr($clean, 0, 31) : 'Sheet ' . ($index + 1);
     }
 
     /**

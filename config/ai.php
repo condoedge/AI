@@ -1315,6 +1315,42 @@ return [
         // ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Domain Calculations (canonical formulas)
+    |--------------------------------------------------------------------------
+    |
+    | Named metrics the host's business defines, with their EXACT aggregation —
+    | rendered into the query-generation prompt (CalculationsSection) so metric
+    | questions reuse the approved formula instead of inventing one.
+    |
+    |   'calculations' => [
+    |       'team_total_owed' => [
+    |           'label'       => 'Total owed to the team (receivables outstanding)',
+    |           'description' => 'What customers still owe.',
+    |           'formula'     => 'SUM of Invoice.calc_due_amount where calc_due_amount > 0',
+    |           'cypher'      => 'MATCH (i:Invoice) WHERE i.calc_due_amount > 0 RETURN sum(i.calc_due_amount) AS total_owed',
+    |           'notes'       => 'Split overdue vs not-yet-due on i.due_at < date().',
+    |       ],
+    |   ],
+    */
+    'calculations' => [],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Guardrails
+    |--------------------------------------------------------------------------
+    |
+    | domain_scope: one host-specific sentence describing what IS in this
+    | software's domain. Appended to the out-of-domain guardrail so the
+    | assistant can name its scope when declining unrelated questions.
+    | Null/empty keeps the generic project-name-based decline.
+    |
+    */
+    'guardrails' => [
+        'domain_scope' => env('AI_DOMAIN_SCOPE'),
+    ],
+
     'query_generator_sections' => [
         \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
         \Condoedge\Ai\Services\PromptSections\GenericContextSection::class,
@@ -1331,6 +1367,7 @@ return [
         \Condoedge\Ai\Services\PromptSections\DetectedEntitiesSection::class,
         \Condoedge\Ai\Services\PromptSections\DetectedScopesSection::class,
         fn(SemanticPromptBuilder $promptBuilder) => new \Condoedge\Ai\Services\PromptSections\PatternLibrarySection($promptBuilder->getPatternLibrary()),
+        \Condoedge\Ai\Services\PromptSections\CalculationsSection::class, // Priority 74: canonical domain formulas (config 'ai.calculations'), zero tokens when none configured
         \Condoedge\Ai\Services\PromptSections\QueryRulesSection::class,
         \Condoedge\Ai\Services\PromptSections\TenantScopingRulesSection::class, // Priority 76: per-entity $ai_team_ids predicates the acceptance gate verifies (after query_rules/75, before question/80)
         \Condoedge\Ai\Services\PromptSections\QuestionSection::class,

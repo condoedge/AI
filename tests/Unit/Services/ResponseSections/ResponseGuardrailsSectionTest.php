@@ -54,6 +54,28 @@ class ResponseGuardrailsSectionTest extends TestCase
     }
 
     /** @test */
+    public function a_configured_domain_scope_names_what_is_in_scope(): void
+    {
+        config()->set('ai.guardrails.domain_scope', 'widget manufacturing — orders, machines and shifts.');
+
+        $output = $this->format();
+
+        $this->assertStringContainsString('The domain of Acme is: widget manufacturing', $output);
+        $this->assertStringContainsString('out-of-scope per rule 2', $output);
+    }
+
+    /** @test */
+    public function no_domain_scope_keeps_the_generic_project_decline_only(): void
+    {
+        config()->set('ai.guardrails.domain_scope', null);
+
+        $output = $this->format();
+
+        $this->assertStringContainsString('outside what you can help with for Acme', $output);
+        $this->assertStringNotContainsString('The domain of Acme is:', $output);
+    }
+
+    /** @test */
     public function it_always_includes_itself(): void
     {
         $section = new ResponseGuardrailsSection();

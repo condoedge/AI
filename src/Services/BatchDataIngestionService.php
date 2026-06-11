@@ -17,6 +17,13 @@ use Illuminate\Support\Facades\Log;
 
 class BatchDataIngestionService implements DataIngestionServiceInterface
 {
+    /**
+     * Entities embedded + upserted per vector wave. Bounds the vector phase's peak
+     * memory (vectors are ~25KB each as PHP float arrays at 1536 dims) independently
+     * of the ingest --chunk size; 250 ≈ 25MB of vectors resident at once.
+     */
+    private const VECTOR_WAVE_SIZE = 250;
+
     private readonly GraphPropertyMapper $propertyMapper;
     private readonly VectorPayloadBuilder $payloadBuilder;
     private readonly PolymorphicTargetResolver $polymorphicResolver;
@@ -407,86 +414,100 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
             // Ensure collection exists before upserting
             $dimension = $this->embeddingProvider->getDimensions();
             $this->vectorStore->ensureCollection($collection, $dimension);
-            try {
-                // Build texts to embed
-                $texts = [];
-                $metadata = [];
-                $indexes = [];
 
-                foreach ($items as $item) {
-                    $entity = $item['entity'];
-                    $config = $item['config'];
-                    $data = $entity->toArray();
+            // Bounded waves: holding a WHOLE ingest chunk's embeddings at once
+            // (2000 × 1536 floats ≈ 200MB+ as PHP arrays) exhausted the CLI
+            // memory_limit mid-run. Each wave embeds, upserts and releases its
+            // vectors before the next starts, so peak memory is set by the wave
+            // size — independent of the --chunk option. A wave failure only
+            // fails that wave's entities, not the whole collection batch.
+            foreach (array_chunk($items, self::VECTOR_WAVE_SIZE) as $wave) {
+                try {
+                    // Build texts to embed
+                    $texts = [];
+                    $metadata = [];
+                    $indexes = [];
 
-                    // Shared embed-text building (strips sensible columns) so the
-                    // batch path embeds the exact same text as the single path.
-                    $textToEmbed = $this->payloadBuilder->buildEmbedTextFor($entity, $data, $config);
-                    if (empty(trim($textToEmbed))) {
-                        // No text to embed — graph-only entity, mark as success
-                        $results[$item['index']] = true;
-                        $this->logger->debug('batch_ingestion', 'skip_empty_embed', [
-                            'entity' => get_class($entity),
-                            'id' => $entity->getId(),
-                        ]);
+                    foreach ($wave as $item) {
+                        $entity = $item['entity'];
+                        $config = $item['config'];
+                        $data = $entity->toArray();
+
+                        // Shared embed-text building (strips sensible columns) so the
+                        // batch path embeds the exact same text as the single path.
+                        $textToEmbed = $this->payloadBuilder->buildEmbedTextFor($entity, $data, $config);
+                        if (empty(trim($textToEmbed))) {
+                            // No text to embed — graph-only entity, mark as success
+                            $results[$item['index']] = true;
+                            $this->logger->debug('batch_ingestion', 'skip_empty_embed', [
+                                'entity' => get_class($entity),
+                                'id' => $entity->getId(),
+                            ]);
+                            continue;
+                        }
+
+                        $texts[] = $textToEmbed;
+                        $indexes[] = $item['index'];
+
+                        // Shared payload building (id + metadata + owner/security
+                        // metadata) so the batch payload matches the single path.
+                        $metadata[] = $this->payloadBuilder->buildPayload($entity, $data, $config);
+                    }
+
+                    if (empty($texts)) {
                         continue;
                     }
 
-                    $texts[] = $textToEmbed;
-                    $indexes[] = $item['index'];
+                    // Batch embed
+                    $this->logger->info('batch_ingestion', 'embedding_start', [
+                        'collection' => $collection,
+                        'count' => count($texts),
+                    ]);
 
-                    // Shared payload building (id + metadata + owner/security
-                    // metadata) so the batch payload matches the single path.
-                    $metadata[] = $this->payloadBuilder->buildPayload($entity, $data, $config);
-                }
+                    $embedStart = microtime(true);
+                    $vectors = $this->embeddingProvider->embedBatch($texts);
+                    $embedMs = round((microtime(true) - $embedStart) * 1000, 2);
 
-                if (empty($texts)) continue;
+                    $this->logger->info('batch_ingestion', 'embedding_complete', [
+                        'collection' => $collection,
+                        'count' => count($texts),
+                        'duration_ms' => $embedMs,
+                        'per_entity_ms' => round($embedMs / count($texts), 2),
+                    ]);
 
-                // Batch embed
-                $this->logger->info('batch_ingestion', 'embedding_start', [
-                    'collection' => $collection,
-                    'count' => count($texts),
-                ]);
+                    // Build points and upsert in chunks (Qdrant has a 32MB payload limit)
+                    $points = [];
+                    foreach ($vectors as $i => $vector) {
+                        $points[] = [
+                            'id' => $metadata[$i]['id'],
+                            'vector' => $vector,
+                            'payload' => $metadata[$i],
+                        ];
+                    }
 
-                $embedStart = microtime(true);
-                $vectors = $this->embeddingProvider->embedBatch($texts);
-                $embedMs = round((microtime(true) - $embedStart) * 1000, 2);
+                    $upsertChunkSize = 500;
+                    foreach (array_chunk($points, $upsertChunkSize) as $chunk) {
+                        $this->vectorStore->upsert($collection, $chunk);
+                    }
 
-                $this->logger->info('batch_ingestion', 'embedding_complete', [
-                    'collection' => $collection,
-                    'count' => count($texts),
-                    'duration_ms' => $embedMs,
-                    'per_entity_ms' => round($embedMs / count($texts), 2),
-                ]);
+                    // Mark all successful
+                    foreach ($indexes as $idx) {
+                        $results[$idx] = true;
+                    }
 
-                // Build points and upsert in chunks (Qdrant has a 32MB payload limit)
-                $points = [];
-                foreach ($vectors as $i => $vector) {
-                    $points[] = [
-                        'id' => $metadata[$i]['id'],
-                        'vector' => $vector,
-                        'payload' => $metadata[$i],
-                    ];
-                }
-
-                $upsertChunkSize = 500;
-                foreach (array_chunk($points, $upsertChunkSize) as $chunk) {
-                    $this->vectorStore->upsert($collection, $chunk);
-                }
-
-                // Mark all successful
-                foreach ($indexes as $idx) {
-                    $results[$idx] = true;
-                }
-            } catch (\Exception $e) {
-                $this->logger->error('batch_ingestion', 'batch_vector_failed', [
-                    'collection' => $collection,
-                    'count' => count($items),
-                    'error' => $e->getMessage(),
-                    'exception_class' => get_class($e),
-                ]);
-                foreach ($items as $item) {
-                    if (!isset($results[$item['index']])) {
-                        $results[$item['index']] = false;
+                    // Release this wave's vectors/points before the next allocates.
+                    unset($vectors, $points, $texts, $metadata);
+                } catch (\Exception $e) {
+                    $this->logger->error('batch_ingestion', 'batch_vector_failed', [
+                        'collection' => $collection,
+                        'count' => count($wave),
+                        'error' => $e->getMessage(),
+                        'exception_class' => get_class($e),
+                    ]);
+                    foreach ($wave as $item) {
+                        if (!isset($results[$item['index']])) {
+                            $results[$item['index']] = false;
+                        }
                     }
                 }
             }

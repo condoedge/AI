@@ -11,12 +11,17 @@ use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Kompo\Traits\HasFilePreview;
-use Condoedge\Utils\Kompo\Common\Form;
+use Condoedge\Utils\Kompo\Chat\ChatComposerForm;
 
 /**
  * Chat Message Form - Input form for sending messages in the chat.
  *
- * After submitting, refreshes the parent panel to show the new message.
+ * Built on the shared chat kit's ChatComposerForm (composer layout slots); the SEND FLOW
+ * stays the ai-specific run()+selfPost+refresh chain instead of the kit's background send:
+ * an ai send runs a whole LLM turn (long), needs a typing indicator with no self-expiry,
+ * and must surface the ASSISTANT reply too — so the optimistic user bubble + typing
+ * indicator come from the ai injector (precreateMessagePlaceholder) and the panel refresh
+ * after the selfPost re-renders both persisted messages from the DB.
  *
  * Orchestration (security gate, context, persistence, RAG, error mapping) lives in
  * ChatPresenter + the Phase 1 use cases; this component only collects request input, shows
@@ -29,12 +34,9 @@ use Condoedge\Utils\Kompo\Common\Form;
  *       'panel_id' => AiChatPanel::MESSAGES_PANEL_ID,
  *   ])
  */
-class ChatMessageForm extends Form
+class ChatMessageForm extends ChatComposerForm
 {
     use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation, HasFilePreview;
-
-    public $id = 'chat-message-form';
-    public $class = 'w-full';
 
     protected ?int $conversationId = null;
     protected ?AiConversation $conversation = null;
@@ -62,24 +64,94 @@ class ChatMessageForm extends Form
                 ->find($this->conversationId);
         }
     }
-    public function render()
+
+    /* COMPOSER (chat kit slots) - the layout comes from ChatComposerForm::render();
+       only the ai input/button/chrome are supplied here. */
+
+    protected function composerInput()
     {
-        return _Rows(
-            _Flex(
-                _Textarea()->name('message')
-                    ->placeholder($this->settings()->inputPlaceholder())
-                    ->onEnter($this->sendingMessageActions())
-                    ->id('chat-message-input')
-                    ->class('flex-1 bg-transparent !mb-0 border-0 focus:ring-0 text-gray-800 placeholder-gray-400 resize-none min-h-[44px] max-h-[200px]')
-                    ->rows(1)
-                    ->attr(['oninput' => "this.style.height='auto';this.style.height=this.scrollHeight+'px'"]),
-                $this->responseStyleSelector(),
-                _Button()->icon(_Sax('send-1', 20))->id('chat-send-btn')
-                    ->class('p-3 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all flex-shrink-0')
-                    ->onClick($this->sendingMessageActions()),
-            )->class('flex items-end gap-3 px-4 py-3 bg-white/90 border border-gray-200/70 rounded-2xl shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 backdrop-blur-sm transition-all'),
-            $this->quickActions(),
-        )->class('p-4 !pt-0 border-t border-gray-100/70');
+        return _Textarea()->name('message')
+            ->placeholder($this->settings()->inputPlaceholder())
+            // Kompo-side Enter handling (kit enterToSend is disabled below so the two
+            // never double-fire); Shift+Enter keeps inserting a new line natively
+            ->onEnter($this->sendingMessageActions())
+            ->id('chat-message-input')
+            ->class('flex-1 bg-transparent !mb-0 border-0 focus:ring-0 text-gray-800 placeholder-gray-400 resize-none min-h-[44px] max-h-[200px]')
+            ->rows(1)
+            ->attr(['oninput' => "this.style.height='auto';this.style.height=this.scrollHeight+'px'"]);
+    }
+
+    protected function composerInputType(): string
+    {
+        return static::INPUT_TEXTAREA;
+    }
+
+    protected function panelSelector(): string
+    {
+        return '#' . MessagesQuery::ID;
+    }
+
+    protected function composerId(): string
+    {
+        return 'chat-message-form';
+    }
+
+    protected function composerClass(): string
+    {
+        return 'p-4 !pt-0 border-t border-gray-100/70';
+    }
+
+    protected function composerRowClass(): string
+    {
+        // The ai pill keeps its own Tailwind chrome (not the kit's .chat-composer-row hook)
+        return 'flex items-end gap-3 px-4 py-3 bg-white/90 border border-gray-200/70 rounded-2xl shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 backdrop-blur-sm transition-all';
+    }
+
+    /**
+     * Style selector + the icon send button. The button keeps the ai onClick chain
+     * (optimistic placeholder + typing indicator via the injector, then the selfPost
+     * that runs the LLM turn, then the panel refresh).
+     */
+    protected function sendButton()
+    {
+        return _Flex(
+            $this->responseStyleSelector(),
+            _Button()->icon(_Sax('send-1', 20))->id('chat-send-btn')
+                ->class('p-3 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all flex-shrink-0')
+                ->onClick($this->sendingMessageActions()),
+        )->class('items-end gap-3 shrink-0');
+    }
+
+    protected function bottomSlot()
+    {
+        return $this->quickActions();
+    }
+
+    /**
+     * The kit's background send (selfPost + updateInQuery swap of the temp bubble) is OFF
+     * on purpose: it only re-renders the USER card, while an ai send must also surface the
+     * assistant reply and keep a typing indicator alive for the whole (long) LLM turn.
+     * The ai injector owns the optimistic UI, so the kit's JS optimistic/clear/enter
+     * behaviors are disabled too — the run() script in sendingMessageActions() does it all.
+     */
+    protected function backgroundSendEnabled(): bool
+    {
+        return false;
+    }
+
+    protected function optimisticEnabled(): bool
+    {
+        return false;
+    }
+
+    protected function enterToSendEnabled(): bool
+    {
+        return false;
+    }
+
+    protected function clearInputOnSend(): bool
+    {
+        return false;
     }
 
     protected function responseStyleSelector()
@@ -117,16 +189,6 @@ class ChatMessageForm extends Form
         );
 
         return _Flex(...$buttons)->class('mt-2 gap-2 flex-wrap');
-    }
-
-    protected function scrollScript($withTransition = true): string
-    {
-        return "() => {
-            const c = document.getElementById('" . MessagesQuery::ID . "').querySelector('.vlQueryWrapper');
-            if (c) {
-                setTimeout(() => c.scrollTo({ top: c.scrollHeight, behavior: '" . ($withTransition ? "smooth" : "auto") . "' }), 100);
-            }
-        }";
     }
 
     /**
@@ -244,12 +306,13 @@ class ChatMessageForm extends Form
 
         return fn($e) => $e
             // 1. Show placeholder immediately (client-side)
-            // Note: precreateMessagePlaceholder() also hides welcome/empty state
+            // Note: precreateMessagePlaceholder() also hides welcome/empty state;
+            // the avatar is baked into the bubble template server-side (AbstractChatSurface)
             ->run('() => {
                 const input = document.getElementById("chat-message-input");
                 const message = input ? input.value : "";
                 if (message.trim()) {
-                    precreateMessagePlaceholder(message, "' . addslashes($this->settings()->showAvatars() ? $this->userAvatarHtml() : '') . '");
+                    precreateMessagePlaceholder(message);
                     input.value = "";
                     input.style.height = "auto";
                     input.dispatchEvent(new Event("input", { bubbles: true }));

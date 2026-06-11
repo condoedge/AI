@@ -342,6 +342,21 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $prompt .= "No matching records were found for this question. Briefly and helpfully tell the "
             . "user that no results were found, and if useful suggest how they might rephrase or what "
             . "else they could ask.\n\n";
+
+        // Follow-up awareness: "make a PDF of that" / "export it" style requests reference the
+        // PREVIOUS turn, not new data. Without the previous turn's information this path can
+        // only say "no results" to a request the user just watched succeed — worse than wrong.
+        $conversation = $options['conversation_context'] ?? [];
+        $lastSample = is_array($conversation['last_result_sample'] ?? null) ? $conversation['last_result_sample'] : [];
+        if (!empty($lastSample)) {
+            $sampleJson = json_encode(array_slice($lastSample, 0, 10), JSON_UNESCAPED_UNICODE);
+            $prompt .= "EXCEPTION — information from the previous turn (most recently shown to the user): {$sampleJson}\n";
+            $prompt .= "If the question is actually a request ABOUT that previous information — format it, "
+                . "summarize it, turn it into a document, export it as a PDF or Excel — do NOT say no results "
+                . "were found. Fulfill it instead: compose the requested content from that information, and for "
+                . "a file request include the matching export action link (for a formatted document, compose it "
+                . "fully in your answer and use the document-mode export link).\n\n";
+        }
         // If the question is really a request to DO something the app supports (book/reserve/contact
         // support/...), offer that action as a link instead of a dead-end "no results".
         $actionsHint = $this->emptyResponseActionsHint();

@@ -18,42 +18,40 @@ use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Actions\ActionInvocation;
 use Condoedge\Ai\Services\Actions\ModelMethodMutationAction;
 use Condoedge\Ai\Services\Actions\PendingActionToken;
-use Condoedge\Utils\Kompo\Common\Query;
+use Condoedge\Utils\Kompo\Chat\ChatMessagesQuery;
 
 /**
  * The chat messages panel. Owns list/render orchestration and the Kompo round-trip surface
  * (the public selfPost/selfGet action methods Kompo resolves against this component), and
  * delegates the heavy lifting to three plain collaborators:
  *
- *  - MessageBubbleRenderer — user/assistant bubble + action-bar markup.
+ *  - MessageBubbleRenderer — user/assistant bubble + action-bar markup (kit-backed).
  *  - RichDataRenderer       — response_data tables/metrics/lists, suggestions, metrics, file cards.
  *  - ConversationActions    — ownership-scoped pin/feedback/archive/delete mutations.
+ *
+ * The chat list mechanics (Scroll pagination + topPagination, the flex-col-reverse items
+ * wrapper recipe and the snap-to-bottom carrier) come from the shared chat kit's
+ * ChatMessagesQuery (condoedge/utils).
  *
  * The action methods stay here as thin entry points because Kompo resolves selfPost('feedback')
  * / selfGet('editMessage') / etc. against THIS component; they delegate their authorization +
  * mutation to ConversationActions (one consistent ownership gate) and their domain work to the
  * ChatPresenter use-case seam.
  */
-class MessagesQuery extends Query
+class MessagesQuery extends ChatMessagesQuery
 {
     use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation, HasFilePreview;
 
     public const ID = 'chat-messages-panel';
     public $class = '';
-    public $itemsWrapperClass = '[&>div]:gap-4 [&>div]:flex [&>div]:flex-col-reverse p-6 overflow-y-auto mini-scroll flex-1 min-h-0';
-    public $style = 'max-height: 95vh; display: flex; flex-direction: column;';
 
-    public $noItemsFound = '';
+    // Kit style + the surface's max-height cap
+    public $style = 'max-height: 95vh; display: flex; flex-direction: column;';
 
     protected $conversation;
 
     /** The page/record the chat was opened from (forwarded array prop -> DTO). */
     protected ?PageContext $pageContext = null;
-
-    public $perPage = 30;
-    public $paginationType = 'Scroll';
-    public $topPagination = true;
-    public $bottomPagination = false;
 
     protected $latestMessageId;
 
@@ -177,8 +175,10 @@ class MessagesQuery extends Query
                 'page_context' => $this->pageContext?->toArray(),
             ]),
 
+            // Kit snap-to-bottom carrier: remounts (and re-snaps to the newest message)
+            // at mount and on every refresh of this Query
             $this->conversation
-                ? _Hidden()->onLoad->run($this->scrollScript(false))
+                ? $this->snapToBottomOnLoad()
                 : null,
         )->class('flex-shrink-0 relative z-0');
     }
@@ -568,16 +568,6 @@ class MessagesQuery extends Query
     }
 
     // ========== HELPERS ==========
-
-    protected function scrollScript($withTransition = true): string
-    {
-        return "() => {
-            const c = document.getElementById('" . self::ID . "').querySelector('.vlQueryWrapper');
-            if (c) {
-                setTimeout(() => c.scrollTo({ top: c.scrollHeight, behavior: '" . ($withTransition ? "smooth" : "auto") . "' }), 100);
-            }
-        }";
-    }
 
     public function deleteConversation($id)
     {

@@ -24,6 +24,9 @@ final class ActionContext
      * @param string|null $text  The link text the LLM emitted (used as a label).
      * @param array<string, mixed> $input  Schema-filtered params.
      * @param array<int, array<string, mixed>> $resultSet  Current/last tabular result set.
+     * @param string|null $answer  The FULL composed answer the link was embedded in
+     *                             (markdown) — lets document-style actions render what the
+     *                             LLM wrote, not just the tabular result set.
      */
     public function __construct(
         public readonly mixed $user = null,
@@ -33,6 +36,7 @@ final class ActionContext
         public readonly ?string $text = null,
         public readonly array $input = [],
         public readonly array $resultSet = [],
+        public readonly ?string $answer = null,
     ) {
     }
 
@@ -54,6 +58,7 @@ final class ActionContext
             text: isset($context['text']) ? (string) $context['text'] : null,
             input: $input,
             resultSet: is_array($resultSet) ? $resultSet : [],
+            answer: isset($context['answer']) ? (string) $context['answer'] : null,
         );
     }
 }

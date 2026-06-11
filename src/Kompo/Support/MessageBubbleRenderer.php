@@ -20,25 +20,28 @@ use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
 /**
  * Builds the user and assistant chat bubbles (and the per-message action bar).
  *
- * This was the bulk of MessagesQuery's rendering surface (userBubble / assistantBubble /
- * messageActionBar). It is a pure view builder over (theme + settings + a message + already
- * resolved per-message context), so it lives here as a plain collaborator while MessagesQuery
- * keeps the list/render orchestration.
+ * The bubble CHROME (own/other row layout, avatar + timestamp slots, radii, shadows,
+ * entrance animations) is delegated to the shared chat kit's ChatBubbleRenderer
+ * (condoedge/utils) through the ai-themed ThemedChatBubbleRenderer subclass: the user
+ * message renders as the kit's ownBubble, the assistant message as otherBubble. What
+ * stays here is everything ai-SPECIFIC: the markdown/link-processed assistant content,
+ * rich-data renderables, file references, suggestions, metrics, the per-message action
+ * bar and the persisted-invocation/approval cards — all passed to the kit as $content.
  *
  * Kompo round-trip note: the action-bar links call selfPost('feedback'|'regenerate'),
  * copyToClipboard(...) and the edit link calls selfGet('editMessage'). Those method-name
  * strings are resolved by Kompo against the owning MessagesQuery component when the booted
  * element tree is traversed — building the elements here does not change the request target,
  * so the public feedback/regenerate/editMessage methods stay on MessagesQuery.
- *
- * Behavior-preserving: every class string, animation class, slot and markup is copied verbatim
- * from the original MessagesQuery methods.
  */
 class MessageBubbleRenderer
 {
     protected ActionDispatcher $dispatcher;
 
     protected ActionResultPresenter $presenter;
+
+    /** The shared chat-kit bubble renderer, themed with this chat's runtime theme. */
+    protected ThemedChatBubbleRenderer $kit;
 
     /**
      * Per-request dispatch memo for persisted invocations, keyed by fingerprint. The renderer
@@ -63,6 +66,7 @@ class MessageBubbleRenderer
         // degrade to a self-built one so the renderer works without DI wiring.
         $this->dispatcher = $dispatcher ?? $this->resolveDispatcher();
         $this->presenter = $presenter ?? new ActionResultPresenter();
+        $this->kit = new ThemedChatBubbleRenderer($theme);
     }
 
     /**
@@ -82,33 +86,39 @@ class MessageBubbleRenderer
     public function userBubble($message)
     {
         $isNew = $this->isNewMessage($message);
-        $animationClass = $isNew ? ' animate-message-user' : '';
-        $highlightClass = $isNew ? ' animate-new-message-highlight' : '';
 
+        // Kit ownBubble: right-aligned themed bubble, avatar right of it, entrance
+        // animation + highlight for new messages. The ai content is escaped plain text.
+        $bubble = $this->kit->ownBubble(
+            _Html(e($message->content))->class('whitespace-pre-wrap'),
+            null, // the ai user bubble shows no author name
+            $this->settings->showAvatars() ? $this->userAvatarHtml : null,
+            $this->settings->showTimestamps() ? $message->created_at->format('g:i A') : null,
+            null,
+            false,
+            false,
+            $isNew,
+        );
+
+        if (!$this->settings->enableEdit()) {
+            return $bubble;
+        }
+
+        // The edit link is ai-specific chrome below the bubble; the wrapping 'group'
+        // reveals it when hovering anywhere on the message (same recipe as before).
         return _Rows(
+            $bubble,
             _FlexEnd(
-                _Rows(
-                    _Html(e($message->content))->class('whitespace-pre-wrap'),
-                    $this->settings->showTimestamps()
-                        ? _Html($message->created_at->format('g:i A'))->class('text-xs opacity-60 mt-2')
-                        : null,
-                )->class('group px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme->primaryGradient() . ' text-white shadow-md' . $highlightClass),
-                $this->settings->showAvatars()
-                    ? _Html($this->userAvatarHtml)->class('ml-3 flex-shrink-0')
-                    : null,
-            )->class('items-end' . $animationClass),
-            $this->settings->enableEdit() ? _FlexEnd(
                 _Link(__('ai.common.edit'))->icon('pencil')
                     ->class('opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-gray-600 mt-1 transition-opacity')
                     ->selfGet('editMessage', ['id' => $message->id])->inModal(),
-            ) : null,
+            ),
         )->class('group');
     }
 
     public function assistantBubble($message, array $resultSet)
     {
         $isNew = $this->isNewMessage($message);
-        $animationClass = $isNew ? ' animate-message-assistant' : '';
         $contentRevealClass = $isNew ? ' animate-content-reveal' : '';
         $staggerClass = $isNew ? ' animate-stagger-content' : '';
 
@@ -182,14 +192,17 @@ class MessageBubbleRenderer
 
         $content[] = $this->messageActionBar($message);
 
-        return _Rows(
-            _Flex(
-                $this->settings->showAvatars()
-                    ? _Html($this->assistantAvatarHtml)->class('mr-3 flex-shrink-0 self-start')
-                    : null,
-                _Rows(...$content)
-                    ->class('group px-5 py-4 rounded-2xl rounded-tl-md max-w-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md transition-shadow'),
-            )->class('items-start' . $animationClass),
+        // Kit otherBubble: left-aligned white card, avatar left of it, entrance animation
+        // for new messages. All the ai-specific renderables ride in as the $content array.
+        return $this->kit->otherBubble(
+            $content,
+            null, // the assistant bubble shows no author name
+            $this->settings->showAvatars() ? $this->assistantAvatarHtml : null,
+            null,
+            null,
+            false,
+            false,
+            $isNew,
         );
     }
 

@@ -100,7 +100,7 @@ class ActionToolSpecTest extends TestCase
     {
         $spec = ActionToolSpec::fromAction(new ExportExcelAction());
 
-        $this->assertStringContainsString('Export the current result set as an Excel (.xlsx) file.', $spec->description);
+        $this->assertStringContainsString('Export as an Excel (.xlsx) file.', $spec->description);
         $this->assertStringContainsString('may say', $spec->description);
         $this->assertStringContainsString('export excel', $spec->description);
         $this->assertStringContainsString('spreadsheet', $spec->description);
