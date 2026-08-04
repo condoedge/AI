@@ -337,6 +337,37 @@ class ContextRetriever implements ContextRetrieverInterface
                     }
                 }
 
+                // AUGMENTATION ANCHOR (item B — iteration-11 sentinel red): a
+                // QU-flagged follow-up that operates on a recorded DATA result
+                // must not enter retrieval blind when QU produced no entity
+                // types ("add their last login to it" → entity_types=[]).
+                // Deterministically re-seed the PREVIOUS turn's entity types
+                // (last_entity_types; focused_entity as fallback) at the same
+                // strength QU entity types get — gated on the recorded anchor
+                // (last_cypher_query), so ordinary knowledge follow-ups without
+                // a data anchor are untouched.
+                $conversationContext = $options['conversation_context'] ?? [];
+                if ($ctx->qu->followUpReference
+                    && trim((string) ($conversationContext['last_cypher_query'] ?? '')) !== '') {
+                    $anchorLabels = (array) ($conversationContext['last_entity_types'] ?? []);
+                    if ($anchorLabels === [] && $conversationFocusedEntity) {
+                        $anchorLabels = [$conversationFocusedEntity];
+                    }
+                    foreach ($anchorLabels as $label) {
+                        if (!is_string($label) || $label === '') {
+                            continue;
+                        }
+                        $fullName = $this->findFullEntityName($label, $this->entityConfigs);
+                        if ($fullName && !isset($ctx->semanticSelection->entities[$fullName])) {
+                            $ctx->semanticSelection->entities[$fullName] = new SelectedEntity(
+                                score: config('ai.semantic_context.anchor_entity_score', 0.8),
+                                matchedText: "Augmentation anchor (previous turn): '{$label}'",
+                                config: $this->entityConfigs[$fullName] ?? null,
+                            );
+                        }
+                    }
+                }
+
                 // Hybrid retrieval: fold a sparse/lexical signal (BM25-ish over entity
                 // names/aliases/scope text) into the dense semantic ranking via RRF. The
                 // dense ranking is the current (score-sorted) entity order; the sparse
@@ -414,7 +445,19 @@ class ContextRetriever implements ContextRetrieverInterface
                         $ctx->graphSchema = $fullSchema;
                     }
                 }
+
+                $identityLabels = $this->identityEntityLabels();
+                if (!empty($identityLabels)) {
+                    $ctx->graphSchema = $this->schemaProjector->includeLabels(
+                        $ctx->graphSchema,
+                        $fullSchema,
+                        $identityLabels
+                    );
+                    $this->annotateIdentityLabels($ctx, $fullSchema, $identityLabels);
+                }
+
                 $ctx->graphSchema['all_relationship_types'] = $fullSchema['relationships'] ?? [];
+                $ctx->graphSchema['all_relationship_patterns'] = $fullSchema['relationshipPatterns'] ?? [];
             } catch (\Exception $e) {
                 $this->logger->error('context_retriever', 'Schema retrieval failed: ' . $e->getMessage());
                 $ctx->addError('Schema retrieval failed: ' . $e->getMessage());
@@ -491,7 +534,8 @@ class ContextRetriever implements ContextRetrieverInterface
      * {@inheritDoc}
      *
      * Retrieves and normalizes the graph schema: node labels, relationship types,
-     * a flat property-key list, and per-label properties from entity configs.
+     * exact relationship patterns, a flat property-key list, and per-label properties
+     * from entity configs.
      *
      * @return array{labels: array, relationships: array, properties: array, propertyKeys: array}
      *
@@ -507,6 +551,7 @@ class ContextRetriever implements ContextRetrieverInterface
         return [
             'labels' => $schema['labels'] ?? [],
             'relationships' => $schema['relationshipTypes'] ?? $schema['relationships'] ?? [],
+            'relationshipPatterns' => $schema['relationshipPatterns'] ?? $schema['relationship_patterns'] ?? [],
             'properties' => $propertiesByLabel, // Now structured by label
             'propertyKeys' => $schema['propertyKeys'] ?? $schema['properties'] ?? [], // Keep flat list too
         ];
@@ -644,6 +689,66 @@ class ContextRetriever implements ContextRetrieverInterface
     private function isHybridEnabled(): bool
     {
         return function_exists('config') && (bool) config('ai.rag.hybrid_enabled', false);
+    }
+
+    /**
+     * Labels that should stay in the filtered graph schema as identity anchors.
+     *
+     * Host apps can override this list when their auth/team concepts use different
+     * node labels. An empty array disables the behavior.
+     *
+     * @return string[]
+     */
+    private function identityEntityLabels(): array
+    {
+        $labels = function_exists('config')
+            ? config('ai.semantic_context.always_include_identity_labels', ['User', 'Team'])
+            : ['User', 'Team'];
+
+        if (!is_array($labels)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($labels as $label) {
+            if (!is_string($label)) {
+                continue;
+            }
+
+            $label = trim($label);
+            if ($label !== '') {
+                $normalized[] = $label;
+            }
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
+    /**
+     * Mark identity labels that actually exist in the graph schema. This makes
+     * audit/debug output explicit: these were forced as current identity anchors,
+     * not selected by semantic similarity.
+     *
+     * @param string[] $identityLabels
+     */
+    private function annotateIdentityLabels(PipelineContext $ctx, array $fullSchema, array $identityLabels): void
+    {
+        $available = array_fill_keys($fullSchema['labels'] ?? [], true);
+        $included = [];
+
+        foreach ($identityLabels as $label) {
+            if (isset($available[$label])) {
+                $included[] = $label;
+            }
+        }
+
+        if (empty($included)) {
+            return;
+        }
+
+        $selected = $ctx->selectionInfo['selected_entities'] ?? [];
+        $ctx->selectionInfo['selected_entities'] = array_values(array_unique(array_merge($selected, $included)));
+        $ctx->selectionInfo['identity_entities'] = array_values(array_unique($included));
     }
 
     /**

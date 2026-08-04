@@ -7,9 +7,11 @@ namespace Condoedge\Ai\Tests\Unit\Services;
 use Condoedge\Ai\Tests\TestCase;
 use Mockery;
 use Condoedge\Ai\Services\QueryGenerator;
+use Condoedge\Ai\Services\TemplateMatcher;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Exceptions\QueryValidationException;
 
@@ -91,13 +93,8 @@ class QueryGeneratorTest extends TestCase
         // Disable explanation to avoid second complete() call
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('cypher', $result);
-        $this->assertArrayHasKey('explanation', $result);
-        $this->assertArrayHasKey('confidence', $result);
-        $this->assertArrayHasKey('warnings', $result);
-        $this->assertArrayHasKey('metadata', $result);
-        $this->assertStringContainsString('MATCH', $result['cypher']);
+        $this->assertInstanceOf(QueryGenerationResult::class, $result);
+        $this->assertStringContainsString('MATCH', $result->cypher);
     }
 
     public function test_generate_uses_template_for_list_all(): void
@@ -112,10 +109,10 @@ class QueryGeneratorTest extends TestCase
 
         $result = $this->generator->generate($question, $context);
 
-        $this->assertStringContainsString('MATCH', $result['cypher']);
-        $this->assertStringContainsString('Customer', $result['cypher']);
-        $this->assertStringContainsString('LIMIT', $result['cypher']);
-        $this->assertNotNull($result['metadata']['template_used']);
+        $this->assertStringContainsString('MATCH', $result->cypher);
+        $this->assertStringContainsString('Customer', $result->cypher);
+        $this->assertStringContainsString('LIMIT', $result->cypher);
+        $this->assertNotNull($result->metadata['template_used']);
     }
 
     public function test_generate_uses_template_for_count(): void
@@ -130,9 +127,59 @@ class QueryGeneratorTest extends TestCase
 
         $result = $this->generator->generate($question, $context);
 
-        $this->assertStringContainsString('count', strtolower($result['cypher']));
-        $this->assertStringContainsString('Order', $result['cypher']);
-        $this->assertNotNull($result['metadata']['template_used']);
+        $this->assertStringContainsString('count', strtolower($result->cypher));
+        $this->assertStringContainsString('Order', $result->cypher);
+        $this->assertNotNull($result->metadata['template_used']);
+    }
+
+    public function test_template_output_passes_through_validation_and_falls_through_to_llm_when_invalid(): void
+    {
+        $question = "Show all customers";
+        $context = $this->makeContext([
+            'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
+        ]);
+
+        // A template matcher that emits Cypher the validator rejects (no MATCH/RETURN).
+        $brokenMatcher = new class extends TemplateMatcher {
+            public function detectTemplate(string $question): ?string
+            {
+                return 'list_all';
+            }
+
+            public function generateFromTemplate(string $question, string $templateName, PipelineContext $context): ?array
+            {
+                return [
+                    'cypher' => 'BROKEN {placeholder}',
+                    'explanation' => '',
+                    'confidence' => 0.9,
+                    'warnings' => [],
+                    'metadata' => ['template_used' => $templateName, 'retry_count' => 0, 'complexity' => 0],
+                ];
+            }
+        };
+
+        $generator = new QueryGenerator(
+            $this->mockLlm,
+            $this->mockGraph,
+            $this->config,
+            null,
+            null,
+            null,
+            $brokenMatcher
+        );
+
+        // Invalid template output must NOT be returned; the LLM path runs instead.
+        $this->mockLlm->shouldReceive('complete')
+            ->once()
+            ->with(Mockery::any(), Mockery::type('string'), Mockery::any())
+            ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
+
+        $result = $generator->generate($question, $context, ['explain' => false]);
+
+        $this->assertStringNotContainsString('BROKEN', $result->cypher);
+        $this->assertStringNotContainsString('{', $result->cypher);
+        $this->assertStringContainsString('MATCH', $result->cypher);
+        $this->assertNull($result->metadata['template_used']);
     }
 
     public function test_generate_retries_on_validation_failure(): void
@@ -156,8 +203,8 @@ class QueryGeneratorTest extends TestCase
 
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
-        $this->assertGreaterThan(0, $result['metadata']['retry_count']);
-        $this->assertStringContainsString('MATCH', $result['cypher']);
+        $this->assertGreaterThan(0, $result->metadata['retry_count']);
+        $this->assertStringContainsString('MATCH', $result->cypher);
     }
 
     public function test_generate_throws_exception_after_max_retries(): void
@@ -194,8 +241,8 @@ class QueryGeneratorTest extends TestCase
 
         $result = $this->generator->generate($question, $context, ['temperature' => 0.5, 'explain' => false]);
 
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('cypher', $result);
+        $this->assertInstanceOf(QueryGenerationResult::class, $result);
+        $this->assertNotNull($result->cypher);
     }
 
     public function test_generate_includes_explanation_when_requested(): void
@@ -223,7 +270,7 @@ class QueryGeneratorTest extends TestCase
 
         $result = $this->generator->generate($question, $context, ['explain' => true]);
 
-        $this->assertNotEmpty($result['explanation']);
+        $this->assertNotEmpty($result->explanation);
     }
 
     // =========================================================================
@@ -313,59 +360,6 @@ class QueryGeneratorTest extends TestCase
     }
 
     // =========================================================================
-    // Sanitization Tests
-    // =========================================================================
-
-    public function test_sanitize_removes_delete(): void
-    {
-        $query = 'MATCH (n:Customer) DELETE n';
-
-        $sanitized = $this->generator->sanitize($query);
-
-        $this->assertStringNotContainsString('DELETE', $sanitized);
-    }
-
-    public function test_sanitize_removes_drop(): void
-    {
-        $query = 'DROP INDEX customer_email';
-
-        $sanitized = $this->generator->sanitize($query);
-
-        $this->assertStringNotContainsString('DROP', $sanitized);
-    }
-
-    public function test_sanitize_adds_limit_if_missing(): void
-    {
-        $query = 'MATCH (n:Customer) RETURN n';
-
-        $sanitized = $this->generator->sanitize($query);
-
-        $this->assertStringContainsString('LIMIT', $sanitized);
-        $this->assertStringContainsString('100', $sanitized);
-    }
-
-    public function test_sanitize_preserves_existing_limit(): void
-    {
-        $query = 'MATCH (n:Customer) RETURN n LIMIT 50';
-
-        $sanitized = $this->generator->sanitize($query);
-
-        $this->assertStringContainsString('LIMIT 50', $sanitized);
-        $this->assertEquals(1, substr_count(strtoupper($sanitized), 'LIMIT'));
-    }
-
-    public function test_sanitize_removes_multiple_dangerous_operations(): void
-    {
-        $query = 'MATCH (n:Customer) DELETE n; DROP INDEX x; CREATE (m:New)';
-
-        $sanitized = $this->generator->sanitize($query);
-
-        $this->assertStringNotContainsString('DELETE', $sanitized);
-        $this->assertStringNotContainsString('DROP', $sanitized);
-        $this->assertStringNotContainsString('CREATE', $sanitized);
-    }
-
-    // =========================================================================
     // Template Tests
     // =========================================================================
 
@@ -442,8 +436,8 @@ class QueryGeneratorTest extends TestCase
 
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('cypher', $result);
+        $this->assertInstanceOf(QueryGenerationResult::class, $result);
+        $this->assertNotNull($result->cypher);
     }
 
     public function test_generate_extracts_cypher_from_markdown(): void
@@ -460,8 +454,8 @@ class QueryGeneratorTest extends TestCase
 
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
-        $this->assertStringNotContainsString('```', $result['cypher']);
-        $this->assertStringContainsString('MATCH', $result['cypher']);
+        $this->assertStringNotContainsString('```', $result->cypher);
+        $this->assertStringContainsString('MATCH', $result->cypher);
     }
 
     public function test_validate_with_cypher_comments(): void

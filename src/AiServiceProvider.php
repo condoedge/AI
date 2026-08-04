@@ -45,6 +45,7 @@ use Condoedge\Ai\Services\Extractors\OcrPdfParser;
 use Condoedge\Ai\Services\Extractors\PdfExtractor;
 use Condoedge\Ai\Services\Extractors\DocxExtractor;
 use Condoedge\Ai\Services\PatternLibrary;
+use Condoedge\Ai\Services\Retrieval\TokenBudgeter;
 use Condoedge\Ai\Services\SemanticPromptBuilder;
 use Condoedge\Ai\Services\SemanticIndexer;
 use Condoedge\Ai\Services\ScopeSemanticMatcher;
@@ -226,7 +227,9 @@ class AiServiceProvider extends ServiceProvider
 
         $this->app->singleton(SemanticPromptBuilder::class, function ($app) {
             return new SemanticPromptBuilder(
-                patternLibrary: $app->make(PatternLibrary::class)
+                patternLibrary: $app->make(PatternLibrary::class),
+                tokenBudgeter: $app->make(TokenBudgeter::class),
+                logger: $app->make(AiLogger::class)
             );
         });
 
@@ -315,6 +318,21 @@ class AiServiceProvider extends ServiceProvider
 
         $this->app->alias('file-search', FileSearchService::class);
 
+        // Attention digest (design 2026-07-23): the runner's only graph path is
+        // the pipeline QueryExecutorInterface (security invariant by wiring);
+        // the composer's single LLM call rides the response_generation role.
+        $this->app->singleton(\Condoedge\Ai\Services\Digest\DigestRunner::class, function ($app) {
+            return new \Condoedge\Ai\Services\Digest\DigestRunner(
+                $app->make(QueryExecutorInterface::class)
+            );
+        });
+
+        $this->app->singleton(\Condoedge\Ai\Services\Response\DigestResponseComposer::class, function ($app) {
+            return new \Condoedge\Ai\Services\Response\DigestResponseComposer(
+                $app->make(LlmResolver::class)->forRole('response_generation')
+            );
+        });
+
         $this->app->singleton('ai', function ($app) {
             return new AiManager(
                 ingestion: $app->make(DataIngestionServiceInterface::class),
@@ -327,7 +345,10 @@ class AiServiceProvider extends ServiceProvider
                 vectorStore: $app->make(VectorStoreInterface::class),
                 fileContextProvider: $app->make(FileContextProvider::class),
                 responseFileEnricher: $app->make(ResponseFileEnricher::class),
-                responseEntityEnricher: $app->make(ResponseEntityEnricher::class)
+                responseEntityEnricher: $app->make(ResponseEntityEnricher::class),
+                exportComposer: $app->make(\Condoedge\Ai\Services\Response\ExportResponseComposer::class),
+                digestRunner: $app->make(\Condoedge\Ai\Services\Digest\DigestRunner::class),
+                digestComposer: $app->make(\Condoedge\Ai\Services\Response\DigestResponseComposer::class)
             );
         });
 
@@ -353,7 +374,7 @@ class AiServiceProvider extends ServiceProvider
         $this->app->singleton(\Condoedge\Ai\Services\Retrieval\RerankerInterface::class, function ($app) {
             if (config('ai.rag.rerank_enabled', false)) {
                 return new \Condoedge\Ai\Services\Retrieval\LlmReranker(
-                    $app->make(LlmProviderInterface::class)
+                    $app->make(\Condoedge\Ai\Services\LlmResolver::class)->forRole('reranker')
                 );
             }
 
@@ -414,6 +435,14 @@ class AiServiceProvider extends ServiceProvider
             // question translated into each — the cross-lingual fan-out angles.
             $quConfig = config('ai.query_understanding', []);
             $quConfig['corpus_languages'] = config('ai.file_context.corpus_languages', []);
+            // The corpus register also lives under file_context (retrieval owns the
+            // corpus description); surface it so the SAME single QU call can emit
+            // lay->domain-register reformulations as extra file-search angles.
+            $quConfig['corpus_register'] = config('ai.file_context.corpus_register', '');
+            // The clarify branch toggle lives under ai.understanding (item C);
+            // surface it so the QU prompt only asks for the clarify keys when the
+            // pipeline branch that consumes them is enabled.
+            $quConfig['clarify_enabled'] = config('ai.understanding.clarify_enabled', true);
 
             return new QueryUnderstandingService(
                 llm: $app->make(LlmResolver::class)->forRole('query_understanding'),
@@ -482,7 +511,7 @@ class AiServiceProvider extends ServiceProvider
 
         $this->app->singleton(\Condoedge\Ai\Services\Discovery\AiConfigEnhancer::class, function ($app) {
             return new \Condoedge\Ai\Services\Discovery\AiConfigEnhancer(
-                llm: $app->make(LlmProviderInterface::class)
+                llm: $app->make(\Condoedge\Ai\Services\LlmResolver::class)->forRole('config_enhancement')
             );
         });
     }

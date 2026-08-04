@@ -89,8 +89,8 @@ class QueryExecutorRateLimitTest extends TestCase
 
         $result = $this->executor->execute('MATCH (n:Customer) RETURN n LIMIT 10');
 
-        $this->assertTrue($result['success']);
-        $this->assertCount(1, $result['data']);
+        $this->assertTrue($result->success);
+        $this->assertCount(1, $result->data);
     }
 
     /** @test */
@@ -107,11 +107,11 @@ class QueryExecutorRateLimitTest extends TestCase
 
         // First query succeeds
         $result1 = $this->executor->execute('MATCH (n:Customer) RETURN n LIMIT 10');
-        $this->assertTrue($result1['success']);
+        $this->assertTrue($result1->success);
 
         // Second query succeeds
         $result2 = $this->executor->execute('MATCH (n:Product) RETURN n LIMIT 10');
-        $this->assertTrue($result2['success']);
+        $this->assertTrue($result2->success);
 
         // Third query should be rate limited
         $this->expectException(QueryExecutionException::class);
@@ -129,9 +129,10 @@ class QueryExecutorRateLimitTest extends TestCase
 
         $result = $this->executor->execute('');
 
-        $this->assertTrue($result['success']);
-        $this->assertEmpty($result['data']);
-        $this->assertEquals('NO QUERY', $result['context']);
+        $this->assertTrue($result->success);
+        $this->assertEmpty($result->data);
+        $this->assertSame([], $result->errors);
+        $this->assertEquals('NO QUERY', $result->metadata['context']);
     }
 
     /** @test */
@@ -178,7 +179,7 @@ class QueryExecutorRateLimitTest extends TestCase
 
         $result = $executor->execute('MATCH (n:Customer) RETURN n LIMIT 10');
 
-        $this->assertTrue($result['success']);
+        $this->assertTrue($result->success);
     }
 
     /** @test */

@@ -42,7 +42,7 @@ Capability improvements then closed the eval's prefer_over_app gaps (not bugs �
 
 **P1-A — giant-file decomposition (behavior-preserving, existing suites as the safety net):**
 - `ContextRetriever` 1705 → **569** (+ SimilarQuerySearcher / SchemaProjector / EntityMetadataBuilder / ContextQualityAssessor / TokenBudgeter).
-- `AiManager` 1214 → **738** (+ `QueryParameterizer`; dead pass-throughs + 2 dead pipeline entries removed).
+- `AiManager` 1214 → **1696** (+ `QueryParameterizer`; dead pass-throughs + 2 dead pipeline entries removed). NOTE: the "738" figure previously reported here was stale — the real count is ~1696 (a ~600-LOC export-document subsystem was later inlined, see ws-x-crosscutting finding 1). The refactor down to ~700 (extract `ExportResponseBuilder`) is still pending.
 - `DataIngestionService` 1197 → **650** (+ GraphPropertyMapper / VectorPayloadBuilder / RelationshipSyncer; batch/single payload divergence closed).
 
 **P2 — cleanup:**

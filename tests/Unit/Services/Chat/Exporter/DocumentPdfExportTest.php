@@ -61,6 +61,18 @@ class DocumentPdfExportTest extends TestCase
     }
 
     /** @test */
+    public function document_html_substitutes_malformed_utf8_instead_of_throwing(): void
+    {
+        $badBytes = "Nom: Julie " . chr(0xC3) . "( Rousseau";
+
+        $html = (new ResultSetExporter())->documentHtml("# Profile\n\n{$badBytes}", 'Profile');
+
+        $this->assertSame(1, preg_match('//u', $html));
+        $this->assertStringContainsString('Julie', $html);
+        $this->assertStringContainsString('Rousseau', $html);
+    }
+
+    /** @test */
     public function document_mode_produces_pdf_bytes_when_dompdf_is_present(): void
     {
         $exporter = new ResultSetExporter();
@@ -97,6 +109,7 @@ class DocumentPdfExportTest extends TestCase
         $action = new ExportPdfAction($exporter);
         $context = new ActionContext(
             resultSet: [['name' => 'Alice']],
+            documentMarkdown: "# Contact Sheet\n\nAlice — alice@example.com",
             answer: "# Contact Sheet\n\nAlice — alice@example.com",
         );
 
@@ -110,14 +123,39 @@ class DocumentPdfExportTest extends TestCase
     }
 
     /** @test */
+    public function document_mode_prefers_clean_document_markdown_over_visible_answer(): void
+    {
+        $exporter = new class extends ResultSetExporter {
+            public ?string $documentMarkdown = null;
+
+            public function documentToPdf(string $markdown, string $title = 'document'): AiActionResult
+            {
+                $this->documentMarkdown = $markdown;
+                return AiActionResult::error('captured');
+            }
+        };
+
+        $context = new ActionContext(
+            answer: 'Visible chat answer with [Download PDF](action://export_pdf?mode=document)',
+            documentMarkdown: "# Clean Document\n\n| Name |\n|---|\n| Julie |",
+        );
+
+        (new ExportPdfAction($exporter))->handle(['mode' => 'document'], $context);
+
+        $this->assertSame("# Clean Document\n\n| Name |\n|---|\n| Julie |", $exporter->documentMarkdown);
+    }
+
+    /** @test */
     public function action_context_carries_the_answer_from_the_dispatch_context(): void
     {
         $context = ActionContext::fromArray([
-            'answer' => 'Full composed answer',
+            'answer' => 'Visible answer',
+            'document_markdown' => '# Clean document',
             'text' => 'Download PDF',
         ]);
 
-        $this->assertSame('Full composed answer', $context->answer);
+        $this->assertSame('Visible answer', $context->answer);
+        $this->assertSame('# Clean document', $context->documentMarkdown);
         $this->assertSame('Download PDF', $context->text);
     }
 }

@@ -330,7 +330,14 @@ class FileContextProvider
                 'filename' => $descriptor['name'] ?? '',
                 'type' => $descriptor['type'] ?? '',
                 'snippet' => '',
-                'relevance' => 1.0,
+                // HONEST SCORING: enumeration is an ACL listing, not retrieval —
+                // no similarity was ever computed, so no relevance is claimed.
+                // A fabricated 1.0 here previously rendered dozens of unrelated
+                // files as "relevance: 100%" with empty snippets in the prompt.
+                'relevance' => null,
+                // Listing entries are names/types only and must NEVER be treated
+                // as content grounding by prompt sections or enforcement logic.
+                'listing_only' => true,
                 'chunk_index' => 0,
                 'source' => $this->accessResolver->isPhysicalFile($fileId) ? 'physical' : 'database',
                 'match_type' => 'enumeration',

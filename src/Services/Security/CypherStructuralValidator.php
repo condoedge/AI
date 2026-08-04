@@ -83,7 +83,10 @@ final class CypherStructuralValidator
             // A clause keyword inside parentheses is only a defect when it is in
             // CLAUSE position. A word that follows ':' (a node/relationship label)
             // or '.' (a property name) is an identifier, not a clause keyword.
-            if ($t->parenDepth > 0 && $this->isClauseKeyword($t->value)
+            // Inside a BRACE block ({…}) a clause keyword is legal: an existential
+            // subquery (`EXISTS { MATCH … WHERE … }`, the null-tolerant scope the
+            // injector emits for OPTIONAL-bound variables) or a map key.
+            if ($t->parenDepth > 0 && $t->braceDepth === 0 && $this->isClauseKeyword($t->value)
                 && !$this->isIdentifierPosition($tokens, $idx)) {
                 return "clause keyword '{$t->value}' trapped inside parentheses at offset {$t->offset}";
             }

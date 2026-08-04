@@ -88,11 +88,18 @@ class SchemaProjector
             ))
             : [];
 
+        $filteredRelationshipPatterns = $this->filterRelationshipPatterns(
+            $fullSchema['relationshipPatterns'] ?? [],
+            $filteredLabels,
+            $filteredRelationships
+        );
+
         $relevantPropertyKeys = array_values(array_unique($relevantPropertyKeys));
 
         return [
             'labels' => $filteredLabels,
             'relationships' => $filteredRelationships,
+            'relationshipPatterns' => $filteredRelationshipPatterns,
             'properties' => $relevantProperties,
             'propertyKeys' => $relevantPropertyKeys,
         ];
@@ -122,7 +129,167 @@ class SchemaProjector
             ));
         }
 
+        if (!empty($filtered['relationshipPatterns'])) {
+            $filtered['relationshipPatterns'] = $this->filterRelationshipPatterns(
+                $filtered['relationshipPatterns'],
+                $filtered['labels'] ?? $labels,
+                $filtered['relationships'] ?? []
+            );
+        }
+
         return $filtered;
+    }
+
+    /**
+     * Merge specific labels from the full schema into an already-filtered schema.
+     *
+     * This is used for identity anchors such as User/Team: they should remain
+     * available to the prompt even when semantic filtering selects another domain
+     * entity, but without expanding back to the full schema.
+     *
+     * @param string[] $labels
+     */
+    public function includeLabels(array $filteredSchema, array $fullSchema, array $labels): array
+    {
+        $available = array_fill_keys($fullSchema['labels'] ?? [], true);
+        $labelsToInclude = [];
+
+        foreach ($labels as $label) {
+            if (!is_string($label)) {
+                continue;
+            }
+
+            $label = trim($label);
+            if ($label !== '' && isset($available[$label])) {
+                $labelsToInclude[] = $label;
+            }
+        }
+
+        $labelsToInclude = array_values(array_unique($labelsToInclude));
+        if (empty($labelsToInclude)) {
+            return $filteredSchema;
+        }
+
+        $filteredSchema['labels'] = array_values(array_unique(array_merge(
+            $filteredSchema['labels'] ?? [],
+            $labelsToInclude
+        )));
+
+        foreach ($labelsToInclude as $label) {
+            if (isset($fullSchema['properties'][$label])) {
+                $filteredSchema['properties'][$label] = $fullSchema['properties'][$label];
+            }
+        }
+
+        $propertyKeys = $filteredSchema['propertyKeys'] ?? [];
+        foreach ($labelsToInclude as $label) {
+            foreach (($fullSchema['properties'][$label] ?? []) as $property) {
+                $propertyKeys[] = $property;
+            }
+        }
+        $filteredSchema['propertyKeys'] = array_values(array_unique($propertyKeys));
+
+        $patterns = $this->filterRelationshipPatterns(
+            $fullSchema['relationshipPatterns'] ?? [],
+            $filteredSchema['labels'] ?? [],
+            []
+        );
+        $filteredSchema['relationshipPatterns'] = $this->uniqueRelationshipPatterns(array_merge(
+            $filteredSchema['relationshipPatterns'] ?? [],
+            $patterns
+        ));
+
+        $relationshipTypes = $filteredSchema['relationships'] ?? [];
+        foreach ($filteredSchema['relationshipPatterns'] as $pattern) {
+            if (is_array($pattern) && is_string($pattern['type'] ?? null)) {
+                $relationshipTypes[] = $pattern['type'];
+            }
+        }
+        $filteredSchema['relationships'] = array_values(array_unique($relationshipTypes));
+
+        return $filteredSchema;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $patterns
+     * @param array<int, string> $labels
+     * @param array<int, string> $relationshipTypes
+     * @return array<int, array<string, mixed>>
+     */
+    private function filterRelationshipPatterns(array $patterns, array $labels, array $relationshipTypes = []): array
+    {
+        if (empty($patterns)) {
+            return [];
+        }
+
+        $allowedLabels = array_fill_keys($labels, true);
+        $allowedTypes = array_fill_keys($relationshipTypes, true);
+        $hasLabelFilter = !empty($allowedLabels);
+        $hasTypeFilter = !empty($allowedTypes);
+
+        $filtered = [];
+        foreach ($patterns as $pattern) {
+            if (!is_array($pattern)) {
+                continue;
+            }
+
+            $type = $pattern['type'] ?? $pattern['relationshipType'] ?? $pattern['relationship_type'] ?? null;
+            $fromLabel = $pattern['from_label'] ?? $pattern['fromLabel'] ?? $pattern['from'] ?? null;
+            $toLabel = $pattern['to_label'] ?? $pattern['toLabel'] ?? $pattern['to'] ?? null;
+
+            if (!is_string($type) || !is_string($fromLabel) || !is_string($toLabel)) {
+                continue;
+            }
+
+            if ($hasTypeFilter && !isset($allowedTypes[$type])) {
+                continue;
+            }
+
+            if ($hasLabelFilter && (!isset($allowedLabels[$fromLabel]) || !isset($allowedLabels[$toLabel]))) {
+                continue;
+            }
+
+            $filtered[] = [
+                'from_label' => $fromLabel,
+                'type' => $type,
+                'to_label' => $toLabel,
+                'count' => isset($pattern['count']) ? (int) $pattern['count'] : null,
+            ];
+        }
+
+        return array_values($filtered);
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $patterns
+     * @return array<int, array<string, mixed>>
+     */
+    private function uniqueRelationshipPatterns(array $patterns): array
+    {
+        $unique = [];
+
+        foreach ($patterns as $pattern) {
+            if (!is_array($pattern)) {
+                continue;
+            }
+
+            $fromLabel = $pattern['from_label'] ?? null;
+            $type = $pattern['type'] ?? null;
+            $toLabel = $pattern['to_label'] ?? null;
+
+            if (!is_string($fromLabel) || !is_string($type) || !is_string($toLabel)) {
+                continue;
+            }
+
+            $unique[$fromLabel . '|' . $type . '|' . $toLabel] = [
+                'from_label' => $fromLabel,
+                'type' => $type,
+                'to_label' => $toLabel,
+                'count' => isset($pattern['count']) ? (int) $pattern['count'] : null,
+            ];
+        }
+
+        return array_values($unique);
     }
 
     /**

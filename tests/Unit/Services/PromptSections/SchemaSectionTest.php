@@ -30,12 +30,18 @@ class SchemaSectionTest extends TestCase
         $section = new SchemaSection();
 
         $context = new PipelineContext();
-        $context->graphSchema = ['labels' => ['Invoice']];
+        $context->graphSchema = [
+            'labels' => ['Invoice'],
+            'relationshipPatterns' => [
+                ['from_label' => 'User', 'type' => 'CREATED', 'to_label' => 'Invoice', 'count' => 7],
+            ],
+        ];
 
         $this->assertTrue($section->shouldInclude('q', $context, []));
 
         $output = $section->format('q', $context, []);
         $this->assertStringContainsString('GRAPH SCHEMA', $output);
         $this->assertStringContainsString('Invoice', $output);
+        $this->assertStringContainsString('(:User)-[:CREATED]->(:Invoice)', $output);
     }
 }

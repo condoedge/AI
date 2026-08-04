@@ -1856,6 +1856,36 @@ class FileContextProviderTest extends TestCase
     }
 
     /** @test */
+    public function enumeration_entries_carry_no_fabricated_relevance_and_are_marked_listing_only(): void
+    {
+        // Regression (broken file scorer): enumeration used to assign a uniform
+        // relevance of 1.0 with EMPTY snippets to every accessible file, which the
+        // prompt rendered as "relevance: 100%" grounding — pure noise. No
+        // similarity is ever computed during enumeration, so no relevance may be
+        // claimed, and the entries must be marked listing-only so they never
+        // enter grounding context.
+        $user = new \stdClass();
+        $user->id = 1;
+
+        $this->accessResolver
+            ->shouldReceive('enumerateAccessibleFiles')
+            ->once()
+            ->andReturn([
+                ['file_id' => 10, 'name' => 'invoice-0042.pdf', 'type' => 'pdf'],
+                ['file_id' => 11, 'name' => 'holiday.mov', 'type' => 'mov'],
+            ]);
+
+        $result = $this->provider->enumerateAccessibleFiles($user);
+
+        foreach ($result as $entry) {
+            $this->assertNull($entry['relevance'], 'enumeration must not fabricate a relevance score');
+            $this->assertTrue($entry['listing_only'], 'enumeration entries must be marked listing-only');
+            $this->assertSame('', $entry['snippet']);
+            $this->assertSame('enumeration', $entry['match_type']);
+        }
+    }
+
+    /** @test */
     public function enumeration_returns_only_what_the_resolver_allows(): void
     {
         // The provider must never widen the resolver's ACL-filtered set: it lists

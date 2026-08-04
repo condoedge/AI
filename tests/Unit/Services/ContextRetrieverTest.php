@@ -340,6 +340,74 @@ class ContextRetrieverTest extends TestCase
     }
 
     /**
+     * Test that current identity labels survive schema filtering even when the
+     * relevance fallback selects a different entity.
+     */
+    public function test_retrieve_context_keeps_identity_labels_in_filtered_schema()
+    {
+        config(['ai.semantic_context.always_include_identity_labels' => ['User', 'Team']]);
+
+        $question = 'Show invoice totals';
+        $entityConfigs = [
+            'App\\Models\\Billing\\Invoice' => [
+                'graph' => ['label' => 'Invoice', 'properties' => ['id', 'total']],
+            ],
+            'App\\Models\\Auth\\User' => [
+                'graph' => ['label' => 'User', 'properties' => ['id', 'email', 'current_team_id']],
+            ],
+            'App\\Models\\Auth\\Team' => [
+                'graph' => ['label' => 'Team', 'properties' => ['id', 'team_name']],
+            ],
+        ];
+        $service = new ContextRetriever(
+            $this->mockVectorStore,
+            $this->mockGraphStore,
+            $this->mockEmbeddingProvider,
+            $this->logger,
+            $entityConfigs
+        );
+
+        $this->mockEmbeddingProvider
+            ->shouldReceive('embed')
+            ->andReturn([0.1]);
+
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('questions', Mockery::any(), Mockery::any(), Mockery::any(), Mockery::any())
+            ->andReturn([]);
+
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('semantic_entities', Mockery::any(), Mockery::any())
+            ->andReturn([
+                ['payload' => ['label' => 'Invoice']],
+            ]);
+
+        $this->mockGraphStore
+            ->shouldReceive('getSchema')
+            ->once()
+            ->andReturn([
+                'labels' => ['Invoice', 'User', 'Team', 'Contact'],
+                'relationshipTypes' => ['BELONGS_TO', 'HAS_CONTACT'],
+                'relationshipPatterns' => [
+                    ['from_label' => 'User', 'type' => 'BELONGS_TO', 'to_label' => 'Team', 'count' => 4],
+                    ['from_label' => 'Contact', 'type' => 'HAS_CONTACT', 'to_label' => 'User', 'count' => 2],
+                ],
+                'propertyKeys' => ['id', 'total', 'email', 'current_team_id', 'team_name'],
+            ]);
+
+        $context = $service->retrieveContext($question, ['includeExamples' => false]);
+
+        $this->assertContains('Invoice', $context->graphSchema['labels']);
+        $this->assertContains('User', $context->graphSchema['labels']);
+        $this->assertContains('Team', $context->graphSchema['labels']);
+        $this->assertNotContains('Contact', $context->graphSchema['labels']);
+        $this->assertArrayHasKey('User', $context->graphSchema['properties']);
+        $this->assertArrayHasKey('Team', $context->graphSchema['properties']);
+        $this->assertSame(['User', 'Team'], $context->selectionInfo['identity_entities']);
+    }
+
+    /**
      * Test that retrieveContext respects examplesPerLabel option
      */
     public function test_retrieve_context_respects_examples_per_label_option()
@@ -808,6 +876,9 @@ class ContextRetrieverTest extends TestCase
             ->andReturn([
                 'labels' => ['Team'],
                 'relationshipTypes' => ['MEMBER_OF'],
+                'relationshipPatterns' => [
+                    ['from_label' => 'User', 'type' => 'MEMBER_OF', 'to_label' => 'Team', 'count' => 4],
+                ],
                 'propertyKeys' => ['id'],
             ]);
 
@@ -815,6 +886,9 @@ class ContextRetrieverTest extends TestCase
 
         $this->assertEquals(['Team'], $schema['labels']);
         $this->assertEquals(['MEMBER_OF'], $schema['relationships']);
+        $this->assertEquals([
+            ['from_label' => 'User', 'type' => 'MEMBER_OF', 'to_label' => 'Team', 'count' => 4],
+        ], $schema['relationshipPatterns']);
         // The flat property-key list from the store is normalized under 'propertyKeys';
         // 'properties' is reserved for the per-label structure derived from entity configs.
         $this->assertEquals(['id'], $schema['propertyKeys']);

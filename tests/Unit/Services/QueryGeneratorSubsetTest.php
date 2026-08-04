@@ -71,8 +71,8 @@ class QueryGeneratorSubsetTest extends TestCase
 
         $result = $this->generator->generate('Which invoices exist?', $this->makeContext(), ['explain' => false]);
 
-        $this->assertGreaterThan(0, $result['metadata']['retry_count']);
-        $this->assertStringContainsString('MATCH (i:Invoice)', $result['cypher']);
+        $this->assertGreaterThan(0, $result->metadata['retry_count']);
+        $this->assertStringContainsString('MATCH (i:Invoice)', $result->cypher);
     }
 
     /** @test */
@@ -84,8 +84,8 @@ class QueryGeneratorSubsetTest extends TestCase
 
         $result = $this->generator->generate('Open invoices?', $this->makeContext(), ['explain' => false]);
 
-        $this->assertSame(0, $result['metadata']['retry_count']);
-        $this->assertStringContainsString('MATCH (i:Invoice)', $result['cypher']);
+        $this->assertSame(0, $result->metadata['retry_count']);
+        $this->assertStringContainsString('MATCH (i:Invoice)', $result->cypher);
     }
 
     /** @test */
@@ -99,6 +99,6 @@ class QueryGeneratorSubsetTest extends TestCase
 
         $result = $this->generator->generate('Anything?', $this->makeContext(), ['explain' => false]);
 
-        $this->assertSame(0, $result['metadata']['retry_count']);
+        $this->assertSame(0, $result->metadata['retry_count']);
     }
 }

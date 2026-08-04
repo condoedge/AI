@@ -8,6 +8,7 @@ use Condoedge\Ai\Tests\TestCase;
 use Mockery;
 use Condoedge\Ai\Services\QueryExecutor;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\Exceptions\QueryExecutionException;
 use Condoedge\Ai\Exceptions\QueryTimeoutException;
 use Condoedge\Ai\Exceptions\ReadOnlyViolationException;
@@ -72,11 +73,10 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query);
 
-        $this->assertTrue($result['success']);
-        $this->assertCount(2, $result['data']);
-        $this->assertArrayHasKey('stats', $result);
-        $this->assertArrayHasKey('metadata', $result);
-        $this->assertEmpty($result['errors']);
+        $this->assertInstanceOf(QueryExecutionResult::class, $result);
+        $this->assertTrue($result->success);
+        $this->assertCount(2, $result->data);
+        $this->assertEmpty($result->errors);
     }
 
     public function test_execute_adds_limit_if_missing(): void
@@ -92,7 +92,7 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query);
 
-        $this->assertTrue($result['success']);
+        $this->assertTrue($result->success);
     }
 
     public function test_execute_returns_no_query_success_for_empty_query(): void
@@ -105,9 +105,14 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute('');
 
-        $this->assertTrue($result['success']);
-        $this->assertSame([], $result['data']);
-        $this->assertSame('NO QUERY', $result['context']);
+        // The empty-cypher branch returns the SAME well-formed DTO shape as the
+        // success branch: success + empty data + empty errors. The "no query"
+        // signal rides metadata, not a divergent top-level key.
+        $this->assertInstanceOf(QueryExecutionResult::class, $result);
+        $this->assertTrue($result->success);
+        $this->assertSame([], $result->data);
+        $this->assertSame([], $result->errors);
+        $this->assertSame('NO QUERY', $result->metadata['context']);
     }
 
     public function test_execute_returns_no_query_success_for_whitespace_query(): void
@@ -117,8 +122,10 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute('   ');
 
-        $this->assertTrue($result['success']);
-        $this->assertSame('NO QUERY', $result['context']);
+        $this->assertTrue($result->success);
+        $this->assertSame([], $result->data);
+        $this->assertSame([], $result->errors);
+        $this->assertSame('NO QUERY', $result->metadata['context']);
     }
 
     public function test_execute_respects_timeout_option(): void
@@ -131,7 +138,7 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query, [], ['timeout' => 60]);
 
-        $this->assertEquals(60, $result['metadata']['timeout']);
+        $this->assertEquals(60, $result->metadata['timeout']);
     }
 
     public function test_execute_respects_limit_option(): void
@@ -147,7 +154,7 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query, [], ['limit' => 50]);
 
-        $this->assertTrue($result['success']);
+        $this->assertTrue($result->success);
     }
 
     public function test_execute_formats_results_as_table(): void
@@ -163,8 +170,8 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query, [], ['format' => 'table']);
 
-        $this->assertEquals('table', $result['metadata']['format']);
-        $this->assertIsArray($result['data']);
+        $this->assertEquals('table', $result->metadata['format']);
+        $this->assertIsArray($result->data);
     }
 
     public function test_execute_collects_statistics(): void
@@ -177,10 +184,10 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query);
 
-        $this->assertArrayHasKey('execution_time_ms', $result['stats']);
-        $this->assertArrayHasKey('rows_returned', $result['stats']);
-        $this->assertGreaterThanOrEqual(0, $result['stats']['execution_time_ms']);
-        $this->assertEquals(1, $result['stats']['rows_returned']);
+        $this->assertArrayHasKey('execution_time_ms', $result->stats);
+        $this->assertArrayHasKey('rows_returned', $result->stats);
+        $this->assertGreaterThanOrEqual(0, $result->stats['execution_time_ms']);
+        $this->assertEquals(1, $result->stats['rows_returned']);
     }
 
     // =========================================================================
@@ -207,7 +214,7 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query, [], ['read_only' => false]);
 
-        $this->assertTrue($result['success']);
+        $this->assertTrue($result->success);
     }
 
     public function test_execute_detects_delete(): void
@@ -236,6 +243,35 @@ class QueryExecutorTest extends TestCase
         $this->expectException(ReadOnlyViolationException::class);
 
         $this->executor->execute('MATCH (n:Test) SET n.value = 1');
+    }
+
+    public function test_execute_detects_drop(): void
+    {
+        // DROP is a dangerous keyword the validator knows but the executor's
+        // read-only gate historically did not. The gate must reject it before
+        // anything reaches the graph store.
+        $this->mockGraph->shouldNotReceive('query');
+
+        $this->expectException(ReadOnlyViolationException::class);
+
+        $this->executor->execute('DROP INDEX index_name');
+    }
+
+    public function test_read_only_gate_shares_validator_keyword_authority(): void
+    {
+        // The executor read-only gate must classify writes from the SAME list the
+        // CypherValidator uses, so a keyword the validator rejects can never slip
+        // through the executor. Prove the two sets are identical.
+        $reflection = new \ReflectionClass($this->executor);
+        $property = $reflection->getProperty('writeKeywords');
+        $property->setAccessible(true);
+
+        $executorKeywords = $property->getValue($this->executor);
+
+        $this->assertEqualsCanonicalizing(
+            \Condoedge\Ai\Services\CypherValidator::DANGEROUS_KEYWORDS,
+            $executorKeywords
+        );
     }
 
     // =========================================================================
@@ -488,6 +524,6 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query, $params);
 
-        $this->assertTrue($result['success']);
+        $this->assertTrue($result->success);
     }
 }

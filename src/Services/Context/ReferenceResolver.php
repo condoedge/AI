@@ -36,7 +36,17 @@ class ReferenceResolver
     ];
 
     /**
-     * Check if a question is a follow-up to previous context
+     * Check if a question is a follow-up to previous context.
+     *
+     * AUTHORITY NOTE (item D): this regex heuristic is the PRE-QU FALLBACK
+     * only — it exists so conversation-context processing (which runs BEFORE
+     * the QU LLM call) has a cheap signal for reference resolution. For every
+     * decision made AFTER query understanding runs, the authoritative
+     * follow-up signal is QueryUnderstandingResult::$followUpReference (the
+     * semantic judgment): export-of-previous routing, the digest guard and the
+     * augmentation anchor all read QU, never this regex. The eval trace
+     * records BOTH (is_follow_up_regex vs follow_up_reference_qu) so
+     * disagreement between them stays auditable.
      */
     public function isFollowUp(string $question): bool
     {
@@ -74,7 +84,19 @@ class ReferenceResolver
     }
 
     /**
-     * Resolve references in a question using conversation context
+     * Resolve references in a question using conversation context.
+     *
+     * RESOLVE, DON'T REWRITE (G2/L5 item A — iteration-11 verdict): the user's
+     * wording is returned VERBATIM as enriched_question on every path. Textual
+     * pronoun substitution corrupted meaning live and in eval, repeatedly —
+     * "add their last login to it" became "add their last login to teams"
+     * (the imperative's object changed from the previous RESULT to the Team
+     * entity) and "export it" became "export teams". The resolution now rides
+     * exclusively in the STRUCTURED fields (resolved_entity / operation /
+     * base_query); downstream, the conversation-context snapshot
+     * (last_cypher_query, focused_entity, last_result_sample) plus the
+     * followUpReference anchor mechanism carry the referent into retrieval and
+     * generation — the question text itself is never mutated.
      *
      * @param string $question The user's question
      * @param array $context Conversation context
@@ -101,14 +123,12 @@ class ReferenceResolver
         // Determine operation type
         $operation = $this->determineOperation($question);
 
-        // Build enriched question with resolved references
-        $enrichedQuestion = $this->buildEnrichedQuestion($question, $focusedEntity, $operation);
-
         return [
             'resolved' => true,
             'resolved_entity' => $focusedEntity,
             'operation' => $operation,
-            'enriched_question' => $enrichedQuestion,
+            // Verbatim by contract — see the docblock above.
+            'enriched_question' => $question,
             'base_query' => $operation === 'extend' ? $lastQuery : null,
             'reference_type' => $referenceType,
         ];
@@ -137,30 +157,5 @@ class ReferenceResolver
         }
 
         return 'filter';
-    }
-
-    /**
-     * Build an enriched question with resolved references
-     */
-    private function buildEnrichedQuestion(string $question, ?string $entity, string $operation): string
-    {
-        if ($entity === null) {
-            return $question;
-        }
-
-        // Replace pronouns with entity name
-        $enriched = preg_replace('/\b(those|them|these|they|it)\b/i', strtolower($entity) . 's', $question);
-
-        // If question starts with "and", make it a complete sentence
-        if (preg_match('/^and\s+/i', $enriched)) {
-            $enriched = preg_replace('/^and\s+/i', "Show {$entity}s ", $enriched);
-        }
-
-        // Add entity context if implicit
-        if ($enriched === $question && !str_contains(strtolower($question), strtolower($entity))) {
-            $enriched = "{$entity}s: {$question}";
-        }
-
-        return $enriched;
     }
 }

@@ -141,4 +141,46 @@ class EvalCommandTest extends TestCase
             }
         }
     }
+
+    /** @test */
+    public function it_can_repeat_page_example_questions_for_iterative_smoke_runs(): void
+    {
+        $this->app['config']->set('ai.chat.example_questions', []);
+        $this->app['config']->set('ai.chat.page_examples', [
+            'Unit' => [
+                'Show this unit payment history',
+                'Who owns this unit?',
+            ],
+        ]);
+        $this->app['config']->set('ai.eval.stage_thresholds', [
+            'understanding' => 0.0,
+            'retrieval' => 0.0,
+            'prompt' => 0.0,
+            'generation' => 0.0,
+        ]);
+
+        $reportPath = sys_get_temp_dir() . '/ai-eval-page-examples-' . uniqid() . '.json';
+
+        try {
+            $this->artisan('ai:eval', [
+                '--offline' => true,
+                '--tags' => 'page_example',
+                '--iterations' => 2,
+                '--report' => $reportPath,
+            ])->assertExitCode(0);
+
+            $report = json_decode(file_get_contents($reportPath), true);
+
+            $this->assertSame(4, $report['total_rows']);
+            $this->assertSame(2, $report['meta']['base_question_count']);
+            $this->assertSame(2, $report['meta']['iterations']);
+            $this->assertContains('page_example', $report['rows'][0]['tags']);
+            $this->assertContains('iteration:1', $report['rows'][0]['tags']);
+            $this->assertContains('iteration:2', $report['rows'][2]['tags']);
+        } finally {
+            if (file_exists($reportPath)) {
+                unlink($reportPath);
+            }
+        }
+    }
 }

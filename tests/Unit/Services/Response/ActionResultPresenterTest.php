@@ -119,8 +119,30 @@ class ActionResultPresenterTest extends TestCase
             'export_excel'
         );
 
-        $this->assertIsString($presented);
-        $this->assertStringContainsString('maatwebsite/excel', $presented);
+        $this->assertStringContainsString('maatwebsite/excel', $this->renderToString($presented));
+    }
+
+    /** @test */
+    public function export_successes_present_json_safe_download_payloads_in_unit_context(): void
+    {
+        $presented = $this->presenter()->present(
+            AiActionResult::export("%PDF-1.4\n" . chr(128), 'application/pdf', 'profile.pdf'),
+            'export_pdf'
+        );
+
+        if (is_array($presented)) {
+            $this->assertSame('download', $presented['type']);
+            $this->assertSame('application/pdf', $presented['mime']);
+            $this->assertSame('profile.pdf', $presented['filename']);
+            $this->assertStringStartsWith('data:application/pdf;base64,', $presented['href']);
+            $this->assertArrayNotHasKey('content', $presented);
+            $this->assertIsString(json_encode($presented, JSON_THROW_ON_ERROR));
+        } else {
+            $this->assertIsObject($presented);
+            $this->assertSame('profile.pdf', $presented->label);
+            $this->assertStringStartsWith('data:application/pdf;base64,', $presented->href);
+            $this->assertSame('profile.pdf', $presented->config['attrs']['download'] ?? null);
+        }
     }
 
     /** @test */
@@ -128,8 +150,7 @@ class ActionResultPresenterTest extends TestCase
     {
         $presented = $this->presenter()->present(AiActionResult::error(''), 'export_pdf');
 
-        $this->assertIsString($presented);
-        $this->assertStringContainsString('unavailable', $presented);
+        $this->assertStringContainsString('unavailable', $this->renderToString($presented));
     }
 
     /** @test */
@@ -142,8 +163,7 @@ class ActionResultPresenterTest extends TestCase
             true,
         );
 
-        $this->assertIsString($presented);
-        $this->assertStringContainsString('no longer available', $presented);
+        $this->assertStringContainsString('no longer available', $this->renderToString($presented));
     }
 
     /** @test */
@@ -156,9 +176,9 @@ class ActionResultPresenterTest extends TestCase
             true,
         );
 
-        $this->assertIsString($presented);
-        $this->assertStringNotContainsString('SQLSTATE', $presented);
-        $this->assertStringNotContainsString('secret', $presented);
+        $rendered = $this->renderToString($presented);
+        $this->assertStringNotContainsString('SQLSTATE', $rendered);
+        $this->assertStringNotContainsString('secret', $rendered);
     }
 
     /** @test */
@@ -193,7 +213,8 @@ class ActionResultPresenterTest extends TestCase
             'export_excel'
         );
 
-        $this->assertSame([$viaPresenter], $viaHandler);
+        $this->assertStringContainsString('maatwebsite/excel', $this->renderToString($viaHandler[0] ?? null));
+        $this->assertStringContainsString('maatwebsite/excel', $this->renderToString($viaPresenter));
     }
 
     /** @test */
@@ -217,5 +238,29 @@ class ActionResultPresenterTest extends TestCase
         $this->assertSame('Archive', $card['label']);
         $this->assertSame('This will archive. Confirm?', $card['message']);
         $this->assertNotSame('', $card['token']);
+    }
+
+    private function renderToString(mixed $value): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+
+        if (is_array($value)) {
+            return json_encode($value, JSON_THROW_ON_ERROR);
+        }
+
+        if (is_object($value)) {
+            $parts = [];
+            foreach (['label', 'href', 'class'] as $property) {
+                if (property_exists($value, $property) && is_scalar($value->{$property})) {
+                    $parts[] = (string) $value->{$property};
+                }
+            }
+
+            return implode(' ', $parts) . ' ' . json_encode($value, JSON_PARTIAL_OUTPUT_ON_ERROR);
+        }
+
+        return (string) $value;
     }
 }

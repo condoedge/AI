@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\Exceptions\QueryExecutionException;
 use Condoedge\Ai\Exceptions\QueryTimeoutException;
 use Condoedge\Ai\Exceptions\ReadOnlyViolationException;
@@ -36,16 +37,26 @@ use Illuminate\Support\Facades\Log;
 class QueryExecutor implements QueryExecutorInterface
 {
     /**
-     * Write operation keywords
+     * Write/dangerous operation keywords.
+     *
+     * Single-sourced from CypherValidator so the read-only gate rejects every
+     * keyword the validator considers a write — the two lists cannot diverge.
      */
-    private array $writeKeywords = [
-        'CREATE', 'DELETE', 'REMOVE', 'MERGE', 'SET', 'DETACH'
-    ];
+    private array $writeKeywords = CypherValidator::DANGEROUS_KEYWORDS;
 
     /**
      * Rate limiter instance
      */
     protected RateLimiter $rateLimiter;
+
+    /**
+     * Batch keys that already paid their (single) rate-limiter charge on this
+     * executor instance. See {@see attemptRateLimit()} — request-scoped by
+     * construction (the array lives on the instance, never in cache).
+     *
+     * @var array<string, true>
+     */
+    protected array $chargedRateLimitBatches = [];
 
     /**
      * Constructor
@@ -72,12 +83,12 @@ class QueryExecutor implements QueryExecutorInterface
      * @param string $cypherQuery Validated Cypher query to execute
      * @param array $parameters Query parameters
      * @param array $options Execution options
-     * @return array Execution result
+     * @return QueryExecutionResult Execution result
      * @throws QueryExecutionException If query execution fails
      * @throws QueryTimeoutException If query exceeds timeout
      * @throws ReadOnlyViolationException If write operation in read-only mode
      */
-    public function execute(?string $cypherQuery, array $parameters = [], array $options = []): array
+    public function execute(?string $cypherQuery, array $parameters = [], array $options = []): QueryExecutionResult
     {
         $timeout = $options['timeout'] ?? $this->config['default_timeout'] ?? 30;
         $limit = $options['limit'] ?? $this->config['default_limit'] ?? 100;
@@ -87,13 +98,13 @@ class QueryExecutor implements QueryExecutorInterface
 
         // Some cases we'll send an empty cypher query because there's nothing to run, just a direct answers, so we don't throw a direct error
         if (empty(trim($cypherQuery ?? ''))) {
-            return [
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-                'context' => 'NO QUERY',
-            ];
+            return new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: ['context' => 'NO QUERY'],
+                errors: [],
+            );
         }
 
         $securityResult = $this->applySecurityFilter($cypherQuery, $options);
@@ -102,13 +113,13 @@ class QueryExecutor implements QueryExecutorInterface
         // rewrite. Return a clean empty result instead of running anything — fail
         // closed without a crash, and without shipping a malformed query to Neo4j.
         if (($securityResult['safe_stop'] ?? false) === true) {
-            return [
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => ['security_filter_applied' => false, 'safe_stop' => true],
-                'errors' => [],
-            ];
+            return new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: ['security_filter_applied' => false, 'safe_stop' => true],
+                errors: [],
+            );
         }
 
         $cypherQuery = $securityResult['query'];
@@ -120,8 +131,10 @@ class QueryExecutor implements QueryExecutorInterface
             $parameters = array_merge($securityResult['parameters'], $parameters);
         }
 
-        // SECURITY: Enforce rate limiting to prevent DoS via expensive query flooding
-        if (!$this->rateLimiter->attempt()) {
+        // SECURITY: Enforce rate limiting to prevent DoS via expensive query flooding.
+        // Batched executions (options['rate_limit_batch'] — e.g. one attention-digest
+        // run) charge the shared limiter ONCE per batch; see attemptRateLimit().
+        if (!$this->attemptRateLimit($options)) {
             throw new QueryExecutionException(
                 'Rate limit exceeded for query execution. Please wait before trying again.'
             );
@@ -185,18 +198,18 @@ class QueryExecutor implements QueryExecutorInterface
                 conversationId: $options['conversation_id'] ?? null
             );
 
-            return [
-                'success' => true,
-                'data' => $formattedData,
-                'stats' => $stats,
-                'metadata' => [
+            return new QueryExecutionResult(
+                success: true,
+                data: $formattedData,
+                stats: $stats,
+                metadata: [
                     'format' => $format,
                     'read_only' => $readOnly,
                     'timeout' => $timeout,
                     'security_filter_applied' => $securityFilterApplied,
                 ],
-                'errors' => [],
-            ];
+                errors: [],
+            );
 
         } catch (QueryTimeoutException $e) {
             // Wall-clock budget exceeded on the success path — surface directly
@@ -230,6 +243,54 @@ class QueryExecutor implements QueryExecutorInterface
     }
 
     /**
+     * Acquire a rate-limiter slot for this execution.
+     *
+     * DIGEST SELF-RATE-LIMIT FIX (iteration-11 verdict, item F): a single
+     * attention-digest turn runs up to max_sources (9) source queries plus
+     * companion counts through the SHARED query_executor limiter (default
+     * 30/min) — two back-to-back digest turns starved it live and printed
+     * "could not be checked" for real sources. A digest run is ONE user-visible
+     * action, so it now pays ONE limiter charge: the runner mints a fresh
+     * `rate_limit_batch` key per run, the FIRST execution carrying it consumes
+     * a normal slot, and every subsequent execution with the SAME key on this
+     * executor instance rides that charge.
+     *
+     * CHOICE (documented): one-charge-per-batch on the SHARED limiter was
+     * chosen over a digest-specific limiter key because (a) a digest still
+     * consumes real budget from the same global window — the DoS accounting
+     * stays whole rather than moving to a second, separately-tunable pool, and
+     * (b) it needs no new config surface. Rate limiting for normal turns is
+     * UNCHANGED: no batch key → one charge per query, exactly as before.
+     *
+     * Scope/safety: the memo is per-executor-instance (request-scoped, never
+     * cached), the key is server-minted (DigestRunner strips any caller-supplied
+     * value and generates its own random key), and a rejected first charge still
+     * fails the whole batch closed.
+     *
+     * @param array $options Execution options (reads 'rate_limit_batch').
+     */
+    protected function attemptRateLimit(array $options): bool
+    {
+        $batch = $options['rate_limit_batch'] ?? null;
+
+        if (!is_string($batch) || $batch === '') {
+            return $this->rateLimiter->attempt();
+        }
+
+        if (isset($this->chargedRateLimitBatches[$batch])) {
+            return true;
+        }
+
+        if (!$this->rateLimiter->attempt()) {
+            return false;
+        }
+
+        $this->chargedRateLimitBatches[$batch] = true;
+
+        return true;
+    }
+
+    /**
      * Execute query and return count only
      *
      * @param string $cypherQuery Query to execute
@@ -257,7 +318,7 @@ class QueryExecutor implements QueryExecutorInterface
 
         try {
             $result = $this->execute($countQuery, $parameters, $options);
-            return (int) ($result['data'][0]['total'] ?? 0);
+            return (int) ($result->data[0]['total'] ?? 0);
         } catch (\Exception $e) {
             throw new QueryExecutionException(
                 "Count execution failed: " . $e->getMessage(),
@@ -300,7 +361,7 @@ class QueryExecutor implements QueryExecutorInterface
         $lastPage = (int) ceil($total / $perPage);
 
         return [
-            'data' => $result['data'],
+            'data' => $result->data,
             'pagination' => [
                 'current_page' => $page,
                 'per_page' => $perPage,
@@ -309,8 +370,8 @@ class QueryExecutor implements QueryExecutorInterface
                 'from' => $offset + 1,
                 'to' => min($offset + $perPage, $total),
             ],
-            'stats' => $result['stats'],
-            'metadata' => $result['metadata'],
+            'stats' => $result->stats,
+            'metadata' => $result->metadata,
         ];
     }
 
@@ -358,26 +419,6 @@ class QueryExecutor implements QueryExecutorInterface
             $this->explain($cypherQuery);
             return true;
         } catch (\Exception $e) {
-            return false;
-        }
-    }
-
-    /**
-     * Cancel a running query
-     *
-     * @param string $queryId Query identifier
-     * @return bool True if cancelled successfully
-     */
-    public function cancel(?string $queryId): bool
-    {
-        try {
-            // Neo4j specific: CALL dbms.listQueries() and dbms.killQuery()
-            // Use parameterized query to prevent injection
-            $killQuery = "CALL dbms.killQuery(\$queryId)";
-            $this->graphStore->query($killQuery, ['queryId' => $queryId]);
-            return true;
-        } catch (\Exception $e) {
-            // Query might have already finished or ID invalid
             return false;
         }
     }

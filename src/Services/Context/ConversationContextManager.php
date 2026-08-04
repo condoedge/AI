@@ -114,8 +114,17 @@ class ConversationContextManager
         // Extract entity filter from Cypher WHERE clause
         $entityFilter = $this->extractEntityFilter($cypherQuery);
 
-        // Store result sample (first 10 results for context)
-        $resultSample = array_slice($queryResult['data'] ?? [], 0, 10);
+        // Store result sample: the first 10 rows for an ordinary query turn (a
+        // display sample — the follow-up export path recovers the full set by
+        // re-executing last_cypher_query). A DIGEST turn keeps its rows IN FULL:
+        // it records no cypher, so this sample IS the only source a follow-up
+        // "export that" can materialize (B1 promises the file carries everything
+        // shown), and the rows are already display-capped per source by the
+        // DigestRunner — bounded by max_sources x row cap, never a raw result set.
+        $isDigestTurn = is_array($queryResult['metadata']['response']['digest'] ?? null);
+        $resultSample = $isDigestTurn
+            ? array_values($queryResult['data'] ?? [])
+            : array_slice($queryResult['data'] ?? [], 0, 10);
 
         $referencedFiles = $queryResult['referenced_files'] ?? [];
         $detectedTemplate = $queryResult['detected_template'] ?? null;
@@ -130,13 +139,41 @@ class ConversationContextManager
             'focused_entity' => $focusedEntity,
             'mentioned_entities' => $newEntities,
             'last_relationships' => $cypherEntities['relationships'],
-            'last_cypher_query' => $cypherQuery,
-            'last_result_count' => count($queryResult['data'] ?? []),
-            'last_result_sample' => $resultSample,
-            'focused_entity_filter' => $entityFilter,
             'last_answer_summary' => Str::limit($response, 500),
             'updated_at' => now()->toIso8601String(),
         ];
+
+        // PRESERVE-ON-EMPTY (live failure 2026-07-23): a turn that showed the user
+        // no rows — a documents-only answer, a misrouted follow-up, a 0-row query,
+        // an internally-caught error — must NOT erase what the user was last SHOWN.
+        // Follow-ups ("ok, can you export that?", "add the roles to it") refer to
+        // the last visible result; unconditional overwrite here made a docs turn
+        // wipe the roster and the next export answer "No results were found".
+        // Only a turn that actually produced rows advances the result memory.
+        $rowCount = count($queryResult['data'] ?? []);
+        if ($rowCount > 0) {
+            $snapshotUpdate['last_cypher_query'] = $cypherQuery;
+            $snapshotUpdate['last_result_count'] = $rowCount;
+            $snapshotUpdate['last_result_sample'] = $resultSample;
+            $snapshotUpdate['focused_entity_filter'] = $entityFilter;
+            // AUGMENTATION ANCHOR (item B): EVERY entity of the executed cypher —
+            // not just the first — so a later column-add follow-up ("add their
+            // last login to it") can deterministically re-seed retrieval with the
+            // previous turn's entity types when QU comes back empty. Written only
+            // on row-producing turns (same preserve-on-empty rule as
+            // last_cypher_query: a docs turn must not erase the data anchor).
+            if (!empty($cypherEntities['entities'])) {
+                $snapshotUpdate['last_entity_types'] = array_values($cypherEntities['entities']);
+            }
+        }
+
+        // Only update last_subject when THIS turn had one: a subject-less
+        // follow-up ("Ok, give me the excel") must not erase the subject of the
+        // result it operates on — that subject is what titles its export.
+        $subject = $queryResult['metadata']['subject'] ?? null;
+        if (is_string($subject) && trim($subject) !== '') {
+            $snapshotUpdate['last_subject'] = trim($subject);
+        }
 
         // Only update last_referenced_files if there are new files
         // Otherwise preserve the previous reference for follow-up questions
@@ -219,6 +256,8 @@ class ConversationContextManager
             'last_result_sample' => $snapshot['last_result_sample'] ?? [],
             'last_result_count' => $snapshot['last_result_count'] ?? 0,
             'last_cypher_query' => $snapshot['last_cypher_query'] ?? null,
+            'last_entity_types' => $snapshot['last_entity_types'] ?? [],
+            'last_subject' => $snapshot['last_subject'] ?? null,
             'last_query_type' => $snapshot['last_query_type'] ?? null,
             'last_detected_template' => $snapshot['last_detected_template'] ?? null,
             'last_relationships' => $snapshot['last_relationships'] ?? [],

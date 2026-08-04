@@ -105,6 +105,30 @@ class CurrentUserContextSectionTest extends TestCase
     }
 
     /** @test */
+    public function it_includes_identity_anchors_and_contact_wording_guidance(): void
+    {
+        $user = new User();
+        $user->id = 42;
+        $user->name = 'John Doe';
+        $user->email = 'john@example.com';
+
+        Auth::shouldReceive('check')->andReturn(true);
+        Auth::shouldReceive('user')->andReturn($user);
+        Auth::shouldReceive('id')->andReturn(42);
+
+        $context = $this->context();
+        $context->qu = new QueryUnderstandingResult(isPossessive: true);
+
+        $output = $this->section->format('Can you create a PDF with my contact information?', $context, []);
+
+        $this->assertStringContainsString('CURRENT IDENTITY ENTITY ANCHORS', $output);
+        $this->assertStringContainsString('User.id = 42', $output);
+        $this->assertStringContainsString('CONTACT WORDING DISAMBIGUATION', $output);
+        $this->assertStringContainsString('my contact information', $output);
+        $this->assertStringContainsString('Current user email: john@example.com', $output);
+    }
+
+    /** @test */
     public function it_omits_user_email_by_default(): void
     {
         // PII minimization: the user's email is NOT shipped to the LLM unless explicitly
@@ -176,5 +200,85 @@ class CurrentUserContextSectionTest extends TestCase
 
         $this->assertStringContainsString('Guest', $output);
         $this->assertStringContainsString('N/A', $output);
+    }
+
+    /** @test */
+    public function it_renders_the_team_name_from_a_name_column_when_team_name_is_absent(): void
+    {
+        // Micro-bug A regression: hosts whose Team model exposes `name` (not
+        // `team_name`) rendered "Current team name: N/A" although the team exists.
+        $user = new User();
+        $user->id = 13;
+        $user->name = 'Julie Rousseau';
+        $user->email = 'j.rousseau@example.com';
+        $user->currentTeam = (object) ['id' => 3, 'name' => 'Novo Gestion'];
+
+        Auth::shouldReceive('check')->andReturn(true);
+        Auth::shouldReceive('user')->andReturn($user);
+        Auth::shouldReceive('id')->andReturn(13);
+
+        $output = $this->section->format('test question', $this->context(), []);
+
+        $this->assertStringContainsString('Current team ID: 3', $output);
+        $this->assertStringContainsString('Current team name: Novo Gestion', $output);
+        $this->assertStringNotContainsString('Current team name: N/A', $output);
+    }
+
+    /** @test */
+    public function a_team_name_column_still_wins_over_the_name_fallback(): void
+    {
+        $user = new User();
+        $user->id = 13;
+        $user->name = 'Julie Rousseau';
+        $user->email = 'j.rousseau@example.com';
+        $user->currentTeam = (object) ['id' => 3, 'team_name' => 'Primary Name', 'name' => 'Fallback Name'];
+
+        Auth::shouldReceive('check')->andReturn(true);
+        Auth::shouldReceive('user')->andReturn($user);
+        Auth::shouldReceive('id')->andReturn(13);
+
+        $output = $this->section->format('test question', $this->context(), []);
+
+        $this->assertStringContainsString('Current team name: Primary Name', $output);
+    }
+
+    /** @test */
+    public function ownership_paths_are_scoped_to_personal_possessives_with_collective_guidance(): void
+    {
+        // Lever L2-B(i): the ownership-paths block used to be rendered for ANY
+        // possessive, pulling collective possessives ("our board") into personal
+        // Contact paths. It must now scope itself to PERSONAL possessives and
+        // steer COLLECTIVE possessives to the team anchor ($ai_team_ids).
+        config(['ai.user_entity_paths' => [
+            'Unit' => [
+                'description' => "User's units via Contact.",
+                'cypher' => 'MATCH (c:Contact {user_id: $userId})<-[:CONTACT]-(cu:ContactUnit)-[:UNIT]->(n:Unit)',
+            ],
+        ]]);
+
+        $user = new User();
+        $user->id = 13;
+        $user->name = 'Julie Rousseau';
+        $user->email = 'j.rousseau@example.com';
+
+        Auth::shouldReceive('check')->andReturn(true);
+        Auth::shouldReceive('user')->andReturn($user);
+        Auth::shouldReceive('id')->andReturn(13);
+
+        $context = $this->context();
+        $context->qu = new QueryUnderstandingResult(isPossessive: true);
+
+        $output = $this->section->format('show me our board of directors', $context, []);
+
+        // Header restricts the paths to personal possessives.
+        $this->assertStringContainsString('USER OWNERSHIP PATHS (PERSONAL possessives ONLY)', $output);
+        // Explicit personal-vs-collective decision guidance.
+        $this->assertStringContainsString('PERSONAL vs COLLECTIVE possessives', $output);
+        $this->assertStringContainsString('COLLECTIVE possessives', $output);
+        // Collective questions anchor on team scope, not the personal paths.
+        $this->assertStringContainsString('$ai_team_ids', $output);
+        $this->assertStringContainsString('do NOT route it through the personal paths below', $output);
+        // The configured personal path still renders for genuine "my X" questions.
+        $this->assertStringContainsString('MATCH (c:Contact {user_id: $userId})', $output);
     }
 }

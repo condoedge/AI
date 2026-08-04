@@ -33,7 +33,7 @@ class EvalReport
         public array $thresholds = [],
         /** @var string[] Stages whose average fell below their threshold. */
         public array $failedStages = [],
-        /** True when the run was offline (judge skipped everywhere). */
+        /** True when the run was offline (response generation skipped). */
         public bool $offline = false,
         /** Wall-clock metadata: user, counts, etc. */
         public array $meta = [],
@@ -41,12 +41,74 @@ class EvalReport
 
     public function passed(): bool
     {
-        return empty($this->failedStages);
+        return empty($this->failedStages) && $this->gateFailures() === [];
     }
 
     public function totalRows(): int
     {
         return count($this->rows);
+    }
+
+    /**
+     * Every failed fact-gate across all rows. Computed from the rows (no extra
+     * mutable state) so aggregate() stays untouched; a non-empty list makes the
+     * run FAIL regardless of stage averages — gates are hard requirements.
+     *
+     * @return array<int, array{conversation_id: ?string, turn_index: int, question: string, gate: string, detail: string}>
+     */
+    public function gateFailures(): array
+    {
+        $failures = [];
+        foreach ($this->rows as $row) {
+            foreach ($row->gates as $gate) {
+                if (($gate['passed'] ?? true) === false) {
+                    $failures[] = [
+                        'conversation_id' => $row->conversationId,
+                        'turn_index' => $row->turnIndex,
+                        'question' => $row->question,
+                        'gate' => (string) ($gate['gate'] ?? ''),
+                        'detail' => (string) ($gate['detail'] ?? ''),
+                    ];
+                }
+            }
+        }
+
+        return $failures;
+    }
+
+    /**
+     * Rows grouped by suite conversation, IN TURN ORDER, each turn carrying its
+     * verbatim standard — the navigation index an out-of-process grading agent
+     * uses before drilling into the full per-row traces.
+     *
+     * @return array<int, array{id: string, role: ?string, turns: array}>
+     */
+    public function conversationGroups(): array
+    {
+        $groups = [];
+        foreach ($this->rows as $row) {
+            if ($row->conversationId === null || $row->conversationId === '') {
+                continue;
+            }
+            $groups[$row->conversationId] ??= [
+                'id' => $row->conversationId,
+                'role' => $row->role,
+                'turns' => [],
+            ];
+            $groups[$row->conversationId]['turns'][] = [
+                'turn_index' => $row->turnIndex,
+                'question' => $row->question,
+                'standard' => $row->standard,
+                'verdict_label' => $row->verdictLabel,
+                'gates' => $row->gates,
+            ];
+        }
+
+        foreach ($groups as &$group) {
+            usort($group['turns'], fn ($a, $b) => $a['turn_index'] <=> $b['turn_index']);
+        }
+
+        return array_values($groups);
     }
 
     public function toArray(): array
@@ -60,6 +122,8 @@ class EvalReport
             'blame_counts' => $this->blameCounts,
             'thresholds' => $this->thresholds,
             'failed_stages' => $this->failedStages,
+            'gate_failures' => $this->gateFailures(),
+            'conversations' => $this->conversationGroups(),
             'total_rows' => $this->totalRows(),
             'meta' => $this->meta,
             'rows' => array_map(fn (EvalRow $r) => $r->toArray(), $this->rows),

@@ -76,7 +76,7 @@ class QueryExecutorTimeoutTest extends TestCase
 
         $result = $executor->execute('MATCH (n:Customer) RETURN n LIMIT 5');
 
-        $this->assertTrue($result['success']);
-        $this->assertSame(30, $result['metadata']['timeout']);
+        $this->assertTrue($result->success);
+        $this->assertSame(30, $result->metadata['timeout']);
     }
 }

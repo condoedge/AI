@@ -163,7 +163,11 @@ final class CypherScopeAnalyzer
                 return new ScopePlan(false, [], $literalSpans, $accessesNodes, $scope->reason);
             }
 
-            $scopes[] = $scope;
+            // A part yields one Scope, or a list of Scopes (one per WITH-segment
+            // carrying sensitive bindings — see analyzePartScope).
+            foreach (is_array($scope) ? $scope : [$scope] as $segmentScope) {
+                $scopes[] = $segmentScope;
+            }
         }
 
         return new ScopePlan(true, $scopes, $literalSpans, $accessesNodes, null);
@@ -188,10 +192,37 @@ final class CypherScopeAnalyzer
     }
 
     /**
-     * Analyze ONE UNION-free part. Returns a Scope, or a (rejecting) ScopePlan.
+     * Analyze ONE UNION-free part. Returns a Scope, a list of Scopes (one per
+     * WITH-segment carrying sensitive bindings), or a (rejecting) ScopePlan.
+     *
+     * WITH-SEGMENTATION (item E — board-query carry-through, 2026-07-23): a
+     * top-level WITH is a SEGMENT BOUNDARY, not a wall. Every sensitive binding
+     * anchors at the FIRST WITH|RETURN|ORDER at the part's depth AFTER its own
+     * binding site — i.e. in its OWN segment, where its alias is by
+     * construction still live (there can be no top-level WITH strictly between
+     * a binding and the first anchor keyword after it). Bindings sharing an
+     * anchor share a Scope; a query like
+     *
+     *   MATCH (b:BoardMember)-[:R]->(un:Union) WHERE un.team_id IN $ai_team_ids
+     *   WITH un, max(b.year) AS y
+     *   MATCH (cur:BoardMember)-[:R]->(un) WHERE cur.year = y RETURN cur
+     *
+     * therefore yields TWO scopes: {b, un} anchored at the WITH (spliced
+     * predicates land BEFORE it, while b and un are live) and {cur} anchored at
+     * the RETURN. A variable re-projected through the WITH (`WITH un, …`)
+     * retains its established scoping — its later label-free `(un)` mention is
+     * a live back-reference, not a new binding. Previously the whole part had
+     * ONE anchor after the LAST binding, so `b` (projected away by the WITH)
+     * read as 'sensitive_binding_not_live' and the entire valid query
+     * fail-closed (live board-query safe-stop).
+     *
+     * FAIL-CLOSED preserved: label-free NEW bindings, alias-free labels,
+     * comprehension-buried sensitive patterns, anchor-less bindings, and DEAD
+     * back-references (a label-free `(u)` after a WITH that projected u away)
+     * are all still rejected.
      *
      * @param list<Token> $tokens
-     * @return Scope|ScopePlan
+     * @return Scope|list<Scope>|ScopePlan
      */
     private function analyzePartScope(
         array $tokens,
@@ -201,8 +232,9 @@ final class CypherScopeAnalyzer
         int $baseBracket,
         int $baseBrace
     ) {
-        // 1) Enumerate node bindings across the WHOLE part + detect un-anchorable
-        // sensitive patterns (comprehensions, label-free primaries).
+        // 1) Enumerate every labelled node-binding OCCURRENCE across the WHOLE
+        // part + detect un-anchorable sensitive patterns (comprehensions,
+        // label-free primaries, dead back-references).
         $extract = $this->extractBindings(
             $tokens,
             $start,
@@ -216,64 +248,124 @@ final class CypherScopeAnalyzer
             return new ScopePlan(false, [], [], true, $extract['reason']);
         }
 
-        /** @var list<NodeBinding> $bindings */
-        $bindings = $extract['bindings'];
-        $lastBindingTokenIdx = $extract['lastBindingTokenIdx'];
+        /** @var list<array{alias:string,label:string,tokenIdx:int,optional:bool}> $occurrences */
+        $occurrences = $extract['occurrences'];
 
-        // 2) The anchor closes the LAST node-binding MATCH scope: the first
-        // WITH|RETURN|ORDER at this part's depth AFTER the last binding. A leading
-        // `WITH const` before any MATCH is therefore NOT mistaken for the anchor
-        // (closes G1).
-        $anchorSearchFrom = $lastBindingTokenIdx >= 0 ? $lastBindingTokenIdx : $start;
-        $anchorIdx = $this->findAnchorIndex($tokens, $anchorSearchFrom, $end, $baseParen, $baseBracket, $baseBrace);
-
-        if ($anchorIdx === null) {
-            // No anchor after the bindings.
-            if (empty($bindings)) {
-                // No sensitive bindings AND no anchor → a pure scalar / introspection
-                // part (e.g. `CALL db.labels()`); nothing to scope.
-                return new Scope([], $start >= 0 && $start < count($tokens) ? $tokens[$start]->offset : 0);
-            }
-            // A sensitive binding with nowhere to anchor the predicate → fail closed
-            // (preserves inject_returns_null_when_branch_has_no_safe_anchor).
-            return new ScopePlan(false, [], [], true, 'no_anchor');
+        if (empty($occurrences)) {
+            // No sensitive bindings → a pure scalar / introspection part
+            // (e.g. `CALL db.labels()`); nothing to scope.
+            return new Scope([], $start >= 0 && $start < count($tokens) ? $tokens[$start]->offset : 0);
         }
 
-        $anchorOffset = $tokens[$anchorIdx]->offset;
+        // 2) Per-occurrence anchor: the first WITH|RETURN|ORDER at this part's
+        // depth AFTER the occurrence (a leading `WITH const` before any MATCH is
+        // therefore never mistaken for an anchor — closes G1). Group occurrences
+        // by anchor: one Scope per segment that carries sensitive bindings.
+        $groups = [];
+        foreach ($occurrences as $occ) {
+            $anchorIdx = $this->findAnchorIndex($tokens, $occ['tokenIdx'], $end, $baseParen, $baseBracket, $baseBrace);
+            if ($anchorIdx === null) {
+                // A sensitive binding with nowhere to anchor the predicate → fail
+                // closed (preserves inject_returns_null_when_branch_has_no_safe_anchor).
+                return new ScopePlan(false, [], [], true, 'no_anchor');
+            }
+            $groups[$anchorIdx][] = $occ;
+        }
+        ksort($groups);
 
-        // 3) Liveness: every sensitive binding's alias must still be bound at the
-        // anchor. A WITH between the BINDING and the anchor that projects the alias
-        // away makes it un-scopeable there → fail closed. (A leading WITH BEFORE a
-        // binding does not constrain that binding.)
-        foreach ($bindings as $binding) {
-            $bindingIdx = $extract['bindingTokenIdx'][$binding->alias] ?? $start;
-            if (!$this->aliasLiveBetween(
-                $tokens,
-                $bindingIdx,
-                $anchorIdx,
-                $binding->alias,
-                $baseParen,
-                $baseBracket,
-                $baseBrace
-            )) {
-                return new ScopePlan(false, [], [], true, 'sensitive_binding_not_live');
+        $scopes = [];
+        $prevAnchorIdx = null;
+        foreach ($groups as $anchorIdx => $groupOccurrences) {
+            // Segment lower bound: just after the previous USED anchor (or the
+            // part start). Bounds the WHERE search and the OPTIONAL-MATCH anchor
+            // check to this segment, and is exported so the acceptance gate never
+            // lets an earlier segment's predicate vouch for a later re-binding.
+            $segStart = $prevAnchorIdx === null ? $start : $prevAnchorIdx + 1;
+            $prevAnchorIdx = $anchorIdx;
+
+            // Dedupe occurrences of the same alias+label WITHIN the segment
+            // (a re-match in the same segment is one binding). The same alias in
+            // a LATER segment gets its own scope — that is the carry-through fix.
+            $bindings = [];
+            $seen = [];
+            foreach ($groupOccurrences as $occ) {
+                $key = $occ['alias'] . '|' . $occ['label'];
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                $bindings[] = new NodeBinding($occ['alias'], $occ['label'], $occ['optional']);
+            }
+
+            // This segment's own WHERE (between its bindings and its anchor) and
+            // its top-level OR, for precedence-correct AND-merge.
+            $whereInfo = $this->findWhere($tokens, $segStart, $anchorIdx, $baseParen, $baseBracket, $baseBrace);
+
+            $scopes[] = new Scope(
+                sensitiveBindings: $bindings,
+                anchorOffset: $tokens[$anchorIdx]->offset,
+                whereOffset: $whereInfo['whereOffset'],
+                // Predicate end is bounded at the first clause keyword after the WHERE
+                // (an intervening MATCH/WITH/… before the anchor), so the injector wraps
+                // ONLY the predicate when parenthesizing a top-level OR (c12).
+                whereEndOffset: $whereInfo['whereOffset'] >= 0 ? $whereInfo['whereEndOffset'] : -1,
+                whereHasTopLevelOr: $whereInfo['hasTopLevelOr'],
+                // Whether a WHERE spliced at the anchor would attach to an OPTIONAL
+                // MATCH (and thus filter only the optional match, not the row).
+                anchorClauseIsOptionalMatch: $this->anchorFollowsOptionalMatch(
+                    $tokens,
+                    $segStart,
+                    $anchorIdx,
+                    $baseParen,
+                    $baseBracket,
+                    $baseBrace
+                ),
+                segmentStartOffset: $segStart > $start && $segStart < count($tokens)
+                    ? $tokens[$segStart]->offset
+                    : 0
+            );
+        }
+
+        return count($scopes) === 1 ? $scopes[0] : $scopes;
+    }
+
+    /**
+     * Whether the LAST pattern/projection clause before the anchor is an
+     * OPTIONAL MATCH. Cypher attaches a WHERE to the clause that precedes it, so
+     * anything the injector splices immediately before the anchor lands on that
+     * clause; when it is OPTIONAL, a WHERE there filters the optional match only
+     * (an unmatched row survives with a null variable) and must NOT carry
+     * row-level (mandatory-binding) predicates.
+     *
+     * @param list<Token> $tokens
+     */
+    private function anchorFollowsOptionalMatch(
+        array $tokens,
+        int $start,
+        int $anchorIdx,
+        int $baseParen,
+        int $baseBracket,
+        int $baseBrace
+    ): bool {
+        $lastIsOptional = false;
+
+        for ($i = $start; $i < $anchorIdx && $i < count($tokens); $i++) {
+            $t = $tokens[$i];
+            if ($t->type !== CypherLexer::T_WORD
+                || !$this->atDepth($t, $baseParen, $baseBracket, $baseBrace)) {
+                continue;
+            }
+            if ($t->isWord('MATCH')) {
+                $prev = $tokens[$i - 1] ?? null;
+                $lastIsOptional = $prev !== null && $prev->isWord('OPTIONAL');
+            } elseif ($t->isWord('WITH') || $t->isWord('UNWIND')
+                || $t->isWord('MERGE') || $t->isWord('CREATE')) {
+                // Any later non-OPTIONAL clause re-anchors the WHERE attachment.
+                $lastIsOptional = false;
             }
         }
 
-        // 4) Locate this part's own WHERE (between bindings and the anchor) and
-        // its top-level OR, for precedence-correct AND-merge.
-        $whereInfo = $this->findWhere($tokens, $start, $anchorIdx, $baseParen, $baseBracket, $baseBrace);
-
-        return new Scope(
-            sensitiveBindings: $bindings,
-            anchorOffset: $anchorOffset,
-            whereOffset: $whereInfo['whereOffset'],
-            // Predicate end is bounded at the first clause keyword after the WHERE
-            // (an intervening MATCH/WITH/… before the anchor), so the injector wraps
-            // ONLY the predicate when parenthesizing a top-level OR (c12).
-            whereEndOffset: $whereInfo['whereOffset'] >= 0 ? $whereInfo['whereEndOffset'] : -1,
-            whereHasTopLevelOr: $whereInfo['hasTopLevelOr']
-        );
+        return $lastIsOptional;
     }
 
     // ---------------------------------------------------------------------
@@ -519,16 +611,23 @@ final class CypherScopeAnalyzer
     }
 
     /**
-     * Extract every sensitive (labelled) node binding in the part, and detect
-     * sensitive bindings hidden in comprehensions / subqueries or carried by a
-     * label-free node access (which we cannot anchor → reject).
+     * Extract every sensitive (labelled) node-binding OCCURRENCE in the part,
+     * and detect sensitive bindings hidden in comprehensions / subqueries or
+     * carried by a label-free node access (which we cannot anchor → reject).
      *
-     * Scans the WHOLE part (not just up to a pre-chosen anchor): the anchor is
-     * derived from the LAST binding afterwards, so a leading `WITH const` cannot
-     * pre-empt the real primary-MATCH boundary.
+     * Scans the WHOLE part: anchors are derived per occurrence afterwards
+     * (WITH-segmentation), so a leading `WITH const` cannot pre-empt the real
+     * primary-MATCH boundary, and a re-binding of the same alias after a WITH
+     * is a NEW occurrence that gets scoped in its own segment.
+     *
+     * Back-references: a label-free `(u)` whose alias received a :Label earlier
+     * in the part is a back-reference ONLY while the alias is still LIVE at
+     * that point (projected through every intervening top-level WITH). A DEAD
+     * back-reference — the alias was projected away — is a fresh unconstrained
+     * variable wearing a scoped variable's name; tenancy is unprovable → reject.
      *
      * @param list<Token> $tokens
-     * @return array{bindings: list<NodeBinding>, bindingTokenIdx: array<string,int>, lastBindingTokenIdx: int, reason: ?string}
+     * @return array{occurrences: list<array{alias:string,label:string,tokenIdx:int,optional:bool}>, reason: ?string}
      */
     private function extractBindings(
         array $tokens,
@@ -538,15 +637,23 @@ final class CypherScopeAnalyzer
         int $baseBracket,
         int $baseBrace
     ): array {
-        // Pre-pass: every alias that receives a :Label ANYWHERE in the part (at the
-        // part's own depth). A later label-free `(i)` re-reference of a labelled
-        // alias is a back-reference, not a new untyped binding.
-        $labelledAliases = $this->collectLabelledAliases($tokens, $start, $end, $baseParen, $baseBracket, $baseBrace);
+        // Pre-pass: for every alias, the token indexes where it receives a :Label
+        // at the part's own depth (used for live-back-reference verification).
+        $labelledAliasIdx = [];
+        for ($i = $start; $i < $end; $i++) {
+            if (!$tokens[$i]->isPunct('(')) {
+                continue;
+            }
+            if ($tokens[$i]->bracketDepth > $baseBracket || $tokens[$i]->braceDepth > $baseBrace) {
+                continue;
+            }
+            $parsed = $this->parseNodePattern($tokens, $i, $end);
+            if ($parsed !== null && $parsed['label'] !== null && $parsed['alias'] !== null) {
+                $labelledAliasIdx[$parsed['alias']][] = $i;
+            }
+        }
 
-        $bindings = [];
-        $bindingTokenIdx = [];
-        $seenAliases = [];
-        $lastBindingTokenIdx = -1;
+        $occurrences = [];
 
         for ($i = $start; $i < $end; $i++) {
             $t = $tokens[$i];
@@ -567,7 +674,7 @@ final class CypherScopeAnalyzer
 
             if ($parsed['label'] !== null && ($insideComprehension || $insideSubquery)) {
                 // A sensitive node we cannot anchor structurally → reject.
-                return ['bindings' => [], 'bindingTokenIdx' => [], 'lastBindingTokenIdx' => -1, 'reason' => 'unsupported_pattern_scope'];
+                return ['occurrences' => [], 'reason' => 'unsupported_pattern_scope'];
             }
 
             // Patterns inside comprehensions/subqueries that are NOT sensitive are
@@ -580,72 +687,88 @@ final class CypherScopeAnalyzer
             if ($parsed['label'] === null) {
                 // A label-free node bound by a MATCH whose alias is NEVER labelled
                 // anywhere in the part is a genuinely untyped node access; tenancy
-                // is unprovable → reject. A label-free `(i)` whose alias IS labelled
-                // elsewhere is a back-reference and is fine.
+                // is unprovable → reject.
                 if (!$this->isMatchedNodePattern($tokens, $i, $start, $baseParen, $baseBracket, $baseBrace)) {
                     continue;
                 }
                 $alias = $parsed['alias'];
-                if ($alias !== null && isset($labelledAliases[$alias])) {
-                    continue; // back-reference to a labelled binding
+                if ($alias !== null && $this->isLiveBackReference($tokens, $labelledAliasIdx[$alias] ?? [], $i, $alias, $baseParen, $baseBracket, $baseBrace)) {
+                    continue; // live back-reference to a labelled binding
                 }
-                return ['bindings' => [], 'bindingTokenIdx' => [], 'lastBindingTokenIdx' => -1, 'reason' => 'label_free_sensitive'];
+                if ($alias !== null && !empty($labelledAliasIdx[$alias])) {
+                    // Labelled somewhere, but DEAD here (projected away by an
+                    // intervening WITH): a fresh unconstrained variable wearing a
+                    // scoped name — never silently treat it as the scoped binding.
+                    return ['occurrences' => [], 'reason' => 'sensitive_binding_not_live'];
+                }
+                return ['occurrences' => [], 'reason' => 'label_free_sensitive'];
             }
 
             // Labelled but alias-free (`(:Label)`) → no variable to scope on.
             if ($parsed['alias'] === null) {
-                return ['bindings' => [], 'bindingTokenIdx' => [], 'lastBindingTokenIdx' => -1, 'reason' => 'label_free_sensitive'];
+                return ['occurrences' => [], 'reason' => 'label_free_sensitive'];
             }
 
-            $lastBindingTokenIdx = $i;
-            if (!isset($seenAliases[$parsed['alias']])) {
-                $bindings[] = new NodeBinding($parsed['alias'], $parsed['label']);
-                $bindingTokenIdx[$parsed['alias']] = $i;
-                $seenAliases[$parsed['alias']] = true;
-            } else {
-                // Re-binding the same alias later (e.g. a second labelled MATCH on
-                // the same variable): track the latest position for liveness.
-                $bindingTokenIdx[$parsed['alias']] = $i;
-            }
+            $occurrences[] = [
+                'alias' => $parsed['alias'],
+                'label' => $parsed['label'],
+                'tokenIdx' => $i,
+                // Bound by OPTIONAL MATCH → may be null at the anchor; the
+                // injector must scope it null-tolerantly. (A variable ALSO
+                // bound by an earlier plain MATCH is never null; marking it
+                // optional anyway only adds a dead IS-NULL disjunct — the
+                // team scope is still enforced on every non-null value.)
+                'optional' => $this->isOptionalMatchedPattern($tokens, $i, $start, $baseParen, $baseBracket, $baseBrace),
+            ];
         }
 
-        return [
-            'bindings' => $bindings,
-            'bindingTokenIdx' => $bindingTokenIdx ?? [],
-            'lastBindingTokenIdx' => $lastBindingTokenIdx,
-            'reason' => null,
-        ];
+        return ['occurrences' => $occurrences, 'reason' => null];
     }
 
     /**
-     * Aliases that receive an explicit :Label at the part's own graph-pattern depth.
+     * Whether the label-free node reference at $refIdx is a LIVE back-reference:
+     * some earlier labelled occurrence of $alias exists whose projection chain
+     * keeps the alias in scope at $refIdx (or a labelled occurrence follows in
+     * the same part — a label re-check, which the labelled occurrence itself
+     * scopes — provided the alias flows UNBROKEN between the two).
+     *
+     * BOTH directions require alias liveness across any intervening top-level
+     * WITH. The forward direction is NOT exempt: in
+     * `MATCH (u) WITH collect(u.x) AS xs MATCH (u:User) ...` the WITH drops u,
+     * so the labelled `(u:User)` is a FRESH variable that must never vouch for
+     * the earlier label-free full-graph scan — accepting it would launder an
+     * unscoped cross-tenant read into an apparently-scoped query.
      *
      * @param list<Token> $tokens
-     * @return array<string, true>
+     * @param list<int>   $labelledIdxs Token indexes where $alias is labelled.
      */
-    private function collectLabelledAliases(
+    private function isLiveBackReference(
         array $tokens,
-        int $start,
-        int $end,
+        array $labelledIdxs,
+        int $refIdx,
+        string $alias,
         int $baseParen,
         int $baseBracket,
         int $baseBrace
-    ): array {
-        $labelled = [];
-        for ($i = $start; $i < $end; $i++) {
-            if (!$tokens[$i]->isPunct('(')) {
+    ): bool {
+        foreach ($labelledIdxs as $labelledIdx) {
+            if ($labelledIdx > $refIdx) {
+                // Forward label re-check (`MATCH (u) MATCH (u:Union)`): the
+                // labelled occurrence constrains and scopes the variable —
+                // but ONLY while it is the SAME variable, i.e. no intervening
+                // WITH projects the alias away between the reference and the
+                // labelled occurrence (mirror of the backward guard below).
+                if ($this->aliasLiveBetween($tokens, $refIdx, $labelledIdx, $alias, $baseParen, $baseBracket, $baseBrace)) {
+                    return true;
+                }
                 continue;
             }
-            // Only consider top-level graph patterns (not comprehension internals).
-            if ($tokens[$i]->bracketDepth > $baseBracket || $tokens[$i]->braceDepth > $baseBrace) {
-                continue;
-            }
-            $parsed = $this->parseNodePattern($tokens, $i, $end);
-            if ($parsed !== null && $parsed['label'] !== null && $parsed['alias'] !== null) {
-                $labelled[$parsed['alias']] = true;
+            if ($this->aliasLiveBetween($tokens, $labelledIdx, $refIdx, $alias, $baseParen, $baseBracket, $baseBrace)) {
+                return true;
             }
         }
-        return $labelled;
+
+        return false;
     }
 
     /**
@@ -679,6 +802,43 @@ final class CypherScopeAnalyzer
             }
             if ($this->isClauseKeyword($t)) {
                 // Hit a non-MATCH clause keyword first → not a matched node here.
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether the node pattern at index $open belongs to an OPTIONAL MATCH
+     * clause: walking left to the nearest clause keyword at the part's depth
+     * finds a MATCH directly preceded by OPTIONAL. Mirrors
+     * {@see isMatchedNodePattern} (same walk, same depth rules).
+     *
+     * @param list<Token> $tokens
+     */
+    private function isOptionalMatchedPattern(
+        array $tokens,
+        int $open,
+        int $partStart,
+        int $baseParen,
+        int $baseBracket,
+        int $baseBrace
+    ): bool {
+        for ($i = $open - 1; $i >= $partStart; $i--) {
+            $t = $tokens[$i];
+            if (!$this->atDepth($t, $baseParen, $baseBracket, $baseBrace)) {
+                continue;
+            }
+            if ($t->type !== CypherLexer::T_WORD) {
+                continue;
+            }
+            if ($t->isWord('MATCH')) {
+                $prev = $tokens[$i - 1] ?? null;
+                return $prev !== null && $prev->isWord('OPTIONAL');
+            }
+            if ($this->isClauseKeyword($t)) {
+                // Hit a non-MATCH clause keyword first → not an OPTIONAL-matched
+                // node here (expression context / other clause).
                 return false;
             }
         }
@@ -784,13 +944,16 @@ final class CypherScopeAnalyzer
             return true; // no projection between binding and anchor → stays live
         }
 
-        // The WITH projection list runs until the next WHERE/ORDER at this depth,
-        // else up to the anchor.
+        // The WITH projection list runs until the next clause keyword at this
+        // depth (WHERE, ORDER, MATCH, UNWIND, …), else up to the bound. Stopping
+        // only at WHERE/ORDER under-bounded the list when the range extends past
+        // the projection into a following clause (the live-back-reference check
+        // passes an arbitrary reference index as the bound).
         $projEnd = $anchorIdx;
         for ($i = $withIdx + 1; $i < $anchorIdx; $i++) {
             $t = $tokens[$i];
             if ($this->atDepth($t, $baseParen, $baseBracket, $baseBrace)
-                && ($t->isWord('WHERE') || $t->isWord('ORDER'))) {
+                && ($t->isWord('WHERE') || $this->isPredicateTerminatingKeyword($t))) {
                 $projEnd = $i;
                 break;
             }

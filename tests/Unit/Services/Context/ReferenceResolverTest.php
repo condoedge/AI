@@ -37,7 +37,9 @@ class ReferenceResolverTest extends TestCase
 
         $this->assertEquals('Customer', $result['resolved_entity']);
         $this->assertEquals('filter', $result['operation']);
-        $this->assertStringContainsString('Customer', $result['enriched_question']);
+        // Resolve, don't rewrite: the referent rides in resolved_entity, the
+        // question text stays verbatim (anaphor-corruption regression, item A).
+        $this->assertSame('and those in Sales team?', $result['enriched_question']);
     }
 
     /** @test */
@@ -100,7 +102,10 @@ class ReferenceResolverTest extends TestCase
 
         $result = $this->resolver->resolve('and in Sales team?', $context);
 
-        $this->assertStringContainsString('Customer', $result['enriched_question']);
+        // Resolve, don't rewrite: the question is preserved verbatim and the
+        // referent is delivered structurally (anaphor-corruption regression).
+        $this->assertSame('and in Sales team?', $result['enriched_question']);
+        $this->assertSame('Customer', $result['resolved_entity']);
         $this->assertStringContainsString('Sales', $result['enriched_question']);
     }
 

@@ -132,6 +132,8 @@ class MessageBubbleRenderer
         $linkContext = [
             'files' => $files,
             'result_set' => $resultSet,
+            'answer' => $message->content,
+            'document_markdown' => $message->metadata['export_document_markdown'] ?? null,
             'user' => auth()->user(),
         ];
         $processed = $this->contentLinkProcessor->processForDirectRendering(

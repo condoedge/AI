@@ -81,6 +81,14 @@
     "ai.chat.try-asking": "Try asking:",
     "ai.chat.settings": "Settings",
     "ai.chat.new-conversation-tooltip": "New conversation",
+    "ai.chat.limit-banner-text": "This conversation is getting long - I may lose track of earlier details. Start a fresh one; the button copies a mini resume you can paste there.",
+    "ai.chat.limit-banner-button": "Copy resume & start new conversation",
+    "ai.chat.resume-header": "Resume of a previous conversation (started :date):",
+    "ai.chat.resume-subject": "Subject: :subject",
+    "ai.chat.resume-last-result": "{1} Last shown result: 1 row about :subject; columns: :columns|[2,*] Last shown result: :count rows about :subject; columns: :columns",
+    "ai.chat.resume-last-result-generic": "{1} Last shown result: 1 row; columns: :columns|[2,*] Last shown result: :count rows; columns: :columns",
+    "ai.chat.resume-last-answer": "Last answer: :answer",
+    "ai.chat.resume-recent-questions": "Recent questions:",
 
     "ai.messages.pin": "Pin conversation",
     "ai.messages.unpin": "Unpin",
@@ -190,6 +198,10 @@
     "ai.prompt.explain_no_results": "Please explain in a friendly way why there might be no results. Suggest what the user could try instead or how to rephrase their question.",
 
     "ai.response.no_results_fallback": "No results were found for your question: \":question\". You might want to try rephrasing or checking if the data you're looking for exists.",
+    "ai.response.truncation_disclosure": "Showing :shown of :total — ask for the full list or an export.",
+    "ai.digest.truncation_footer": ":label: showing :shown of :total.",
+    "ai.response.self_reference_marker": "that's you",
+    "ai.response.self_reference_patch": "that's you — your own contact details",
 
     "ai.error.encountered_issue": "I encountered an issue while trying to answer your question: \":question\".",
     "ai.error.timeout_guidance": "The query took too long to execute. Try asking a more specific question or limiting the scope.",
@@ -202,5 +214,7 @@
     "ai.insight.average_value": "Average value: :value",
     "ai.insight.high_values": "Contains some notably high values",
     "ai.insight.low_values": "Contains some notably low values",
-    "ai.insight.properties_count": "Results contain :count properties: :properties"
+    "ai.insight.properties_count": "Results contain :count properties: :properties",
+
+    "ai.internal-file": "Internal file: :name"
 }

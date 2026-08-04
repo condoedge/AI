@@ -7,7 +7,6 @@ namespace Condoedge\Ai\GraphStore;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Laudis\Neo4j\ClientBuilder;
 use Laudis\Neo4j\Contracts\ClientInterface;
-use Laudis\Neo4j\Contracts\TransactionInterface;
 use Laudis\Neo4j\Authentication\Authenticate;
 use Laudis\Neo4j\Types\CypherMap;
 use Laudis\Neo4j\Types\CypherList;
@@ -39,11 +38,6 @@ class BoltNeo4jStore implements GraphStoreInterface
     protected string $username;
     protected string $database;
     protected ClientInterface $client;
-
-    /**
-     * Active transaction for transaction methods
-     */
-    private ?TransactionInterface $activeTransaction = null;
 
     public function __construct(?array $config = null)
     {
@@ -190,6 +184,7 @@ class BoltNeo4jStore implements GraphStoreInterface
         $schema = [
             'labels' => [],
             'relationshipTypes' => [],
+            'relationshipPatterns' => [],
             'propertyKeys' => [],
         ];
 
@@ -202,7 +197,46 @@ class BoltNeo4jStore implements GraphStoreInterface
         $propKeys = $this->query("CALL db.propertyKeys()");
         $schema['propertyKeys'] = array_column($propKeys, 'propertyKey');
 
+        try {
+            $schema['relationshipPatterns'] = $this->getRelationshipPatterns();
+        } catch (\Throwable $e) {
+            Log::warning('Failed to retrieve Neo4j relationship patterns', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         return $schema;
+    }
+
+    /**
+     * @return array<int, array{from_label: string, type: string, to_label: string, count: int}>
+     */
+    private function getRelationshipPatterns(): array
+    {
+        $rows = $this->query("
+            MATCH (from)-[r]->(to)
+            WITH labels(from) AS fromLabels, type(r) AS type, labels(to) AS toLabels, count(r) AS count
+            UNWIND fromLabels AS fromLabel
+            UNWIND toLabels AS toLabel
+            RETURN fromLabel, type, toLabel, count
+            ORDER BY type, fromLabel, toLabel
+        ");
+
+        $patterns = [];
+        foreach ($rows as $row) {
+            if (!isset($row['fromLabel'], $row['type'], $row['toLabel'])) {
+                continue;
+            }
+
+            $patterns[] = [
+                'from_label' => (string) $row['fromLabel'],
+                'type' => (string) $row['type'],
+                'to_label' => (string) $row['toLabel'],
+                'count' => (int) ($row['count'] ?? 0),
+            ];
+        }
+
+        return $patterns;
     }
 
     public function nodeExists(string $label, string|int $id): bool
@@ -249,106 +283,6 @@ class BoltNeo4jStore implements GraphStoreInterface
         }
 
         return $result[0]['n'] ?? null;
-    }
-
-    /**
-     * Begin a new transaction
-     *
-     * @return array Transaction context with 'session' key
-     */
-    public function beginTransaction(): array
-    {
-        $session = $this->client->beginTransaction();
-
-        $txId = spl_object_id($session);
-
-        return [
-            'id' => $txId,
-            'session' => $session,
-        ];
-    }
-
-    /**
-     * Commit a transaction
-     *
-     * @param mixed $transaction Transaction context from beginTransaction()
-     * @return bool Success status
-     */
-    public function commit($transaction): bool
-    {
-        if (!is_array($transaction) || empty($transaction['session'])) {
-            return true;
-        }
-
-        try {
-            $session = $transaction['session'];
-            if ($session instanceof TransactionInterface) {
-                $session->commit();
-            }
-            return true;
-        } catch (\Exception $e) {
-            Log::error('Failed to commit Neo4j Bolt transaction', [
-                'error' => $e->getMessage(),
-                'transaction_id' => $transaction['id'] ?? 'unknown',
-            ]);
-            return false;
-        }
-    }
-
-    /**
-     * Rollback a transaction
-     *
-     * @param mixed $transaction Transaction context from beginTransaction()
-     * @return bool Success status
-     */
-    public function rollback($transaction): bool
-    {
-        if (!is_array($transaction) || empty($transaction['session'])) {
-            return true;
-        }
-
-        try {
-            $session = $transaction['session'];
-            if ($session instanceof TransactionInterface) {
-                $session->rollback();
-            }
-            return true;
-        } catch (\Exception $e) {
-            Log::error('Failed to rollback Neo4j Bolt transaction', [
-                'error' => $e->getMessage(),
-                'transaction_id' => $transaction['id'] ?? 'unknown',
-            ]);
-            return false;
-        }
-    }
-
-    /**
-     * Execute a query within a transaction
-     *
-     * @param array $transaction Transaction context from beginTransaction()
-     * @param string $cypher Cypher query
-     * @param array $parameters Query parameters
-     * @return array Query results
-     */
-    public function queryInTransaction(array $transaction, string $cypher, array $parameters = []): array
-    {
-        if (empty($transaction['session'])) {
-            throw new \RuntimeException('Invalid transaction context: missing session');
-        }
-
-        try {
-            $session = $transaction['session'];
-            if (!$session instanceof TransactionInterface) {
-                throw new \RuntimeException('Invalid transaction session type');
-            }
-
-            $result = $session->run($cypher, $parameters);
-
-            return $this->convertResultToArray($result);
-
-        } catch (\Exception $e) {
-            throw new \RuntimeException("Neo4j query error in transaction: " . $e->getMessage(), 0, $e);
-        }
     }
 
     /**

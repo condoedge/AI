@@ -150,9 +150,21 @@ class AskQuestionUseCase
             if (!is_array($invocations)) {
                 $invocations = [];
             }
+            $messageMetadata = [];
+            if ($invocations !== []) {
+                $messageMetadata['invocations'] = $invocations;
+            }
+            $exportDocumentMarkdown = $aiResponse['metadata']['response']['export_document_markdown'] ?? null;
+            if (is_string($exportDocumentMarkdown) && trim($exportDocumentMarkdown) !== '') {
+                $messageMetadata['export_document_markdown'] = $exportDocumentMarkdown;
+            }
 
             // Record response: single context-snapshot write (even without cypher), so
-            // follow-ups can resolve referenced files / entities.
+            // follow-ups can resolve referenced files / entities. Metadata rides along
+            // so the snapshot contracts the composers stamp actually hold end-to-end:
+            // metadata.subject (the distilled subject that titles a follow-up export)
+            // and metadata.response.digest (marks the rows as a full display-capped
+            // set the snapshot keeps whole for the "export that" follow-up).
             $this->contextManager->recordResponse(
                 $conversation,
                 $answerText,
@@ -160,6 +172,7 @@ class AskQuestionUseCase
                 [
                     'data' => $queryData,
                     'referenced_files' => $referencedFiles,
+                    'metadata' => is_array($aiResponse['metadata'] ?? null) ? $aiResponse['metadata'] : [],
                 ]
             );
 
@@ -170,7 +183,7 @@ class AskQuestionUseCase
                 'suggestions' => $suggestions,
                 'referenced_files' => $referencedFiles,
                 'regenerated' => $regenerated,
-                'metadata' => $invocations !== [] ? ['invocations' => $invocations] : [],
+                'metadata' => $messageMetadata,
             ]);
 
             // ABSTENTION: no data AND no referenced files → flag the turn as degraded so the

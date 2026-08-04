@@ -6,8 +6,11 @@ use Condoedge\Ai\DTOs\PageContext;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
 use Condoedge\Ai\Kompo\Support\ConversationActions;
+use Condoedge\Ai\Kompo\Support\ConversationLimitBanner;
 use Condoedge\Ai\Kompo\Support\MessageBubbleRenderer;
 use Condoedge\Ai\Kompo\Support\RichDataRenderer;
+use Condoedge\Ai\Kompo\Support\SuggestionSubmit;
+use Condoedge\Ai\Kompo\Support\WelcomeSuggestions;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
@@ -18,6 +21,7 @@ use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Actions\ActionInvocation;
 use Condoedge\Ai\Services\Actions\ModelMethodMutationAction;
 use Condoedge\Ai\Services\Actions\PendingActionToken;
+use Condoedge\Ai\Services\Chat\ConversationResumeBuilder;
 use Condoedge\Utils\Kompo\Chat\ChatMessagesQuery;
 
 /**
@@ -54,6 +58,9 @@ class MessagesQuery extends ChatMessagesQuery
     protected ?PageContext $pageContext = null;
 
     protected $latestMessageId;
+
+    /** Memoized messages()->count() — chatHeader, top and the limit banner all need it; one COUNT per request. */
+    protected ?int $messageCount = null;
 
     /** Lazily built per-request collaborators (see accessors below). */
     protected ?MessageBubbleRenderer $bubbleRenderer = null;
@@ -95,7 +102,7 @@ class MessagesQuery extends ChatMessagesQuery
             $content = $this->emptyState();
         }
 
-        if ($this->conversation && $this->conversation->messages()->count() === 0) {
+        if ($this->conversation && $this->messageCount() === 0) {
             $content = $this->welcomeState();
         }
 
@@ -112,7 +119,7 @@ class MessagesQuery extends ChatMessagesQuery
         }
 
         $isPinned = $this->conversation->metadata['pinned'] ?? false;
-        $messageCount = $this->conversation->messages()->count();
+        $messageCount = $this->messageCount();
 
         return _FlexBetween(
             _Rows(
@@ -169,6 +176,8 @@ class MessagesQuery extends ChatMessagesQuery
         // Always show the form - even without a conversation
         // ChatMessageForm will auto-create conversation on first message
         return _Rows(
+            $this->limitBanner(),
+
             new ChatMessageForm(null, [
                 'conversation_id' => $this->conversation?->id,
                 'response_style' => $this->settings()->responseStyle(),
@@ -183,6 +192,45 @@ class MessagesQuery extends ChatMessagesQuery
         )->class('flex-shrink-0 relative z-0');
     }
 
+    /**
+     * The soft conversation-length banner, shown right below the thread (above the composer)
+     * once the conversation reaches the configured message count. Purely advisory — the
+     * composer stays enabled (ConversationLimitBanner::shouldShow owns + unit-tests the gate).
+     *
+     * The button does BOTH things in ONE click via TWO SIBLING click interactions ($e->run
+     * + $e->selfPost as separate statements): the kompo front end runs every click
+     * interaction of the element, whereas chaining ->run(js)->selfPost(...) would nest the
+     * selfPost under the runJs action's 'success' event — which runJsAction never fires
+     * (verified in vue-kompo core/Action.js), so a single chain would silently drop the
+     * new-conversation call.
+     *
+     *  1. run(): copies the server-built mini resume to the clipboard (user-gesture-safe,
+     *     JSON_HEX_*-encoded — see ConversationLimitBanner::copyResumeJs).
+     *  2. selfPost('createConversation') + refresh(AiChatPanel::ID): the exact chain the
+     *     emptyState "start new" button uses (HasConversationCreation).
+     *
+     * The resume is built server-side at render time — deterministic serialization of the
+     * context snapshot + recent questions, NO LLM call (ConversationResumeBuilder).
+     */
+    protected function limitBanner()
+    {
+        if (!ConversationLimitBanner::shouldShow($this->conversation, $this->messageCount())) {
+            return null;
+        }
+
+        $resume = app(ConversationResumeBuilder::class)->build($this->conversation);
+
+        return _Rows(
+            _Html(e(__('ai.chat.limit-banner-text')))
+                ->class('text-sm text-amber-800'),
+            _Link(e(__('ai.chat.limit-banner-button')))->icon(_Sax('copy', 16))
+                ->class('mt-2 self-start px-4 py-2 bg-amber-100 hover:bg-amber-200 text-amber-800 text-sm font-medium rounded-xl transition-all')
+                ->onClick(function ($e) use ($resume) {
+                    $e->run(ConversationLimitBanner::copyResumeJs($resume));
+                    $e->selfPost('createConversation')->refresh(AiChatPanel::ID);
+                }),
+        )->class('flex flex-col px-6 py-3 mx-4 mb-2 bg-amber-50 border border-amber-200 rounded-xl');
+    }
 
     public function query()
     {
@@ -216,7 +264,15 @@ class MessagesQuery extends ChatMessagesQuery
 
     protected function emptyState()
     {
-        return _Rows(
+        // The empty state (no conversation selected yet — first-ever open, or right after an
+        // archive/delete cleared the session selection) also surfaces the example questions:
+        // this is the state a user actually lands in when opening the chat from a record page,
+        // so the per-page page_examples must show HERE, not only on a freshly created empty
+        // conversation. Clicking a suggestion is safe without a conversation: it fills the
+        // composer and clicks send (SuggestionSubmit), and ChatMessageForm auto-creates the
+        // conversation on first send — the injector already hides #chat-empty-state on the
+        // optimistic echo (chat-message-injector.js precreateMessagePlaceholder).
+        return _Rows(array_filter([
             _Html($this->welcomeAvatarHtml())->class('mb-6'),
             _Html(__('ai.chat.select-conversation'))->class('text-2xl font-bold text-gray-800 mb-3'),
             _Html(__('ai.chat.select-conversation-desc'))
@@ -225,7 +281,8 @@ class MessagesQuery extends ChatMessagesQuery
                 ->class('px-6 py-3 bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white rounded-xl shadow-lg hover:shadow-xl transition-all')
                 ->selfPost('createConversation')
                 ->refresh(AiChatPanel::ID),
-        )->id('chat-empty-state')->class('flex flex-col items-center justify-center flex-1 py-8');
+            $this->exampleQuestionsBlock('mt-8'),
+        ]))->id('chat-empty-state')->class('flex flex-col items-center justify-center flex-1 py-8');
     }
 
     protected function welcomeState()
@@ -236,24 +293,46 @@ class MessagesQuery extends ChatMessagesQuery
             _Html($this->settings()->welcomeMessage())->class('text-gray-500 text-center max-w-md mb-6'),
         ];
 
-        // Example questions: prefer a per-entity-type override for the page the chat was
-        // opened from (e.g. "Show this unit's payment history"), falling back to the global list.
-        $examples = $this->resolveExampleQuestions();
-        if (!empty($examples)) {
-            $questionButtons = array_map(fn($q) =>
-                _Link($q)->icon('chat-bubble-left-ellipsis')
-                    ->class('w-full p-3 text-left rounded-xl border border-gray-200 bg-white ' . $this->theme()->primaryLightBgHover() . ' transition-all flex items-center gap-3 group text-sm')
-                    ->selfPost('askSuggestion', ['question' => $q])->refresh(),
-                $examples
-            );
+        $elements[] = $this->exampleQuestionsBlock();
 
-            $elements[] = _Rows(
-                _Html(__('ai.chat.try-asking'))->class('text-sm font-medium text-gray-400 mb-3'),
-                _Rows(...$questionButtons)->class('space-y-2 w-full max-w-md'),
-            )->class('w-full flex flex-col items-center');
+        return _Rows(array_filter($elements))->id('chat-welcome-state')->class('flex flex-col items-center justify-center flex-1 py-8 px-4');
+    }
+
+    /**
+     * The example-questions suggestion block, shared by welcomeState() and emptyState().
+     *
+     * Prefers a per-entity-type override for the page the chat was opened from (config
+     * 'ai.chat.page_examples.{EntityType}'), falling back to the global example_questions —
+     * honoring show_suggestions + max_suggestions (WelcomeSuggestions). Null when nothing
+     * resolves, so callers can array_filter it away.
+     *
+     * CLICK = TYPED-SEND PARITY: each button runs client-side JS that fills the composer
+     * input and clicks the real send button (SuggestionSubmit::fillAndSendJs), so the click
+     * goes through ChatMessageForm's own sendingMessageActions() chain — optimistic user
+     * bubble + typing indicator appear immediately, THEN the answer arrives via the panel
+     * refresh. No separate server endpoint, no parallel send implementation.
+     *
+     * Labels are e()-escaped because Kompo Link labels render through v-html client-side;
+     * the raw question still goes to fillAndSendJs, which JSON_HEX_*-encodes it for JS.
+     */
+    protected function exampleQuestionsBlock(string $extraClass = '')
+    {
+        $examples = $this->resolveExampleQuestions();
+        if (empty($examples)) {
+            return null;
         }
 
-        return _Rows(...$elements)->id('chat-welcome-state')->class('flex flex-col items-center justify-center flex-1 py-8 px-4');
+        $questionButtons = array_map(fn($q) =>
+            _Link(e($q))->icon('chat-bubble-left-ellipsis')
+                ->class('w-full p-3 text-left rounded-xl border border-gray-200 bg-white ' . $this->theme()->primaryLightBgHover() . ' transition-all flex items-center gap-3 group text-sm')
+                ->onClick(fn($e) => $e->run(SuggestionSubmit::fillAndSendJs($q))),
+            $examples
+        );
+
+        return _Rows(
+            _Html(__('ai.chat.try-asking'))->class('text-sm font-medium text-gray-400 mb-3'),
+            _Rows(...$questionButtons)->class('space-y-2 w-full max-w-md'),
+        )->class(trim('w-full flex flex-col items-center ' . $extraClass));
     }
 
     /**
@@ -262,21 +341,14 @@ class MessagesQuery extends ChatMessagesQuery
      * When the chat was opened from a page with a known entity type, a host can tailor the
      * suggestions via config('ai.chat.page_examples.{EntityType}') (config-only, no LLM call) so
      * a Unit page shows "Show this unit's payment history." Falls back to the global example list.
+     * Empty when show_suggestions is off; always capped at max_suggestions (see the plain,
+     * kit-free WelcomeSuggestions collaborator, which owns + unit-tests this resolution).
      *
      * @return array<int,string>
      */
     protected function resolveExampleQuestions(): array
     {
-        $entityType = $this->pageContext?->entityType;
-
-        if ($entityType !== null && $entityType !== '' && function_exists('app') && app()->bound('config')) {
-            $pageExamples = config('ai.chat.page_examples.' . $entityType);
-            if (is_array($pageExamples) && !empty($pageExamples)) {
-                return $pageExamples;
-            }
-        }
-
-        return $this->settings()->exampleQuestions();
+        return WelcomeSuggestions::resolve($this->pageContext, $this->settings());
     }
 
     public function togglePin($id)
@@ -340,6 +412,13 @@ class MessagesQuery extends ChatMessagesQuery
         }
     }
 
+    /**
+     * Server-side "ask this suggestion" entry point. KEPT for backward compatibility (hosts /
+     * older surfaces may still selfPost here), but the package UI no longer targets it: welcome
+     * examples and follow-up chips now fill the composer and click the real send button
+     * (SuggestionSubmit::fillAndSendJs) so a click gets the same optimistic user bubble +
+     * typing indicator as a typed send instead of silently waiting for the whole LLM turn.
+     */
     public function askSuggestion($question)
     {
         if (empty(trim($question))) {
@@ -568,6 +647,20 @@ class MessagesQuery extends ChatMessagesQuery
     }
 
     // ========== HELPERS ==========
+
+    /**
+     * The conversation's message count, computed at most once per request (chatHeader,
+     * top()'s welcome gate and the limit banner all consume it).
+     */
+    protected function messageCount(): int
+    {
+        if ($this->messageCount === null) {
+            $this->messageCount = $this->conversation
+                ? $this->conversation->messages()->count()
+                : 0;
+        }
+        return $this->messageCount;
+    }
 
     public function deleteConversation($id)
     {

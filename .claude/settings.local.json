@@ -141,7 +141,8 @@
       "mcp__code-index__search_code_advanced",
       "mcp__code-index__set_project_path",
       "mcp__code-index__find_files",
-      "mcp__code-index__get_file_summary"
+      "mcp__code-index__get_file_summary",
+      "mcp__code-index__get_settings_info"
     ],
     "deny": [],
     "ask": []

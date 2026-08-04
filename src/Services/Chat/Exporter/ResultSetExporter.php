@@ -22,11 +22,12 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
  * Nothing here imports those classes at the top of the file — every reference is a string
  * passed to class_exists()/new, so the package autoloads cleanly without them installed.
  *
- * EXPORT PRIVACY (the file must not leak what the chat answer would never show):
+ * EXPORT PRIVACY (the file must not leak schema internals):
  *   Both toExcel()/toPdf() project rows through {@see redact()} before serializing, so the
- *   generated file drops internal id-ish columns (neo4j_id, *_id, leading-underscore keys)
- *   and any field the privacy policy hides (PII column names). The behavior is config-driven
- *   via config('ai.export') so a host can tune the deny-list/patterns or disable it entirely.
+ *   generated file always drops internal id-ish columns (neo4j_id, *_id, leading-underscore
+ *   keys). Beyond that, the export carries the columns the user is already authorized to see;
+ *   a host that wants specific columns stripped from files lists them in
+ *   config('ai.export.redact_columns') (empty by default).
  */
 class ResultSetExporter
 {
@@ -210,7 +211,7 @@ class ResultSetExporter
 
         $styles = (string) ($this->safeConfig('ai.export.pdf_document_styles') ?? self::DEFAULT_DOCUMENT_STYLES);
 
-        $safeTitle = htmlspecialchars($title, ENT_QUOTES, 'UTF-8');
+        $safeTitle = htmlspecialchars($this->validUtf8($title), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
         return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' . $safeTitle . '</title>'
             . '<style>' . $styles . '</style></head><body>' . $body . '</body></html>';
@@ -230,6 +231,8 @@ class ResultSetExporter
      */
     private function markdownToHtml(string $markdown): string
     {
+        $markdown = $this->validUtf8($markdown);
+
         $converterClass = self::MARKDOWN_CONVERTER_CLASS;
         if (class_exists($converterClass)) {
             try {
@@ -245,7 +248,7 @@ class ResultSetExporter
             }
         }
 
-        return nl2br(htmlspecialchars($markdown, ENT_QUOTES, 'UTF-8'));
+        return nl2br(htmlspecialchars($markdown, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
     }
 
     /**
@@ -325,6 +328,7 @@ class ResultSetExporter
      */
     public function extractMarkdownTables(string $markdown): array
     {
+        $markdown = $this->validUtf8($markdown);
         $lines = preg_split('/\R/', $markdown) ?: [];
         $tables = [];
         $heading = null;
@@ -378,7 +382,7 @@ class ResultSetExporter
         $line = trim($line);
         $line = preg_replace('/^\||\|$/', '', $line) ?? $line;
 
-        return array_map('trim', explode('|', $line));
+        return array_map(fn ($cell) => $this->validUtf8(trim($cell)), explode('|', $line));
     }
 
     /**
@@ -388,6 +392,8 @@ class ResultSetExporter
      */
     private function writeTypedCell(object $sheet, string $coordinate, string $value): void
     {
+        $value = $this->validUtf8($value);
+
         if (is_numeric(str_replace([',', ' '], ['', ''], $value)) && $value !== '') {
             $numeric = (float) str_replace([',', ' '], ['', ''], $value);
             $sheet->setCellValueExplicit($coordinate, $numeric, 'n'); // DataType::TYPE_NUMERIC
@@ -424,7 +430,7 @@ class ResultSetExporter
      */
     private function safeSheetTitle(?string $name, int $index): string
     {
-        $clean = trim((string) preg_replace('/[\[\]\*\?:\\\\\/]+/', ' ', (string) $name));
+        $clean = trim((string) preg_replace('/[\[\]\*\?:\\\\\/]+/', ' ', $this->validUtf8((string) $name)));
 
         return $clean !== '' ? mb_substr($clean, 0, 31) : 'Sheet ' . ($index + 1);
     }
@@ -434,8 +440,8 @@ class ResultSetExporter
      *
      * Drops, per column NAME (case-insensitive):
      *   - configured internal id-ish columns + the default deny-list (neo4j_id, *_id, _meta);
-     *   - any field hidden by the privacy policy (PII column names), passed in by the caller or
-     *     read from config('ai.access_control.identifying_fields.*').
+     *   - the export deny-list, passed in by the caller or read from
+     *     config('ai.export.redact_columns') (empty by default — see configuredPiiColumns()).
      *
      * The whole step is bypassable with config('ai.export.redact_rows') = false, so a host that
      * exports through an already-redacted result set is not double-charged.
@@ -501,28 +507,21 @@ class ResultSetExporter
     }
 
     /**
-     * PII column names the privacy policy hides — the SAME list the prose layer uses, so the
-     * file and the chat answer agree on what is sensitive (model-agnostic, config-driven).
+     * Column names to strip from generated files, read from config('ai.export.redact_columns').
+     *
+     * This is the export-specific deny-list, deliberately separate from the LLM
+     * PII-minimization list (ai.access_control.identifying_fields): an export serializes a
+     * result set the user is already authorized to see and asked for, so it must not inherit
+     * the list whose only job is to keep fields out of the third-party LLM prompt. Empty by
+     * default — internal id-ish columns are stripped independently by the patterns above.
      *
      * @return array<int, string>
      */
     private function configuredPiiColumns(): array
     {
-        $fields = $this->safeConfig('ai.access_control.identifying_fields');
-        if (!is_array($fields)) {
-            return [];
-        }
+        $columns = $this->safeConfig('ai.export.redact_columns');
 
-        $columns = [];
-        foreach ($fields as $entityColumns) {
-            if (is_array($entityColumns)) {
-                foreach ($entityColumns as $column) {
-                    $columns[] = (string) $column;
-                }
-            }
-        }
-
-        return $columns;
+        return is_array($columns) ? array_values(array_map('strval', $columns)) : [];
     }
 
     /**
@@ -609,7 +608,7 @@ class ResultSetExporter
         foreach ($cells as $cell) {
             $sheet->setCellValueExplicit(
                 $this->columnLetter($col) . $rowIndex,
-                $cell,
+                $this->validUtf8($cell),
                 // DataType::TYPE_STRING — passed as literal to avoid importing the class.
                 's'
             );
@@ -633,7 +632,7 @@ class ResultSetExporter
      */
     private function toHtmlTable(string $title, array $headers, array $matrix): string
     {
-        $esc = static fn($v) => htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
+        $esc = fn($v) => htmlspecialchars($this->validUtf8((string) $v), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 
         $html = '<html><head><meta charset="utf-8"><style>'
             . 'body{font-family:DejaVu Sans, sans-serif;font-size:10px;}'
@@ -667,10 +666,15 @@ class ResultSetExporter
     private function stringify(mixed $value): string
     {
         if (is_scalar($value) || $value === null) {
-            return (string) $value;
+            return $this->validUtf8((string) $value);
         }
 
-        return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '';
+        $encoded = json_encode(
+            $value,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE
+        );
+
+        return is_string($encoded) ? $this->validUtf8($encoded) : '';
     }
 
     /**
@@ -689,8 +693,35 @@ class ResultSetExporter
 
     private function safeFilename(string $title, string $ext): string
     {
-        $base = preg_replace('/[^A-Za-z0-9_\-]+/', '_', $title) ?: 'export';
+        $base = preg_replace('/[^A-Za-z0-9_\-]+/', '_', $this->validUtf8($title)) ?: 'export';
         $base = trim($base, '_') ?: 'export';
         return $base . '.' . $ext;
+    }
+
+    private function validUtf8(string $value): string
+    {
+        if ($value === '') {
+            return '';
+        }
+
+        if (function_exists('mb_check_encoding') && @mb_check_encoding($value, 'UTF-8')) {
+            return $value;
+        }
+
+        if (function_exists('iconv')) {
+            $converted = @iconv('UTF-8', 'UTF-8//IGNORE', $value);
+            if (is_string($converted)) {
+                return $converted;
+            }
+        }
+
+        if (function_exists('mb_convert_encoding')) {
+            $converted = @mb_convert_encoding($value, 'UTF-8', 'UTF-8');
+            if (is_string($converted)) {
+                return $converted;
+            }
+        }
+
+        return preg_replace('/[^\x09\x0A\x0D\x20-\x7E]/', '', $value) ?? '';
     }
 }

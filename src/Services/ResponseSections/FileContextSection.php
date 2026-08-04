@@ -42,10 +42,18 @@ class FileContextSection extends BaseResponseSection
             return '';
         }
 
+        // File-listing (enumeration) context is an ACL listing, not retrieval:
+        // names/types only, no computed relevance, no content. Rendering it
+        // through the grounding path would fabricate "relevance: N%" lines with
+        // empty snippets — pure prompt noise that reads as evidence.
+        if (!empty($context->fileContext['enumeration'])) {
+            return $this->formatEnumeration($files);
+        }
+
         $citationsEnabled = !$this->isTerseStyle($options);
 
         $output = $this->header('RELEVANT FILE CONTENT');
-        $output .= "The following files contain information relevant to answering the question.\n";
+        $output .= "The following files contain information relevant to answering the question.\nSometimes the content may be incomplete or truncated, or not be related so be sure to verify the information.\n\n";
         if ($citationsEnabled) {
             $output .= "Use citation markers [N] when referencing content from these files.\n";
         }
@@ -67,6 +75,33 @@ class FileContextSection extends BaseResponseSection
         if ($citationsEnabled) {
             $output .= "When using information from these files, include the citation marker like [1] or [2].\n\n";
         }
+
+        return $output;
+    }
+
+    /**
+     * Render a file-listing (enumeration) context: the user's accessible files
+     * as names/types only. No relevance percentages (none were computed) and no
+     * snippet spotlights (there is no content) — and an explicit instruction
+     * that this listing is NOT grounding for content claims.
+     *
+     * @param array<int,array> $files
+     */
+    private function formatEnumeration(array $files): string
+    {
+        $output = $this->header('ACCESSIBLE FILES (LISTING ONLY)');
+        $output .= "The user's question is about WHICH files they can access. The list below is that answer: file names and types only.\n";
+        $output .= "This listing is NOT document content and has no relevance ranking. Use it ONLY to tell the user which files exist for them; never treat it as evidence of what any document says, and never invent file contents.\n\n";
+
+        foreach ($files as $index => $file) {
+            $refNumber = $index + 1;
+            $filename = $file['filename'] ?? 'Unknown file';
+            $type = (string) ($file['type'] ?? '');
+
+            $output .= "[{$refNumber}] {$filename}" . ($type !== '' ? " ({$type})" : '') . "\n";
+        }
+
+        $output .= "\nWhen naming these files in the answer you may reference them with their [N] markers.\n\n";
 
         return $output;
     }

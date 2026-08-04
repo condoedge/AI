@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Tests\Unit\Services;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\CypherValidator;
 use Condoedge\Ai\Services\TemplateMatcher;
 use Condoedge\Ai\Tests\TestCase;
 
@@ -112,5 +113,41 @@ class TemplateMatcherTest extends TestCase
         $result = $this->matcher->generateFromTemplate('show all customers', 'list_all', $context);
 
         $this->assertNull($result);
+    }
+
+    public function test_every_template_yields_placeholder_free_validatable_cypher(): void
+    {
+        $validator = new CypherValidator();
+        $context = $this->schemaContext(['Customer', 'Order']);
+
+        foreach ($this->matcher->getTemplates() as $template) {
+            $name = $template['name'];
+            $detected = $this->matcher->detectTemplate($template['example_question']);
+            $this->assertSame(
+                $name,
+                $detected,
+                "Template '{$name}' example_question must match its own pattern"
+            );
+
+            $result = $this->matcher->generateFromTemplate(
+                $template['example_question'],
+                $name,
+                $context
+            );
+            $this->assertNotNull($result, "Template '{$name}' must produce a result");
+
+            $this->assertDoesNotMatchRegularExpression(
+                '/\{[a-z0-9_]+\}/i',
+                $result['cypher'],
+                "Template '{$name}' emitted an unsubstituted placeholder: {$result['cypher']}"
+            );
+
+            $validation = $validator->validate($result['cypher']);
+            $this->assertTrue(
+                $validation['valid'],
+                "Template '{$name}' produced Cypher the validator rejects: "
+                    . implode(', ', $validation['errors'])
+            );
+        }
     }
 }

@@ -531,46 +531,4 @@ class AiSystemFeatureTest extends TestCase
         }
     }
 
-    /**
-     * Test: Insights extraction
-     *
-     * @test
-     */
-    public function it_extracts_insights_from_query_results(): void
-    {
-        $data = [
-            ['value' => 100],
-            ['value' => 200],
-            ['value' => 150],
-        ];
-
-        $insights = AI::extractInsights($data);
-
-        $this->assertIsArray($insights);
-        $this->assertNotEmpty($insights);
-
-        // Should mention count
-        $insightsText = implode(' ', $insights);
-        $this->assertStringContainsString('3', $insightsText);
-    }
-
-    /**
-     * Test: Visualization suggestions
-     *
-     * @test
-     */
-    public function it_suggests_appropriate_visualizations(): void
-    {
-        $data = [['count' => 42]];
-        $cypher = "MATCH (n:Customer) RETURN count(n) as count";
-
-        $suggestions = AI::suggestVisualizations($data, $cypher);
-
-        $this->assertIsArray($suggestions);
-        $this->assertNotEmpty($suggestions);
-
-        // Should suggest number visualization for count
-        $types = array_column($suggestions, 'type');
-        $this->assertContains('number', $types);
-    }
 }

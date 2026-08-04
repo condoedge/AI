@@ -17,6 +17,8 @@ use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Mockery;
 
 /**
@@ -237,13 +239,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
-            ->andReturn([
-                'cypher' => 'MATCH (p:Policy) RETURN p',
-                'explanation' => 'Finding policies',
-                'confidence' => 0.9,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (p:Policy) RETURN p',
+                explanation: 'Finding policies',
+                confidence: 0.9,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
@@ -251,12 +253,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [['name' => 'Payment Policy']],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [['name' => 'Payment Policy']],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
         $this->mockResponseGenerator->shouldReceive('generate')
             ->once()
@@ -301,13 +304,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
-            ->andReturn([
-                'cypher' => 'MATCH (c:Customer) RETURN c',
-                'explanation' => 'Listing customers',
-                'confidence' => 0.95,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (c:Customer) RETURN c',
+                explanation: 'Listing customers',
+                confidence: 0.95,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
@@ -315,12 +318,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
         // With no rows AND no document context the pipeline abstains via
         // generateEmptyResponse() (the single no-source path) rather than
@@ -370,13 +374,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
-            ->andReturn([
-                'cypher' => 'MATCH (p:Policy) RETURN p',
-                'explanation' => 'Finding policies',
-                'confidence' => 0.9,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (p:Policy) RETURN p',
+                explanation: 'Finding policies',
+                confidence: 0.9,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
@@ -384,12 +388,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
         // File retrieval failed (swallowed) so there is no document context and
         // the query returned no rows -> pipeline abstains via generateEmptyResponse().
@@ -479,13 +484,13 @@ class AiManagerFileContextTest extends TestCase
                 }),
                 Mockery::any()
             )
-            ->andReturn([
-                'cypher' => 'MATCH (d:Document) RETURN d',
-                'explanation' => 'Finding documents',
-                'confidence' => 0.9,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (d:Document) RETURN d',
+                explanation: 'Finding documents',
+                confidence: 0.9,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
@@ -493,12 +498,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
         $this->mockResponseGenerator->shouldReceive('generate')
             ->once()
@@ -586,13 +592,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
-            ->andReturn([
-                'cypher' => 'MATCH (d:Document) RETURN d',
-                'explanation' => 'Finding documents',
-                'confidence' => 0.9,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (d:Document) RETURN d',
+                explanation: 'Finding documents',
+                confidence: 0.9,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
@@ -600,12 +606,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
         // Document context is present, so the pipeline produces a grounded
         // answer via generate() (not the empty/abstain path).

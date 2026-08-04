@@ -42,6 +42,24 @@ class CalculationsSectionTest extends TestCase
     }
 
     /** @test */
+    public function it_requires_verification_columns_alongside_the_exact_aggregate(): void
+    {
+        // Lever L2-B(iii): "use EXACTLY" alone made the generator drop identifying
+        // columns (bare $0 aggregates are unverifiable). The rule must keep the
+        // aggregation exact while REQUIRING identifying/verification columns.
+        config()->set('ai.calculations', [
+            'metric' => ['label' => 'A metric', 'formula' => 'SUM of x'],
+        ]);
+
+        $output = (new CalculationsSection())->format('q', new PipelineContext());
+
+        $this->assertStringContainsString('NEVER return the bare aggregate alone', $output);
+        $this->assertStringContainsString('identifying/verification columns', $output);
+        $this->assertStringContainsString('count of rows aggregated', $output);
+        $this->assertStringContainsString('ADD columns; never change the aggregation itself', $output);
+    }
+
+    /** @test */
     public function it_is_excluded_entirely_when_no_calculations_are_configured(): void
     {
         config()->set('ai.calculations', []);

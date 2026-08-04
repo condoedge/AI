@@ -582,10 +582,14 @@ questions resolve through `user_entity_paths`/the entity catalog, the law questi
 ingested `public/laws` corpus, action questions through registered resident-safe actions
 (CondoEdge's own comment, `ai.php:1009-1014`). The full validated question catalog, per persona
 and per page, with the verification trail, is `docs/audit/96-condoedge-recommended-questions.md` —
-build a new host's list the same way. Two wiring caveats documented at `ai.php:1024-1031`:
-clicked suggestions are currently sent *without* `page_context` (only typed messages carry the
-soft prior), and every `page_examples` key needs a live mount — except modal-only entities
-(the [f11] limitation, section 8).
+build a new host's list the same way. Wiring notes (updated 2026-07-23): clicked suggestions
+now DO carry `page_context` — a click fills the composer and clicks the real send button
+(`SuggestionSubmit::fillAndSendJs`), so it flows through `ChatMessageForm::sendMessage`, which
+threads the surface's `page_context` to `ChatPresenter::handleSend` exactly like a typed
+message (with the same optimistic user bubble + typing indicator). Remaining caveats: every
+`page_examples` key needs a live mount — except modal-only entities (the [f11] limitation,
+section 8) — and the `'screen'` surface reaches the chat by route navigation, which cannot
+carry the `page_context` prop, so that surface always falls back to the global list.
 
 ---
 

@@ -32,16 +32,21 @@ class QueryUnderstandingEntityTypeValidationTest extends TestCase
     /**
      * @param array $entityTypes entity_types the LLM "returned"
      */
-    private function analyzeWithLlmEntityTypes(array $entityTypes): QueryUnderstandingResult
+    private function analyzeWithLlmEntityTypes(
+        array $entityTypes,
+        bool $isPossessive = false,
+        string $intent = 'list',
+        array $personNames = []
+    ): QueryUnderstandingResult
     {
         $llm = Mockery::mock(LlmProviderInterface::class);
         $llm->shouldReceive('chatJson')->once()->andReturn([
             'entity_types' => $entityTypes,
-            'person_names' => [],
+            'person_names' => $personNames,
             'property_concepts' => [],
             'search_query' => 'rewritten',
-            'is_possessive' => false,
-            'intent' => 'list',
+            'is_possessive' => $isPossessive,
+            'intent' => $intent,
             'question_type' => 'data_query',
             'clarified_question' => '',
             'search_tags' => [],
@@ -93,6 +98,31 @@ class QueryUnderstandingEntityTypeValidationTest extends TestCase
         $this->assertContains('Unit', $result->entityTypes);
         $this->assertNotContains('Dragon', $result->entityTypes);
         $this->assertCount(2, $result->entityTypes);
+    }
+
+    /** @test */
+    public function possessive_profile_lookup_does_not_force_ambiguous_contact_entity(): void
+    {
+        $result = $this->analyzeWithLlmEntityTypes(
+            ['Contact', 'Unit'],
+            isPossessive: true,
+            intent: 'lookup'
+        );
+
+        $this->assertNotContains('Contact', $result->entityTypes);
+        $this->assertContains('Unit', $result->entityTypes);
+    }
+
+    /** @test */
+    public function possessive_contact_record_lists_keep_the_contact_entity(): void
+    {
+        $result = $this->analyzeWithLlmEntityTypes(
+            ['Contact'],
+            isPossessive: true,
+            intent: 'list'
+        );
+
+        $this->assertContains('Contact', $result->entityTypes);
     }
 
     /** @test */

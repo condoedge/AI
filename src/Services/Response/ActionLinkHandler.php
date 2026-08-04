@@ -168,8 +168,15 @@ class ActionLinkHandler extends AbstractContentLinkHandler
 
     protected function getStripReplacement(array $match): string
     {
-        // Return the link text (first capture group)
-        return $match[1];
+        if ($this->isEntityMatch($match)) {
+            return $match[1];
+        }
+
+        $actionKey = (string) ($match[2] ?? '');
+
+        // Export actions render as download chips; keeping their label in prose
+        // duplicates "Download PDF/Excel" and can pollute document exports.
+        return str_starts_with($actionKey, 'export_') ? '' : $match[1];
     }
 
     /**

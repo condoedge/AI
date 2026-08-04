@@ -185,22 +185,22 @@ class QueryGeneratorSecurityTest extends TestCase
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
         // The injection structure must never appear in the executed query.
-        $this->assertStringNotContainsString('})', $result['cypher']);
-        $this->assertStringNotContainsString('HACKED', $result['cypher']);
-        $this->assertStringNotContainsString('->(', $result['cypher']);
+        $this->assertStringNotContainsString('})', $result->cypher);
+        $this->assertStringNotContainsString('HACKED', $result->cypher);
+        $this->assertStringNotContainsString('->(', $result->cypher);
 
         // The malicious question did NOT yield a template query (it could not be
         // safely extracted), so no template was used.
-        $this->assertNull($result['metadata']['template_used']);
+        $this->assertNull($result->metadata['template_used']);
 
         // A benign question over the same schema still flows through the template
         // path and produces a clean, backtick-escaped label - proving the
         // template label extraction is sanitized, not merely bypassed.
         $benign = $this->generator->generate('show all Customer', $context);
-        $this->assertEquals('list_all', $benign['metadata']['template_used']);
-        $this->assertStringContainsString('MATCH', $benign['cypher']);
-        $this->assertStringContainsString('Customer', $benign['cypher']);
-        $this->assertStringNotContainsString('})', $benign['cypher']);
+        $this->assertEquals('list_all', $benign->metadata['template_used']);
+        $this->assertStringContainsString('MATCH', $benign->cypher);
+        $this->assertStringContainsString('Customer', $benign->cypher);
+        $this->assertStringNotContainsString('})', $benign->cypher);
     }
 
     /**
@@ -241,7 +241,7 @@ class QueryGeneratorSecurityTest extends TestCase
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
         // Should use LLM, not template
-        $this->assertNull($result['metadata']['template_used']);
+        $this->assertNull($result->metadata['template_used']);
     }
 
     /**
@@ -260,7 +260,7 @@ class QueryGeneratorSecurityTest extends TestCase
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
         // Should use LLM, not template
-        $this->assertNull($result['metadata']['template_used']);
+        $this->assertNull($result->metadata['template_used']);
     }
 
     /**
@@ -287,19 +287,19 @@ class QueryGeneratorSecurityTest extends TestCase
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
         // The executed query must carry no write/injection payload.
-        $this->assertStringNotContainsString('DETACH', $result['cypher']);
-        $this->assertStringNotContainsString('DELETE', $result['cypher']);
-        $this->assertStringNotContainsString('})', $result['cypher']);
+        $this->assertStringNotContainsString('DETACH', $result->cypher);
+        $this->assertStringNotContainsString('DELETE', $result->cypher);
+        $this->assertStringNotContainsString('})', $result->cypher);
 
         // The malicious question produced no template query.
-        $this->assertNull($result['metadata']['template_used']);
+        $this->assertNull($result->metadata['template_used']);
 
         // A benign count question over the same schema still uses the count
         // template and yields a clean, injection-free query.
         $benign = $this->generator->generate('how many Customer', $context);
-        $this->assertEquals('count', $benign['metadata']['template_used']);
-        $this->assertStringNotContainsString('DETACH', $benign['cypher']);
-        $this->assertStringNotContainsString('})', $benign['cypher']);
+        $this->assertEquals('count', $benign->metadata['template_used']);
+        $this->assertStringNotContainsString('DETACH', $benign->cypher);
+        $this->assertStringNotContainsString('})', $benign->cypher);
     }
 
     /**
@@ -318,8 +318,8 @@ class QueryGeneratorSecurityTest extends TestCase
         $result = $this->generator->generate($question, $context);
 
         // Should match Customer (singularized, capitalized)
-        $this->assertStringContainsString('Customer', $result['cypher']);
-        $this->assertEquals('list_all', $result['metadata']['template_used']);
+        $this->assertStringContainsString('Customer', $result->cypher);
+        $this->assertEquals('list_all', $result->metadata['template_used']);
     }
 
     /**
@@ -339,6 +339,6 @@ class QueryGeneratorSecurityTest extends TestCase
         $result = $this->generator->generate($question, $context);
 
         // Query should be clean and valid - labels are wrapped in backticks for defense-in-depth
-        $this->assertMatchesRegularExpression('/MATCH \(n:`?[A-Za-z_][A-Za-z0-9_]*`?\)/', $result['cypher']);
+        $this->assertMatchesRegularExpression('/MATCH \(n:`?[A-Za-z_][A-Za-z0-9_]*`?\)/', $result->cypher);
     }
 }

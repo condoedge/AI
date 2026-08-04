@@ -55,6 +55,10 @@ class SchemaProjectorTest extends TestCase
                 'Order' => ['id', 'total'],
             ],
             'propertyKeys' => ['id', 'name', 'email', 'total'],
+            'relationshipPatterns' => [
+                ['from_label' => 'Person', 'type' => 'MEMBER_OF', 'to_label' => 'Team', 'count' => 2],
+                ['from_label' => 'Order', 'type' => 'PLACED', 'to_label' => 'Person', 'count' => 1],
+            ],
         ];
 
         $selection = new SemanticSelectionResult(
@@ -67,6 +71,7 @@ class SchemaProjectorTest extends TestCase
         $this->assertSame(['Team' => ['id', 'name']], $filtered['properties']);
         $this->assertSame(['id', 'name'], $filtered['propertyKeys']);
         $this->assertSame([], $filtered['relationships']);
+        $this->assertSame([], $filtered['relationshipPatterns']);
     }
 
     /** @test */
@@ -80,6 +85,10 @@ class SchemaProjectorTest extends TestCase
                 'Person' => ['id', 'email'],
             ],
             'propertyKeys' => ['id', 'email'],
+            'relationshipPatterns' => [
+                ['from_label' => 'Person', 'type' => 'MEMBER_OF', 'to_label' => 'Team', 'count' => 2],
+                ['from_label' => 'Team', 'type' => 'OWNS', 'to_label' => 'Order', 'count' => 1],
+            ],
         ];
 
         $selection = new SemanticSelectionResult(
@@ -94,6 +103,9 @@ class SchemaProjectorTest extends TestCase
         $this->assertContains('Team', $filtered['labels']);
         $this->assertContains('Person', $filtered['labels']);
         $this->assertSame(['MEMBER_OF'], $filtered['relationships']);
+        $this->assertSame([
+            ['from_label' => 'Person', 'type' => 'MEMBER_OF', 'to_label' => 'Team', 'count' => 2],
+        ], $filtered['relationshipPatterns']);
         $this->assertArrayHasKey('Person', $filtered['properties']);
     }
 
@@ -102,6 +114,11 @@ class SchemaProjectorTest extends TestCase
     {
         $schema = [
             'labels' => ['Team', 'Person', 'Order'],
+            'relationships' => ['MEMBER_OF', 'PLACED'],
+            'relationshipPatterns' => [
+                ['from_label' => 'Person', 'type' => 'MEMBER_OF', 'to_label' => 'Team', 'count' => 2],
+                ['from_label' => 'Order', 'type' => 'PLACED', 'to_label' => 'Person', 'count' => 1],
+            ],
             'properties' => [
                 'Team' => ['id'],
                 'Person' => ['id'],
@@ -115,6 +132,46 @@ class SchemaProjectorTest extends TestCase
         $this->assertArrayHasKey('Team', $filtered['properties']);
         $this->assertArrayHasKey('Order', $filtered['properties']);
         $this->assertArrayNotHasKey('Person', $filtered['properties']);
+        $this->assertSame([], $filtered['relationshipPatterns']);
+    }
+
+    /** @test */
+    public function include_labels_merges_identity_labels_without_restoring_the_full_schema(): void
+    {
+        $fullSchema = [
+            'labels' => ['Invoice', 'User', 'Team', 'Contact'],
+            'relationships' => ['BELONGS_TO', 'HAS_CONTACT'],
+            'relationshipPatterns' => [
+                ['from_label' => 'User', 'type' => 'BELONGS_TO', 'to_label' => 'Team', 'count' => 5],
+                ['from_label' => 'Contact', 'type' => 'HAS_CONTACT', 'to_label' => 'User', 'count' => 2],
+            ],
+            'properties' => [
+                'Invoice' => ['id', 'total'],
+                'User' => ['id', 'email', 'current_team_id'],
+                'Team' => ['id', 'team_name'],
+                'Contact' => ['id', 'name'],
+            ],
+            'propertyKeys' => ['id', 'total', 'email', 'current_team_id', 'team_name', 'name'],
+        ];
+        $filtered = [
+            'labels' => ['Invoice'],
+            'relationships' => [],
+            'relationshipPatterns' => [],
+            'properties' => ['Invoice' => ['id', 'total']],
+            'propertyKeys' => ['id', 'total'],
+        ];
+
+        $merged = $this->makeProjector()->includeLabels($filtered, $fullSchema, ['User', 'Team']);
+
+        $this->assertSame(['Invoice', 'User', 'Team'], $merged['labels']);
+        $this->assertArrayHasKey('User', $merged['properties']);
+        $this->assertArrayHasKey('Team', $merged['properties']);
+        $this->assertArrayNotHasKey('Contact', $merged['properties']);
+        $this->assertContains('current_team_id', $merged['propertyKeys']);
+        $this->assertSame([
+            ['from_label' => 'User', 'type' => 'BELONGS_TO', 'to_label' => 'Team', 'count' => 5],
+        ], $merged['relationshipPatterns']);
+        $this->assertSame(['BELONGS_TO'], $merged['relationships']);
     }
 
     /** @test */

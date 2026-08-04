@@ -155,4 +155,27 @@ class DocumentExcelExportTest extends TestCase
         $action->handle([], $context);
         $this->assertSame([['name' => 'Alice']], $exporter->tableRows);
     }
+
+    /** @test */
+    public function document_mode_prefers_clean_document_markdown_over_visible_answer(): void
+    {
+        $exporter = new class extends ResultSetExporter {
+            public ?string $documentMarkdown = null;
+
+            public function documentToExcel(string $markdown, string $title = 'document'): AiActionResult
+            {
+                $this->documentMarkdown = $markdown;
+                return AiActionResult::error('captured');
+            }
+        };
+
+        $context = new ActionContext(
+            answer: 'Visible chat answer with [Download Excel](action://export_excel?mode=document)',
+            documentMarkdown: "| H |\n|---|\n| clean |",
+        );
+
+        (new ExportExcelAction($exporter))->handle(['mode' => 'document'], $context);
+
+        $this->assertSame("| H |\n|---|\n| clean |", $exporter->documentMarkdown);
+    }
 }

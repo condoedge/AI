@@ -7,6 +7,8 @@ namespace Condoedge\Ai\Services;
 use Condoedge\Ai\Contracts\PromptSectionInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\AssistantIdentity;
+use Condoedge\Ai\Services\Retrieval\TokenBudgeter;
+use Condoedge\Ai\Support\AiLogger;
 use Condoedge\Ai\Services\PromptSections\GenericContextSection;
 use Condoedge\Ai\Services\PromptSections\ProjectContextSection;
 use Condoedge\Ai\Services\PromptSections\SchemaSection;
@@ -68,13 +70,39 @@ class SemanticPromptBuilder
     private ?string $systemPrompt = null;
 
     /**
+     * Token accounting helper used for the per-turn cost estimate and the optional
+     * budget enforcement. Pure/side-effect-free.
+     */
+    private TokenBudgeter $tokenBudgeter;
+
+    /**
+     * Optional logger for per-turn token telemetry. Null in container-free unit
+     * tests; telemetry is then carried only on the return value.
+     */
+    private ?AiLogger $logger;
+
+    /**
+     * Section names that must never be dropped by budget enforcement: the user's
+     * question and the final task cue are required for a coherent, on-question
+     * prompt regardless of budget.
+     */
+    private const ALWAYS_KEEP_SECTIONS = ['question', 'task_instructions'];
+
+    /**
      * Create a new semantic prompt builder
      *
      * @param PatternLibrary $patternLibrary Pattern library instance
+     * @param TokenBudgeter|null $tokenBudgeter Token accounting helper (defaults to a fresh instance)
+     * @param AiLogger|null $logger Optional logger for token telemetry
      */
-    public function __construct(PatternLibrary $patternLibrary)
-    {
+    public function __construct(
+        PatternLibrary $patternLibrary,
+        ?TokenBudgeter $tokenBudgeter = null,
+        ?AiLogger $logger = null
+    ) {
         $this->patternLibrary = $patternLibrary;
+        $this->tokenBudgeter = $tokenBudgeter ?? new TokenBudgeter();
+        $this->logger = $logger;
         $this->registerDefaultModules();
         $this->applyGlobalExtensions();
     }
@@ -210,7 +238,7 @@ class SemanticPromptBuilder
      * @param string $question User's natural language question
      * @param PipelineContext $context Pipeline context with schema, metadata, and detected scopes
      * @param bool $allowWrite Whether to allow write operations
-     * @return array{system: string, user: string}
+     * @return array{system: string, user: string, token_estimate: int, sections_dropped: string[]}
      */
     public function buildPrompts(
         string $question,
@@ -222,11 +250,11 @@ class SemanticPromptBuilder
         // System framing: explicit custom prompt overrides; otherwise the config identity
         // plus an internal, provider-neutral role note (config-driven so it can be localized).
         if ($this->systemPrompt !== null) {
-            $system = $this->systemPrompt . "\n\n";
+            $framing = $this->systemPrompt . "\n\n";
         } else {
             $identity = AssistantIdentity::render(includeLanguagePolicy: false);
             $roleNote = $this->queryRoleNote();
-            $system = ($identity !== '' ? $identity . "\n\n" : '')
+            $framing = ($identity !== '' ? $identity . "\n\n" : '')
                 . ($roleNote !== '' ? $roleNote . "\n\n" : '');
         }
 
@@ -234,34 +262,153 @@ class SemanticPromptBuilder
         // execution security boundary can scope (reduces fail-closed over-DENY).
         $subsetRules = $this->scopeableSubsetRules();
         if ($subsetRules !== '') {
-            $system .= $subsetRules . "\n\n";
+            $framing .= $subsetRules . "\n\n";
         }
 
-        $user = '';
+        // Collect each section's contribution as an ordered entry. The system framing
+        // and any host before/after callbacks are non-droppable (safety/policy and
+        // host extensions); only a section's own user-role body is a budget candidate,
+        // and never the always-keep essentials. Assembling these entries in order with
+        // no drops reproduces the historical concatenation byte-for-byte.
+        $entries = [];
+        $entries[] = $this->entry('__framing', 'system', -1, $framing, true);
 
         $this->processModules(
-            beforeCallbackProcess: function($callback) use (&$user, $question, $context, $options) {
-                $user .= $callback($question, $context, $options);
+            beforeCallbackProcess: function ($callback) use (&$entries, $question, $context, $options) {
+                $entries[] = $this->entry('__before_callback', 'user', -1, $callback($question, $context, $options), true);
             },
-            moduleProcess: function($section) use (&$system, &$user, $question, $context, $options) {
+            moduleProcess: function ($section) use (&$entries, $question, $context, $options) {
                 if (!$section->shouldInclude($question, $context, $options)) {
                     return;
                 }
 
                 $content = $section->format($question, $context, $options);
+                $role = $section->role();
+                $name = $section->getName();
 
-                if ($section->role() === 'system') {
-                    $system .= $content;
-                } else {
-                    $user .= $content;
-                }
+                // System-role sections carry identity/policy; never budget-droppable.
+                // Essential user sections (question, task cue) are also kept.
+                $keep = $role === 'system' || in_array($name, self::ALWAYS_KEEP_SECTIONS, true);
+
+                $entries[] = $this->entry($name, $role, $section->getPriority(), $content, $keep);
             },
-            afterCallbackProcess: function($callback) use (&$user, $question, $context, $options) {
-                $user .= $callback($question, $context, $options);
+            afterCallbackProcess: function ($callback) use (&$entries, $question, $context, $options) {
+                $entries[] = $this->entry('__after_callback', 'user', PHP_INT_MAX, $callback($question, $context, $options), true);
             },
         );
 
-        return ['system' => $system, 'user' => $user];
+        $budget = $this->tokenBudget();
+        $keptEntries = $entries;
+        $dropped = [];
+
+        if ($budget > 0) {
+            $keptEntries = $this->tokenBudgeter->enforce($entries, $budget);
+            $dropped = $this->droppedSectionNames($entries, $keptEntries);
+        }
+
+        $system = '';
+        $user = '';
+        foreach ($keptEntries as $entry) {
+            if ($entry['role'] === 'system') {
+                $system .= $entry['content'];
+            } else {
+                $user .= $entry['content'];
+            }
+        }
+
+        $tokenEstimate = $this->tokenBudgeter->estimateTokens($system)
+            + $this->tokenBudgeter->estimateTokens($user);
+
+        $this->recordTokenTelemetry($tokenEstimate, $budget, $dropped);
+
+        return [
+            'system' => $system,
+            'user' => $user,
+            'token_estimate' => $tokenEstimate,
+            'sections_dropped' => $dropped,
+        ];
+    }
+
+    /**
+     * Build one ordered prompt-contribution entry for the budgeter/assembler.
+     *
+     * @return array{name: string, role: string, priority: int, content: string, keep: bool}
+     */
+    private function entry(string $name, string $role, int $priority, string $content, bool $keep): array
+    {
+        return [
+            'name' => $name,
+            'role' => $role,
+            'priority' => $priority,
+            'content' => $content,
+            'keep' => $keep,
+        ];
+    }
+
+    /**
+     * Configured per-turn token budget for the assembled prompt. Zero/unset disables
+     * enforcement so the default path is byte-identical. Container-tolerant for unit
+     * tests built without a config repository.
+     */
+    private function tokenBudget(): int
+    {
+        if (function_exists('app') && app()->bound('config')) {
+            return (int) config('ai.rag.token_budget', 0);
+        }
+
+        return 0;
+    }
+
+    /**
+     * Names of named sections present before enforcement but absent after. Internal
+     * framing/callback entries (prefixed "__") are non-droppable and excluded.
+     *
+     * @param array<int, array{name: string}> $before
+     * @param array<int, array{name: string}> $after
+     * @return string[]
+     */
+    private function droppedSectionNames(array $before, array $after): array
+    {
+        $keptNames = [];
+        foreach ($after as $entry) {
+            $keptNames[$entry['name']] = true;
+        }
+
+        $dropped = [];
+        foreach ($before as $entry) {
+            $name = $entry['name'];
+            if (str_starts_with($name, '__')) {
+                continue;
+            }
+            if (!isset($keptNames[$name])) {
+                $dropped[] = $name;
+            }
+        }
+
+        return array_values(array_unique($dropped));
+    }
+
+    /**
+     * Emit the per-turn token estimate so cost is observable. Best-effort: telemetry
+     * must never break prompt assembly, and the estimate is also returned to callers.
+     *
+     * @param string[] $dropped
+     */
+    private function recordTokenTelemetry(int $tokenEstimate, int $budget, array $dropped): void
+    {
+        if ($this->logger === null) {
+            return;
+        }
+
+        try {
+            $this->logger->info('prompt_builder', 'prompt_token_estimate', [
+                'token_estimate' => $tokenEstimate,
+                'token_budget' => $budget,
+                'sections_dropped' => $dropped,
+            ]);
+        } catch (\Throwable $e) {
+            // Telemetry is observability, not correctness — swallow any logging fault.
+        }
     }
 
     /**

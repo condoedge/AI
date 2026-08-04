@@ -215,6 +215,45 @@ class EntityActionAwarenessSectionTest extends TestCase
     }
 
     /** @test */
+    public function it_always_emits_the_data_question_guardrail_after_the_action_list(): void
+    {
+        // REGRESSION PIN (iter-3 ambiguous-balance t0): a host page-link action
+        // whose aliases named the same domain concept as a data question ("Show
+        // me the balance." vs an action aliased "my balance") led the generator
+        // to answer NO QUERY REQUIRED instead of generating the query. The
+        // section must always instruct that actions NEVER replace data questions
+        // — with and without prior results in context.
+        config(['ai.entity_actions' => []]);
+        config(['ai.generic_actions' => [
+            'my_statement' => [
+                'aliases' => ['my statement', 'my balance', 'how much do I owe'],
+                'label' => 'My account statement',
+                'description' => 'My account statement.',
+                'action' => fn () => null,
+            ],
+        ]]);
+
+        // Without prior results.
+        $output = $this->section->format('Show me the balance.', new PipelineContext(), []);
+        $this->assertStringContainsString('ACTIONS NEVER REPLACE DATA QUESTIONS', $output);
+        $this->assertStringContainsString('MUST still generate the Cypher query', $output);
+
+        // With prior results (the CRITICAL RULE block present too).
+        $context = new PipelineContext();
+        $context->conversationContext = [
+            'focused_entity' => 'Account',
+            'last_result_sample' => [['id' => '1', 'name' => 'Ops account']],
+        ];
+        $output = $this->section->format('Show me the balance.', $context, []);
+        $this->assertStringContainsString('ACTIONS NEVER REPLACE DATA QUESTIONS', $output);
+        // The guardrail precedes (and scopes) the NO-QUERY-REQUIRED escape hatch.
+        $this->assertLessThan(
+            strpos($output, 'CRITICAL RULE'),
+            strpos($output, 'ACTIONS NEVER REPLACE DATA QUESTIONS')
+        );
+    }
+
+    /** @test */
     public function it_reads_actions_from_the_registry_not_raw_config(): void
     {
         config(['ai.entity_actions' => []]);

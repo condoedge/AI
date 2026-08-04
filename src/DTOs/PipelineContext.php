@@ -41,6 +41,13 @@ class PipelineContext
      */
     public array $pageContext = [];
 
+    /**
+     * Host-supplied narration for the current page ("Explain this page"). Set only when the
+     * turn is answered as read-only page narration grounded on config('ai.chat.page_descriptions');
+     * default '' keeps PageDescriptionSection silent (zero tokens) for every ordinary turn.
+     */
+    public string $pageDescription = '';
+
     public function __construct()
     {
         $this->qu = new QueryUnderstandingResult();

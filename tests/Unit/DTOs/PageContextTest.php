@@ -89,6 +89,27 @@ class PageContextTest extends TestCase
         $this->assertSame([], $ctx->filters);
     }
 
+    public function test_description_key_prefers_entity_type(): void
+    {
+        $ctx = new PageContext(route: 'units.show', entityType: 'Unit');
+
+        $this->assertSame('Unit', $ctx->descriptionKey());
+    }
+
+    public function test_description_key_falls_back_to_route(): void
+    {
+        // A list/index screen may carry only a route (no record on screen).
+        $ctx = new PageContext(route: 'units.index');
+
+        $this->assertSame('units.index', $ctx->descriptionKey());
+    }
+
+    public function test_description_key_is_null_without_type_or_route(): void
+    {
+        $this->assertNull((new PageContext())->descriptionKey());
+        $this->assertNull((new PageContext(route: '', entityType: ''))->descriptionKey());
+    }
+
     public function test_to_array_round_trips(): void
     {
         $data = [

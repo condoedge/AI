@@ -261,6 +261,55 @@ class ResponseGeneratorTest extends TestCase
     }
 
     /** @test */
+    public function error_response_follows_the_question_language_not_the_app_locale(): void
+    {
+        // The iter-3 live failure: FRENCH canned error ("J'ai rencontré un
+        // problème...") answered an ENGLISH question because __() rendered under
+        // the app locale. With the QU-detected question language threaded in, the
+        // error copy must follow the QUESTION's language.
+        app()->setLocale('fr');
+
+        $result = $this->generator->generateErrorResponse(
+            'I mean what unit 310 owes.',
+            new \RuntimeException('HTTP 429 rate limit'),
+            ['question_language' => 'en']
+        );
+
+        $this->assertStringContainsString('I encountered an issue', $result['answer']);
+        $this->assertStringNotContainsString('J\'ai rencontré un problème', $result['answer']);
+        $this->assertStringNotContainsString('Veuillez', $result['answer']);
+    }
+
+    /** @test */
+    public function error_response_keeps_the_app_locale_when_no_question_language_is_threaded(): void
+    {
+        // Unchanged behavior when QU produced no language: the app locale decides
+        // (a French host answering with no language signal stays French).
+        app()->setLocale('fr');
+
+        $result = $this->generator->generateErrorResponse(
+            'Une question quelconque',
+            new \RuntimeException('boom')
+        );
+
+        $this->assertStringContainsString('J\'ai rencontré un problème', $result['answer']);
+    }
+
+    /** @test */
+    public function error_response_renders_french_for_a_french_question_in_an_english_host(): void
+    {
+        app()->setLocale('en');
+
+        $result = $this->generator->generateErrorResponse(
+            'Montre-moi le solde.',
+            new \RuntimeException('boom'),
+            ['question_language' => 'fr']
+        );
+
+        $this->assertStringContainsString('J\'ai rencontré un problème', $result['answer']);
+    }
+
+    /** @test */
     public function it_includes_error_details_when_requested(): void
     {
         $question = "Test query";

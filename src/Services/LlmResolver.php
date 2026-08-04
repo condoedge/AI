@@ -7,12 +7,14 @@ namespace Condoedge\Ai\Services;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 
 /**
- * Resolves the LLM provider for a given pipeline role.
- * Falls back to the default provider when no role-specific config exists.
+ * Resolves the LLM provider for a given pipeline role — the seam for
+ * fast-vs-accurate model tiering (config('ai.llm_roles'), see config/ai.php).
+ * A role with no config SAFELY falls back to the default provider, so an empty
+ * llm_roles map leaves every stage on the single default model.
  *
- *   $resolver->forRole('query_understanding')   // gpt-4o-mini
- *   $resolver->forRole('query_generation')       // gpt-4o
- *   $resolver->forRole('response_generation')    // gpt-4o-mini
+ *   $resolver->forRole('query_understanding')    // FAST: small model
+ *   $resolver->forRole('query_generation')        // ACCURATE: reasoning model
+ *   $resolver->forRole('response_generation')     // ACCURATE: answer writer
  */
 class LlmResolver
 {

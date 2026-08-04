@@ -412,21 +412,6 @@ class AdversarialSecurityTest extends TestCase
     }
 
     /** @test */
-    public function it_sanitizes_queries_by_adding_limit()
-    {
-        $llmMock = Mockery::mock(\Condoedge\Ai\Contracts\LlmProviderInterface::class);
-        $graphMock = Mockery::mock(\Condoedge\Ai\Contracts\GraphStoreInterface::class);
-
-        $generator = new QueryGenerator($llmMock, $graphMock, ['default_limit' => 100]);
-
-        $queryWithoutLimit = "MATCH (n:Customer) RETURN n";
-        $sanitized = $generator->sanitize($queryWithoutLimit);
-
-        $this->assertStringContainsString('LIMIT', $sanitized,
-            'Sanitize should add LIMIT to prevent large result sets');
-    }
-
-    /** @test */
     public function it_handles_extremely_long_questions()
     {
         $llmMock = Mockery::mock(\Condoedge\Ai\Contracts\LlmProviderInterface::class);

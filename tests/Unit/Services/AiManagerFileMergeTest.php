@@ -16,6 +16,8 @@ use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryUnderstandingResult;
 use Condoedge\Ai\Services\AiManager;
 use Condoedge\Ai\Services\Context\FileContextProvider;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\Tests\TestCase;
 use Mockery;
 
@@ -49,6 +51,11 @@ class AiManagerFileMergeTest extends TestCase
 
         config(['ai.security.enabled' => false]);
         config(['ai.file_context.enabled' => true]);
+        // These tests pin the LEGACY single-reference-per-file contract (the
+        // snippet-depth selection within ONE merged reference). Multi-chunk
+        // emission (max_chunks_per_file > 1) is covered by
+        // AiManagerMultiChunkMergeTest.
+        config(['ai.file_context.max_chunks_per_file' => 1]);
 
         $this->mockContext = Mockery::mock(ContextRetrieverInterface::class);
         $this->mockEmbedding = Mockery::mock(EmbeddingProviderInterface::class);
@@ -111,19 +118,19 @@ class AiManagerFileMergeTest extends TestCase
         $this->mockQueryGenerator->shouldReceive('generate')->andReturnUsing(
             function ($q, $context) use (&$captured) {
                 $captured = $context->fileContext['relevant_files'] ?? [];
-                return [
-                    'cypher' => 'MATCH (u:Unit) RETURN u',
-                    'explanation' => '',
-                    'confidence' => 0.9,
-                    'warnings' => [],
-                    'metadata' => [],
-                ];
+                return new QueryGenerationResult(
+                    cypher: 'MATCH (u:Unit) RETURN u',
+                    explanation: '',
+                    confidence: 0.9,
+                    warnings: [],
+                    metadata: [],
+                );
             }
         );
 
-        $this->mockQueryExecutor->shouldReceive('execute')->andReturn([
-            'success' => true, 'data' => [['id' => 1]], 'stats' => [], 'metadata' => [],
-        ]);
+        $this->mockQueryExecutor->shouldReceive('execute')->andReturn(new QueryExecutionResult(
+            success: true, data: [['id' => 1]], stats: [], metadata: [], errors: [],
+        ));
         $this->mockResponseGenerator->shouldReceive('generate')->andReturn([
             'answer' => 'ok', 'insights' => [], 'visualizations' => [], 'metadata' => [],
         ]);

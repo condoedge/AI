@@ -9,19 +9,11 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 use Condoedge\Ai\Services\Chat\Exporter\ResultSetExporter;
 
 /**
- * export_pdf — generative-UI built-in.
+ * export_pdf - generative-UI built-in.
  *
- * Two modes, backed by {@see ResultSetExporter} (degrades gracefully — returns an error
- * AiActionResult telling the user to install barryvdh/laravel-dompdf — when Dompdf is absent):
- *
- *   mode=table (default)  the current/last result set as a tabular PDF dump.
- *   mode=document         the COMPOSED ANSWER the link is embedded in, rendered
- *                         markdown→HTML→PDF — for contact sheets, summaries and other
- *                         formatted documents whose layout the LLM designs per ask.
- *
- * Link grammar:
- *   [Download PDF](action://export_pdf?title=Overdue%20Invoices)
- *   [Download contact sheet (PDF)](action://export_pdf?mode=document&title=Contact%20Sheet)
+ * mode=table exports the current/last result set as a tabular PDF.
+ * mode=document renders a clean markdown document payload from ActionContext
+ * (legacy fallback: visible answer markdown) to PDF.
  */
 class ExportPdfAction extends AbstractBuiltInAction
 {
@@ -44,8 +36,8 @@ class ExportPdfAction extends AbstractBuiltInAction
     public function description(): string
     {
         return 'Export as a PDF. mode=table (default) exports the current result set as a data table; '
-            . 'mode=document renders YOUR composed answer as a formatted document — write the document '
-            . '(headings, sections, tables) in the answer itself, then add this link.';
+            . 'mode=document renders a clean markdown document payload as a formatted document. '
+            . 'Keep the visible chat answer concise and provide the download action.';
     }
 
     public function aliases(): array
@@ -57,7 +49,7 @@ class ExportPdfAction extends AbstractBuiltInAction
     {
         return [
             'title' => ['type' => 'string', 'default' => 'export', 'label' => 'File title'],
-            'mode' => ['type' => 'string', 'default' => 'table', 'label' => "Export source: 'table' (result set) or 'document' (the composed answer)"],
+            'mode' => ['type' => 'string', 'default' => 'table', 'label' => "Export source: 'table' (result set) or 'document' (clean markdown document payload)"],
         ];
     }
 
@@ -66,7 +58,7 @@ class ExportPdfAction extends AbstractBuiltInAction
         $title = (string) ($input['title'] ?? 'export');
 
         if (strtolower((string) ($input['mode'] ?? 'table')) === 'document') {
-            return $this->exporter->documentToPdf((string) ($context->answer ?? ''), $title);
+            return $this->exporter->documentToPdf((string) ($context->documentMarkdown ?? $context->answer ?? ''), $title);
         }
 
         $rows = $context->resultSet;

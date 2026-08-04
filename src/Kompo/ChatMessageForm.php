@@ -10,6 +10,7 @@ use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
+use Condoedge\Ai\Kompo\Support\SuggestionSubmit;
 use Condoedge\Ai\Kompo\Traits\HasFilePreview;
 use Condoedge\Utils\Kompo\Chat\ChatComposerForm;
 
@@ -75,7 +76,9 @@ class ChatMessageForm extends ChatComposerForm
             // Kompo-side Enter handling (kit enterToSend is disabled below so the two
             // never double-fire); Shift+Enter keeps inserting a new line natively
             ->onEnter($this->sendingMessageActions())
-            ->id('chat-message-input')
+            // Id shared with SuggestionSubmit (welcome examples / follow-up chips fill this
+            // input and click the send button below to reuse the exact typed-send chain).
+            ->id(SuggestionSubmit::INPUT_ID)
             ->class('flex-1 bg-transparent !mb-0 border-0 focus:ring-0 text-gray-800 placeholder-gray-400 resize-none min-h-[44px] max-h-[200px]')
             ->rows(1)
             ->attr(['oninput' => "this.style.height='auto';this.style.height=this.scrollHeight+'px'"]);
@@ -116,7 +119,7 @@ class ChatMessageForm extends ChatComposerForm
     {
         return _Flex(
             $this->responseStyleSelector(),
-            _Button()->icon(_Sax('send-1', 20))->id('chat-send-btn')
+            _Button()->icon(_Sax('send-1', 20))->id(SuggestionSubmit::SEND_BUTTON_ID)
                 ->class('p-3 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all flex-shrink-0')
                 ->onClick($this->sendingMessageActions()),
         )->class('items-end gap-3 shrink-0');
@@ -309,7 +312,7 @@ class ChatMessageForm extends ChatComposerForm
             // Note: precreateMessagePlaceholder() also hides welcome/empty state;
             // the avatar is baked into the bubble template server-side (AbstractChatSurface)
             ->run('() => {
-                const input = document.getElementById("chat-message-input");
+                const input = document.getElementById("' . SuggestionSubmit::INPUT_ID . '");
                 const message = input ? input.value : "";
                 if (message.trim()) {
                     precreateMessagePlaceholder(message);

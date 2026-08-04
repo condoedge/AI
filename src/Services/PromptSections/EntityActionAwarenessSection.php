@@ -64,14 +64,31 @@ class EntityActionAwarenessSection extends BasePromptSection
             $output .= "\n";
         }
 
+        // GUARDRAIL (regression pin — ambiguous-balance t0): the action list above
+        // must never legitimize skipping a DATA question. An action's aliases can
+        // overlap the subject of a legitimate data request (e.g. a page-link action
+        // whose aliases name the same domain concept the user is asking a question
+        // about); the model once classified such a question as an action request
+        // and returned NO QUERY REQUIRED, collapsing the turn into "no results".
+        $output .= "**ACTIONS NEVER REPLACE DATA QUESTIONS:**\n";
+        $output .= "The list above only identifies which phrases are UI actions rather than database fields. ";
+        $output .= "When the user asks for information that the graph can answer — a value, an amount, a balance, a list, details of something — ";
+        $output .= "you MUST still generate the Cypher query for the underlying data, ";
+        $output .= "even if the question's wording overlaps an action's name or aliases, and even when previous results are available in context — ";
+        $output .= "the response layer attaches any relevant action links separately. ";
+        $output .= "Return `NO QUERY REQUIRED` only when the request is PURELY to open, navigate to, or perform one of these actions ";
+        $output .= "with no informational component to answer.\n\n";
+
         $lastResults = $context->conversationContext['last_result_sample'] ?? [];
 
         if (!empty($lastResults)) {
-            $output .= "**CRITICAL RULE:**\n";
-            $output .= "If the user asks for any of the above action terms (like 'profile link', 'profile page'):\n";
+            $output .= "**CRITICAL RULE (pure action/link requests only):**\n";
+            $output .= "If the user's request is PURELY to open or link to one of the above actions for an entity already shown (like 'profile link', 'profile page'):\n";
             $output .= "1. These are UI actions, NOT database queries\n";
             $output .= "2. The entity IDs are ALREADY AVAILABLE in context below\n";
-            $output .= "3. You MUST return: `NO QUERY REQUIRED`\n\n";
+            $output .= "3. You MUST return: `NO QUERY REQUIRED`\n";
+            $output .= "This rule NEVER applies to questions asking for information or values (balances, amounts, lists, details) — ";
+            $output .= "those remain data questions requiring a Cypher query even when their wording overlaps an action's aliases.\n\n";
 
             $output .= "**Available Entity IDs from Previous Results:**\n";
             foreach ($lastResults as $index => $result) {

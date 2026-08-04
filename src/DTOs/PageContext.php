@@ -54,6 +54,27 @@ final class PageContext
     }
 
     /**
+     * The lookup key for a host-provided page description ("Explain this page").
+     *
+     * Prefers the entity type (the same key page_examples are keyed by, e.g. 'Unit'),
+     * falling back to the route name when no entity type is set (e.g. a list/index
+     * screen that carries only a route). Null when neither is present, so the caller
+     * resolves no description and the turn stays an ordinary query.
+     */
+    public function descriptionKey(): ?string
+    {
+        if ($this->entityType !== null && $this->entityType !== '') {
+            return $this->entityType;
+        }
+
+        if ($this->route !== null && $this->route !== '') {
+            return $this->route;
+        }
+
+        return null;
+    }
+
+    /**
      * @return array{route:?string,entity_type:?string,entity_id:int|string|null,filters:array<string,mixed>,label:?string}
      */
     public function toArray(): array

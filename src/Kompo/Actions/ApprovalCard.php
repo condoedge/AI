@@ -52,7 +52,8 @@ class ApprovalCard
 
         // Pure-logic / non-Kompo context: return the structured intent so callers/tests can
         // assert on it without booting the framework.
-        if (!function_exists('_Rows') || !function_exists('_Link') || !function_exists('_Html')) {
+        if (!function_exists('_Rows') || !function_exists('_Link') || !function_exists('_Html')
+            || ($confirmWiring === null && !self::canUseDefaultKompoWiring())) {
             return [
                 'type' => 'approval_card',
                 'token' => $token,
@@ -91,5 +92,14 @@ class ApprovalCard
             _Panel()->id($panelId)->class('mt-2'),
         )->class('mt-3 p-4 rounded-xl border border-amber-200 bg-amber-50')
          ->attr(['data-pending-action' => $token]);
+    }
+
+    private static function canUseDefaultKompoWiring(): bool
+    {
+        try {
+            return function_exists('config') && trim((string) config('app.key', '')) !== '';
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 }

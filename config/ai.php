@@ -398,7 +398,6 @@ return [
     | - query_understanding: Pre-processes questions (fast model recommended)
     | - query_generation: Generates Cypher queries (needs reasoning power)
     | - response_generation: Generates natural language answers (fast model OK)
-    | - eval_judge: Grades answers in `ai:eval` (use a strong, cheap judge at temp 0)
     | - eval_generator: Phrases eval questions in `ai:eval` (any fast model)
     |
     */
@@ -406,7 +405,6 @@ return [
         // 'query_understanding' => ['model' => 'gpt-4o-mini', 'temperature' => 0.0],
         // 'query_generation' => null,  // uses default
         // 'response_generation' => ['model' => 'gpt-4o-mini'],
-        // 'eval_judge' => ['model' => 'gpt-4o', 'temperature' => 0.0],     // LLM-as-judge for ai:eval
         // 'eval_generator' => ['model' => 'gpt-4o-mini', 'temperature' => 0.4], // question phrasing for ai:eval
     ],
 
@@ -417,15 +415,15 @@ return [
     |
     | Configuration for the closed-Q&A eval harness with per-stage failure
     | attribution. The harness generates label-free questions from this config,
-    | drives them through the real pipeline, grades answers with a reference-free
-    | LLM judge, and attributes failure to one weakest stage.
+    | drives them through the real pipeline and attributes failure to one weakest
+    | stage from deterministic per-stage signals. Answer grading is done
+    | out-of-process by an agent, not by an in-command LLM judge.
     |
     | - stage_thresholds: minimum average score (0-1) each stage must meet for
     |                     the run to PASS. Lower a threshold to relax it; the run
     |                     exits non-zero if any stage average falls below its min.
     | - row_pass_threshold: a single row's weakest-stage score below this marks
     |                       the row 'failed' in the report.
-    | - judge: which LLM role + sampling the LLM-as-judge uses (temp 0 = stable).
     | - report_path: where the JSON report is written (null = only print).
     |
     */
@@ -438,12 +436,6 @@ return [
         ],
 
         'row_pass_threshold' => env('AI_EVAL_ROW_PASS_THRESHOLD', 0.6),
-
-        'judge' => [
-            'role' => 'eval_judge',
-            'temperature' => env('AI_EVAL_JUDGE_TEMPERATURE', 0.0),
-            'max_tokens' => env('AI_EVAL_JUDGE_MAX_TOKENS', 800),
-        ],
 
         'report_path' => env('AI_EVAL_REPORT_PATH', storage_path('app/ai-eval-report.json')),
     ],
@@ -515,6 +507,12 @@ return [
     | Configure rate limits to prevent DoS attacks via expensive query flooding.
     | These limits apply to query execution and LLM API calls.
     |
+    | BATCHED CHARGES: an attention-digest run (up to ai.digest.max_sources
+    | queries + companion counts) counts as ONE charge against
+    | queries_per_minute — the DigestRunner mints a per-run rate_limit_batch
+    | key and QueryExecutor charges the first execution only. Normal turns are
+    | charged per query, unchanged. See QueryExecutor::attemptRateLimit().
+    |
     */
     'rate_limits' => [
         'queries_per_minute' => env('AI_QUERIES_PER_MINUTE', 30),
@@ -560,7 +558,7 @@ return [
     | Available styles:
     | - 'minimal': Just the answer, nothing else (e.g., "Admin System" or "42")
     | - 'concise': One sentence answer (e.g., "The next birthday is Admin System on Nov 29.")
-    | - 'friendly': Natural conversational style, 2-3 sentences max (RECOMMENDED)
+    | - 'friendly': Natural conversational style, length adapted to question type (RECOMMENDED)
     | - 'detailed': Full explanation with context
     | - 'technical': Includes query details for debugging
     |
@@ -568,11 +566,22 @@ return [
     | These apply to 'detailed' style. 'minimal', 'concise', and 'friendly' styles
     | automatically hide all technical details.
     |
+    | length_guidance: question_type-adaptive length guidance for the answer prompt,
+    | keyed by the QU question type (data_query | knowledge_query | hybrid). Values
+    | here override the built-in defaults in GuidelinesSection (data questions =>
+    | concise direct answer; knowledge/document questions => short structured
+    | overview allowed). The global word cap (default_max_length) always applies.
+    |
     */
     'response_generation' => [
         'default_format' => env('AI_RESPONSE_FORMAT', 'text'), // text, markdown, json
         'default_style' => env('AI_RESPONSE_STYLE', 'friendly'), // minimal, concise, friendly, detailed, technical
         'default_max_length' => env('AI_RESPONSE_MAX_LENGTH', 500), // words (auto-adjusted by style)
+        'length_guidance' => [
+            // 'data_query' => 'This is a data question: keep it concise. ...',
+            // 'knowledge_query' => 'This is a knowledge/document question: a short structured overview is appropriate. ...',
+            // 'hybrid' => 'Lead with the direct answer, then ...',
+        ],
         'temperature' => env('AI_RESPONSE_TEMPERATURE', 0.3),
         'include_insights' => env('AI_RESPONSE_INSIGHTS', true),
         'include_visualizations' => env('AI_RESPONSE_VIZ', true),
@@ -582,6 +591,37 @@ return [
         'hide_technical_details' => env('AI_RESPONSE_HIDE_TECHNICAL', true),
         'hide_execution_stats' => env('AI_RESPONSE_HIDE_STATS', true),
         'hide_project_info' => env('AI_RESPONSE_HIDE_PROJECT', true),
+
+        // Citation enforcement (structural, not semantic): when a turn is
+        // document-grounded (file chunks present AND QU classified it a
+        // knowledge query) but the generated answer contains ZERO [N] citation
+        // markers, regenerate ONCE with a hard cite-or-decline instruction.
+        // If the retry still ships no markers, the retry is returned as-is and
+        // response metadata carries citation_enforcement = 'failed' so the
+        // eval trace shows it. Max one retry; disabled for terse styles whose
+        // contract forbids markers.
+        'citation_enforcement' => env('AI_RESPONSE_CITATION_ENFORCEMENT', true),
+
+        // Truncation/count honesty (structural, BLOCKING): when more rows exist
+        // than were rendered into the prompt's data sample, the shipped answer
+        // MUST contain the total (or the explicit remainder) as a literal
+        // number. A missing disclosure triggers ONE regeneration with a hard
+        // instruction; if it is STILL missing, a localized disclosure line
+        // ("Showing X of Y — ask for the full list or an export.") is appended
+        // deterministically so a truncated answer can never ship claiming
+        // completeness. Response metadata carries truncation_honesty =
+        // clean|recovered|patched whenever the guard's trigger held.
+        'truncation_honesty' => env('AI_RESPONSE_TRUNCATION_HONESTY', true),
+
+        // Self-identity-as-contact guard (structural): when the authenticated
+        // user's own email appears in the answer on a line with no "that's you"
+        // marker (wordings single-sourced from SelfReferenceNoticeSection +
+        // resources/lang), regenerate ONCE with a hard instruction; if it
+        // persists, a localized "(that's you — your own contact details)"
+        // marker is inserted deterministically after the first unmarked
+        // occurrence. Response metadata carries self_reference_guard =
+        // clean|recovered|patched. Never fires when the email is absent.
+        'self_reference_guard' => env('AI_RESPONSE_SELF_REFERENCE_GUARD', true),
     ],
 
     /*
@@ -607,6 +647,15 @@ return [
         // Reciprocal Rank Fusion. Lifts recall on exact name/alias/acronym/ID queries the
         // embedding misses. When false, semantic selection uses the dense ranking only.
         'hybrid_enabled' => env('AI_RAG_HYBRID_ENABLED', false),
+
+        // Per-turn token budget for the assembled query-generation prompt. When > 0,
+        // SemanticPromptBuilder drops the least-important context sections (highest
+        // priority number first) until the estimated prompt fits the budget; the user's
+        // question and the final task cue are always kept. 0 (the default) disables
+        // enforcement, leaving the assembled prompt byte-identical to the unbudgeted
+        // path. The per-turn token estimate is recorded via AiLogger regardless, so
+        // cost is observable even when no budget is set.
+        'token_budget' => env('AI_RAG_TOKEN_BUDGET', 0),
     ],
 
     /*
@@ -742,6 +791,13 @@ return [
         // Score assigned to entities injected by Query Understanding.
         // Should be high enough to ensure they're included in context.
         'qu_entity_score' => (float) env('AI_SEMANTIC_CONTEXT_QU_ENTITY_SCORE', 0.8),
+
+        // Score assigned to the previous turn's entity types when the
+        // AUGMENTATION ANCHOR re-seeds them into selection (a QU-flagged
+        // follow-up operating on a recorded data result, e.g. "add their last
+        // login to it"). Same strength as QU entity types by default, so the
+        // anchored entities rank as if QU had predicted them.
+        'anchor_entity_score' => (float) env('AI_SEMANTIC_CONTEXT_ANCHOR_ENTITY_SCORE', 0.8),
     ],
 
     /*
@@ -799,6 +855,79 @@ return [
 
         // Temperature for QU LLM call (0.0 = deterministic)
         'temperature' => (float) env('AI_QUERY_UNDERSTANDING_TEMPERATURE', 0.0),
+
+        // Entity labels that can be mistaken for own-profile wording. When QU marks
+        // a request as possessive lookup/other, these labels are not force-injected
+        // unless the request is clearly a list/count/aggregate/contact-record ask.
+        // Override per host app, or set [] to disable.
+        'own_profile_ambiguous_entity_labels' => ['Contact'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Understanding-driven Branches
+    |--------------------------------------------------------------------------
+    |
+    | clarify_enabled (item C — clarify branch): when true (default), the SAME
+    | single QU LLM call may flag a question as GENUINELY ambiguous
+    | (needs_clarification + candidate_readings + ONE clarifying question in
+    | the question's language). The pipeline then SKIPS file search and query
+    | generation and answers with that clarifying question — zero extra LLM
+    | calls. Never fires on follow-up-reference or digest turns (guarded at
+    | parse time AND in the pipeline branch). Set false to always force-resolve.
+    |
+    */
+    'understanding' => [
+        'clarify_enabled' => env('AI_UNDERSTANDING_CLARIFY_ENABLED', true),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Export Composition
+    |--------------------------------------------------------------------------
+    |
+    | Document-mode PDF/Excel exports use clean markdown payloads, not the visible
+    | chat answer. When a possessive export has no query rows, the composer may
+    | build a one-row document from the current identity context using this map.
+    | Host apps can replace these paths with their own profile/contact/team fields.
+    |
+    */
+    'export' => [
+        'document_row_limit' => (int) env('AI_EXPORT_DOCUMENT_ROW_LIMIT', 250),
+
+        // Column names stripped from generated Excel/PDF files (case-insensitive). Empty by
+        // default: an export serializes a result set the user is already authorized to see and
+        // explicitly asked for, so columns like email/phone are kept. This is intentionally
+        // NOT the LLM PII-minimization list (access_control.identifying_fields). Internal
+        // id-ish columns (neo4j_id, *_id, leading-underscore) are always stripped regardless.
+        'redact_columns' => [],
+
+        'identity_fields' => [
+            ['label' => 'User Name', 'path' => 'user.name'],
+            ['label' => 'User Email', 'path' => 'user.email'],
+            ['label' => 'Team Name', 'path' => ['team.team_name', 'team.name']],
+        ],
+        'auto_identity_fields' => [
+            'enabled' => env('AI_EXPORT_AUTO_IDENTITY_FIELDS', true),
+            'sources' => [
+                'user' => 'User',
+                'team' => 'Team',
+            ],
+            'exclude' => [
+                'id',
+                'password',
+                'remember_token',
+                'api_token',
+                'token',
+                'secret',
+                'two_factor_secret',
+                'two_factor_recovery_codes',
+                'created_at',
+                'updated_at',
+                'deleted_at',
+                'email_verified_at',
+            ],
+        ],
     ],
 
     /*
@@ -939,6 +1068,34 @@ return [
         // Empty (default) = monolingual behaviour, zero added cost.
         'corpus_languages' => [],
 
+        // Corpus register for lay-to-domain query expansion. When the indexed
+        // documents are written in a specialized register (legal, medical,
+        // regulatory...), describe that register here in plain text: name the
+        // register and list a few of the corpus's own characteristic terms,
+        // in the shape "<field> terminology (<term>, <term>, <term>)". The
+        // Query-Understanding layer then (in its SAME single LLM call, zero
+        // extra calls) also emits 1-3 short reformulations of the question in
+        // that register's own terminology, and each is added as a separate
+        // file-search fan-out angle. This bridges the user's casual wording to
+        // the terms of art the documents actually use. Empty (default) = off,
+        // zero cost. The register text is HOST configuration: the package
+        // never ships domain vocabulary of its own.
+        'corpus_register' => env('AI_FILE_CORPUS_REGISTER', ''),
+
+        // How many DISTINCT chunks of the SAME file the multi-angle merge may
+        // surface as separate references (each with its own snippet), so a
+        // deepening question can be grounded on more than one passage of the
+        // right document. 1 = legacy single-reference-per-file behaviour.
+        // The overall reference list is always bounded by max_references.
+        'max_chunks_per_file' => env('AI_FILE_MAX_CHUNKS_PER_FILE', 3),
+
+        // QU question types for which file search is SKIPPED entirely (no
+        // fan-out, no recall floor): a pure data query gains nothing from
+        // document retrieval and pays ~seconds of latency plus noise chunks
+        // for it. Driven by the existing QU question_type signal — never
+        // phrase matching. Set to [] to always run file search.
+        'skip_for_question_types' => ['data_query'],
+
         // Include file snippets in response metadata
         'include_snippets' => true,
 
@@ -1055,10 +1212,56 @@ return [
         'page_examples' => [
         ],
 
+        // Host-provided "Explain this page" narration, keyed by page_context.entity_type
+        // (falling back to the route name when a screen carries only a route). When the
+        // chat is opened from a page whose key is present here AND the user asks what the
+        // page is / what they can do, the assistant narrates from this text WITHOUT running
+        // a graph query (so it never lands in the "no results" path). Empty = feature off:
+        // a page-explanation question is then answered as an ordinary turn, unchanged.
+        // e.g. 'Unit' => 'This page shows a single unit — its owners, balance and payment history. From here you can review payments and download an account statement.',
+        'page_descriptions' => [
+        ],
+
+        // AI-composed guided tutorials ("show me how to X"). OPT-IN and OFF by
+        // default: when 'enabled' is false nothing in the package composes a
+        // tutorial, so default chat behaviour is unchanged. A host turns it on,
+        // then supplies — per page — the whitelist of CSS selectors the AI may
+        // anchor a step to (the package never learns host DOM); a selector outside
+        // the host map is dropped to a floating step. Rendering an actual in-app
+        // walkthrough is host wiring: see docs/audit/next-level/ws-c-tutorial-host-wiring.md.
+        'tutorials' => [
+            'enabled' => env('AI_CHAT_TUTORIALS_ENABLED', false),
+            // Hard cap on emitted steps regardless of what the model returns.
+            'max_steps' => env('AI_CHAT_TUTORIALS_MAX_STEPS', 5),
+            // LLM role used to compose the plan (see llm_roles above).
+            'role' => env('AI_CHAT_TUTORIALS_ROLE', 'response_generation'),
+            'temperature' => env('AI_CHAT_TUTORIALS_TEMPERATURE', 0.2),
+            'max_tokens' => env('AI_CHAT_TUTORIALS_MAX_TOKENS', 900),
+        ],
+
+        // QU intent labels that mean "what is this page / what can I do here". The
+        // narration path above activates only for these intents (and only when a matching
+        // page description exists). Config-driven and model-agnostic — never a hardcoded
+        // phrase list — mirroring file_context.enumeration.intents.
+        'page_explanation_intents' => ['page_explanation'],
+
         // Conversation persistence
         'persist_history' => env('AI_CHAT_PERSIST_HISTORY', true),
         'max_messages' => env('AI_CHAT_MAX_MESSAGES', 50),
         'session_key_prefix' => env('AI_CHAT_SESSION_PREFIX', 'ai_chat_history'),
+
+        // SOFT conversation-length guard. When a conversation reaches
+        // conversation_limit.max_messages (below — NOT the unrelated 'max_messages' key
+        // above) the messages panel shows a banner suggesting a fresh conversation (one click copies a
+        // mini resume to paste there) — sending is NEVER blocked. This is a context-QUALITY
+        // threshold, not a storage cap: prompt history only reaches ~5 messages back and the
+        // result snapshot is one-deep, so recall degrades well before any hard limit.
+        // The default is PROVISIONAL — the long-conversation degradation study will replace
+        // it with the measured knee once it runs.
+        'conversation_limit' => [
+            'enabled' => env('AI_CHAT_CONVERSATION_LIMIT_ENABLED', true),
+            'max_messages' => env('AI_CHAT_CONVERSATION_LIMIT', 30),
+        ],
 
         // Conversation history for LLM context
         'max_history_messages' => env('AI_CHAT_MAX_HISTORY_MESSAGES', 10), // Messages to send to LLM
@@ -1216,6 +1419,12 @@ return [
     |   'tool_rounds'    (default 2) — max tool-enabled LLM rounds per turn;
     |                    on exhaustion one forced no-tools call closes the prose.
     |   'max_tool_calls' (default 5) — max action dispatches per turn.
+    |   'native_query_tool' (default false) — offer the read-only run_query tool
+    |                    INSIDE the native loop, so the model can fire several
+    |                    read-only Cypher queries in one turn and compose over
+    |                    them. Gated additionally on 'native_tools' (it rides that
+    |                    loop). DEFAULT-OFF: flipping it LIVE end-to-end stays
+    |                    blocked on tenant-scoping sign-off — do not enable here.
     |
     */
     'actions' => [
@@ -1224,6 +1433,7 @@ return [
         'native_tools' => (bool) env('AI_ACTION_NATIVE_TOOLS', false),
         'tool_rounds' => (int) env('AI_ACTION_TOOL_ROUNDS', 2),
         'max_tool_calls' => (int) env('AI_ACTION_MAX_TOOL_CALLS', 5),
+        'native_query_tool' => (bool) env('AI_ACTION_NATIVE_QUERY_TOOL', false),
     ],
 
     /*
@@ -1338,6 +1548,73 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Attention Sources (multi-query digest registry)
+    |--------------------------------------------------------------------------
+    |
+    | Canonical "what needs my attention?" sources for the attention digest.
+    | The package ships the MECHANISM only (QU digest_request signal, the
+    | deterministic DigestRunner, the one-call DigestResponseComposer); every
+    | host specific — labels, enum literals, cypher, ordering semantics — lives
+    | in the HOST's published copy of this key. Ships EMPTY (white-label rule).
+    | Array order = render order = attention ranking.
+    |
+    | Schema per entry ('<source_key>' => [...]):
+    |   'label'           (required) section heading, host language
+    |   'description'     one sentence of intent, rendered into composition
+    |   'cypher'          (required) canonical scoped query. AUTHORING RULES:
+    |                     - stay inside the scopeable subset: single primary
+    |                       labeled binding, plain MATCH/OPTIONAL MATCH hops,
+    |                       no UNION, no CALL {} subqueries, no label-free hops
+    |                       to sensitive nodes (the coverage gate safe-stops
+    |                       anything it cannot PROVE scoped — rendered as a
+    |                       loud per-source error, never silence);
+    |                     - no parameters beyond the $ai_team_ids convention
+    |                       (bound automatically from the pipeline user; NEVER
+    |                       inline team ids);
+    |                     - graph dates are STRINGS: compare against
+    |                       toString(datetime()) / toString(date()), never raw
+    |                       datetime()/date();
+    |                     - NO trailing LIMIT — the runner passes the cap via
+    |                       options and the executor appends it; the companion
+    |                       true-total count needs the uncapped query;
+    |                     - RETURN only the fields the section renders plus the
+    |                       entity id; guard deleted_at IS NULL where the label
+    |                       soft-deletes.
+    |   'fallback_cypher' run ONLY when the primary returns 0 rows
+    |   'fallback_label'  REQUIRED with fallback_cypher — fallback rows render
+    |                     under THIS heading only, never as primary rows
+    |   'limit'           per-source row cap (default ai.digest.default_row_cap)
+    |   'action_key'      generic action for the section link:
+    |                     [label](action://<action_key>)
+    |   'entity'          graph label — enables per-row entity-action links
+    |   'empty_text'      null => an empty source collapses into the combined
+    |                     "nothing pending in: ..." line; a string always
+    |                     renders as the section's note
+    |   'enabled'         ship-but-hold switch (default true)
+    |
+    */
+    'attention_sources' => [],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Digest Settings
+    |--------------------------------------------------------------------------
+    |
+    | max_sources: hard cap on sources executed per digest run. Overflow is
+    | never silent: skipped keys ride metadata.digest.skipped_sources and a
+    | warning is logged. default_row_cap: per-source row cap when the entry
+    | omits 'limit'. NB: the shared executor rate limiter
+    | (ai.rate_limits.queries_per_minute) is global — hosts with concurrent
+    | chat load should budget it when enabling many sources.
+    |
+    */
+    'digest' => [
+        'max_sources' => 8,
+        'default_row_cap' => 5,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Guardrails
     |--------------------------------------------------------------------------
     |
@@ -1380,6 +1657,9 @@ return [
         \Condoedge\Ai\Services\ResponseSections\PrivacyAndSecurityGuidelinesSection::class,
         \Condoedge\Ai\Services\ResponseSections\ResponseGuardrailsSection::class, // Priority 1100: after the security policy; anti-over-claim + out-of-domain scoping
         \Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection::class,
+        \Condoedge\Ai\Services\ResponseSections\PageDescriptionSection::class, // Priority 22: "Explain this page" narration grounding; zero tokens unless a page description is set on the turn
+        \Condoedge\Ai\Services\ResponseSections\ResponsePageContextSection::class, // Priority 24: WHERE the user asked from (route/screen/record) — situational context for referents and next-step offers; zero tokens without page context
+        \Condoedge\Ai\Services\ResponseSections\ResponseCurrentUserContextSection::class, // Priority 25: WHO the user is (same identity facts as query-gen) + insider-voice rule; zero tokens when unauthenticated
         \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
         // QueryInfoSection removed from defaults: it fed the executed Cypher into the
         // response prompt, directly contradicting PrivacyAndSecurityGuidelinesSection
@@ -1388,6 +1668,7 @@ return [
         \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
         \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class, // For file reference follow-ups
         \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,
+        \Condoedge\Ai\Services\ResponseSections\SelfReferenceNoticeSection::class, // Priority 52: mechanism, not prose — when a result value IS the current user's own email/name, an unmissable "that's you" note lands right under the data; zero tokens otherwise
         \Condoedge\Ai\Services\ResponseSections\ResponseEntityActionsSection::class, // Priority 55: After ResultsData (50), before Statistics (60)
         \Condoedge\Ai\Services\ResponseSections\StatisticsSection::class,
         \Condoedge\Ai\Services\ResponseSections\GuidelinesSection::class,

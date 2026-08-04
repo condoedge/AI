@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Contracts;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 
 /**
  * Query Generator Interface
@@ -24,15 +25,10 @@ interface QueryGeneratorInterface
      *                       - max_retries: Max retry attempts if validation fails (default: 3)
      *                       - allow_write: Allow write operations (default: false)
      *                       - explain: Include query explanation (default: true)
-     * @return array Result with keys:
-     *               - cypher: Generated Cypher query
-     *               - explanation: Human-readable explanation of what query does
-     *               - confidence: Confidence score (0-1)
-     *               - warnings: Array of warnings about query safety/performance
-     *               - metadata: Additional metadata (template used, retry count, etc.)
+     * @return QueryGenerationResult Generated cypher, explanation, confidence, warnings and metadata
      * @throws \RuntimeException If query generation fails after retries
      */
-    public function generate(string $question, PipelineContext $context, array $options = []): array;
+    public function generate(string $question, PipelineContext $context, array $options = []): QueryGenerationResult;
 
     /**
      * Validate a Cypher query for syntax and safety
@@ -50,14 +46,6 @@ interface QueryGeneratorInterface
      * @throws \InvalidArgumentException If query is empty
      */
     public function validate(?string $cypherQuery, array $options = []): array;
-
-    /**
-     * Sanitize a Cypher query by removing dangerous operations
-     *
-     * @param string $cypherQuery Query to sanitize
-     * @return string Sanitized query
-     */
-    public function sanitize(?string $cypherQuery): string;
 
     /**
      * Get available query templates

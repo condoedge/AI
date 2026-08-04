@@ -48,6 +48,7 @@ class QueryRulesSectionTest extends TestCase
         $this->assertStringContainsString('EXAMPLE ENTITIES block', $output);
         $this->assertStringContainsString('DETECTED BUSINESS CONCEPTS block', $output);
         $this->assertStringContainsString('DETECTED ENTITIES block', $output);
+        $this->assertStringContainsString('ENTITY RELATIONSHIPS block', $output);
     }
 
     /** @test */
@@ -60,9 +61,42 @@ class QueryRulesSectionTest extends TestCase
     }
 
     /** @test */
+    public function it_forbids_inventing_edges_from_foreign_keys(): void
+    {
+        $output = $this->format();
+
+        $this->assertStringContainsString('Do NOT infer relationship traversals from *_id properties', $output);
+        $this->assertStringContainsString('current_team_id', $output);
+        $this->assertStringContainsString('filter on that property with WHERE', $output);
+    }
+
+    /** @test */
     public function it_emits_the_read_only_constraint_when_writes_are_disallowed(): void
     {
         $this->assertStringContainsString('READ-ONLY CONSTRAINT', $this->format(allowWrite: false));
         $this->assertStringNotContainsString('READ-ONLY CONSTRAINT', $this->format(allowWrite: true));
+    }
+
+    /** @test */
+    public function it_forces_requested_attributes_into_the_return_clause(): void
+    {
+        $output = $this->format();
+
+        // ws-a-query-1: requested attributes must be projected, not just filtered.
+        $this->assertStringContainsString('RETURN', $output);
+        $this->assertStringContainsString('REQUESTED ATTRIBUTES block', $output);
+        $this->assertStringContainsString('output column', $output);
+        $this->assertStringContainsString('projection requirement', $output);
+    }
+
+    /** @test */
+    public function requested_attributes_take_precedence_over_entity_description_column_lists(): void
+    {
+        // Lever L2-B(ii): entity descriptions may suggest default columns; the
+        // user's requested attributes must always win over those suggestions.
+        $output = $this->format();
+
+        $this->assertStringContainsString('REQUESTED ATTRIBUTES OVERRIDE any column list', $output);
+        $this->assertStringContainsString('requested attributes always win', $output);
     }
 }

@@ -87,6 +87,32 @@ class EntityMetadataBuilderTest extends TestCase
     }
 
     /** @test */
+    public function from_semantic_selection_resolves_scope_configs_when_the_scope_carries_the_full_entity_class_name(): void
+    {
+        // ROOT CAUSE of the 2026-07-23 empty CURRENT_BOARD_MEMBERS prompt block:
+        // the context_index stores scope points with the FULL config key
+        // ('App\Models\Person'), but findFullEntityName only compared basenames —
+        // the lookup missed, the scope config resolved to [], and the scope
+        // emitted as an EMPTY block (no concept, no cypher_pattern).
+        $builder = new EntityMetadataBuilder($this->entityConfigs, null);
+
+        $selection = new SemanticSelectionResult(
+            entities: [
+                'App\\Models\\Person' => new SelectedEntity(0.9, 'people', $this->entityConfigs['App\\Models\\Person']),
+            ],
+            scopes: [
+                'volunteers' => new SelectedScope(0.85, 'App\\Models\\Person', 'show volunteers'),
+            ],
+        );
+
+        $result = $builder->fromSemanticSelection('show volunteers', $selection);
+
+        $this->assertArrayHasKey('volunteers', $result['detected_scopes']);
+        $this->assertSame("type = 'volunteer'", $result['detected_scopes']['volunteers']['cypher_pattern']);
+        $this->assertSame(['type' => 'volunteer'], $result['detected_scopes']['volunteers']['filter']);
+    }
+
+    /** @test */
     public function all_returns_only_entities_with_metadata(): void
     {
         $builder = new EntityMetadataBuilder($this->entityConfigs, null);

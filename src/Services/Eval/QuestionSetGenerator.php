@@ -54,6 +54,9 @@ class QuestionSetGenerator
         foreach ($this->fromExampleQuestions() as $q) {
             $questions[] = $q;
         }
+        foreach ($this->fromPageExampleQuestions() as $q) {
+            $questions[] = $q;
+        }
         foreach ($this->fromBusinessRules() as $q) {
             $questions[] = $q;
         }
@@ -138,6 +141,34 @@ class QuestionSetGenerator
                 $out[] = $this->q($question, ['example', 'data_query']);
             }
         }
+        return $out;
+    }
+
+    /**
+     * Per-page recommended questions, taken verbatim and tagged so the eval command can
+     * specifically smoke-test clicked recommendations with --tags=page_example.
+     *
+     * @return array<int, array{question: string, tags: string[]}>
+     */
+    private function fromPageExampleQuestions(): array
+    {
+        $out = [];
+        foreach ((array) ($this->config['page_examples'] ?? []) as $entityType => $questions) {
+            foreach ((array) $questions as $question) {
+                $question = trim((string) $question);
+                if ($question === '') {
+                    continue;
+                }
+
+                $tags = ['example', 'page_example', 'page_context', 'data_query'];
+                if (is_string($entityType) && trim($entityType) !== '') {
+                    $tags[] = 'page:' . trim($entityType);
+                }
+
+                $out[] = $this->q($question, $tags);
+            }
+        }
+
         return $out;
     }
 
@@ -239,10 +270,20 @@ class QuestionSetGenerator
         $out = [];
         foreach ($questions as $q) {
             $key = strtolower(trim($q['question']));
-            if ($key === '' || isset($seen[$key])) {
+            if ($key === '') {
                 continue;
             }
-            $seen[$key] = true;
+
+            if (isset($seen[$key])) {
+                $index = $seen[$key];
+                $out[$index]['tags'] = array_values(array_unique(array_merge(
+                    $out[$index]['tags'],
+                    $q['tags'] ?? []
+                )));
+                continue;
+            }
+
+            $seen[$key] = count($out);
             $out[] = $q;
         }
         return $out;

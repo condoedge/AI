@@ -127,6 +127,20 @@ final class ScopeAcceptanceGate
             }
         }
 
+        // WITH-SEGMENT lower bound (item E): a part split by top-level WITHs
+        // yields one scope per segment; each binding's predicate must be found in
+        // its OWN segment. Without this bound, a predicate emitted BEFORE the
+        // WITH would vouch for the SAME alias re-bound AFTER it — accepting the
+        // later, unscoped match as self-scoped (a leak).
+        if ($scope->segmentStartOffset > 0) {
+            for ($i = $start; $i < $anchorIdx; $i++) {
+                if ($tokens[$i]->offset >= $scope->segmentStartOffset) {
+                    $start = max($start, $i);
+                    break;
+                }
+            }
+        }
+
         return [$start, $anchorIdx];
     }
 

@@ -518,9 +518,6 @@ class DataIngestionService implements DataIngestionServiceInterface
     {
         $results = [];
 
-        // Note: Could use transactions here for atomicity
-        // $transaction = $this->graphStore->beginTransaction();
-
         foreach ($entities as $index => $entity) {
             try {
                 $graphConfig = $entity->getGraphConfig();
@@ -538,8 +535,6 @@ class DataIngestionService implements DataIngestionServiceInterface
                 ];
             }
         }
-
-        // $this->graphStore->commit($transaction);
 
         return $results;
     }

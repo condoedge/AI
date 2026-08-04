@@ -130,6 +130,19 @@ class ConversationContextSection extends BasePromptSection
             $output .= $this->formatAvailableActions($availableActions);
         }
 
+        // AUGMENTATION ANCHOR (item B): QU judged this turn a follow-up that
+        // OPERATES ON the previous result AND a previous query is recorded —
+        // instruct the generator to EXTEND that query rather than start blind
+        // (the exact live failure: "add their last login to it" regenerated
+        // from nothing and lost the members table entirely).
+        if (($context->qu->followUpReference ?? false)
+            && !empty($conversationContext['last_cypher_query'])) {
+            $output .= "\n**THIS REQUEST OPERATES ON THE PREVIOUS RESULT.** "
+                . "EXTEND the Previous Query above: keep its MATCH/WHERE and returned columns, "
+                . "and ADD the newly requested data (extra columns / relationships) to it. "
+                . "Do NOT write an unrelated fresh query and do NOT drop columns the user was already shown.\n";
+        }
+
         // Follow-up instructions: each bullet is gated on the data it references, so the model
         // is never handed guidance about context that isn't present.
         $output .= $this->formatFollowUpInstructions($conversationContext);

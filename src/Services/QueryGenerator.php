@@ -8,6 +8,7 @@ use Condoedge\Ai\Contracts\QueryGeneratorInterface;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
 use Condoedge\Ai\Services\Security\CypherScopeAnalyzer;
@@ -98,10 +99,10 @@ class QueryGenerator implements QueryGeneratorInterface
      * @param string $question Natural language question
      * @param PipelineContext $context Pipeline context with schema, metadata, and detected scopes
      * @param array $options Optional parameters
-     * @return array Result with cypher, explanation, confidence, warnings, metadata
+     * @return QueryGenerationResult Result with cypher, explanation, confidence, warnings, metadata
      * @throws QueryGenerationException If generation fails after retries
      */
-    public function generate(string $question, PipelineContext $context, array $options = []): array
+    public function generate(string $question, PipelineContext $context, array $options = []): QueryGenerationResult
     {
         $this->logger->startTimer('query_generation');
 
@@ -134,14 +135,31 @@ class QueryGenerator implements QueryGeneratorInterface
 
                 $result = $this->templateMatcher->generateFromTemplate($question, $template, $context);
                 if ($result !== null) {
-                    $durationMs = $this->logger->stopTimer('query_generation');
-                    $this->logger->info('query_generator', 'Query generated via template', [
-                        'duration_ms' => $durationMs,
-                        'source' => 'template',
+                    // The deterministic path is safety-checked like the LLM path: a
+                    // template that produces invalid Cypher falls through to LLM
+                    // generation rather than shipping straight to the executor.
+                    $validation = $this->validate($result['cypher'], ['allow_write' => $allowWrite]);
+                    if ($validation['valid']) {
+                        $durationMs = $this->logger->stopTimer('query_generation');
+                        $this->logger->info('query_generator', 'Query generated via template', [
+                            'duration_ms' => $durationMs,
+                            'source' => 'template',
+                            'template' => $template,
+                            'confidence' => $result['confidence'],
+                        ]);
+                        return new QueryGenerationResult(
+                            cypher: $result['cypher'],
+                            explanation: $result['explanation'] ?? '',
+                            confidence: (float) ($result['confidence'] ?? 0.0),
+                            warnings: $result['warnings'] ?? [],
+                            metadata: $result['metadata'] ?? [],
+                        );
+                    }
+
+                    $this->logger->warning('query_generator', 'Template output failed validation, falling through to LLM', [
                         'template' => $template,
-                        'confidence' => $result['confidence'],
+                        'errors' => $validation['errors'],
                     ]);
-                    return $result;
                 }
             } else {
                 $this->logger->debug('query_generator', 'No template matched for question', [
@@ -158,11 +176,22 @@ class QueryGenerator implements QueryGeneratorInterface
         $retryCount = 0;
         $lastError = null;
 
+        // Prompt-capture seam for the eval harness: attach the VERBATIM final
+        // system/user strings to result metadata ONLY when explicitly requested,
+        // so production payloads never grow. On retries the LAST attempt's
+        // prompts win — that is the pair that produced the returned cypher.
+        $capturePrompts = ($options['capture_prompts'] ?? false) === true;
+        $capturedPrompts = null;
+
         while ($retryCount < $maxRetries) {
             try {
                 // Build prompt, split into system (identity + static rules) and user.
                 ['system' => $systemPrompt, 'user' => $userPrompt] =
                     $this->buildPrompts($question, $context, $allowWrite, $lastError);
+
+                if ($capturePrompts) {
+                    $capturedPrompts = ['system' => $systemPrompt, 'user' => $userPrompt];
+                }
 
                 $this->logger->debug('query_generator', 'Sending prompt to LLM', [
                     'prompt_size_bytes' => strlen($systemPrompt) + strlen($userPrompt),
@@ -191,17 +220,17 @@ class QueryGenerator implements QueryGeneratorInterface
                         'source' => 'llm',
                         'confidence' => 1.0,
                     ]);
-                    return [
-                        'cypher' => '',
-                        'explanation' => 'No query required to answer the question.',
-                        'confidence' => 1.0,
-                        'warnings' => [],
-                        'metadata' => [
+                    return new QueryGenerationResult(
+                        cypher: '',
+                        explanation: 'No query required to answer the question.',
+                        confidence: 1.0,
+                        warnings: [],
+                        metadata: [
                             'template_used' => null,
                             'retry_count' => $retryCount,
                             'complexity' => 0,
-                        ],
-                    ];
+                        ] + ($capturedPrompts !== null ? ['prompts' => $capturedPrompts] : []),
+                    );
                 }
 
                 $cypher = $this->extractCypher($response);
@@ -238,17 +267,17 @@ class QueryGenerator implements QueryGeneratorInterface
                         'retry_count' => $retryCount,
                         'complexity' => $validation['complexity'],
                     ]);
-                    return [
-                        'cypher' => $cypher,
-                        'explanation' => $explain ? $this->generateExplanation($cypher, $question) : '',
-                        'confidence' => $confidence,
-                        'warnings' => $validation['warnings'],
-                        'metadata' => [
+                    return new QueryGenerationResult(
+                        cypher: $cypher,
+                        explanation: $explain ? $this->generateExplanation($cypher, $question) : '',
+                        confidence: $confidence,
+                        warnings: $validation['warnings'],
+                        metadata: [
                             'template_used' => null,
                             'retry_count' => $retryCount,
                             'complexity' => $validation['complexity'],
-                        ],
-                    ];
+                        ] + ($capturedPrompts !== null ? ['prompts' => $capturedPrompts] : []),
+                    );
                 }
 
                 // Validation failed, prepare for retry
@@ -287,9 +316,12 @@ class QueryGenerator implements QueryGeneratorInterface
             'max_retries' => $maxRetries,
         ]);
 
-        throw new QueryGenerationException(
+        // Attach the LAST attempt's verbatim prompts (capture-mode only) so a
+        // failed generation is still inspectable by the eval trace — the prompts
+        // must not be lost precisely when the stage fails.
+        throw (new QueryGenerationException(
             "Failed to generate valid query after {$maxRetries} attempts. Last error: {$lastError}"
-        );
+        ))->setPrompts($capturedPrompts);
     }
 
     /**
@@ -325,17 +357,6 @@ class QueryGenerator implements QueryGeneratorInterface
         }
 
         return (bool) config('ai.security.enforce_scopeable_subset', true);
-    }
-
-    /**
-     * Sanitize a Cypher query by removing dangerous operations
-     *
-     * @param string $cypherQuery Query to sanitize
-     * @return string Sanitized query
-     */
-    public function sanitize(?string $cypherQuery): string
-    {
-        return $this->validator->sanitize($cypherQuery, $this->config['default_limit'] ?? 100);
     }
 
     /**

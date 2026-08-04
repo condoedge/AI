@@ -28,6 +28,15 @@ class ResultsDataSection extends BaseResponseSection
         return $this;
     }
 
+    /**
+     * How many rows this section renders at most — read by the ResponseGenerator's
+     * truncation-honesty guard so trigger and prompt can never disagree.
+     */
+    public function getMaxItems(): int
+    {
+        return $this->maxItems;
+    }
+
     public function format(PipelineContext $context, array $options = []): string
     {
         $data = $context->executionResult->data;
@@ -44,9 +53,16 @@ class ResultsDataSection extends BaseResponseSection
             . $this->spotlight(json_encode($displayData, JSON_PRETTY_PRINT), 'retrieved_document', ['id' => 'results'])
             . "\n\n";
 
-        if (count($data) > $this->maxItems) {
-            $remaining = count($data) - $this->maxItems;
-            $output .= "(Showing first {$this->maxItems} of " . count($data) . " results, {$remaining} more not shown)\n\n";
+        // The disclosed total prefers the companion count's TRUE total (stamped by
+        // AiManager when execution hit the row cap) over the retrieved row count,
+        // so a cap-hit turn shows "first 10 of 250", never a false "of 100".
+        $trueTotal = $context->executionResult->metadata['true_total'] ?? null;
+        $total = is_numeric($trueTotal) && (int) $trueTotal >= count($data) ? (int) $trueTotal : count($data);
+
+        if ($total > count($displayData)) {
+            $shown = count($displayData);
+            $remaining = $total - $shown;
+            $output .= "(Showing first {$shown} of {$total} results, {$remaining} more not shown)\n\n";
         }
 
         return $output;

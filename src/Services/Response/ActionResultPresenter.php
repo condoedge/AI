@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Response;
 
 use Condoedge\Ai\Kompo\Actions\ApprovalCard;
+use Condoedge\Ai\Services\Actions\ActionKind;
 use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 
 /**
@@ -55,6 +56,10 @@ class ActionResultPresenter
             return $noticeWhenUnavailable ? $this->renderUnavailableNotice() : null;
         }
 
+        if ($result->kind === ActionKind::Export) {
+            return $this->renderDownload($result->payload);
+        }
+
         $renderable = $result->renderable;
 
         // Deferred mutating action → confirmation card, NEVER inline execution.
@@ -63,6 +68,53 @@ class ActionResultPresenter
         }
 
         return $renderable;
+    }
+
+    /**
+     * Export payloads contain raw bytes, which must never be returned directly into a chat
+     * render tree that will be JSON encoded. Convert them to a base64 data URI at the presenter
+     * boundary while leaving AiActionResult::export() byte-compatible for non-chat exporters.
+     */
+    private function renderDownload(mixed $payload): mixed
+    {
+        if (!is_array($payload) || !array_key_exists('content', $payload)) {
+            return $this->renderExportFailure('The generated export could not be prepared for download.');
+        }
+
+        $mime = $this->safeMime((string) ($payload['mime'] ?? 'application/octet-stream'));
+        $filename = $this->safeDownloadFilename((string) ($payload['filename'] ?? 'download'));
+        $href = 'data:' . $mime . ';base64,' . base64_encode((string) $payload['content']);
+
+        if (function_exists('_Link')) {
+            $link = _Link($filename)->attr([
+                'download' => $filename,
+            ]);
+
+            // Kompo's Link target is the public href property. Generic attrs are not
+            // enough here, and ->href($href) would route-normalize the data URI.
+            if (is_object($link) && property_exists($link, 'href')) {
+                $link->href = $href;
+            }
+
+            if (is_object($link) && method_exists($link, 'icon')) {
+                $link = $link->icon('export-2');
+            }
+
+            if (is_object($link) && method_exists($link, 'class')) {
+                $link = $link->class('cdge-export-download');
+            }
+
+            return $link;
+        }
+
+        // No Kompo runtime (unit context): keep the payload JSON-safe and intentionally omit
+        // the raw binary content key.
+        return [
+            'type' => 'download',
+            'href' => $href,
+            'mime' => $mime,
+            'filename' => $filename,
+        ];
     }
 
     /**
@@ -105,6 +157,23 @@ class ActionResultPresenter
 
         // No Kompo runtime (unit context) — return the message text so the failure is never silent.
         return $message;
+    }
+
+    private function safeMime(string $mime): string
+    {
+        $mime = trim($mime);
+
+        return preg_match('/^[A-Za-z0-9.+-]+\/[A-Za-z0-9.+-]+$/', $mime) === 1
+            ? $mime
+            : 'application/octet-stream';
+    }
+
+    private function safeDownloadFilename(string $filename): string
+    {
+        $clean = preg_replace('/[^A-Za-z0-9_. -]+/', '_', $filename) ?: 'download';
+        $clean = trim($clean, " ._\t\n\r\0\x0B");
+
+        return $clean !== '' ? $clean : 'download';
     }
 
     /**

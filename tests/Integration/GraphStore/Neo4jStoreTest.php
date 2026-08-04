@@ -248,18 +248,4 @@ class Neo4jStoreTest extends TestCase
         $this->assertEquals('Alpha Team', $results[0]['team_name']);
         $this->assertEquals(2, $results[0]['member_count']);
     }
-
-    public function test_transaction_operations()
-    {
-        // Begin transaction
-        $tx = $this->neo4j->beginTransaction();
-        $this->assertNotNull($tx);
-
-        // Commit
-        $this->assertTrue($this->neo4j->commit($tx));
-
-        // Rollback
-        $tx2 = $this->neo4j->beginTransaction();
-        $this->assertTrue($this->neo4j->rollback($tx2));
-    }
 }

@@ -71,6 +71,7 @@ class QueryRulesSection extends BasePromptSection
         $output .= $this->formatDataTypeRules();
         $output .= $this->formatRelationshipRules();
         $output .= $this->formatBusinessRules();
+        $output .= $this->formatFieldProjection();
         $output .= $this->formatBestPractices();
         $output .= $this->formatOutputFormat();
 
@@ -107,6 +108,9 @@ class QueryRulesSection extends BasePromptSection
                "   - ALWAYS check the relationship direction in the schema\n" .
                "   - (a)-[:REL]->(b) means relationship goes FROM a TO b\n" .
                "   - (a)<-[:REL]-(b) means relationship goes FROM b TO a\n" .
+               "   - Do NOT infer relationship traversals from *_id properties, Eloquent relation names, natural-language phrases, or configured foreign_key metadata\n" .
+               "   - Use a relationship traversal only when the exact source label, relationship type, target label, and direction are present in the ENTITY RELATIONSHIPS block or in a DETECTED BUSINESS CONCEPTS block CYPHER PATTERN\n" .
+               "   - If a node exposes a scalar foreign-key property such as current_team_id, team_id, or user_id and the exact edge is not present in the ENTITY RELATIONSHIPS block, filter on that property with WHERE instead of traversing an invented edge\n" .
                "   - Getting the direction wrong will return zero results!\n\n";
     }
 
@@ -121,9 +125,18 @@ class QueryRulesSection extends BasePromptSection
                "   - When returning entity data, JOIN to related entities to get human-readable names (e.g., JOIN Contact for BoardMember)\n\n";
     }
 
+    private function formatFieldProjection(): string
+    {
+        return "5. FIELD PROJECTION:\n" .
+               "   - If the REQUESTED ATTRIBUTES block lists data concepts, each mapped property MUST appear in the RETURN clause as an output column\n" .
+               "   - RETURN requested attributes as columns in addition to an identifying column (name or id) — do NOT only use them in a WHERE filter\n" .
+               "   - A request to see/include an attribute is a projection requirement, not just a filter\n" .
+               "   - PRECEDENCE: REQUESTED ATTRIBUTES OVERRIDE any column list suggested in an entity description — descriptions offer default columns, the user's requested attributes always win, joining to related entities when the attribute lives there\n\n";
+    }
+
     private function formatBestPractices(): string
     {
-        return "5. QUERY BEST PRACTICES:\n" .
+        return "6. QUERY BEST PRACTICES:\n" .
                "   - Always include LIMIT clause (default LIMIT 100)\n" .
                "   - Use DISTINCT when traversing relationships\n" .
                "   - Use descriptive variable names (p for Person, o for Order, etc.)\n" .
@@ -132,7 +145,7 @@ class QueryRulesSection extends BasePromptSection
 
     private function formatOutputFormat(): string
     {
-        return "6. OUTPUT FORMAT:\n" .
+        return "7. OUTPUT FORMAT:\n" .
                "   - Return ONLY the Cypher query\n" .
                "   - NO markdown code blocks\n" .
                "   - NO explanations or comments\n" .
@@ -142,7 +155,7 @@ class QueryRulesSection extends BasePromptSection
 
     private function formatReadOnlyConstraint(): string
     {
-        return "7. READ-ONLY CONSTRAINT:\n" .
+        return "8. READ-ONLY CONSTRAINT:\n" .
                "   - NO write operations (CREATE, MERGE, SET, DELETE, REMOVE, etc.)\n" .
                "   - Only generate read queries (MATCH, RETURN, WHERE, etc.)\n\n";
     }
@@ -154,7 +167,7 @@ class QueryRulesSection extends BasePromptSection
         }
 
         $output = '';
-        $ruleNumber = 8; // Continue from last standard rule
+        $ruleNumber = 9; // Continue from last standard rule
 
         foreach ($this->customRules as $category => $rules) {
             $output .= "{$ruleNumber}. {$category}:\n";

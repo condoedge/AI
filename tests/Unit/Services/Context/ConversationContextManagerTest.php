@@ -96,7 +96,9 @@ class ConversationContextManagerTest extends TestCase
 
         $this->assertTrue($result['is_follow_up']);
         $this->assertEquals('Customer', $result['resolved_entity']);
-        $this->assertStringContainsString('Customer', $result['enriched_question']);
+        // Resolve, don't rewrite (item A): the ask is preserved verbatim; the
+        // referent rides in resolved_entity + the context snapshot.
+        $this->assertSame('and those in Sales team?', $result['enriched_question']);
     }
 
     /** @test */
@@ -115,6 +117,97 @@ class ConversationContextManagerTest extends TestCase
 
         $this->assertEquals('Customer', $conversation->getFocusedEntity());
         $this->assertContains('Customer', $conversation->getMentionedEntities());
+    }
+
+    /** @test */
+    public function it_persists_the_cypher_and_full_result_count_alongside_the_ten_row_sample(): void
+    {
+        // The follow-up export path ("give me that as an Excel") re-executes the
+        // PREVIOUS turn's cypher to recover the full result set — the snapshot
+        // only keeps a 10-row display sample. This pins the contract that path
+        // depends on: last_cypher_query + last_result_count persist next to the
+        // trimmed last_result_sample, and buildPromptContext exposes all three.
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        $rows = [];
+        for ($i = 1; $i <= 25; $i++) {
+            $rows[] = ['name' => "Member {$i}"];
+        }
+
+        $cypher = 'MATCH (u:User) RETURN u.name AS name LIMIT 100';
+        $this->manager->recordResponse(
+            $conversation,
+            'Here are your team members.',
+            $cypher,
+            ['data' => $rows]
+        );
+
+        $conversation->refresh();
+        $snapshot = $conversation->context_snapshot;
+
+        $this->assertSame($cypher, $snapshot['last_cypher_query']);
+        $this->assertSame(25, $snapshot['last_result_count']);
+        $this->assertCount(10, $snapshot['last_result_sample']);
+
+        $promptContext = $this->manager->buildPromptContext($conversation);
+        $this->assertSame($cypher, $promptContext['last_cypher_query']);
+        $this->assertSame(25, $promptContext['last_result_count']);
+        $this->assertCount(10, $promptContext['last_result_sample']);
+    }
+
+    /** @test */
+    public function a_digest_turn_persists_all_its_rows_as_the_sample_instead_of_the_ten_row_slice(): void
+    {
+        // B1 ("export that" after a combined digest+export turn): a digest turn
+        // records no cypher, so the snapshot sample IS the only export source.
+        // Its rows are already display-capped per source by the DigestRunner —
+        // the snapshot keeps them ALL, or the promised "file with everything
+        // shown here" silently loses every row past the 10-row display slice.
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        $rows = [];
+        for ($i = 1; $i <= 28; $i++) {
+            $rows[] = ['id' => $i, 'attention_source' => 'open_tasks'];
+        }
+
+        $this->manager->recordResponse(
+            $conversation,
+            'Here is your attention digest.',
+            '',
+            [
+                'data' => $rows,
+                'metadata' => ['response' => ['digest' => ['sources' => []]]],
+            ]
+        );
+
+        $conversation->refresh();
+        $snapshot = $conversation->context_snapshot;
+
+        $this->assertCount(28, $snapshot['last_result_sample']);
+        $this->assertSame(28, $snapshot['last_result_count']);
+    }
+
+    /** @test */
+    public function the_distilled_subject_rides_metadata_into_last_subject(): void
+    {
+        // The composer's write-back contract: metadata.subject (the distilled
+        // QU search query) titles a follow-up export of these rows. It only
+        // holds end-to-end when the caller threads metadata into recordResponse.
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        $this->manager->recordResponse(
+            $conversation,
+            'Here are your overdue invoices.',
+            'MATCH (i:Invoice) RETURN i.id AS id',
+            [
+                'data' => [['id' => 1]],
+                'metadata' => ['subject' => 'overdue invoices'],
+            ]
+        );
+
+        $conversation->refresh();
+
+        $this->assertSame('overdue invoices', $conversation->context_snapshot['last_subject']);
     }
 
     /** @test */

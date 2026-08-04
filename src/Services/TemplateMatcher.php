@@ -38,34 +38,6 @@ class TemplateMatcher
             'example_question' => 'How many orders?',
             'example_cypher' => 'MATCH (n:Order) RETURN count(n) as count'
         ],
-        'find_by_property' => [
-            'pattern' => '/^find\s+(\w+)\s+(with|where|having)\s+(\w+)\s*(=|is|equals)\s*(.+)/i',
-            'cypher' => 'MATCH (n:{label} {{{property}: $value}}) RETURN n LIMIT 100',
-            'description' => 'Find entities by property value',
-            'example_question' => 'Find customers with email john@example.com',
-            'example_cypher' => 'MATCH (n:Customer {{email: $value}}) RETURN n LIMIT 100'
-        ],
-        'relationship_query' => [
-            'pattern' => '/^(show|find|get)\s+(\w+)\s+(connected to|related to|linked to)\s+(\w+)/i',
-            'cypher' => 'MATCH (a:{label1})-[r]-(b:{label2}) RETURN a, r, b LIMIT 100',
-            'description' => 'Find related entities',
-            'example_question' => 'Show customers connected to orders',
-            'example_cypher' => 'MATCH (a:Customer)-[r]-(b:Order) RETURN a, r, b LIMIT 100'
-        ],
-        'aggregation' => [
-            'pattern' => '/^(sum|total|average|avg|max|min)\s+(.+)/i',
-            'cypher' => 'MATCH (n:{label}) RETURN {aggregation}(n.{property}) as result',
-            'description' => 'Aggregate property values',
-            'example_question' => 'What is the average order total?',
-            'example_cypher' => 'MATCH (n:Order) RETURN avg(n.total) as result'
-        ],
-        'filtering' => [
-            'pattern' => '/^(\w+)\s+where\s+(.+)/i',
-            'cypher' => 'MATCH (n:{label}) WHERE {condition} RETURN n LIMIT 100',
-            'description' => 'Filter entities by condition',
-            'example_question' => 'Customers where age > 30',
-            'example_cypher' => 'MATCH (n:Customer) WHERE n.age > 30 RETURN n LIMIT 100'
-        ],
     ];
 
     /**

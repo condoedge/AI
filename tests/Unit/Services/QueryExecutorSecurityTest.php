@@ -468,10 +468,10 @@ class QueryExecutorSecurityTest extends TestCase
 
         $result = $this->executor->execute('MATCH (i:Invoice) RETURN i', [], ['user' => $user]);
 
-        $this->assertTrue($result['success']);
-        $this->assertSame([], $result['data']);
-        $this->assertTrue($result['metadata']['safe_stop'] ?? false);
-        $this->assertFalse($result['metadata']['security_filter_applied']);
+        $this->assertTrue($result->success);
+        $this->assertSame([], $result->data);
+        $this->assertTrue($result->metadata['safe_stop'] ?? false);
+        $this->assertFalse($result->metadata['security_filter_applied']);
     }
 
     // =========================================================================

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Contracts;
 
+use Condoedge\Ai\DTOs\QueryExecutionResult;
+
 /**
  * Query Executor Interface
  *
@@ -23,16 +25,11 @@ interface QueryExecutorInterface
      *                       - read_only: Enforce read-only mode (default: true)
      *                       - format: Result format: 'graph', 'table', 'json' (default: 'table')
      *                       - include_stats: Include execution statistics (default: true)
-     * @return array Execution result with keys:
-     *               - success: Boolean indicating if query succeeded
-     *               - data: Query results in requested format
-     *               - stats: Execution statistics (rows returned, time, etc.)
-     *               - metadata: Additional metadata
-     *               - errors: Array of errors if any
+     * @return QueryExecutionResult Success flag, formatted data, stats, metadata and errors
      * @throws \RuntimeException If query execution fails
      * @throws \Exception If query exceeds timeout
      */
-    public function execute(?string $cypherQuery, array $parameters = [], array $options = []): array;
+    public function execute(?string $cypherQuery, array $parameters = [], array $options = []): QueryExecutionResult;
 
     /**
      * Execute query and return count only (optimization)
@@ -81,12 +78,4 @@ interface QueryExecutorInterface
      * @return bool True if query is valid
      */
     public function test(?string $cypherQuery): bool;
-
-    /**
-     * Cancel a running query
-     *
-     * @param string $queryId Query identifier
-     * @return bool True if cancelled successfully
-     */
-    public function cancel(?string $queryId): bool;
 }

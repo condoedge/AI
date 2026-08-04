@@ -52,6 +52,27 @@ class SchemaSection extends BasePromptSection
             $output .= "\n";
         }
 
+        if (!empty($schema['relationshipPatterns']) && is_array($schema['relationshipPatterns'])) {
+            $output .= "Relationship Patterns by Label:\n";
+            foreach ($schema['relationshipPatterns'] as $pattern) {
+                if (!is_array($pattern)) {
+                    continue;
+                }
+
+                $fromLabel = $pattern['from_label'] ?? $pattern['fromLabel'] ?? $pattern['from'] ?? null;
+                $type = $pattern['type'] ?? $pattern['relationshipType'] ?? $pattern['relationship_type'] ?? null;
+                $toLabel = $pattern['to_label'] ?? $pattern['toLabel'] ?? $pattern['to'] ?? null;
+
+                if (!is_string($fromLabel) || !is_string($type) || !is_string($toLabel)) {
+                    continue;
+                }
+
+                $count = isset($pattern['count']) ? ' count=' . (int) $pattern['count'] : '';
+                $output .= "  - (:{$fromLabel})-[:{$type}]->(:{$toLabel}){$count}\n";
+            }
+            $output .= "\n";
+        }
+
         if (!empty($schema['properties']) && is_array($schema['properties'])) {
             $firstValue = reset($schema['properties']);
             if (is_array($firstValue)) {

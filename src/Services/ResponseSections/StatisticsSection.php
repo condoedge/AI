@@ -33,7 +33,16 @@ class StatisticsSection extends BaseResponseSection
         }
 
         $rowCount = $stats['rows_returned'] ?? count($data);
-        $output .= "- Rows returned: {$rowCount}\n";
+
+        // Companion-count true total (stamped by AiManager when execution hit the
+        // row cap): surface it beside the returned rows so the model knows the
+        // real population size, not just the capped retrieval.
+        $trueTotal = $stats['true_total'] ?? $context->executionResult->metadata['true_total'] ?? null;
+        if (is_numeric($trueTotal) && (int) $trueTotal > (int) $rowCount) {
+            $output .= "- Rows returned: {$rowCount} (of " . (int) $trueTotal . " total matching rows)\n";
+        } else {
+            $output .= "- Rows returned: {$rowCount}\n";
+        }
 
         return $output . "\n";
     }

@@ -75,6 +75,38 @@ class ConversationContextSectionTest extends TestCase
     }
 
     /** @test */
+    public function an_anchored_follow_up_gets_an_explicit_extend_instruction(): void
+    {
+        // Item B (augmentation anchor): when QU judged the turn a follow-up on
+        // the previous result AND a previous query is recorded, the generator
+        // must be told to EXTEND that query — keep its shape and returned
+        // columns, add the newly requested data — instead of starting blind.
+        $context = $this->contextWith([
+            'focused_entity' => 'Team',
+            'last_cypher_query' => 'MATCH (t:Team)-[:HAS_MEMBER]->(u:User) RETURN u.name, u.email',
+        ]);
+        $context->qu = new \Condoedge\Ai\DTOs\QueryUnderstandingResult(followUpReference: true);
+
+        $output = $this->section->format('Ok, but could you add their last login to it?', $context);
+
+        $this->assertStringContainsString('EXTEND the Previous Query', $output);
+        $this->assertStringContainsString('keep its MATCH/WHERE and returned columns', $output);
+    }
+
+    /** @test */
+    public function the_extend_instruction_is_absent_without_the_follow_up_judgment(): void
+    {
+        $context = $this->contextWith([
+            'focused_entity' => 'Team',
+            'last_cypher_query' => 'MATCH (t:Team)-[:HAS_MEMBER]->(u:User) RETURN u.name',
+        ]);
+
+        $output = $this->section->format('How many units do we have?', $context);
+
+        $this->assertStringNotContainsString('EXTEND the Previous Query', $output);
+    }
+
+    /** @test */
     public function it_formats_recent_exchanges(): void
     {
         $context = $this->contextWith([

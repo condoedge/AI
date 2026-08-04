@@ -81,6 +81,14 @@
     "ai.chat.try-asking": "Essayez de demander:",
     "ai.chat.settings": "Parametres",
     "ai.chat.new-conversation-tooltip": "Nouvelle conversation",
+    "ai.chat.limit-banner-text": "Cette conversation devient longue - je risque de perdre le fil des details precedents. Commencez-en une nouvelle; le bouton copie un mini resume a coller dans la nouvelle conversation.",
+    "ai.chat.limit-banner-button": "Copier le resume et demarrer une nouvelle conversation",
+    "ai.chat.resume-header": "Resume d'une conversation precedente (commencee le :date):",
+    "ai.chat.resume-subject": "Sujet: :subject",
+    "ai.chat.resume-last-result": "{1} Dernier resultat affiche: 1 ligne sur :subject; colonnes: :columns|[2,*] Dernier resultat affiche: :count lignes sur :subject; colonnes: :columns",
+    "ai.chat.resume-last-result-generic": "{1} Dernier resultat affiche: 1 ligne; colonnes: :columns|[2,*] Dernier resultat affiche: :count lignes; colonnes: :columns",
+    "ai.chat.resume-last-answer": "Derniere reponse: :answer",
+    "ai.chat.resume-recent-questions": "Questions recentes:",
 
     "ai.messages.pin": "Epingler la conversation",
     "ai.messages.unpin": "Desepingler",
@@ -190,6 +198,10 @@
     "ai.prompt.explain_no_results": "Veuillez expliquer de manière amicale pourquoi il pourrait n'y avoir aucun résultat. Suggérez ce que l'utilisateur pourrait essayer à la place ou comment reformuler sa question.",
 
     "ai.response.no_results_fallback": "Aucun résultat n'a été trouvé pour votre question: \":question\". Vous pourriez essayer de reformuler ou de vérifier si les données que vous recherchez existent.",
+    "ai.response.truncation_disclosure": "Affichage de :shown sur :total — demandez la liste complète ou un export.",
+    "ai.digest.truncation_footer": ":label : affichage de :shown sur :total.",
+    "ai.response.self_reference_marker": "c'est vous",
+    "ai.response.self_reference_patch": "c'est vous — vos propres coordonnées",
 
     "ai.error.encountered_issue": "J'ai rencontré un problème en essayant de répondre à votre question: \":question\".",
     "ai.error.timeout_guidance": "La requête a pris trop de temps à s'exécuter. Essayez de poser une question plus précise ou de limiter la portée.",
@@ -202,5 +214,7 @@
     "ai.insight.average_value": "Valeur moyenne: :value",
     "ai.insight.high_values": "Contient des valeurs notablement élevées",
     "ai.insight.low_values": "Contient des valeurs notablement basses",
-    "ai.insight.properties_count": "Les résultats contiennent :count propriétés: :properties"
+    "ai.insight.properties_count": "Les résultats contiennent :count propriétés: :properties",
+
+    "ai.internal-file": "Fichier interne: :name"
 }

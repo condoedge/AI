@@ -127,50 +127,25 @@ class TestQuestionCommand extends Command
         $execMs = 0;
         $executionResult = ['data' => [], 'metadata' => []];
 
-        // Retrieve file context BEFORE query decision — try all queries and merge results
+        // Retrieve file context BEFORE query decision — through the SAME production
+        // seam the eval driver uses (retrieveFileContextInto -> the private
+        // retrieveAndSetFileContext), so this debug command reproduces production
+        // retrieval EXACTLY: the question_type skip, cross-lingual corpus-translation
+        // angles, register-expansion angles, the page-context angle, the recall
+        // floor, file-listing enumeration and the multi-chunk snippet-depth merge.
+        // The previous inline re-implementation (searchQuery/question/tags only,
+        // naive max-relevance merge) diverged from production and mis-attributed
+        // retrieval misses during debugging.
         $fileContext = [];
-        if (config('ai.file_context.enabled', true)) {
-            $searchQueries = array_filter(array_unique([
-                $context->qu->searchQuery,
-                $question,
-                $context->qu->clarifiedQuestion,
-            ]));
+        try {
+            $context = AI::retrieveFileContextInto($context, $question, ['user' => $user]);
+            $fileContext = $context->fileContext;
+        } catch (\Throwable $e) {
+            $this->warn("  File search failed: {$e->getMessage()}");
+        }
 
-            if (!empty($context->qu->searchTags)) {
-                $searchQueries[] = implode(' ', $context->qu->searchTags);
-            }
-
-            $allFiles = [];
-            foreach ($searchQueries as $searchQuery) {
-                try {
-                    $result = AI::retrieveFileContext($searchQuery, $user);
-                    $found = count($result['relevant_files'] ?? []);
-                    if ($showDebug) {
-                        $this->line("  File search [{$found} files]: \"" . substr($searchQuery, 0, 70) . '"');
-                    }
-                    foreach ($result['relevant_files'] ?? [] as $file) {
-                        $fileId = $file['file_id'] ?? $file['filename'] ?? '';
-                        if (!isset($allFiles[$fileId]) || ($file['relevance'] ?? 0) > ($allFiles[$fileId]['relevance'] ?? 0)) {
-                            $allFiles[$fileId] = $file;
-                        }
-                    }
-                } catch (\Throwable $e) {
-                    if ($showDebug) {
-                        $this->warn("  File search failed: {$e->getMessage()}");
-                    }
-                }
-            }
-
-            if (!empty($allFiles)) {
-                $files = array_values($allFiles);
-                usort($files, fn($a, $b) => ($b['priority_score'] ?? $b['relevance'] ?? 0) <=> ($a['priority_score'] ?? $a['relevance'] ?? 0));
-                $fileContext = [
-                    'relevant_files' => $files,
-                    'file_count' => count($files),
-                    'has_physical' => collect($files)->contains('source', 'physical'),
-                    'has_database' => collect($files)->contains(fn($f) => ($f['source'] ?? '') !== 'physical'),
-                ];
-            }
+        if ($showDebug) {
+            $this->line('  File search [' . count($fileContext['relevant_files'] ?? []) . ' references] via production fan-out');
         }
 
         if ($showDebug && !empty($fileContext['relevant_files'])) {

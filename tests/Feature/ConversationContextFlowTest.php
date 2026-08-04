@@ -268,8 +268,9 @@ class ConversationContextFlowTest extends TestCase
 
         $this->assertTrue($result['is_follow_up']);
         $this->assertEquals('Customer', $result['resolved_entity']);
-        // The enriched question should replace "those" with the entity
-        $this->assertStringContainsString('customer', strtolower($result['enriched_question']));
+        // Resolve, don't rewrite (item A): pronouns are never substituted into
+        // the question text — the referent is structural (resolved_entity).
+        $this->assertSame('How many of those are active?', $result['enriched_question']);
     }
 
     /** @test */

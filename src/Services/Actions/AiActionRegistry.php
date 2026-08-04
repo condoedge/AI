@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Actions;
 
 use Condoedge\Ai\Contracts\AiActionInterface;
+use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Services\Actions\BuiltIn\ExportExcelAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\ExportPdfAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\LinkAction;
@@ -52,6 +53,7 @@ class AiActionRegistry
         }
 
         $this->registerConfigActions();
+        $this->registerNativeQueryTool();
     }
 
     /**
@@ -115,6 +117,48 @@ class AiActionRegistry
                 $this->generic[$action->key()] = $action;
             }
         }
+    }
+
+    /**
+     * Register the read-only run_query tool ONLY when both the native tool loop and its own
+     * flag are on (config('ai.actions.native_tools') AND config('ai.actions.native_query_tool'),
+     * both default OFF). It rides INSIDE the native loop, so it must never be registered — and so
+     * never offered — while native_tools is off. The executor is resolved from the container when
+     * bound; otherwise the tool resolves it lazily on dispatch. A built-in / explicitly-registered
+     * action under the same key is never clobbered.
+     */
+    private function registerNativeQueryTool(): void
+    {
+        if (!(bool) $this->cfg('ai.actions.native_tools', false)) {
+            return;
+        }
+        if (!(bool) $this->cfg('ai.actions.native_query_tool', false)) {
+            return;
+        }
+
+        $tool = new GraphQueryTool($this->resolveQueryExecutor());
+        if (!isset($this->generic[$tool->key()])) {
+            $this->generic[$tool->key()] = $tool;
+        }
+    }
+
+    /**
+     * The EXISTING executor the rest of the pipeline uses, resolved from the container when it is
+     * bound. Returns null in pure-unit/no-provider contexts; the tool then resolves it lazily.
+     */
+    private function resolveQueryExecutor(): ?QueryExecutorInterface
+    {
+        if (function_exists('app')) {
+            try {
+                if (app()->bound(QueryExecutorInterface::class)) {
+                    return app(QueryExecutorInterface::class);
+                }
+            } catch (\Throwable $e) {
+                // Container unavailable — let the tool resolve the executor lazily.
+            }
+        }
+
+        return null;
     }
 
     /**

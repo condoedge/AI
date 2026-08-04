@@ -66,6 +66,17 @@ class SyncRelationshipsCommand extends Command
      */
     public function handle(): int
     {
+        // Same memory hygiene as ai:ingest — this command walks every row of every model:
+        // raise the CLI limit, and detach the per-query retention (QueryExecuted collectors
+        // hold every query + bindings for the process lifetime; gc cannot reclaim it).
+        @ini_set('memory_limit', (string) config('ai.ingestion.memory_limit', '2G'));
+        try {
+            \Illuminate\Support\Facades\DB::connection()->disableQueryLog();
+            \Illuminate\Support\Facades\DB::connection()->unsetEventDispatcher();
+        } catch (\Throwable $e) {
+            // No default DB connection — nothing to detach.
+        }
+
         $this->info('🔗 Relationship Synchronization');
         $this->newLine();
 
@@ -160,11 +171,20 @@ class SyncRelationshipsCommand extends Command
         $failed = 0;
 
         $progressBar = $this->output->createProgressBar($total);
-        $progressBar->setFormat('  [%bar%] %current%/%max% (%percent:3s%%) Created: %message%');
-        $progressBar->setMessage('0');
+        $progressBar->setFormat('  [%bar%] %current%/%max% (%percent:3s%%) %message%');
+        $progressBar->setMessage('Created: 0');
         $progressBar->start();
 
-        $modelClass::chunk($chunkSize, function ($entities) use (
+        // Column-pruned loading: relationship sync reads only the key + FK/morph columns
+        // per row, but a full hydration drags every column along — InboundEmail's complete
+        // email bodies OOM'd a 2000-row chunk before a single relationship was checked.
+        $query = $modelClass::query();
+        $columns = $this->relationshipColumns($model);
+        if ($columns !== null) {
+            $query->select($columns);
+        }
+
+        $query->chunk($chunkSize, function ($entities) use (
             &$created,
             &$skipped,
             &$failed,
@@ -182,8 +202,13 @@ class SyncRelationshipsCommand extends Command
             $skipped += $result['relationships_skipped'];
             $failed += $result['relationships_failed'];
 
-            $progressBar->setMessage((string) $created);
+            $mem = round(memory_get_usage(true) / 1048576);
+            $peak = round(memory_get_peak_usage(true) / 1048576);
+            $progressBar->setMessage("Created: {$created} | Mem: {$mem}MB (peak {$peak}MB)");
             $progressBar->advance(count($entities));
+
+            // Entities + relations form reference cycles; collect deterministically per chunk.
+            gc_collect_cycles();
         });
 
         $progressBar->finish();
@@ -197,6 +222,50 @@ class SyncRelationshipsCommand extends Command
             'skipped' => $skipped,
             'failed' => $failed,
         ];
+    }
+
+    /**
+     * The only columns relationship sync reads per row: the primary key, each
+     * relationship's foreign key, the morph-type column for polymorphic targets, and any
+     * relationship-property source fields. The list is intersected with the table's real
+     * columns (one cheap schema query) so a convention-derived morph column that does not
+     * exist can never break the SELECT. Returns null (full row) when the graph config or
+     * schema cannot be read — correctness over optimization.
+     *
+     * Trade-off: models whose $appends accessors read non-selected attributes will see
+     * null there during toArray(); the sync service's per-entity try/catch keeps any such
+     * failure contained to that entity.
+     */
+    private function relationshipColumns(Nodeable $model): ?array
+    {
+        try {
+            $columns = [$model->getKeyName()];
+
+            foreach ($model->getGraphConfig()->relationships as $rel) {
+                $columns[] = $rel->foreignKey;
+                if ($rel->isPolymorphic()) {
+                    $columns[] = $rel->morphTypeColumn();
+                }
+                foreach ($rel->properties as $sourceField) {
+                    if (is_string($sourceField)) {
+                        $columns[] = $sourceField;
+                    }
+                }
+            }
+
+            $existing = array_flip(
+                $model->getConnection()->getSchemaBuilder()->getColumnListing($model->getTable())
+            );
+            $columns = array_values(array_filter(
+                array_unique($columns),
+                static fn ($column) => isset($existing[$column])
+            ));
+
+            // The key must survive the intersection or chunk() ordering breaks — bail to full rows.
+            return in_array($model->getKeyName(), $columns, true) ? $columns : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**

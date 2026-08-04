@@ -43,7 +43,9 @@ class CalculationsSection extends BasePromptSection
         }
 
         $output = $this->header('DOMAIN CALCULATIONS (canonical formulas)');
-        $output .= "When the question asks for one of these metrics, use its canonical formula EXACTLY — do not invent a different aggregation.\n\n";
+        $output .= "When the question asks for one of these metrics, use its canonical formula EXACTLY — do not invent a different aggregation.\n";
+        $output .= "NEVER return the bare aggregate alone: keep the aggregation itself unchanged, and ALSO RETURN identifying/verification columns alongside it — the count of rows aggregated and the ids/names of the entities involved (e.g. count(x) AS items_counted, plus the id/name of the entity the metric is about) — so the result is verifiable, especially when the aggregate is 0 or empty.\n";
+        $output .= "ADD columns; never change the aggregation itself.\n\n";
 
         foreach ($calculations as $key => $calc) {
             if (!is_array($calc)) {

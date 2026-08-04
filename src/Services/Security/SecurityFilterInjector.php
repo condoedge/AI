@@ -33,6 +33,35 @@ use Condoedge\Ai\Services\Security\Scope\ScopePlan;
  * relationship paths (and the original query) can never collide on a generated
  * variable name.
  *
+ * OPTIONAL MATCH (null-tolerant scoping, AiQueryLog 674):
+ *   • A binding introduced by OPTIONAL MATCH may be null. A mandatory
+ *     `MATCH (i)-[:REL]->(s:Union) WHERE s.team_id IN $ai_team_ids` on a null
+ *     variable eliminates EVERY row, so its relationship scope is emitted as
+ *     `(i IS NULL OR EXISTS { MATCH (i)-[:REL]->(ai_sN:Union) WHERE … })` and a
+ *     direct scope as `(i IS NULL OR i.team_id IN $ai_team_ids)` — merged into
+ *     the anchor-adjacent WHERE. Attached to the OPTIONAL MATCH's own WHERE this
+ *     filters the optional match (a cross-tenant value becomes null, the row
+ *     survives and the value never contributes); in a row-level position it
+ *     keeps unmatched rows while still team-scoping every non-null value.
+ *     SECURITY INVARIANT: OPTIONAL variables are scoped null-tolerantly, never
+ *     left unscoped.
+ *   • When the clause immediately before the anchor is an OPTIONAL MATCH, a
+ *     WHERE spliced there belongs to that OPTIONAL MATCH and does NOT constrain
+ *     the row — so a MANDATORY binding's direct predicate is instead emitted as
+ *     a row-level `WITH * WHERE …` block just before the anchor. (Mandatory
+ *     relationship MATCH blocks are row-level by construction and unaffected.)
+ *
+ * KNOWN REDUNDANCY (documented, intentional): injection is all-or-nothing per
+ * scope — when the acceptance gate rejects the query (any ONE binding not
+ * self-scoped), the injector re-scopes EVERY binding, including ones the
+ * generator already scoped (e.g. a query carrying `(u)-[:UNION]->(u1:Union)
+ * WHERE u1.team_id IN $ai_team_ids` still receives a fresh
+ * `MATCH (u)-[:UNION]->(ai_sN:Union) …` block). Recognizing semantically
+ * equivalent existing scoping would require predicate-level equivalence
+ * analysis; the redundant AND-ed filter can never widen results (defence in
+ * depth), though a duplicate relationship MATCH can multiply rows when a node
+ * has several team edges (not the case for the 1:1 CondoEdge paths).
+ *
  * Returns null on any residual ambiguity (a clause it cannot place, an empty
  * filter) OR when the resulting rewrite is not structurally valid, so the caller
  * fails closed rather than running an under-scoped or malformed query.
@@ -117,8 +146,9 @@ final class SecurityFilterInjector
         array &$reserved,
         int &$aliasCounter
     ): ?array {
-        $whereParts = [];   // direct-column predicates to AND-combine into WHERE
-        $matchInserts = []; // relationship MATCH ... WHERE blocks spliced before anchor
+        $whereParts = [];    // predicates AND-combined into the anchor-adjacent WHERE
+        $rowWhereParts = []; // mandatory predicates that need ROW-level `WITH * WHERE …`
+        $matchInserts = [];  // mandatory relationship MATCH ... WHERE blocks before anchor
 
         foreach ($scope->sensitiveBindings as $binding) {
             $clause = $filterFor($binding);
@@ -141,7 +171,19 @@ final class SecurityFilterInjector
                 if ($uniquified === null) {
                     return null;
                 }
-                $matchInserts[] = $uniquified;
+
+                if ($binding->optional) {
+                    // OPTIONAL-bound variable (may be null): a MANDATORY MATCH on a
+                    // null variable eliminates every row — OPTIONAL semantics
+                    // destroyed (AiQueryLog 674). Express the SAME scope as a
+                    // null-tolerant existential predicate instead: a non-null value
+                    // must still reach a permitted team ($ai_team_ids enforced),
+                    // a null (no optional match) keeps the row. NEVER simply skip
+                    // scoping for OPTIONAL variables.
+                    $whereParts[] = '(' . $binding->alias . ' IS NULL OR EXISTS { ' . $uniquified . ' })';
+                } else {
+                    $matchInserts[] = $uniquified;
+                }
                 continue;
             }
 
@@ -151,7 +193,23 @@ final class SecurityFilterInjector
             if ($predicate === '') {
                 return null;
             }
-            $whereParts[] = $predicate;
+
+            if ($binding->optional) {
+                // Null-tolerant direct predicate: attached to the OPTIONAL MATCH's
+                // WHERE it filters the optional match (cross-tenant value → null,
+                // row survives); in a row-level position the IS-NULL disjunct keeps
+                // unmatched rows while non-null values stay team-scoped.
+                $whereParts[] = '(' . $binding->alias . ' IS NULL OR ' . $predicate . ')';
+            } elseif ($scope->anchorClauseIsOptionalMatch) {
+                // The WHERE we would merge into / open belongs to an OPTIONAL
+                // MATCH: a mandatory binding's predicate there would only filter
+                // the optional match — a cross-tenant mandatory row would still
+                // flow through with the optional variable null (leak). Enforce it
+                // at ROW level via `WITH * WHERE …` instead.
+                $rowWhereParts[] = $predicate;
+            } else {
+                $whereParts[] = $predicate;
+            }
         }
 
         $edits = [];
@@ -211,6 +269,16 @@ final class SecurityFilterInjector
 
         foreach ($matchInserts as $m) {
             $insertBeforeAnchor .= $m . ' ';
+        }
+
+        if (!empty($rowWhereParts)) {
+            // Row-level enforcement for mandatory bindings when the anchor-adjacent
+            // clause is an OPTIONAL MATCH: `WITH *` re-anchors the WHERE at row
+            // level (all variables stay live), so cross-tenant mandatory rows are
+            // eliminated even though the preceding clause is OPTIONAL. Emitted
+            // LAST, after the (self-contained) MATCH blocks, immediately before
+            // the anchor.
+            $insertBeforeAnchor .= 'WITH * WHERE ' . implode(' AND ', $rowWhereParts) . ' ';
         }
 
         if ($insertBeforeAnchor !== '') {

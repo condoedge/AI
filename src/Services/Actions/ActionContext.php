@@ -37,6 +37,7 @@ final class ActionContext
         public readonly array $input = [],
         public readonly array $resultSet = [],
         public readonly ?string $answer = null,
+        public readonly ?string $documentMarkdown = null,
     ) {
     }
 
@@ -59,6 +60,9 @@ final class ActionContext
             input: $input,
             resultSet: is_array($resultSet) ? $resultSet : [],
             answer: isset($context['answer']) ? (string) $context['answer'] : null,
+            documentMarkdown: isset($context['document_markdown'])
+                ? (string) $context['document_markdown']
+                : (isset($context['documentMarkdown']) ? (string) $context['documentMarkdown'] : null),
         );
     }
 }

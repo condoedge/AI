@@ -16,6 +16,8 @@ use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryUnderstandingResult;
 use Condoedge\Ai\Services\AiManager;
 use Condoedge\Ai\Services\Context\FileContextProvider;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\Tests\TestCase;
 use Mockery;
 
@@ -107,20 +109,21 @@ class AiManagerCorpusLanguageAnglesTest extends TestCase
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
         $this->mockEmbedding->shouldReceive('embed')->andReturn(array_fill(0, 1536, 0.1));
 
-        $this->mockQueryGenerator->shouldReceive('generate')->andReturn([
-            'cypher' => 'MATCH (u:Unit) RETURN u',
-            'explanation' => 'List units',
-            'confidence' => 0.9,
-            'warnings' => [],
-            'metadata' => [],
-        ]);
+        $this->mockQueryGenerator->shouldReceive('generate')->andReturn(new QueryGenerationResult(
+            cypher: 'MATCH (u:Unit) RETURN u',
+            explanation: 'List units',
+            confidence: 0.9,
+            warnings: [],
+            metadata: [],
+        ));
 
-        $this->mockQueryExecutor->shouldReceive('execute')->andReturn([
-            'success' => true,
-            'data' => [['id' => 1]],
-            'stats' => [],
-            'metadata' => [],
-        ]);
+        $this->mockQueryExecutor->shouldReceive('execute')->andReturn(new QueryExecutionResult(
+            success: true,
+            data: [['id' => 1]],
+            stats: [],
+            metadata: [],
+            errors: [],
+        ));
 
         $this->mockResponseGenerator->shouldReceive('generate')->andReturn([
             'answer' => 'ok',

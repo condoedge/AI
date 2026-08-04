@@ -15,6 +15,8 @@ use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\DTOs\QueryUnderstandingResult;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Mockery;
@@ -25,11 +27,6 @@ use Mockery;
  * Covers:
  * - P0-1: syncRelationships() delegates to the ingestion service (the observer
  *   calls AI::syncRelationships([...]) so the method must exist).
- * - P0-5: searchSimilar(string, array $options) must unpack the options array
- *   into the retriever's (string $collection, int $limit) signature without a
- *   TypeError under strict_types.
- * - P0-6: getExampleEntities(array $labels, int $limit) must call the retriever
- *   per label (string $label) and merge results without a TypeError.
  */
 class AiManagerTest extends TestCase
 {
@@ -46,6 +43,9 @@ class AiManagerTest extends TestCase
     public function setUp(): void
     {
         parent::setUp();
+
+        config()->set('logging.default', 'null');
+        config()->set('ai.log_channel', 'null');
 
         $this->mockIngestion = Mockery::mock(DataIngestionServiceInterface::class);
         $this->mockContext = Mockery::mock(ContextRetrieverInterface::class);
@@ -106,96 +106,6 @@ class AiManagerTest extends TestCase
     }
 
     // =========================================================================
-    // P0-5: searchSimilar unpacks options array
-    // =========================================================================
-
-    /** @test */
-    public function search_similar_unpacks_options_without_type_error(): void
-    {
-        $question = 'Find all customers';
-        $expected = [
-            ['question' => 'Find all customers', 'query' => 'MATCH (c:Customer) RETURN c', 'score' => 0.9],
-        ];
-
-        // The retriever signature is (string $collection, int $limit) — passing the
-        // raw options array would be a TypeError. The manager must unpack it.
-        $this->mockContext->shouldReceive('searchSimilar')
-            ->once()
-            ->with($question, 'people', 10)
-            ->andReturn($expected);
-
-        $result = $this->manager->searchSimilar($question, [
-            'collection' => 'people',
-            'limit' => 10,
-        ]);
-
-        $this->assertSame($expected, $result);
-    }
-
-    /** @test */
-    public function search_similar_uses_defaults_when_options_empty(): void
-    {
-        $question = 'Find all teams';
-
-        $this->mockContext->shouldReceive('searchSimilar')
-            ->once()
-            ->with($question, 'questions', 5)
-            ->andReturn([]);
-
-        $result = $this->manager->searchSimilar($question);
-
-        $this->assertSame([], $result);
-    }
-
-    // =========================================================================
-    // P0-6: getExampleEntities loops labels and merges
-    // =========================================================================
-
-    /** @test */
-    public function get_example_entities_loops_labels_and_merges_without_type_error(): void
-    {
-        $teamExamples = [
-            ['id' => 1, 'name' => 'Alpha Team'],
-            ['id' => 2, 'name' => 'Beta Team'],
-        ];
-        $personExamples = [
-            ['id' => 10, 'name' => 'Alice'],
-        ];
-
-        // The retriever signature is (string $label, int $limit) — passing the
-        // labels array would be a TypeError. The manager must call per label.
-        $this->mockContext->shouldReceive('getExampleEntities')
-            ->once()
-            ->with('Team', 3)
-            ->andReturn($teamExamples);
-
-        $this->mockContext->shouldReceive('getExampleEntities')
-            ->once()
-            ->with('Person', 3)
-            ->andReturn($personExamples);
-
-        $result = $this->manager->getExampleEntities(['Team', 'Person']);
-
-        $this->assertSame(
-            ['Team' => $teamExamples, 'Person' => $personExamples],
-            $result
-        );
-    }
-
-    /** @test */
-    public function get_example_entities_forwards_limit_per_label(): void
-    {
-        $this->mockContext->shouldReceive('getExampleEntities')
-            ->once()
-            ->with('Customer', 5)
-            ->andReturn([['id' => 1]]);
-
-        $result = $this->manager->getExampleEntities(['Customer'], 5);
-
-        $this->assertSame(['Customer' => [['id' => 1]]], $result);
-    }
-
-    // =========================================================================
     // P1-D3: knowledge-query abstention (no confident ungrounded answers)
     // =========================================================================
 
@@ -246,21 +156,22 @@ class AiManagerTest extends TestCase
         // normal query path, which here returns no Cypher/no data, so the final
         // response is the dedicated empty/abstention response — NOT generate().
         $this->mockQueryGenerator->shouldReceive('generate')
-            ->andReturn([
-                'cypher' => null,
-                'explanation' => '',
-                'confidence' => 0.0,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: null,
+                explanation: '',
+                confidence: 0.0,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockQueryExecutor->shouldReceive('execute')
-            ->andReturn([
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-                'errors' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
         // The abstention path must be used: generateEmptyResponse, not generate.
         $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
@@ -295,25 +206,26 @@ class AiManagerTest extends TestCase
             ->andReturn($ctx);
 
         $this->mockQueryGenerator->shouldReceive('generate')
-            ->andReturn([
-                'cypher' => 'MATCH (c:Customer {name:"Zzzz"}) RETURN c',
-                'explanation' => 'lookup',
-                'confidence' => 0.7,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (c:Customer {name:"Zzzz"}) RETURN c',
+                explanation: 'lookup',
+                confidence: 0.7,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockEmbedding->shouldReceive('embed')->andReturn([0.1]);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
 
         $this->mockQueryExecutor->shouldReceive('execute')
-            ->andReturn([
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-                'errors' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
         // Empty data + no files => dedicated abstention method, never generate().
         $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
@@ -332,6 +244,166 @@ class AiManagerTest extends TestCase
 
         $this->assertSame('No results were found.', $result['answer']);
         $this->assertTrue($result['metadata']['response']['empty_result']);
+    }
+
+    /** @test */
+    public function export_pdf_intent_uses_previous_result_sample_instead_of_empty_result_fallback(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+
+        $ctx = new PipelineContext();
+        $this->mockContext->shouldReceive('retrieveContext')
+            ->once()
+            ->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(
+                cypher: null,
+                explanation: '',
+                confidence: 0.0,
+                warnings: [],
+                metadata: [],
+            ));
+
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
+
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        $result = $this->manager->answerQuestion('Can you create a pdf of my information?', [
+            'conversation_context' => [
+                'last_result_sample' => [
+                    [
+                        'name' => 'Alice Martin',
+                        'role' => 'Owner',
+                        'user_id' => 123,
+                        'neo4j_id' => 'abc',
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertStringContainsString('I prepared the PDF', $result['answer']);
+        $this->assertStringContainsString('Fields included: Name, Role.', $result['answer']);
+        $this->assertStringContainsString('action://export_pdf?mode=document', $result['answer']);
+        $this->assertStringNotContainsString('| Name | Role |', $result['answer']);
+        $this->assertStringNotContainsString('User Id', $result['answer']);
+        $this->assertStringNotContainsString('neo4j', strtolower($result['answer']));
+        $document = $result['metadata']['response']['export_document_markdown'];
+        // Previous-result export with no recorded subject: the request wording is
+        // BANNED as a title (live bug: echoed filenames) — generic title instead.
+        $this->assertStringContainsString('# Requested Information', $document);
+        $this->assertStringNotContainsString('Can you create a pdf', $document);
+        $this->assertStringContainsString('| Name | Role |', $document);
+        $this->assertStringContainsString('Alice Martin', $document);
+        $this->assertStringNotContainsString('Download PDF', $document);
+        $this->assertTrue($result['metadata']['response']['export_intent']);
+        $this->assertSame('previous_result', $result['metadata']['response']['export_source']);
+    }
+
+    /** @test */
+    public function possessive_export_without_rows_uses_configured_identity_context_before_clarifying(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+        config()->set('ai.export.identity_fields', [
+            ['label' => 'Name', 'path' => 'user.name'],
+            ['label' => 'Email', 'path' => 'user.email'],
+            ['label' => 'Team', 'path' => 'team.team_name'],
+        ]);
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(isPossessive: true);
+
+        $this->mockContext->shouldReceive('retrieveContext')
+            ->once()
+            ->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(
+                cypher: null,
+                explanation: '',
+                confidence: 0.0,
+                warnings: [],
+                metadata: [],
+            ));
+
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
+
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        $result = $this->manager->answerQuestion('Can you create a pdf with my information?', [
+            'user' => (object) [
+                'name' => 'Julie Rousseau',
+                'email' => 'j.rousseau@novogestion.ca',
+                'phone' => '514-555-0100',
+                'address' => '123 Rue Principale',
+                'password' => 'secret',
+                'current_team_id' => 3,
+            ],
+            'team' => (object) [
+                'team_name' => 'Gestion Centrale',
+                'website' => 'https://example.test',
+                'id' => 3,
+            ],
+        ]);
+
+        $document = $result['metadata']['response']['export_document_markdown'];
+        $this->assertStringContainsString('# User Information', $document);
+        $this->assertStringContainsString('| Name | Email | Team |', $document);
+        $this->assertStringContainsString('Julie Rousseau', $document);
+        $this->assertStringContainsString('j.rousseau@novogestion.ca', $document);
+        $this->assertStringContainsString('Gestion Centrale', $document);
+        $this->assertStringContainsString('User Phone', $document);
+        $this->assertStringContainsString('514-555-0100', $document);
+        $this->assertStringContainsString('User Address', $document);
+        $this->assertStringContainsString('123 Rue Principale', $document);
+        $this->assertStringContainsString('Team Website', $document);
+        $this->assertStringNotContainsString('password', strtolower($document));
+        $this->assertStringNotContainsString('current_team_id', strtolower($document));
+        $this->assertStringContainsString('Fields included:', $result['answer']);
+        $this->assertStringContainsString('User Phone', $result['answer']);
+        $this->assertStringNotContainsString('| Name | Email | Team |', $result['answer']);
+        $this->assertStringNotContainsString('which information to include', $result['answer']);
+        $this->assertSame('current_identity', $result['metadata']['response']['export_source']);
+    }
+
+    /** @test */
+    public function english_export_pdf_intent_without_source_asks_for_clarification_even_when_locale_is_french(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+        app()->setLocale('fr');
+
+        $ctx = new PipelineContext();
+        $this->mockContext->shouldReceive('retrieveContext')
+            ->once()
+            ->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(
+                cypher: null,
+                explanation: '',
+                confidence: 0.0,
+                warnings: [],
+                metadata: [],
+            ));
+
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
+
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        $result = $this->manager->answerQuestion('Can you create a pdf of my team?');
+
+        $this->assertStringContainsString('I can create a PDF', $result['answer']);
+        $this->assertStringContainsString('which information to include', $result['answer']);
+        $this->assertStringNotContainsString('Je peux', $result['answer']);
+        $this->assertStringNotContainsString('No results', $result['answer']);
+        $this->assertTrue($result['metadata']['response']['export_intent']);
+        $this->assertTrue($result['metadata']['response']['needs_export_source']);
     }
 
     /** @test */
@@ -356,12 +428,13 @@ class AiManagerTest extends TestCase
 
         // execute(null) ran nothing — no rows, no errors of its own.
         $this->mockQueryExecutor->shouldReceive('execute')
-            ->andReturn([
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-                'errors' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
         // The honest error response must be used — never the empty/abstention path.
         $this->mockResponseGenerator->shouldReceive('generateErrorResponse')
@@ -381,6 +454,330 @@ class AiManagerTest extends TestCase
 
         $this->assertTrue($result['metadata']['response']['error'] ?? false);
         $this->assertArrayNotHasKey('empty_result', $result['metadata']['response']);
+    }
+
+    // =========================================================================
+    // Export intent: QU-first, regex fallback (the cold-roster-excel MUST-FLIP)
+    // =========================================================================
+
+    /** @test */
+    public function qu_export_format_fires_the_export_path_when_the_phrase_regex_misses(): void
+    {
+        // The live user failure: "Can i get an excel..." — no verb from the
+        // deterministic list, no document-shape match. QU's semantic judgment
+        // must drive the export; the composer regex is only a fallback.
+        config()->set('ai.file_context.enabled', false);
+
+        $rows = [];
+        for ($i = 1; $i <= 100; $i++) {
+            $rows[] = ['user_name' => "Member {$i}", 'user_email' => "m{$i}@x.com"];
+        }
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(exportFormat: 'excel', language: 'en');
+
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (u:User) RETURN u.name AS user_name, u.email AS user_email LIMIT 100',
+                explanation: '',
+                confidence: 0.9,
+                warnings: [],
+                metadata: [],
+            ));
+
+        $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
+        $this->mockEmbedding->shouldReceive('embed')->andReturn([0.1]);
+        $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
+
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->once()
+            ->andReturn(new QueryExecutionResult(success: true, data: $rows, stats: [], metadata: [], errors: []));
+
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+
+        $result = $this->manager->answerQuestion(
+            'Can i get an excel with all the members from my current team? With contact info'
+        );
+
+        $this->assertTrue($result['metadata']['response']['export_intent']);
+        $this->assertSame('excel', $result['metadata']['response']['export_format']);
+        $this->assertSame('current_result', $result['metadata']['response']['export_source']);
+
+        // FULL result set, not the 10-row display sample.
+        $this->assertSame(100, $result['metadata']['response']['result_count']);
+        $document = $result['metadata']['response']['export_document_markdown'];
+        $this->assertStringContainsString('Member 1', $document);
+        $this->assertStringContainsString('Member 100', $document);
+    }
+
+    /** @test */
+    public function composer_regex_remains_the_fallback_when_qu_produced_no_export_format(): void
+    {
+        // qu->exportFormat null (e.g. QU call failed) + a phrase the deterministic
+        // regex DOES catch → the export path still fires.
+        config()->set('ai.file_context.enabled', false);
+
+        $ctx = new PipelineContext(); // default QU result: exportFormat null
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: null, explanation: '', confidence: 0.0, warnings: [], metadata: []));
+
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->once()
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
+
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        $result = $this->manager->answerQuestion('export that to Excel', [
+            'conversation_context' => [
+                'last_result_sample' => [['name' => 'Alice']],
+            ],
+        ]);
+
+        $this->assertTrue($result['metadata']['response']['export_intent']);
+        $this->assertSame('excel', $result['metadata']['response']['export_format']);
+        $this->assertSame('previous_result', $result['metadata']['response']['export_source']);
+    }
+
+    // =========================================================================
+    // Follow-up export: re-execute the recorded cypher for the FULL set
+    // =========================================================================
+
+    /** @test */
+    public function follow_up_export_re_executes_the_recorded_cypher_through_the_scoped_executor(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+
+        $recordedCypher = 'MATCH (u:User) RETURN u.name AS name, u.email AS email LIMIT 100';
+        $fullRows = [];
+        for ($i = 1; $i <= 100; $i++) {
+            $fullRows[] = ['name' => "Member {$i}", 'email' => "m{$i}@x.com"];
+        }
+        $user = (object) ['id' => 13];
+
+        $ctx = new PipelineContext();
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: null, explanation: '', confidence: 0.0, warnings: [], metadata: []));
+
+        // First execute: the (null-cypher) pipeline execution. Second execute: the
+        // previous-result re-execution — MUST receive the recorded cypher AND the
+        // same identity options (tenant scoping happens inside the executor from
+        // options.user), never a raw unscoped path.
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->twice()
+            ->andReturnUsing(function ($cypher, $params, $options) use ($recordedCypher, $fullRows, $user) {
+                if ($cypher === $recordedCypher) {
+                    $this->assertSame($user, $options['user'] ?? null, 're-execution must carry the pipeline user for tenant scoping');
+                    $this->assertSame('Perfect - give me that as an Excel with their contact info.', $options['original_question'] ?? null);
+                    return new QueryExecutionResult(success: true, data: $fullRows, stats: [], metadata: [], errors: []);
+                }
+
+                return new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []);
+            });
+
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        // The 100-row cap hit triggers the companion count; here it FAILS, so the
+        // pre-existing "true total unknown" behavior must be preserved unchanged.
+        $this->mockQueryExecutor->shouldReceive('executeCount')
+            ->andThrow(new \RuntimeException('count backend unavailable'));
+
+        $result = $this->manager->answerQuestion('Perfect - give me that as an Excel with their contact info.', [
+            'user' => $user,
+            'conversation_context' => [
+                'last_cypher_query' => $recordedCypher,
+                'last_result_count' => 100,
+                'last_result_sample' => array_slice($fullRows, 0, 10),
+            ],
+        ]);
+
+        $this->assertSame('previous_result', $result['metadata']['response']['export_source']);
+        // 100 rows == the executor's silent LIMIT cap and the companion count
+        // failed: the true total is unknown, so completeness must NOT be claimed
+        // (reviewer finding: a capped export claiming complete suppresses the
+        // "more may exist" disclosure).
+        $this->assertFalse($result['metadata']['response']['export_source_complete']);
+        $this->assertSame(100, $result['metadata']['response']['result_count']);
+
+        $document = $result['metadata']['response']['export_document_markdown'];
+        $this->assertStringContainsString('Member 100', $document, 'export must carry the FULL re-executed set, not the 10-row sample');
+        $this->assertStringContainsString('more may exist', $document, 'a cap-hit export must disclose that more rows may exist');
+    }
+
+    /** @test */
+    public function follow_up_export_falls_back_to_the_sample_with_disclosure_when_re_execution_fails(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+
+        $recordedCypher = 'MATCH (u:User) RETURN u.name AS name LIMIT 100';
+        $sample = [];
+        for ($i = 1; $i <= 10; $i++) {
+            $sample[] = ['name' => "Member {$i}"];
+        }
+
+        $ctx = new PipelineContext();
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: null, explanation: '', confidence: 0.0, warnings: [], metadata: []));
+
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->twice()
+            ->andReturnUsing(function ($cypher) use ($recordedCypher) {
+                if ($cypher === $recordedCypher) {
+                    throw new \RuntimeException('Neo4j unavailable');
+                }
+
+                return new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []);
+            });
+
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        $result = $this->manager->answerQuestion('give me that as an Excel of my team', [
+            'conversation_context' => [
+                'last_cypher_query' => $recordedCypher,
+                'last_result_count' => 100,
+                'last_result_sample' => $sample,
+            ],
+        ]);
+
+        $this->assertSame('previous_result', $result['metadata']['response']['export_source']);
+        $this->assertFalse($result['metadata']['response']['export_source_complete']);
+        $this->assertSame(10, $result['metadata']['response']['result_count']);
+        $this->assertSame(100, $result['metadata']['response']['result_total']);
+        // Explicit "10 of 100" disclosure in the visible answer AND the payload.
+        $this->assertStringContainsString('10 of 100', $result['answer']);
+        $this->assertStringContainsString('Showing 10 of 100 rows.', $result['metadata']['response']['export_document_markdown']);
+    }
+
+    /** @test */
+    public function follow_up_export_without_recorded_cypher_uses_the_sample_and_discloses_the_recorded_total(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+
+        $ctx = new PipelineContext();
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: null, explanation: '', confidence: 0.0, warnings: [], metadata: []));
+
+        // Only the pipeline execution — no cypher recorded, so NO re-execution call.
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->once()
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
+
+        $result = $this->manager->answerQuestion('export that to Excel', [
+            'conversation_context' => [
+                'last_result_count' => 42,
+                'last_result_sample' => [['name' => 'Alice'], ['name' => 'Bob']],
+            ],
+        ]);
+
+        $this->assertSame(42, $result['metadata']['response']['result_total']);
+        $this->assertStringContainsString('2 of 42', $result['answer']);
+    }
+
+    /** @test */
+    public function follow_up_export_after_a_digest_turn_carries_every_persisted_row_and_is_complete(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+
+        // B1: a digest turn records no cypher but persists its FULL
+        // display-capped row set as the snapshot sample. The follow-up
+        // "export that" must materialize ALL of it and be marked complete —
+        // the digest turn promised "the file with everything shown here".
+        $sample = [];
+        for ($i = 1; $i <= 28; $i++) {
+            $sample[] = ['id' => $i, 'title' => "Task {$i}", 'attention_source' => 'open_tasks'];
+        }
+
+        $ctx = new PipelineContext();
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: null, explanation: '', confidence: 0.0, warnings: [], metadata: []));
+
+        // Only the (null-cypher) pipeline execution — no cypher recorded, so
+        // NO re-execution call.
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->once()
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
+
+        $result = $this->manager->answerQuestion('export that to Excel', [
+            'conversation_context' => [
+                'last_cypher_query' => '',
+                'last_result_count' => 28,
+                'last_result_sample' => $sample,
+            ],
+        ]);
+
+        $this->assertSame('previous_result', $result['metadata']['response']['export_source']);
+        $this->assertTrue(
+            $result['metadata']['response']['export_source_complete'],
+            'the full persisted digest set IS complete — the B1 promise holds'
+        );
+        $this->assertSame(28, $result['metadata']['response']['result_count']);
+        $this->assertStringContainsString(
+            'Task 28',
+            $result['metadata']['response']['export_document_markdown'],
+            'every digest row reaches the export document, not a 10-row slice'
+        );
+    }
+
+    // =========================================================================
+    // Error-path language policy (ambiguous-balance t1 regression companion)
+    // =========================================================================
+
+    /** @test */
+    public function infrastructure_error_response_receives_the_qu_detected_question_language(): void
+    {
+        // iter-3 live failure: an ENGLISH question hit the generation error path in
+        // a French-locale host and got the FRENCH canned error. The QU-detected
+        // question language must be threaded into generateErrorResponse options.
+        config()->set('ai.file_context.enabled', false);
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(language: 'en');
+
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andThrow(new QueryGenerationException('Failed after 3 attempts. Last error: HTTP 429 rate limit'));
+
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
+
+        $this->mockResponseGenerator->shouldReceive('generateErrorResponse')
+            ->once()
+            ->with(
+                'I mean what unit 310 owes.',
+                Mockery::type(\Throwable::class),
+                Mockery::on(fn ($options) => ($options['question_language'] ?? null) === 'en')
+            )
+            ->andReturn([
+                'answer' => 'I ran into a problem answering that. Please try again.',
+                'insights' => [],
+                'visualizations' => [],
+                'format' => 'text',
+                'metadata' => ['error' => true, 'error_type' => 'RuntimeException'],
+            ]);
+
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        $result = $this->manager->answerQuestion('I mean what unit 310 owes.');
+
+        $this->assertTrue($result['metadata']['response']['error']);
+        $this->assertStringContainsString('try again', $result['answer']);
     }
 
     /** @test */
@@ -558,15 +955,15 @@ class AiManagerTest extends TestCase
         );
 
         $this->mockQueryGenerator->shouldReceive('generate')
-            ->andReturn([
-                'cypher' => null,
-                'explanation' => '',
-                'confidence' => 0.0,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: null,
+                explanation: '',
+                confidence: 0.0,
+                warnings: [],
+                metadata: [],
+            ));
         $this->mockQueryExecutor->shouldReceive('execute')
-            ->andReturn(['data' => [], 'stats' => [], 'metadata' => [], 'errors' => []]);
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
 
         // No files anywhere → honest abstention, not a fabricated listing.
         $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
@@ -583,5 +980,121 @@ class AiManagerTest extends TestCase
         $result = $manager->answerQuestion('Which files do I have access to?');
 
         $this->assertStringContainsString('could not find', $result['answer']);
+    }
+
+    // =========================================================================
+    // C4: "Explain this page" — page-explanation narration (read-only, no query)
+    // =========================================================================
+
+    /** @test */
+    public function page_explanation_intent_with_configured_description_narrates_without_a_query(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+        config()->set('ai.chat.page_explanation_intents', ['page_explanation']);
+        config()->set('ai.chat.page_descriptions', [
+            'Unit' => 'This page shows a single unit: its owners, balance and payment history.',
+        ]);
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(intent: 'page_explanation');
+
+        $this->mockContext->shouldReceive('retrieveContext')
+            ->once()
+            ->andReturn($ctx);
+
+        // Narration is grounded ONLY on the host page description + route — never a
+        // graph query, never the empty-result abstention path.
+        $this->mockQueryGenerator->shouldReceive('generate')->never();
+        $this->mockQueryExecutor->shouldReceive('execute')->never();
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+
+        // The grounded generate() path runs once, with the host description and the
+        // current route stamped onto the context the section reads.
+        $captured = null;
+        $this->mockResponseGenerator->shouldReceive('generate')
+            ->once()
+            ->with(Mockery::on(function (PipelineContext $c) use (&$captured) {
+                $captured = $c;
+                return true;
+            }), Mockery::any())
+            ->andReturn([
+                'answer' => 'This screen lets you review a unit and its payment history.',
+                'insights' => [],
+                'visualizations' => [],
+                'format' => 'text',
+                'metadata' => [],
+            ]);
+
+        $result = $this->manager->answerQuestion('What is this page and what can I do here?', [
+            'page_context' => [
+                'route' => 'units.show',
+                'entity_type' => 'Unit',
+                'entity_id' => 402,
+                'label' => 'Unit 402',
+            ],
+        ]);
+
+        $this->assertStringContainsString('payment history', $result['answer']);
+        // It is narration, not a query attempt: no Cypher, no rows.
+        $this->assertNull($result['cypher']);
+        $this->assertSame([], $result['data']);
+        $this->assertSame('page_explanation', $result['metadata']['response']['intent'] ?? null);
+
+        // The host description AND the route the chat was opened from reached the
+        // grounding the responder narrated over.
+        $this->assertInstanceOf(PipelineContext::class, $captured);
+        $this->assertStringContainsString('payment history', $captured->pageDescription);
+        $this->assertSame('units.show', $captured->pageContext['route'] ?? null);
+    }
+
+    /** @test */
+    public function page_explanation_intent_runs_the_normal_pipeline_when_no_description_is_configured(): void
+    {
+        // Default-off: with no page_descriptions configured, a page-explanation intent
+        // is just a normal turn — the query/abstention path is unchanged.
+        config()->set('ai.file_context.enabled', false);
+        config()->set('ai.chat.page_descriptions', []);
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(intent: 'page_explanation');
+
+        $this->mockContext->shouldReceive('retrieveContext')
+            ->once()
+            ->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(
+                cypher: null,
+                explanation: '',
+                confidence: 0.0,
+                warnings: [],
+                metadata: [],
+            ));
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
+
+        // No description to narrate over → the ordinary empty/abstention path, not narration.
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
+            ->once()
+            ->andReturn([
+                'answer' => 'No results were found.',
+                'insights' => [],
+                'visualizations' => [],
+                'format' => 'text',
+                'metadata' => ['empty_result' => true, 'result_count' => 0],
+            ]);
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        $result = $this->manager->answerQuestion('What is this page?', [
+            'page_context' => [
+                'route' => 'units.show',
+                'entity_type' => 'Unit',
+                'entity_id' => 402,
+                'label' => 'Unit 402',
+            ],
+        ]);
+
+        $this->assertSame('No results were found.', $result['answer']);
+        $this->assertTrue($result['metadata']['response']['empty_result']);
     }
 }

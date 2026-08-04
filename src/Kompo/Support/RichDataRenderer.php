@@ -14,9 +14,9 @@ use Condoedge\Utils\Facades\FileModel;
  *
  * These were previously eight render* helpers on MessagesQuery. They are pure view builders over
  * (theme + settings + data) and carry no Kompo round-trip state, so they live here as a plain
- * collaborator. Interactive chips still call selfPost('askSuggestion', ...) — that method name is
- * resolved by Kompo against the owning MessagesQuery component when the booted tree is traversed,
- * so moving the element construction here does not change the request target.
+ * collaborator. Suggestion chips fill the composer input and click the real send button
+ * (SuggestionSubmit::fillAndSendJs) so a click reuses the exact typed-send chain — optimistic
+ * user bubble + typing indicator first, then the answer via the panel refresh.
  *
  * Behavior-preserving: every class string, slice limit (rows→10, list items→5, suggestions via
  * settings()->maxSuggestions()) and markup is copied verbatim from MessagesQuery.
@@ -109,14 +109,20 @@ class RichDataRenderer
     }
 
     /**
-     * Follow-up suggestion chips. Each chip re-asks via selfPost('askSuggestion') on MessagesQuery.
+     * Follow-up suggestion chips. Each chip re-asks by filling the composer input and clicking
+     * the real send button (typed-send parity: optimistic bubble + typing indicator, then the
+     * answer) instead of a bare selfPost that waits for the whole LLM turn with no echo.
      */
     public function renderSuggestions(array $suggestions)
     {
+        // e($s): Kompo Link labels render through v-html client-side, and $s comes from
+        // persisted LLM output (message metadata), NOT host config — escape it like every
+        // other LLM-sourced string in this class (table cells, list items). The raw $s
+        // still goes to fillAndSendJs, which JSON_HEX_*-encodes it for the JS context.
         $chips = array_map(fn($s) =>
-            _Link($s)
+            _Link(e($s))
                 ->class('inline-flex items-center px-3 py-1.5 text-sm rounded-full bg-gray-100 text-gray-700 ' . $this->theme->primaryLightBgHover() . ' transition-all cursor-pointer')
-                ->selfPost('askSuggestion', ['question' => $s])->refresh(),
+                ->onClick(fn($e) => $e->run(SuggestionSubmit::fillAndSendJs($s))),
             array_slice($suggestions, 0, $this->settings->maxSuggestions())
         );
 
@@ -150,6 +156,10 @@ class RichDataRenderer
 
     protected function fileReferenceCard(array $file)
     {
+        if (str_starts_with($file['id'], 'physical:')) {
+            return _Html(__('ai.internal-file', ['name' => $file['name']]))->class('text-sm text-gray-700 font-medium');
+        }
+
         $file = FileModel::find($file['id']);
         $type = $file->file_type_enum;
         $icon = $type->icon();

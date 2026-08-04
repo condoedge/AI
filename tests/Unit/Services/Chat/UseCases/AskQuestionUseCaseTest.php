@@ -276,6 +276,40 @@ class AskQuestionUseCaseTest extends TestCase
     }
 
     /** @test */
+    public function export_document_markdown_is_persisted_on_the_assistant_message(): void
+    {
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        $ai = $this->mockAi();
+        $ai->shouldReceive('getSchema')->andReturn(['labels' => [], 'relationships' => []]);
+        $ai->shouldReceive('answerQuestion')->once()->andReturn([
+            'answer' => 'I prepared the PDF. [Download PDF](action://export_pdf?mode=document&title=User%20Information)',
+            'cypher' => null,
+            'data' => [],
+            'suggestions' => [],
+            'referenced_files' => [],
+            'metadata' => [
+                'response' => [
+                    'export_document_markdown' => "# User Information\n\n| Name |\n|---|\n| Julie |",
+                ],
+            ],
+        ]);
+
+        $result = $this->useCase()->execute(new AskQuestionInput(
+            question: 'Create a PDF with my information',
+            conversation: $conversation,
+            style: 'friendly',
+            user: $this->user(),
+        ));
+
+        $this->assertFalse($result->failed());
+        $this->assertSame(
+            "# User Information\n\n| Name |\n|---|\n| Julie |",
+            $result->assistantMessage->metadata['export_document_markdown'] ?? null
+        );
+    }
+
+    /** @test */
     public function no_invocations_key_is_persisted_for_turns_without_native_invocations(): void
     {
         $conversation = AiConversation::create(['user_id' => 1]);
@@ -299,6 +333,52 @@ class AskQuestionUseCaseTest extends TestCase
 
         $this->assertFalse($result->failed());
         $this->assertArrayNotHasKey('invocations', $result->assistantMessage->metadata ?? []);
+    }
+
+    /** @test */
+    public function response_metadata_reaches_the_conversation_snapshot_for_subject_and_digest_sample(): void
+    {
+        // The composers stamp metadata.subject (titles a follow-up export) and
+        // metadata.response.digest (marks the rows as a full display-capped
+        // set). Both contracts are dead unless the use case threads metadata
+        // into recordResponse alongside data/referenced_files.
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        $rows = [];
+        for ($i = 1; $i <= 28; $i++) {
+            $rows[] = ['id' => $i, 'attention_source' => 'open_tasks'];
+        }
+
+        $ai = $this->mockAi();
+        $ai->shouldReceive('getSchema')->andReturn(['labels' => [], 'relationships' => []]);
+        $ai->shouldReceive('answerQuestion')->once()->andReturn([
+            'answer' => 'Here is your attention digest.',
+            'cypher' => null,
+            'data' => $rows,
+            'suggestions' => [],
+            'referenced_files' => [],
+            'metadata' => [
+                'response' => ['digest' => ['sources' => []]],
+                'subject' => 'workspace attention overview',
+            ],
+        ]);
+
+        $result = $this->useCase()->execute(new AskQuestionInput(
+            question: 'What needs my attention?',
+            conversation: $conversation,
+            style: 'friendly',
+            user: $this->user(),
+        ));
+
+        $this->assertFalse($result->failed());
+
+        $snapshot = $conversation->fresh()->context_snapshot;
+        $this->assertSame('workspace attention overview', $snapshot['last_subject'] ?? null);
+        $this->assertCount(
+            28,
+            $snapshot['last_result_sample'] ?? [],
+            'a digest turn persists ALL its display-capped rows so "export that" can carry everything shown'
+        );
     }
 
     /** @test */
