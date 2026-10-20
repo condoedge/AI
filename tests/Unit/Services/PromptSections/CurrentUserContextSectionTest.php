@@ -107,6 +107,8 @@ class CurrentUserContextSectionTest extends TestCase
     /** @test */
     public function it_includes_identity_anchors_and_contact_wording_guidance(): void
     {
+        // The profile entity is derived from the ownership paths (Contact {user_id: $userId}).
+        $this->configurePaths();
         $user = new User();
         $user->id = 42;
         $user->name = 'John Doe';
@@ -280,5 +282,182 @@ class CurrentUserContextSectionTest extends TestCase
         $this->assertStringContainsString('do NOT route it through the personal paths below', $output);
         // The configured personal path still renders for genuine "my X" questions.
         $this->assertStringContainsString('MATCH (c:Contact {user_id: $userId})', $output);
+    }
+
+    /**
+     * @test Eval p16 "When is our next meeting?" → "no meetings linked to you": a question QU
+     * verified as COLLECTIVE possession gets only the team-scope guidance, never the personal
+     * ownership paths (the Cypher model no longer decides personal vs collective itself).
+     */
+    public function a_collective_possessive_gets_team_guidance_and_no_personal_paths(): void
+    {
+        $this->loginJulie();
+        $this->configurePaths();
+
+        $context = $this->context();
+        $context->qu = new QueryUnderstandingResult(
+            isPossessive: true,
+            possessiveWords: ['our'],
+            possessiveScope: QueryUnderstandingResult::SCOPE_COLLECTIVE,
+        );
+
+        $output = $this->section->format('When is our next meeting?', $context, []);
+
+        $this->assertStringContainsString('COLLECTIVE POSSESSIVE', $output);
+        $this->assertStringContainsString('$ai_team_ids', $output);
+        $this->assertStringNotContainsString('USER OWNERSHIP PATHS', $output);
+        $this->assertStringNotContainsString('MATCH (c:Contact {user_id: $userId})', $output);
+
+        // Personal possession still gets the paths.
+        $context->qu = new QueryUnderstandingResult(
+            isPossessive: true,
+            possessiveWords: ['my'],
+            possessiveScope: QueryUnderstandingResult::SCOPE_PERSONAL,
+        );
+        $personal = $this->section->format('What is my unit?', $context, []);
+        $this->assertStringContainsString('USER OWNERSHIP PATHS', $personal);
+        $this->assertStringNotContainsString('COLLECTIVE POSSESSIVE:', $personal);
+    }
+
+    private function loginJulie(): void
+    {
+        $user = new User();
+        $user->id = 13;
+        $user->name = 'Julie Rousseau';
+        $user->email = 'j.rousseau@example.com';
+
+        Auth::shouldReceive('check')->andReturn(true);
+        Auth::shouldReceive('user')->andReturn($user);
+        Auth::shouldReceive('id')->andReturn(13);
+    }
+
+    private function configurePaths(): void
+    {
+        config(['ai.user_entity_paths' => [
+            'Unit' => [
+                'description' => "User's units via Contact.",
+                'cypher' => 'MATCH (c:Contact {user_id: $userId})<-[:CONTACT]-(cu:ContactUnit)-[:UNIT]->(n:Unit)',
+            ],
+            'BoardMember' => [
+                'description' => 'Whether the user is on a board.',
+                'cypher' => 'MATCH (c:Contact {user_id: $userId})<-[:BELONGS_TO_CONTACT]-(n:BoardMember)',
+            ],
+        ]]);
+    }
+
+    /** @test */
+    public function it_renders_only_the_ownership_paths_of_the_selected_labels(): void
+    {
+        // Task 5.11: all user_entity_paths were rendered on every possessive turn
+        // (~5K chars) whatever the question was about.
+        $this->configurePaths();
+        $this->loginJulie();
+
+        $context = $this->context();
+        $context->qu = new QueryUnderstandingResult(isPossessive: true);
+        $context->graphSchema = ['labels' => ['BoardMember', 'Union', 'Contact', 'User', 'Team']];
+
+        $output = $this->section->format('who is on our board?', $context, []);
+
+        $this->assertStringContainsString("To find the current user's BoardMember", $output);
+        $this->assertStringNotContainsString("To find the current user's Unit", $output);
+        $this->assertStringContainsString('PERSONAL vs COLLECTIVE possessives', $output);
+    }
+
+    /** @test */
+    public function it_omits_the_ownership_block_when_no_selected_label_has_a_path(): void
+    {
+        $this->configurePaths();
+        $this->loginJulie();
+
+        $context = $this->context();
+        $context->qu = new QueryUnderstandingResult(isPossessive: true);
+        $context->graphSchema = ['labels' => ['Team', 'TeamRole', 'User']];
+
+        $output = $this->section->format('members of my team with roles', $context, []);
+
+        $this->assertStringNotContainsString('USER OWNERSHIP PATHS', $output);
+        $this->assertStringNotContainsString('To find the current user', $output);
+        // Identity anchors are still there: they are what "my team" resolves to.
+        $this->assertStringContainsString('Team.id', $output);
+    }
+
+    /** @test */
+    public function it_omits_the_contact_wording_guidance_when_contact_is_not_selected(): void
+    {
+        $this->configurePaths();
+        $this->loginJulie();
+
+        $context = $this->context();
+        $context->qu = new QueryUnderstandingResult(isPossessive: true);
+        $context->graphSchema = ['labels' => ['Team', 'TeamRole', 'User']];
+        $withoutContact = $this->section->format('members of my team', $context, []);
+
+        $context->graphSchema = ['labels' => ['Contact', 'User']];
+        $withContact = $this->section->format('my contact information', $context, []);
+
+        $this->assertStringNotContainsString('CONTACT WORDING DISAMBIGUATION', $withoutContact);
+        $this->assertStringContainsString('CONTACT WORDING DISAMBIGUATION', $withContact);
+    }
+
+    /** @test */
+    public function the_paths_of_labels_kept_only_to_join_are_not_rendered(): void
+    {
+        // Unit is in the prompt only because it lies on BoardMember's ownership path:
+        // its own "my unit" path answers a different question.
+        $this->configurePaths();
+        $this->loginJulie();
+
+        $context = $this->context();
+        $context->qu = new QueryUnderstandingResult(isPossessive: true);
+        $context->graphSchema = ['labels' => ['BoardMember', 'Contact', 'Unit']];
+        $context->selectionInfo = ['selection_tiers' => ['BoardMember' => 'seed', 'Contact' => 'ownership', 'Unit' => 'ownership']];
+
+        $output = $this->section->format('am I on the board?', $context, []);
+
+        $this->assertStringContainsString("To find the current user's BoardMember", $output);
+        $this->assertStringNotContainsString("To find the current user's Unit", $output);
+    }
+
+    /** @test */
+    public function the_profile_entity_is_derived_from_the_ownership_paths(): void
+    {
+        // Phase 5C review: the gate and the text hardcoded 'Contact'. The profile entity
+        // is the label the configured ownership paths start from (bound to $userId).
+        config(['ai.user_entity_paths' => [
+            'Pet' => ['cypher' => 'MATCH (p:Person {user_id: $userId})-[:OWNS]->(n:Pet)'],
+            'Person' => ['cypher' => 'MATCH (n:Person {user_id: $userId})'],
+            'Booking' => ['cypher' => 'MATCH (n:Booking)-[:BY]->(:User {id: $userId})'],
+        ]]);
+        $this->loginJulie();
+
+        $context = $this->context();
+        $context->qu = new QueryUnderstandingResult(isPossessive: true);
+        $context->graphSchema = ['labels' => ['Person', 'User']];
+        $withPerson = $this->section->format('my information', $context, []);
+
+        $context->graphSchema = ['labels' => ['Contact', 'User']];
+        $withContactOnly = $this->section->format('my information', $context, []);
+
+        $this->assertStringContainsString('CONTACT WORDING DISAMBIGUATION', $withPerson);
+        $this->assertStringContainsString('Do not use the Person entity', $withPerson);
+        $this->assertStringNotContainsString('Contact entity', $withPerson);
+        // An unrelated host label named Contact no longer triggers it.
+        $this->assertStringNotContainsString('CONTACT WORDING DISAMBIGUATION', $withContactOnly);
+    }
+
+    /** @test */
+    public function no_profile_guidance_without_a_path_starting_from_the_user(): void
+    {
+        config(['ai.user_entity_paths' => []]);
+        $this->loginJulie();
+
+        $context = $this->context();
+        $context->qu = new QueryUnderstandingResult(isPossessive: true);
+
+        $output = $this->section->format('my information', $context, []);
+
+        $this->assertStringNotContainsString('CONTACT WORDING DISAMBIGUATION', $output);
+        $this->assertStringContainsString('CURRENT IDENTITY ENTITY ANCHORS', $output);
     }
 }

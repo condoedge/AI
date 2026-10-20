@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Condoedge\Ai\LlmProviders;
 
 use Condoedge\Ai\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Contracts\ReportsTokenUsageInterface;
+use Condoedge\Ai\Exceptions\LlmBadRequestException;
+use Condoedge\Ai\Exceptions\LlmInvalidJsonException;
 use Condoedge\Ai\Services\Resilience\CircuitBreaker;
 use Condoedge\Ai\Services\Resilience\RetryPolicy;
 use Exception;
@@ -24,15 +27,27 @@ use Exception;
  * Concrete providers supply only the provider-specific request shaping,
  * response extraction, endpoint and auth headers via the abstract hooks.
  */
-abstract class AbstractHttpLlmProvider implements LlmProviderInterface
+abstract class AbstractHttpLlmProvider implements LlmProviderInterface, ReportsTokenUsageInterface
 {
     protected string $apiKey;
     protected string $model;
     protected float $temperature;
     protected int $maxResponseTokens;
 
+    /** The circuit breaker every live-chat provider shares. */
+    public const SHARED_BREAKER = 'llm';
+
+    /** Config `circuit_breaker`: the breaker this provider fails under (default: the shared one). */
+    private string $breakerName = self::SHARED_BREAKER;
+
     private ?CircuitBreaker $circuitBreaker = null;
     private ?RetryPolicy $retryPolicy = null;
+
+    /** Normalized usage of the most recent non-streaming call (see lastUsage()). */
+    private ?array $lastUsage = null;
+
+    /** The model refused a strict output schema once: chatJson stops sending them (see chatJson()). */
+    private bool $schemaRefused = false;
 
     /**
      * @param array $config Provider config (api_key, model, temperature, max_tokens)
@@ -48,6 +63,21 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface
         $this->model = $config['model'] ?? $this->defaultModel();
         $this->temperature = (float) ($config['temperature'] ?? 0.3);
         $this->maxResponseTokens = (int) ($config['max_tokens'] ?? 2000);
+        $this->breakerName = is_string($config['circuit_breaker'] ?? null) && trim($config['circuit_breaker']) !== ''
+            ? trim($config['circuit_breaker'])
+            : self::SHARED_BREAKER;
+    }
+
+    /**
+     * The name of the circuit breaker this provider's calls fail under. Its state
+     * lives in the cache under that name, shared by every provider of the same
+     * name in every process: 'llm' for the live chat; a provider built for
+     * background work (LlmResolver::isolated()) carries another, so a batch that
+     * runs into a rate limit cannot open the breaker the chat goes through.
+     */
+    public function circuitBreakerName(): string
+    {
+        return $this->breakerName;
     }
 
     // =========================================================================
@@ -56,20 +86,53 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface
 
     public function chat(array $messages, array $options = []): string
     {
-        $response = $this->sendRequest($this->shapeRequest($messages, $options), false);
+        $this->resetUsage();
+        $response = $this->request($this->shapeRequest($messages, $options));
 
         return $this->extractTextResponse($response);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * OPTIONAL STRICT OUTPUT SCHEMA: `$options['json_schema'] = ['name' => string,
+     * 'schema' => <JSON Schema object>]`. A provider with structured outputs
+     * ({@see jsonSchemaOptions()}) constrains the reply to it — every declared key is
+     * present and holds a value of its declared type; every other provider ignores the
+     * option and answers in its plain JSON mode. The option is the package's: it is never
+     * sent as a field of the provider's API.
+     *
+     * A model that does not take the schema refuses the request (HTTP 400): the call is
+     * then made ONCE more in plain JSON mode, and when that succeeds this provider stops
+     * sending schemas (the model is fixed per instance), so the refused request is paid
+     * once. A 400 the plain call gets too is the request's own fault and propagates.
+     */
     public function chatJson(array $messages, array $options = []): object|array
     {
+        $this->resetUsage();
         $messages = $this->ensureJsonSystemMessage($messages);
 
-        if ($this->supportsNativeJsonMode()) {
-            $options = array_merge($options, $this->jsonModeOptions());
+        $schema = $this->requestedSchema($options);
+        unset($options['json_schema']);
+        $schemaOptions = $schema !== null && !$this->schemaRefused
+            ? $this->jsonSchemaOptions($schema['name'], $schema['schema'])
+            : [];
+
+        $plainOptions = $this->supportsNativeJsonMode()
+            ? array_merge($options, $this->jsonModeOptions())
+            : $options;
+
+        if ($schemaOptions !== []) {
+            try {
+                $response = $this->request($this->shapeRequest($messages, array_merge($options, $schemaOptions)));
+            } catch (LlmBadRequestException $e) {
+                $response = $this->request($this->shapeRequest($messages, $plainOptions));
+                $this->schemaRefused = true;
+            }
+        } else {
+            $response = $this->request($this->shapeRequest($messages, $plainOptions));
         }
 
-        $response = $this->sendRequest($this->shapeRequest($messages, $options), false);
         $text = $this->extractTextResponse($response);
 
         // Models routinely wrap JSON in ```json fences or a prose preface even
@@ -78,16 +141,33 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface
 
         $decoded = json_decode($json);
         if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new Exception(
-                $this->displayName() . ' response is not valid JSON: ' . json_last_error_msg()
+            // Typed (still an \Exception, same message) so a caller can tell a
+            // reply CUT at the output budget from a malformed one (Task 1.17).
+            throw new LlmInvalidJsonException(
+                $this->displayName() . ' response is not valid JSON: ' . json_last_error_msg(),
+                $text,
+                $this->responseWasTruncated($response)
             );
         }
 
         return $decoded;
     }
 
+    /**
+     * Whether the provider reported the reply stopped at the output budget.
+     * Covers both wire shapes the package speaks: OpenAI chat completions
+     * (choices[0].finish_reason = "length") and Anthropic messages
+     * (stop_reason = "max_tokens"). Overridable for other providers.
+     */
+    protected function responseWasTruncated(array $response): bool
+    {
+        return ($response['choices'][0]['finish_reason'] ?? null) === 'length'
+            || ($response['stop_reason'] ?? null) === 'max_tokens';
+    }
+
     public function complete(string $prompt, ?string $systemPrompt = null, array $options = []): string
     {
+        $this->resetUsage();
         $messages = [];
 
         if ($systemPrompt !== null) {
@@ -101,6 +181,8 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface
 
     public function stream(array $messages, callable $callback, array $options = []): void
     {
+        // Streaming responses carry no usage block we parse: report none.
+        $this->resetUsage();
         $options['stream'] = true;
         $this->sendStreamingRequest($this->shapeRequest($messages, $options), $callback);
     }
@@ -120,9 +202,60 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface
         return $this->model;
     }
 
+    /**
+     * {@inheritDoc}
+     */
+    public function lastUsage(): ?array
+    {
+        return $this->lastUsage;
+    }
+
+    /**
+     * Clear the last-call usage. Called FIRST by every public call path (chat,
+     * chatJson, complete, stream) — before any request shaping
+     * that could throw — so a failed call can never report the previous call's usage.
+     */
+    protected function resetUsage(): void
+    {
+        $this->lastUsage = null;
+    }
+
     // =========================================================================
     // HTTP + resilience (shared)
     // =========================================================================
+
+    /**
+     * Send a non-streaming request and record its token usage. Every
+     * non-streaming call path (chat, chatJson, complete) goes
+     * through here. The previous call's usage is cleared FIRST, so a failed
+     * call never reports a stale value.
+     *
+     * @throws Exception
+     */
+    protected function request(array $requestData): array
+    {
+        $this->lastUsage = null;
+
+        $response = $this->sendRequest($requestData, false);
+
+        $usage = $this->extractUsage($response);
+        if ($usage !== null) {
+            $model = $response['model'] ?? null;
+            $this->lastUsage = $usage + ['model' => is_string($model) && $model !== '' ? $model : $this->model];
+        }
+
+        return $response;
+    }
+
+    /**
+     * Provider-specific: the decoded response's usage block normalized to
+     * ['input' => int, 'output' => int, 'total' => int], or null when absent.
+     * Default: no usage reporting.
+     */
+    protected function extractUsage(array $response): ?array
+    {
+        return null;
+    }
 
     /**
      * Send a non-streaming request, wrapped in the circuit breaker + retry
@@ -284,7 +417,7 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface
         if ($this->circuitBreaker === null) {
             $cfg = $this->resilienceConfig();
             $this->circuitBreaker = new CircuitBreaker(
-                name: 'llm',
+                name: $this->breakerName,
                 failureThreshold: (int) ($cfg['circuit_breaker']['failure_threshold'] ?? 5),
                 recoveryTimeoutSeconds: (int) ($cfg['circuit_breaker']['recovery_timeout_seconds'] ?? 30),
                 successThreshold: (int) ($cfg['circuit_breaker']['success_threshold'] ?? 2)
@@ -367,7 +500,9 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface
             case 401:
                 throw new Exception($provider . ' API authentication failed: Invalid API key');
             case 400:
-                throw new Exception($provider . ' API bad request: ' . $errorMessage);
+                // Typed (still an \Exception, same message): the provider refused the
+                // request itself — chatJson's schema fallback tells it from an outage.
+                throw new LlmBadRequestException($provider . ' API bad request: ' . $errorMessage);
             default:
                 throw new Exception(
                     $provider . ' API request failed (HTTP ' . $httpCode . '): ' . $errorMessage
@@ -529,6 +664,37 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface
     protected function jsonModeOptions(): array
     {
         return [];
+    }
+
+    /**
+     * Options that constrain a chatJson reply to a strict JSON Schema, for a provider
+     * with structured outputs. Default: none — the schema is ignored and the provider's
+     * plain JSON mode answers.
+     *
+     * @param array<string, mixed> $schema a JSON Schema object
+     * @return array<string, mixed>
+     */
+    protected function jsonSchemaOptions(string $name, array $schema): array
+    {
+        return [];
+    }
+
+    /**
+     * The strict output schema a chatJson caller asked for, or null: the option must
+     * hold a JSON Schema ARRAY; a missing or blank name gets a neutral one.
+     *
+     * @return array{name: string, schema: array<string, mixed>}|null
+     */
+    private function requestedSchema(array $options): ?array
+    {
+        $requested = $options['json_schema'] ?? null;
+        if (!is_array($requested) || !is_array($requested['schema'] ?? null) || $requested['schema'] === []) {
+            return null;
+        }
+
+        $name = is_string($requested['name'] ?? null) ? trim($requested['name']) : '';
+
+        return ['name' => $name !== '' ? $name : 'response', 'schema' => $requested['schema']];
     }
 
     // =========================================================================

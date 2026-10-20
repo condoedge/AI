@@ -75,6 +75,23 @@ class QueryUnderstandingDigestRequestTest extends TestCase
     }
 
     /** @test */
+    public function the_prompt_says_a_broad_attention_ask_after_a_single_topic_turn_is_a_new_digest_not_a_follow_up(): void
+    {
+        // Task 1.27 (a), live digest t2: with the conversation block, QU read
+        // "Give me an excel of everything needing my attention" (after a single-
+        // meeting turn) as a follow-up on that 1-row result.
+        $this->configureSources();
+
+        $captured = null;
+        $service = $this->serviceReturning(['search_query' => 'x'], $captured);
+        $service->analyze('what should I take care of next?', []);
+
+        $system = $captured[0]['content'] ?? '';
+        $this->assertStringContainsString('a NEW digest request, not a follow-up', $system);
+        $this->assertStringContainsString('"follow_up_reference" false', $system);
+    }
+
+    /** @test */
     public function hosts_without_the_feature_pay_zero_tokens_no_digest_request_line(): void
     {
         config(['ai.attention_sources' => []]);
@@ -113,6 +130,42 @@ class QueryUnderstandingDigestRequestTest extends TestCase
         $result = $service->analyze('What should we take care of next?', []);
 
         $this->assertTrue($result->digestRequest);
+    }
+
+    /** @test */
+    public function a_digest_request_clears_follow_up_reference_at_parse_time(): void
+    {
+        // Task 1.28 I2: if every digest source fails (DigestRunner returns []),
+        // the turn falls through to the normal pipeline — with followUpReference
+        // still true it re-exported the previous single-topic result (the exact
+        // 1.27(a) regression). A digest ask is never a follow-up.
+        $this->configureSources();
+
+        $result = $this->serviceReturning([
+            'search_query' => 'everything needing my attention',
+            'digest_request' => true,
+            'follow_up_reference' => true,
+            'export_format' => 'excel',
+        ])->analyze('Give me an excel of everything needing my attention', []);
+
+        $this->assertTrue($result->digestRequest);
+        $this->assertFalse($result->followUpReference);
+    }
+
+    /** @test */
+    public function without_attention_sources_a_stray_digest_flag_does_not_clear_follow_up(): void
+    {
+        // No sources = the digest branch can never own the turn; the follow-up
+        // judgment must survive for the normal pipeline.
+        config(['ai.attention_sources' => []]);
+
+        $result = $this->serviceReturning([
+            'search_query' => 'x',
+            'digest_request' => true,
+            'follow_up_reference' => true,
+        ])->analyze('export that', []);
+
+        $this->assertTrue($result->followUpReference);
     }
 
     /** @test */

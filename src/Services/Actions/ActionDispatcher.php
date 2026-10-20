@@ -75,8 +75,9 @@ class ActionDispatcher
     private function claimNonce(string $nonce): bool
     {
         if ($nonce === '') {
-            // Nonce-less token: cannot single-use-protect it; allow once.
-            return true;
+            // Nonce-less token: it cannot be single-use protected, so it is never claimable
+            // (decode() already rejects one; this is defense in depth).
+            return false;
         }
 
         $key = 'ai.actions.nonce.' . $nonce;

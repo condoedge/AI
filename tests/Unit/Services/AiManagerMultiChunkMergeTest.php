@@ -110,7 +110,6 @@ class AiManagerMultiChunkMergeTest extends TestCase
         $ctx->qu = $qu;
         $ctx->similarQueries = [];
         $ctx->graphSchema = ['labels' => ['Unit']];
-        $ctx->relevantEntities = [];
 
         return $ctx;
     }
@@ -329,5 +328,66 @@ class AiManagerMultiChunkMergeTest extends TestCase
         // within the margin, the deeper chunk's snippet wins at max relevance.
         $this->assertSame(24, $files[0]['chunk_index']);
         $this->assertEqualsWithDelta(0.80, $files[0]['relevance'], 0.0001);
+    }
+
+    /**
+     * Task 1.29 (supersedes M-2): a rank-fusion score is per-angle and file-level,
+     * so the cross-angle merge never ranks by it. File 1's snippet comes from the
+     * deeper 'q' angle (within the depth margin) whose fusion is weak; the file
+     * still ranks by its strongest angle's COSINE (0.90), and the merged
+     * reference carries no fusion_score. The snippet chunk's own cosine is kept
+     * as chunk_relevance.
+     *
+     * @test
+     */
+    public function the_merge_ranks_by_strongest_angle_relevance_never_by_a_per_angle_fusion_score(): void
+    {
+        config(['ai.file_context.max_chunks_per_file' => 1]);
+
+        $ctx = $this->makeContext([]);
+
+        $this->perAngle = [
+            'angle-1' => ['relevant_files' => [
+                $this->fileRef(1, 0.90, 0, 'a') + ['fusion_score' => 0.005],
+                $this->fileRef(2, 0.50, 0, 'b') + ['fusion_score' => 0.033],
+            ]],
+            'q' => ['relevant_files' => [
+                $this->fileRef(1, 0.85, 3, 'a deeper') + ['fusion_score' => 0.005],
+            ]],
+        ];
+
+        $files = $this->captureMergedFiles($ctx);
+
+        $this->assertSame([1, 2], array_column($files, 'file_id'));
+        $this->assertSame('a deeper', $files[0]['snippet']);
+        $this->assertEqualsWithDelta(0.90, $files[0]['relevance'], 1e-9);
+        $this->assertEqualsWithDelta(0.85, $files[0]['chunk_relevance'], 1e-9);
+        foreach ($files as $file) {
+            $this->assertArrayNotHasKey('fusion_score', $file);
+        }
+    }
+
+    /**
+     * Task 1.12: in the merge too, a host priority_score is only a tiebreak.
+     *
+     * @test
+     */
+    public function the_cross_angle_merge_uses_priority_score_only_as_a_tiebreak(): void
+    {
+        config(['ai.file_context.max_chunks_per_file' => 1]);
+
+        $ctx = $this->makeContext([]);
+
+        $this->perAngle = [
+            'angle-1' => ['relevant_files' => [
+                $this->fileRef(1, 0.41, 0, 'team') + ['priority_score' => 1.41],
+                $this->fileRef(2, 0.80, 0, 'law') + ['priority_score' => 1.30],
+            ]],
+            'q' => ['relevant_files' => []],
+        ];
+
+        $files = $this->captureMergedFiles($ctx);
+
+        $this->assertSame([2, 1], array_column($files, 'file_id'), 'the 0.80 law chunk leads the 0.41 boosted team file');
     }
 }

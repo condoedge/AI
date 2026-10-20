@@ -68,7 +68,7 @@ class AiConversationContextTest extends TestCase
         ]);
 
         $this->assertEquals('Customer', $conversation->getFocusedEntity());
-        $this->assertEquals('count', $conversation->getLastQueryType());
+        $this->assertEquals('count', $conversation->context_snapshot['last_query_type']);
     }
 
     /** @test */
@@ -77,6 +77,5 @@ class AiConversationContextTest extends TestCase
         $conversation = AiConversation::create(['user_id' => 1]);
 
         $this->assertNull($conversation->getFocusedEntity());
-        $this->assertNull($conversation->getLastQueryType());
     }
 }

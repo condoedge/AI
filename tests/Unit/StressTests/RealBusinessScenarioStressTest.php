@@ -132,9 +132,7 @@ class RealBusinessScenarioStressTest extends TestCase
             {
                 return NodeableConfig::for(static::class)
                     ->label('HealthRecord')
-                    ->properties('id', 'person_id', 'conditions', 'severity')
-                    ->collection('health')
-                    ->embedFields('conditions'); // Embedding huge JSON
+                    ->properties('id', 'person_id', 'conditions', 'severity');
             }
 
             public function toArray(): array
@@ -398,9 +396,7 @@ class RealBusinessScenarioStressTest extends TestCase
             {
                 return NodeableConfig::for(static::class)
                     ->label('Team')
-                    ->properties('id', 'name')
-                    ->collection('teams')
-                    ->embedFields('name'); // Embedding 1000+ char string
+                    ->properties('id', 'name');
             }
         };
 

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Tests\Unit\Services\Retrieval;
 
 use Condoedge\Ai\DTOs\PipelineContext;
-use Condoedge\Ai\Services\PatternLibrary;
 use Condoedge\Ai\Services\Retrieval\TokenBudgeter;
 use Condoedge\Ai\Services\SemanticPromptBuilder;
 use Condoedge\Ai\Tests\TestCase;
@@ -21,7 +20,7 @@ class TokenBudgetEnforcementTest extends TestCase
 {
     private function builder(): SemanticPromptBuilder
     {
-        return new SemanticPromptBuilder(new PatternLibrary());
+        return new SemanticPromptBuilder();
     }
 
     private function richContext(): PipelineContext
@@ -33,15 +32,6 @@ class TokenBudgetEnforcementTest extends TestCase
             'properties' => [
                 'Customer' => ['id', 'name', 'email', 'phone', 'address'],
                 'Order' => ['id', 'total', 'created_at', 'status'],
-            ],
-        ];
-        $context->relevantEntities = [
-            'Customer' => [
-                ['id' => 1, 'name' => 'Alice Anderson', 'email' => 'alice@example.com'],
-                ['id' => 2, 'name' => 'Bob Builder', 'email' => 'bob@example.com'],
-            ],
-            'Order' => [
-                ['id' => 10, 'total' => 1234.56, 'status' => 'confirmed'],
             ],
         ];
         $context->similarQueries = [
@@ -99,7 +89,7 @@ class TokenBudgetEnforcementTest extends TestCase
 
         // The essential tail is never dropped: the user question and the task cue survive.
         $this->assertStringContainsString('How many customers do we have?', $budgeted['user']);
-        $this->assertStringContainsString('CYPHER QUERY', $budgeted['user']);
+        $this->assertStringContainsString(\Condoedge\Ai\Services\PromptSections\TaskInstructionsSection::RESPONSE_CUE, $budgeted['user']);
 
         // Telemetry: the per-turn token estimate is produced and reflects the trimmed size.
         $this->assertArrayHasKey('token_estimate', $budgeted);

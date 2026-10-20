@@ -35,6 +35,10 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
         parent::setUp();
 
         config(['ai.response_generation.truncation_honesty' => true]);
+        // The LLM guard governs the NARRATIVE-ONLY path. With deterministic tables
+        // (Phase 8 batch A) the code-rendered table carries its own "Showing X of Y"
+        // line instead — pinned in ResponseGeneratorDeterministicDataTest.
+        config(['ai.response_generation.deterministic_tables' => false]);
 
         $this->llmMock = Mockery::mock(LlmProviderInterface::class);
         $this->generator = new ResponseGenerator($this->llmMock, [
@@ -109,13 +113,28 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
         // count (10) nor the remainder (513) — the reader cannot tell how much
         // was withheld. The guard must fire; the retry instruction demands the
         // exact total with the entity noun (no "more than", no "results").
+        // Phase 8-B M4: a truncation slip alone is fixable — patched, no retry.
+        $this->llmMock->shouldReceive('complete')->once()->andReturn('There are more than 523 results available.');
+
+        $result = $this->generator->generate($this->truncatedContext(523));
+
+        $this->assertSame('patched', $result['metadata']['truncation_honesty'] ?? null);
+        $this->assertStringContainsString('Showing 10 of 523', $result['answer']);
+        $this->assertSame('all_fixable', $result['metadata']['validation']['retry_skipped'] ?? null);
+    }
+
+    /** @test */
+    public function the_combined_retry_carries_the_completeness_rule_banning_the_observed_phrasing(): void
+    {
+        // The draft also invents a figure (needs the LLM), so the ONE combined retry
+        // runs and carries the RESULT COMPLETENESS rule.
         $calls = [];
         $this->llmMock->shouldReceive('complete')
             ->twice()
             ->andReturnUsing(function ($user) use (&$calls) {
                 $calls[] = $user;
                 return count($calls) === 1
-                    ? 'There are more than 523 results available.'
+                    ? 'There are more than 523 results available, 9,999.99 $ in dues.'
                     : 'Still not disclosing properly.';
             });
 
@@ -123,7 +142,7 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
 
         $this->assertSame('patched', $result['metadata']['truncation_honesty'] ?? null);
         $this->assertStringContainsString('Showing 10 of 523', $result['answer']);
-        // The retry instruction bans the observed failure phrasing explicitly.
+        $this->assertStringContainsString('RESULT COMPLETENESS', $calls[1]);
         $this->assertStringContainsString("'more than 523'", $calls[1]);
         $this->assertStringContainsString("not the word 'results'", $calls[1]);
     }
@@ -132,17 +151,17 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
     public function a_bare_remainder_without_the_total_is_not_clean(): void
     {
         $this->llmMock->shouldReceive('complete')
-            ->twice()
-            ->andReturn('Here are ten members — 90 more are not shown.', 'Your team has 100 members; showing 10.');
+            ->once() // Phase 8-B M4: fixable-only — patched, no retry
+            ->andReturn('Here are ten members — 90 more are not shown.');
 
         $result = $this->generator->generate($this->truncatedContext(100));
 
-        $this->assertSame('recovered', $result['metadata']['truncation_honesty'] ?? null);
+        $this->assertSame('patched', $result['metadata']['truncation_honesty'] ?? null);
         $this->assertMatchesRegularExpression('/(?<!\d)100(?!\d)/', $result['answer']);
     }
 
     /** @test */
-    public function a_missing_disclosure_triggers_exactly_one_retry_which_can_recover(): void
+    public function a_missing_disclosure_riding_the_combined_retry_can_recover(): void
     {
         $calls = [];
         $this->llmMock->shouldReceive('complete')
@@ -150,17 +169,17 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
             ->andReturnUsing(function ($user) use (&$calls) {
                 $calls[] = $user;
                 return count($calls) === 1
-                    ? 'Here are the members of your team.' // no total, no remainder
+                    ? 'Here are the members of your team (dues 9,999.99 $).' // no total + an invented figure
                     : 'Here are 10 of your 100 team members.';
             });
 
         $result = $this->generator->generate($this->truncatedContext(100));
 
-        $this->assertCount(2, $calls, 'Exactly one enforcement retry');
+        $this->assertCount(2, $calls, 'Exactly one combined retry');
         // The retry prompt carries the hard instruction, the numbers, and the draft.
         $this->assertStringContainsString('RESULT COMPLETENESS', $calls[1]);
         $this->assertStringContainsString('100', $calls[1]);
-        $this->assertStringContainsString('Here are the members of your team.', $calls[1]);
+        $this->assertStringContainsString('Here are the members of your team', $calls[1]);
         $this->assertSame('Here are 10 of your 100 team members.', $result['answer']);
         $this->assertSame('recovered', $result['metadata']['truncation_honesty'] ?? null);
     }
@@ -169,14 +188,14 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
     public function a_still_missing_disclosure_is_patched_deterministically_so_it_can_never_ship_undisclosed(): void
     {
         $this->llmMock->shouldReceive('complete')
-            ->twice()
-            ->andReturn('Here are your team members.', 'Still no numbers here.');
+            ->once() // Phase 8-B M4: fixable-only — patched, no retry
+            ->andReturn('Here are your team members.');
 
         $result = $this->generator->generate($this->truncatedContext(100));
 
         $this->assertSame('patched', $result['metadata']['truncation_honesty'] ?? null);
-        // The original draft is kept and the localized disclosure line appended:
-        // the answer PHYSICALLY contains the total now.
+        // The draft is kept and the localized disclosure line appended: the answer
+        // PHYSICALLY contains the total now.
         $this->assertStringContainsString('Here are your team members.', $result['answer']);
         $this->assertStringContainsString('Showing 10 of 100', $result['answer']);
         $this->assertMatchesRegularExpression('/(?<!\d)100(?!\d)/', $result['answer']);
@@ -193,7 +212,7 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
                 if ($calls === 2) {
                     throw new \RuntimeException('LLM down');
                 }
-                return 'Undisclosed truncated list.';
+                return 'Undisclosed truncated list, 9,999.99 $ in dues.'; // the figure forces the retry
             });
 
         $result = $this->generator->generate($this->truncatedContext(100));
@@ -209,8 +228,8 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
         // population is really 250. A draft quoting "100" is NOT a disclosure of
         // the true total (nor of the 240 remainder) — the guard must fire.
         $this->llmMock->shouldReceive('complete')
-            ->twice()
-            ->andReturn('Your team has 100 members.', 'Nope, still no true total.');
+            ->once() // Phase 8-B M4: fixable-only — patched, no retry
+            ->andReturn('Your team has 100 members.');
 
         $result = $this->generator->generate($this->truncatedContext(100, 250));
 
@@ -235,8 +254,8 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
     public function the_patch_line_is_localized_by_the_qu_question_language(): void
     {
         $this->llmMock->shouldReceive('complete')
-            ->twice()
-            ->andReturn('Voici les membres.', 'Toujours sans les chiffres.');
+            ->once() // Phase 8-B M4: fixable-only — patched, no retry
+            ->andReturn('Voici les membres.');
 
         $context = $this->truncatedContext(100);
         $context->qu = new QueryUnderstandingResult(questionType: 'data_query', language: 'fr');
@@ -265,11 +284,10 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
     /** @test */
     public function a_later_guards_retry_cannot_drop_the_disclosed_total(): void
     {
-        // Guard COMPOSITION purity: the truncation guard passes 'clean' on the
-        // draft; the self-reference guard (which runs after it) then fires and
-        // its retry replaces the answer with one that marks the email but DROPS
-        // the total. The blocking guarantee must survive the composition — the
-        // disclosure is re-asserted deterministically on the shipped answer.
+        // Composition purity (Phase 8-B: one validation pass): the draft discloses
+        // the total but presents the user's email unmarked AND invents a figure, so
+        // the combined retry runs; the retry marks the email but DROPS the total.
+        // The final validation catches it and the disclosure is patched back.
         config(['ai.response_generation.self_reference_guard' => true]);
         $email = 'j.rousseau@novogestion.ca';
 
@@ -279,7 +297,7 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
             ->andReturnUsing(function ($user) use (&$calls, $email) {
                 $calls[] = $user;
                 return count($calls) === 1
-                    ? "Your team has 100 members; 10 shown. Contact {$email} for details."
+                    ? "Your team has 100 members; 10 shown. Contact {$email} for details (dues 9,999.99 $)."
                     : "The listed email {$email} (that's you) is your own address."; // no 100, no 10, no 90
             });
 
@@ -300,20 +318,13 @@ class ResponseGeneratorTruncationHonestyTest extends TestCase
         // 20 rows, 10 rendered: a draft naturally says "here are the 10 members"
         // — that literal 10 is the RENDERED count. Without the exact total (20)
         // the tightened rule (total AND shown-or-remainder) is not satisfied.
-        $calls = [];
         $this->llmMock->shouldReceive('complete')
-            ->twice()
-            ->andReturnUsing(function ($user) use (&$calls) {
-                $calls[] = $user;
-                return count($calls) === 1
-                    ? 'Here are the 10 members of your team.'
-                    : 'Your team has 20 members; here are the first 10.';
-            });
+            ->once() // Phase 8-B M4: fixable-only — patched, no retry
+            ->andReturn('Here are the 10 members of your team.');
 
         $result = $this->generator->generate($this->truncatedContext(20));
 
-        $this->assertCount(2, $calls, 'The ambiguous remainder must trigger the retry');
-        $this->assertSame('recovered', $result['metadata']['truncation_honesty'] ?? null);
+        $this->assertSame('patched', $result['metadata']['truncation_honesty'] ?? null, 'the ambiguous remainder is not a disclosure');
         $this->assertMatchesRegularExpression('/(?<!\d)20(?!\d)/', $result['answer']);
     }
 

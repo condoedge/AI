@@ -53,8 +53,8 @@ Implement `Condoedge\Ai\Contracts\AiActionInterface` (or extend
 | `answer` | the FULL composed answer the link is embedded in (document-style actions) |
 
 Return one of `AiActionResult::element() / table() / export() / pending() / error()` — a
-single presenter renders all kinds, on both the markdown-link channel and the native
-tool-calling channel (94b), so a class action automatically works on both.
+single presenter renders all kinds, for markdown links and persisted message invocations
+alike.
 
 ### 1c. The export family (built-in, reusable as a pattern)
 

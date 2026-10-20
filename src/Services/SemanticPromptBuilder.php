@@ -11,13 +11,8 @@ use Condoedge\Ai\Services\Retrieval\TokenBudgeter;
 use Condoedge\Ai\Support\AiLogger;
 use Condoedge\Ai\Services\PromptSections\GenericContextSection;
 use Condoedge\Ai\Services\PromptSections\ProjectContextSection;
-use Condoedge\Ai\Services\PromptSections\SchemaSection;
-use Condoedge\Ai\Services\PromptSections\RelationshipsSection;
-use Condoedge\Ai\Services\PromptSections\ExampleEntitiesSection;
 use Condoedge\Ai\Services\PromptSections\SimilarQueriesSection;
-use Condoedge\Ai\Services\PromptSections\DetectedEntitiesSection;
 use Condoedge\Ai\Services\PromptSections\DetectedScopesSection;
-use Condoedge\Ai\Services\PromptSections\PatternLibrarySection;
 use Condoedge\Ai\Services\PromptSections\QueryRulesSection;
 use Condoedge\Ai\Services\PromptSections\QuestionSection;
 use Condoedge\Ai\Services\PromptSections\TaskInstructionsSection;
@@ -37,15 +32,12 @@ use Condoedge\Ai\Services\PromptSections\CurrentUserContextSection;
  * - project_context (10): Project name, description, business rules
  * - generic_context (15): Additional context information
  * - current_user (17): Current user context for authorization
- * - schema (20): Database schema and node types
- * - relationships (30): Relationship types between nodes
- * - example_entities (40): Sample data for reference
- * - file_context (45): Relevant file content for RAG
+ * - schema (20): SchemaCardsSection — one compact card per selected label
+ *   (typed properties, enum legends, live directed edges, fk hints)
+ * - file_context (45): Names of relevant documents (no document text)
  * - similar_queries (50): Previously successful similar queries
  * - conversation_context (55): Recent conversation history
- * - detected_entities (60): Entities detected in the user's question
  * - detected_scopes (65): Scopes/filters detected in the question
- * - pattern_library (70): Query patterns from the pattern library
  * - query_rules (75): Rules for query generation
  * - question (80): The user's actual question
  * - task_instructions (90): Final instructions for the LLM
@@ -61,8 +53,6 @@ class SemanticPromptBuilder
     use HasInternalModules;
 
     protected $defaultModulesConfigKey = 'ai.query_generator_sections';
-
-    private PatternLibrary $patternLibrary;
 
     /**
      * Custom system prompt (intro text)
@@ -91,20 +81,16 @@ class SemanticPromptBuilder
     /**
      * Create a new semantic prompt builder
      *
-     * @param PatternLibrary $patternLibrary Pattern library instance
      * @param TokenBudgeter|null $tokenBudgeter Token accounting helper (defaults to a fresh instance)
      * @param AiLogger|null $logger Optional logger for token telemetry
      */
     public function __construct(
-        PatternLibrary $patternLibrary,
         ?TokenBudgeter $tokenBudgeter = null,
         ?AiLogger $logger = null
     ) {
-        $this->patternLibrary = $patternLibrary;
         $this->tokenBudgeter = $tokenBudgeter ?? new TokenBudgeter();
         $this->logger = $logger;
         $this->registerDefaultModules();
-        $this->applyGlobalExtensions();
     }
 
     // =========================================================================
@@ -266,18 +252,14 @@ class SemanticPromptBuilder
         }
 
         // Collect each section's contribution as an ordered entry. The system framing
-        // and any host before/after callbacks are non-droppable (safety/policy and
-        // host extensions); only a section's own user-role body is a budget candidate,
+        // is non-droppable (safety/policy); only a section's own user-role body is a budget candidate,
         // and never the always-keep essentials. Assembling these entries in order with
         // no drops reproduces the historical concatenation byte-for-byte.
         $entries = [];
         $entries[] = $this->entry('__framing', 'system', -1, $framing, true);
 
         $this->processModules(
-            beforeCallbackProcess: function ($callback) use (&$entries, $question, $context, $options) {
-                $entries[] = $this->entry('__before_callback', 'user', -1, $callback($question, $context, $options), true);
-            },
-            moduleProcess: function ($section) use (&$entries, $question, $context, $options) {
+            function ($section) use (&$entries, $question, $context, $options) {
                 if (!$section->shouldInclude($question, $context, $options)) {
                     return;
                 }
@@ -291,10 +273,7 @@ class SemanticPromptBuilder
                 $keep = $role === 'system' || in_array($name, self::ALWAYS_KEEP_SECTIONS, true);
 
                 $entries[] = $this->entry($name, $role, $section->getPriority(), $content, $keep);
-            },
-            afterCallbackProcess: function ($callback) use (&$entries, $question, $context, $options) {
-                $entries[] = $this->entry('__after_callback', 'user', PHP_INT_MAX, $callback($question, $context, $options), true);
-            },
+            }
         );
 
         $budget = $this->tokenBudget();
@@ -361,7 +340,7 @@ class SemanticPromptBuilder
 
     /**
      * Names of named sections present before enforcement but absent after. Internal
-     * framing/callback entries (prefixed "__") are non-droppable and excluded.
+     * framing entries (prefixed "__") are non-droppable and excluded.
      *
      * @param array<int, array{name: string}> $before
      * @param array<int, array{name: string}> $after
@@ -453,59 +432,9 @@ class SemanticPromptBuilder
             '- Do not use CALL {} subqueries, pattern comprehensions over sensitive entities, or EXISTS {} that bind sensitive nodes.',
             '- Emit a single statement (no ";"-separated statements).',
             '- If a WHERE uses a top-level OR, the whole disjunction is fine — it will be grouped automatically.',
-            'UNION RULES (critical):',
-            '- Treat each UNION branch as a complete, independent query: MATCH its own labelled nodes AND add their $ai_team_ids filter INSIDE that branch.',
-            '- Every branch\'s RETURN must project the SAME column names/aliases (e.g. RETURN x AS result) so all UNION branches share the same columns.',
-            '- Express team scoping as a WHERE predicate whenever possible; if a relationship MATCH is required, place it before the branch\'s RETURN and do NOT add the helper node to the RETURN.',
+            // The UNION RULES block lives ONLY in TenantScopingRulesSection (Task 5.8): it
+            // was duplicated verbatim here, and the $ai_team_ids placement it teaches only
+            // applies when that section renders per-label team filters.
         ]);
-    }
-
-    // =========================================================================
-    // FACTORY METHODS
-    // =========================================================================
-
-    /**
-     * Create a minimal builder with only essential sections
-     *
-     * @param PatternLibrary $patternLibrary Pattern library
-     * @return self
-     */
-    public static function minimal(PatternLibrary $patternLibrary): self
-    {
-        $builder = new self($patternLibrary);
-
-        // Remove non-essential sections
-        $builder->removeModule('project_context');
-        $builder->removeModule('generic_context');
-        $builder->removeModule('similar_queries');
-        $builder->removeModule('detected_entities');
-        $builder->removeModule('detected_scopes');
-        $builder->removeModule('pattern_library');
-
-        return $builder;
-    }
-
-    /**
-     * Create a builder optimized for simple queries
-     *
-     * @param PatternLibrary $patternLibrary Pattern library
-     * @return self
-     */
-    public static function simple(PatternLibrary $patternLibrary): self
-    {
-        $builder = new self($patternLibrary);
-
-        // Remove advanced sections
-        $builder->removeModule('similar_queries');
-        $builder->removeModule('detected_scopes');
-        $builder->removeModule('pattern_library');
-
-        return $builder;
-    }
-
-    // GETTERS
-    public function getPatternLibrary(): PatternLibrary
-    {
-        return $this->patternLibrary;
     }
 }

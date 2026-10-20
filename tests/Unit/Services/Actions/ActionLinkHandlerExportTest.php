@@ -98,6 +98,10 @@ class ActionLinkHandlerExportTest extends TestCase
     /**
      * Render a Kompo element down to a string we can assert on (the element exposes its rendered
      * markup via render() in the booted Testbench app).
+     *
+     * Whether the element is a plain string or a Kompo object depends on whether an earlier
+     * test loaded Kompo's global helpers, so the JSON path must not escape '/' or unicode —
+     * otherwise 'maatwebsite/excel' reads as 'maatwebsite\/excel' only in the full suite.
      */
     private function renderToString(mixed $element): string
     {
@@ -105,10 +109,12 @@ class ActionLinkHandlerExportTest extends TestCase
             return $element;
         }
 
+        $flags = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE;
+
         if (is_object($element) && method_exists($element, 'render')) {
-            return (string) json_encode($element->render());
+            return (string) json_encode($element->render(), $flags);
         }
 
-        return (string) json_encode($element);
+        return (string) json_encode($element, $flags);
     }
 }

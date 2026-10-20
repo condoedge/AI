@@ -91,8 +91,9 @@ class ModelMethodMutationActionTest extends TestCase
             inputSchema: ['days' => ['type' => 'int', 'default' => 1]],
         );
 
-        $ctx = ActionContext::fromArray(['entity_id' => 7], ['days' => 5]);
-        $result = $action->handle(['days' => 5], $ctx);
+        // M1: handle() acts on the AUTHORIZED (input) id; the matching context id is accepted.
+        $ctx = ActionContext::fromArray(['entity_id' => 7], ['entity_id' => '7', 'days' => 5]);
+        $result = $action->handle(['entity_id' => '7', 'days' => 5], $ctx);
 
         $this->assertInstanceOf(AiActionResult::class, $result);
         $this->assertFalse($result->isError);
@@ -128,7 +129,7 @@ class ModelMethodMutationActionTest extends TestCase
             authorizer: fn ($user, $model, $input) => true,
         );
 
-        $result = $action->handle([], ActionContext::fromArray(['entity_id' => 152463]));
+        $result = $action->handle(['entity_id' => '152463'], ActionContext::fromArray(['entity_id' => 152463]));
 
         $this->assertStringNotContainsString('152463', $result->summaryForLlm);
     }

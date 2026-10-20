@@ -6,9 +6,9 @@ This document maps each major component in the AI Text-to-Query system, the cont
 
 | Layer | Purpose | Key Classes |
 | --- | --- | --- |
-| Domain | Business contracts + value objects | `Nodeable`, `GraphConfig`, `VectorConfig`, `RelationshipConfig`, `HasNodeableConfig` |
+| Domain | Business contracts + value objects | `Nodeable`, `GraphConfig`, `RelationshipConfig`, `NodeableConfig`, `HasNodeableConfig` |
 | Services | Orchestration of AI workflows | `DataIngestionService`, `ContextRetriever`, `QueryGenerator`, `QueryExecutor`, `ResponseGenerator` |
-| Providers | External infrastructure adapters | `Neo4jStore`, `QdrantStore`, `OpenAiLlmProvider`, `OpenAiEmbeddingProvider`, Anthropic counterparts |
+| Providers | External infrastructure adapters | `Neo4jStore`, `QdrantStore`, `OpenAiLlmProvider`, `OpenAiEmbeddingProvider`, `AnthropicLlmProvider` |
 | API Surface | Developer-friendly entry points | `AiManager`, `Condoedge\Ai\Facades\AI` |
 | Support | Resilience/security helpers | `RetryPolicy`, `CircuitBreaker`, `SensitiveDataSanitizer`, `CypherSanitizer` |
 
@@ -26,39 +26,40 @@ This document maps each major component in the AI Text-to-Query system, the cont
 - Translates recorded calls (`where`, `whereBetween`, `whereHas`, etc.) into Cypher fragments recognized by the prompt builder.
 
 ### `NodeableConfig` Builder
-- Fluent API to override discovery (`NodeableConfig::discover($model)->embedFields([...])`).
-- Exposes `toGraphConfig()` / `toVectorConfig()` for strongly typed handoffs into ingestion services.
+- Fluent API to override discovery (`NodeableConfig::discover($model)->aliases([...])`).
+- Exposes `toGraphConfig()` for strongly typed handoffs into ingestion services.
 
-## Dual-Storage Coordination
+## Ingestion & Storage
 
 ### `DataIngestionService`
-Responsible for keeping Neo4j and Qdrant in sync.
+Responsible for writing records to the graph (Neo4j). Records are not embedded and never written to Qdrant, so there is no cross-store coordination.
 
 Flow per entity:
-1. Resolve `GraphConfig` + `VectorConfig` from the Nodeable instance.
-2. Generate embeddings (batch-friendly when using `ingestBatch`).
-3. Persist node + relationships via `GraphStoreInterface` implementation (Neo4j).
-4. Upsert vector payload to Qdrant via `VectorStoreInterface`.
-5. Aggregate per-store status, retry transient failures, and run compensating transactions when one store fails.
+1. Resolve `GraphConfig` from the Nodeable instance.
+2. Persist the node via the `GraphStoreInterface` implementation (Neo4j).
+3. Create its relationships (`RelationshipSyncer`).
+4. Return the result (`graph_stored`, `relationships_created`, `errors`). A failed graph write is reported in `errors` by `sync()` / `ingestBatch()` and raised as a `DataConsistencyException` by `ingest()` / `remove()`.
+
+`php artisan ai:ingest` uses `BatchDataIngestionService`, which writes nodes with Cypher `UNWIND` batches, then relationships.
 
 ### `GraphStoreInterface` / `Neo4jStore`
 - HTTP/Bolt hybrid client with retry + circuit breaker baked in.
-- Provides schema discovery (`getSchema()`), example entity queries, and generic Cypher execution.
+- Provides schema discovery (`getSchema()`) and generic Cypher execution.
 
 ### `VectorStoreInterface` / `QdrantStore`
 - REST client for collection management, vector upserts, semantic search, and metadata-only scrolling.
 - Supports payload filters and item-to-item recommendations used by the RAG layer.
+- Holds file and documentation chunks plus the context indexes, not records - see [What is stored where](/docs/{{version}}/usage/data-ingestion#what-is-stored-where).
 
 ## RAG & Query Generation
 
 ### `ContextRetriever`
 - Embeds incoming questions via the configured embedding provider.
 - Queries Qdrant for similar prompts + historical Cypher outputs.
-- Retrieves graph schema + example nodes from Neo4j to ground the LLM.
+- Retrieves the graph schema from Neo4j to ground the LLM.
 - Produces a context payload consumed by `QueryGenerator` and by end users when debugging.
 
 ### `QueryGenerator`
-- Pattern detection: matches the question to pre-defined templates in `config/ai-patterns.php` before falling back to free-form LLM prompts.
 - Prompt assembly: merges system rules, graph schema, semantic examples, and optional guards (limit enforcement, reserved keyword ban).
 - Validation loop: re-prompts up to 3 times if the generated Cypher fails linting or references unknown labels/props.
 
@@ -68,7 +69,6 @@ Flow per entity:
 
 ### `ResponseGenerator`
 - Uses the configured LLM to turn raw rows into natural language summaries.
-- Adds optional insights (outliers, averages, recommended visualizations) so UI layers can display more than raw data.
 
 ## API Surface
 

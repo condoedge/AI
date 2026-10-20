@@ -59,11 +59,46 @@ class MessageInvocationRenderTest extends TestCase
             'prefix' => '',
         ]);
         $app['config']->set('entities', []);
+        // Kompo's selfPost() (the approval card's confirm wiring) encrypts its target.
+        $app['config']->set('app.key', 'base64:' . base64_encode(random_bytes(32)));
+    }
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // Always render through the PRODUCTION (Kompo element) path. Without this the result
+        // depended on test order: Kompo's helpers are global functions, so the presenter/card
+        // returned plain strings/arrays alone but Kompo elements once any earlier test had
+        // booted the Kompo provider. The helper files are function_exists()-guarded.
+        require_once __DIR__ . '/../../../vendor/kompo/kompo/src/Core/KompoHelpers.php';
+        require_once __DIR__ . '/../../../vendor/kompo/kompo/src/Core/HelperUtils.php';
     }
 
     protected function defineDatabaseMigrations(): void
     {
         $this->loadMigrationsFrom(__DIR__ . '/../../../database/migrations');
+    }
+
+    /**
+     * The visible text of a note element (done-note / unavailable-notice): a Kompo Html
+     * element carries its content as its label.
+     */
+    private function noteText(mixed $element): string
+    {
+        $this->assertInstanceOf(\Kompo\Html::class, $element, 'notes render as a Kompo Html element');
+
+        return (string) $element->label;
+    }
+
+    /**
+     * The signed token an approval card carries (data-pending-action attribute).
+     */
+    private function cardToken(mixed $card): string
+    {
+        $this->assertInstanceOf(\Kompo\Rows::class, $card, 'a pending action renders the approval card');
+
+        return (string) $card->attr('data-pending-action');
     }
 
     protected function tearDown(): void
@@ -158,6 +193,43 @@ class MessageInvocationRenderTest extends TestCase
         );
 
         $this->assertSame(['profile-element:152463'], $elements);
+    }
+
+    /**
+     * @test Actions plan B1: a code-attached record chip (a config entity action, exactly the
+     * shape ActionAttacher persists) renders with its record label as the link text, and is
+     * re-authorized FRESH at every render — a permission revoked after the answer hides it.
+     */
+    public function a_persisted_record_chip_is_reauthorized_at_render_and_hidden_once_revoked(): void
+    {
+        $allowed = true;
+        config(['ai.entity_actions' => [
+            'Unit' => [
+                'view' => [
+                    'action' => fn ($id, $text = 'Open unit') => "unit-link:{$id}:{$text}",
+                    'label' => 'Open unit',
+                    'authorize' => function ($user, array $input = []) use (&$allowed): bool {
+                        return $allowed;
+                    },
+                ],
+            ],
+        ]]);
+        $chip = $this->record('view', 'Unit', 159, [], 'Unit 310 — Carré Soho Phase 3');
+
+        [$renderer] = $this->makeRenderer(new AiActionRegistry());
+        $this->assertSame(
+            ['unit-link:159:Unit 310 — Carré Soho Phase 3'],
+            $renderer->renderPersistedInvocations($this->message(['invocations' => [$chip]]), ['result_set' => []])
+        );
+
+        // Permission revoked after the answer was stored: the next render (a new request,
+        // so a fresh renderer) re-runs authorize() and the chip is gone — no stale link.
+        $allowed = false;
+        [$fresh] = $this->makeRenderer(new AiActionRegistry());
+        $this->assertSame(
+            [],
+            $fresh->renderPersistedInvocations($this->message(['invocations' => [$chip]]), ['result_set' => []])
+        );
     }
 
     /** @test */
@@ -303,8 +375,7 @@ class MessageInvocationRenderTest extends TestCase
 
         $this->assertSame(0, $calls, 'a resolved invocation must skip dispatch entirely');
         $this->assertCount(1, $elements);
-        $this->assertIsString($elements[0]);
-        $this->assertStringContainsString('approved', $elements[0]);
+        $this->assertStringContainsString('approved', $this->noteText($elements[0]));
     }
 
     /** @test */
@@ -332,8 +403,8 @@ class MessageInvocationRenderTest extends TestCase
         );
 
         $this->assertCount(1, $elements);
-        $this->assertIsString($elements[0], 'the done-note replaces the approval card');
-        $this->assertStringContainsString('approved', $elements[0]);
+        // The done-note (an Html note, not the Rows approval card) replaces the card.
+        $this->assertStringContainsString('approved', $this->noteText($elements[0]));
     }
 
     /** @test */
@@ -355,11 +426,15 @@ class MessageInvocationRenderTest extends TestCase
         );
 
         $this->assertCount(1, $elements);
-        $card = $elements[0];
-        $this->assertIsArray($card);
-        $this->assertSame('approval_card', $card['type']);
-        $this->assertSame('Archive', $card['label']);
-        $this->assertNotSame('', $card['token']);
+        $token = $this->cardToken($elements[0]);
+        $this->assertNotSame('', $token);
+        // The confirm round-trip is a self-method post (method name is encrypted in the Kompo
+        // target) carrying the SAME signed token + the invocation's fingerprint.
+        $json = json_encode($elements[0], JSON_UNESCAPED_SLASHES);
+        $this->assertStringContainsString('"X-Kompo-Action":"self-method"', $json);
+        $this->assertStringContainsString('"token":"' . $token . '"', $json);
+        $fingerprint = ActionInvocation::fromArray($this->record('archive'))->fingerprint();
+        $this->assertStringContainsString('"fingerprint":"' . $fingerprint . '"', $json);
     }
 
     /** @test */
@@ -381,8 +456,7 @@ class MessageInvocationRenderTest extends TestCase
         );
 
         $this->assertCount(1, $elements);
-        $this->assertIsString($elements[0]);
-        $this->assertStringContainsString('no longer available', $elements[0]);
+        $this->assertStringContainsString('no longer available', $this->noteText($elements[0]));
     }
 
     /** @test */
@@ -444,7 +518,7 @@ class MessageInvocationRenderTest extends TestCase
 
         // Render mints a fresh signed token (the card) without executing anything.
         $elements = $renderer->renderPersistedInvocations($message, ['result_set' => []]);
-        $token = $elements[0]['token'];
+        $token = $this->cardToken($elements[0]);
         $this->assertSame(0, $handled);
 
         // The confirm round-trip: approveAiAction posts token + messageId + fingerprint.
@@ -466,8 +540,7 @@ class MessageInvocationRenderTest extends TestCase
         [$secondRenderer] = $this->makeRenderer($registry);
         $rerendered = $secondRenderer->renderPersistedInvocations($message->fresh(), ['result_set' => []]);
         $this->assertCount(1, $rerendered);
-        $this->assertIsString($rerendered[0]);
-        $this->assertStringContainsString('approved', $rerendered[0]);
+        $this->assertStringContainsString('approved', $this->noteText($rerendered[0]));
         $this->assertSame(1, $handled, 'the done-note render must not dispatch or execute again');
     }
 
@@ -496,20 +569,20 @@ class MessageInvocationRenderTest extends TestCase
         // succeeds, but the stamp is refused — the fingerprint's invocation does not match the
         // approved token's action identity, so purge must not show as done.
         $elements = $renderer->renderPersistedInvocations($message, ['result_set' => []]);
-        $query->approveAiAction($elements[0]['token'], $message->id, ActionInvocation::fromArray($purge)->fingerprint());
+        $query->approveAiAction($this->cardToken($elements[0]), $message->id, ActionInvocation::fromArray($purge)->fingerprint());
         $this->assertSame([], $message->fresh()->metadata['resolved_invocations'] ?? []);
 
         // A fingerprint matching nothing persisted on the message is refused the same way.
         [$secondRenderer] = $this->makeRenderer($registry);
         $elements = $secondRenderer->renderPersistedInvocations($message->fresh(), ['result_set' => []]);
-        $query->approveAiAction($elements[0]['token'], $message->id, sha1('forged-fingerprint'));
+        $query->approveAiAction($this->cardToken($elements[0]), $message->id, sha1('forged-fingerprint'));
         $this->assertSame([], $message->fresh()->metadata['resolved_invocations'] ?? []);
 
         // The matching fingerprint still lands.
         [$thirdRenderer] = $this->makeRenderer($registry);
         $elements = $thirdRenderer->renderPersistedInvocations($message->fresh(), ['result_set' => []]);
         $archiveFingerprint = ActionInvocation::fromArray($archive)->fingerprint();
-        $query->approveAiAction($elements[0]['token'], $message->id, $archiveFingerprint);
+        $query->approveAiAction($this->cardToken($elements[0]), $message->id, $archiveFingerprint);
         $this->assertSame(
             ['approved'],
             array_values($message->fresh()->metadata['resolved_invocations'] ?? []),

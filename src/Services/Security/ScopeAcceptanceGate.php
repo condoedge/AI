@@ -167,20 +167,115 @@ final class ScopeAcceptanceGate
     }
 
     /**
-     * Token sequence `<alias> . <column> IN $ai_team_ids` present at top level
-     * inside the scope. Token-based, so a match inside a string literal (opaque
-     * T_LITERAL) can never satisfy it, and `IN [` (inlined ids) never matches.
+     * Whether `<alias> . <column> IN $ai_team_ids` is a TOP-LEVEL AND-CONJUNCT of
+     * the WHERE of a MANDATORY (non-OPTIONAL) MATCH inside the scope — the only
+     * position where it provably constrains EVERY row (Task 1.26b).
+     *
+     * Previously the token sequence was accepted ANYWHERE in the scope, so
+     * `… IN $ai_team_ids OR true`, `… OR x.status = 'open'` (an LLM precedence
+     * slip, no attacker needed), `NOT x.team_id IN …`, `IN $ai_team_ids + [5]`,
+     * `= false`, a CASE / comprehension, or the WHERE of an OPTIONAL MATCH (which
+     * filters only the optional part) all passed as self-scoped and the executor
+     * ran them AS-IS. Now:
+     *   - the WHERE must sit at the part's own depth and belong to a plain MATCH;
+     *   - its predicate (up to the next clause head) may contain NO OR / XOR / NOT
+     *     at that depth — a pure conjunction;
+     *   - the 5-token predicate must be a WHOLE conjunct: preceded by WHERE/AND
+     *     and followed by AND or the predicate end.
+     * Anything else returns false → the injector AND-merges the resolver filter
+     * (parenthesizing an existing OR). A false negative is harmless.
      *
      * @param list<Token> $tokens
      */
     private function hasDirectPredicate(array $tokens, int $start, int $end, string $alias, string $column): bool
     {
-        for ($i = $start; $i + 4 < $end; $i++) {
-            if ($this->isAliasColumnInParam($tokens, $i, $end, $alias, $column)) {
-                return true;
+        if (!isset($tokens[$end])) {
+            return false; // no anchor token → cannot establish the part's depth
+        }
+        $base = $tokens[$end];
+
+        for ($w = $start; $w < $end; $w++) {
+            $t = $tokens[$w];
+            if (!$t->isWord('WHERE') || $t->keywordAsIdentifier || !$this->sameDepth($t, $base)) {
+                continue;
+            }
+            if (!$this->whereBelongsToMandatoryMatch($tokens, $start, $w, $base)) {
+                continue;
+            }
+
+            // Predicate end: next clause head (or WHERE) at this depth, else the anchor.
+            $predEnd = $end;
+            for ($j = $w + 1; $j < $end; $j++) {
+                $tj = $tokens[$j];
+                if ($this->sameDepth($tj, $base) && $tj->type === CypherLexer::T_WORD && !$tj->keywordAsIdentifier
+                    && ($tj->isWord('WHERE') || CypherClauses::in($tj->value, CypherClauses::CLAUSE_HEADS))) {
+                    $predEnd = $j;
+                    break;
+                }
+            }
+
+            // A pure top-level conjunction only.
+            $conjunctStarts = [$w + 1];
+            $pure = true;
+            for ($j = $w + 1; $j < $predEnd; $j++) {
+                $tj = $tokens[$j];
+                if (!$this->sameDepth($tj, $base) || $tj->type !== CypherLexer::T_WORD || $tj->keywordAsIdentifier) {
+                    continue;
+                }
+                if ($tj->isWord('OR') || $tj->isWord('XOR') || $tj->isWord('NOT')) {
+                    $pure = false;
+                    break;
+                }
+                if ($tj->isWord('AND')) {
+                    $conjunctStarts[] = $j + 1;
+                }
+            }
+            if (!$pure) {
+                continue;
+            }
+
+            foreach ($conjunctStarts as $k => $cs) {
+                $ce = $conjunctStarts[$k + 1] ?? null;
+                $conjunctEnd = $ce !== null ? $ce - 1 : $predEnd; // the AND / predicate end
+                if ($conjunctEnd - $cs === 5 && $this->isAliasColumnInParam($tokens, $cs, $conjunctEnd, $alias, $column)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether the WHERE at $whereIdx attaches to a plain (non-OPTIONAL) MATCH: the
+     * nearest clause head before it at the same depth is MATCH, not preceded by
+     * OPTIONAL. A WHERE on an OPTIONAL MATCH filters only the optional part.
+     *
+     * @param list<Token> $tokens
+     */
+    private function whereBelongsToMandatoryMatch(array $tokens, int $start, int $whereIdx, Token $base): bool
+    {
+        for ($j = $whereIdx - 1; $j >= $start; $j--) {
+            $tj = $tokens[$j];
+            if (!$this->sameDepth($tj, $base) || $tj->type !== CypherLexer::T_WORD || $tj->keywordAsIdentifier) {
+                continue;
+            }
+            if ($tj->isWord('MATCH')) {
+                $prev = $tokens[$j - 1] ?? null;
+                return !($prev !== null && $prev->isWord('OPTIONAL'));
+            }
+            if ($tj->isWord('WHERE') || CypherClauses::in($tj->value, CypherClauses::CLAUSE_HEADS)) {
+                return false;
             }
         }
         return false;
+    }
+
+    private function sameDepth(Token $a, Token $b): bool
+    {
+        return $a->parenDepth === $b->parenDepth
+            && $a->bracketDepth === $b->bracketDepth
+            && $a->braceDepth === $b->braceDepth;
     }
 
     /**
@@ -190,11 +285,16 @@ final class ScopeAcceptanceGate
      */
     private function isAliasColumnInParam(array $tokens, int $i, int $end, string $alias, string $column): bool
     {
+        // EXACT (case-sensitive) identifier compares: Cypher variables, property
+        // keys and parameters are case-sensitive — a strcasecmp let
+        // `X.team_id IN $ai_team_ids` vouch for a different variable `x`, and the
+        // query ran AS-IS returning every tenant's rows (Task 1.26c). Only the
+        // KEYWORD `IN` is compared case-insensitively.
         return $tokens[$i]->type === CypherLexer::T_WORD
-            && strcasecmp($tokens[$i]->value, $alias) === 0
+            && $tokens[$i]->value === $alias
             && $tokens[$i + 1]->isPunct('.')
             && $tokens[$i + 2]->type === CypherLexer::T_WORD
-            && strcasecmp($tokens[$i + 2]->value, $column) === 0
+            && $tokens[$i + 2]->value === $column
             && $this->isInTeamIdsParam($tokens, $i + 3, $end);
     }
 
@@ -214,7 +314,8 @@ final class ScopeAcceptanceGate
         }
         // The lexer keeps `$ai_team_ids` as one word token (the '$' is a word char).
         $param = $tokens[$i + 1];
+        // Parameters are case-sensitive: `$AI_TEAM_IDS` is a DIFFERENT parameter.
         return $param->type === CypherLexer::T_WORD
-            && strcasecmp($param->value, '$' . TeamPathResolver::TEAM_IDS_PARAM) === 0;
+            && $param->value === '$' . TeamPathResolver::TEAM_IDS_PARAM;
     }
 }

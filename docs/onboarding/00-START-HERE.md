@@ -50,7 +50,7 @@ non-trivial change.
 | **Abstention** | The no-grounding safety behavior: empty query data + no referenced files means the turn is flagged degraded and the response comes from `ResponseGenerator::generateEmptyResponse` ("no results found"), never a confident invented answer (`src/Services/Chat/UseCases/AskQuestionUseCase.php:176-178`, `src/Services/ResponseGenerator.php:322`). |
 | **Action / ActionKind** | A host capability implementing `src/Contracts/AiActionInterface.php`, registered in config. `handle()` returns data + an `ActionKind` intent (`Element`, `Table`, `Export`, `Pending`, `Error`) — never a UI element (`src/Services/Actions/ActionKind.php`). |
 | **Approval token** | The HMAC-signed, TTL-bound (`ai.actions.token_ttl`, default 900s, config/ai.php:1223), user-bound, single-use `PendingActionToken` minted at render time for a mutating action. Only `ActionDispatcher::approve()` — after re-verifying all of that — calls `handle()`. |
-| **Native tool channel** | When `ai.actions.native_tools` is on (default OFF, config/ai.php:1224) and the response LLM implements `src/Contracts/ToolCallingLlmInterface.php`, actions are offered as native provider tools via a bounded loop (`src/Services/Actions/ToolLoopRunner.php`); otherwise they ride the markdown `action://` link grammar. One decision point: `src/Services/Actions/ActionToolGate.php`. |
+| **Action channel** | Code attaches links/actions; the AI only narrates (2026-10-01): links and actions are attached by CODE (`ActionAttacher`, actions plan B1–B5): record chips, identity links (my profile / my team), next steps by answer shape and digest section links are computed from rows, labels, QU fields and permissions, persisted as message `metadata.invocations` and re-authorized at every render. The response model only narrates: it gets one line + the attached chip labels (`AttachedActionsSection`) and may reference a row with `{{record:N}}` (`src/Services/Actions/Attach/`). The opt-in native tool channel was removed 2026-10-01. |
 | **page_context** | A soft prior describing the page/record the chat was opened from, passed by the host when mounting `AiChatFloating` (e.g. `['entity_type' => 'Union', 'entity_id' => ...]`). It biases entity selection and adds one retrieval angle; it never hard-filters (`src/Services/AiManager.php:459-464`, `src/Services/ContextRetriever.php:275-278`). |
 | **Identity** | `ai.identity` (assistant name, persona, language policy, config/ai.php:57-66) rendered by `src/Services/AssistantIdentity.php` + `src/Services/ResponseSections/IdentitySection.php` so the assistant stays white-labeled and never self-identifies its model provider. |
 
@@ -62,8 +62,8 @@ non-trivial change.
 | `Auth/` | `AiAuthAdapterInterface` + `KompoAuthAdapter` (when kompo/auth is present) and `NullAuthAdapter` (fail-closed: zero teams, denies all secured queries, `src/Auth/NullAuthAdapter.php:23-54`). |
 | `Console/Commands/` | The 14 `ai:*` artisan commands (discover, setup, ingest, sync-relationships, index-*, process-files, enhance, validate-config, diagnose, eval, test-question, test-conversation). |
 | `Contracts/` | The 23 interfaces — the seams a host or alternate backend implements. |
-| `Domain/` | `Nodeable` contract (what makes a model indexable) + `GraphConfig`/`VectorConfig`/`RelationshipConfig` value objects. |
-| `DTOs/` | `PipelineContext` (the single typed bag carried through the pipeline), `QueryUnderstandingResult`, `LlmToolCall`/`LlmToolTurn`, result DTOs. |
+| `Domain/` | `Nodeable` contract (what makes a model indexable) + `GraphConfig`/`RelationshipConfig` value objects (records go to the graph only; there is no per-entity vector config). |
+| `DTOs/` | `PipelineContext` (the single typed bag carried through the pipeline), `QueryUnderstandingResult`, result DTOs. |
 | `EmbeddingProviders/` | OpenAI embeddings (default, 1536-dim); the Anthropic one is an explicit non-functional placeholder. |
 | `LlmProviders/` | OpenAI / Anthropic chat over raw cURL with circuit breaker + transient retry (`AbstractHttpLlmProvider.php`). |
 | `GraphStore/` / `VectorStore/` | Neo4j (Bolt or HTTP, factory-selected by URI scheme) and Qdrant adapters. |
@@ -93,7 +93,7 @@ non-trivial change.
 - `92-rag-research.md` — 2024–2026 RAG best practice mapped onto this codebase's actual gaps; which techniques to adopt vs. defer.
 - `93-dead-code-and-duplication.md` — the verified kill-list of unreached code, duplicated paths, and dead config keys (plus a "refuted, do NOT act" appendix).
 - `94-action-and-extensibility-abstraction.md` — how a host teaches the assistant to *do* something with config-only effort; the action contract design.
-- `94b-native-tool-calling-design.md` — the executed design for native provider tool-calling; §2.1 is the authoritative deferred-approval handshake diagram.
+- `94b-native-tool-calling-design.md` — historical design for native provider tool-calling (the loop was removed 2026-10-01); §2.1 is the authoritative deferred-approval handshake diagram.
 - `94c-polymorphic-edge-sync-design.md` — why `morphTo` relationships never materialize as graph edges, and the fix design.
 - `95-condoedge-domain-map.md` — what the CondoEdge host app is, who uses it, what the AI covers.
 - `96-condoedge-recommended-questions.md` — source-verified example questions for the CondoEdge deployment.

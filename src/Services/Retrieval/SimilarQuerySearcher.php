@@ -72,7 +72,16 @@ class SimilarQuerySearcher
             );
         }
 
-        return array_values(array_filter(array_map(function ($result) {
+        return array_values(array_filter(array_map(function ($result) use ($scoreThreshold) {
+            // Enforce the threshold here too: not every vector store applies
+            // score_threshold server-side, and a below-threshold example is an
+            // unrelated query the generator would copy. An UNSCORED hit cannot
+            // prove it clears the threshold, so it is dropped too.
+            if (!isset($result['score']) || !is_numeric($result['score'])
+                || (float) $result['score'] < $scoreThreshold) {
+                return null;
+            }
+
             $question = $result['payload']['question'] ?? $result['metadata']['question'] ?? '';
             $query = $result['payload']['cypher_query'] ?? $result['payload']['query']
                 ?? $result['metadata']['cypher_query'] ?? $result['metadata']['query'] ?? '';

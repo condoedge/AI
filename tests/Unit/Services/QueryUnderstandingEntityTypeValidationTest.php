@@ -45,7 +45,10 @@ class QueryUnderstandingEntityTypeValidationTest extends TestCase
             'person_names' => $personNames,
             'property_concepts' => [],
             'search_query' => 'rewritten',
-            'is_possessive' => $isPossessive,
+            // Possession is derived from quoted words the question really contains.
+            'possessive_words' => $isPossessive ? ['my'] : [],
+            'possessive_forms' => $isPossessive ? ['possessive'] : [],
+            'possessive_scope' => $isPossessive ? 'personal' : null,
             'intent' => $intent,
             'question_type' => 'data_query',
             'clarified_question' => '',
@@ -69,7 +72,7 @@ class QueryUnderstandingEntityTypeValidationTest extends TestCase
             'App\\Models\\Unit' => ['graph' => ['label' => 'Unit'], 'metadata' => []],
         ]);
 
-        return $service->analyze('whatever question', $catalog);
+        return $service->analyze($isPossessive ? 'whatever my question' : 'whatever question', $catalog);
     }
 
     /** @test */
@@ -136,7 +139,9 @@ class QueryUnderstandingEntityTypeValidationTest extends TestCase
             'person_names' => [],
             'property_concepts' => [],
             'search_query' => 'files I can access',
-            'is_possessive' => true,
+            'possessive_words' => ['I'],
+            'possessive_forms' => ['subject'],
+            'possessive_scope' => 'personal',
             'intent' => 'file_listing',
             'question_type' => 'data_query',
             'clarified_question' => '',
@@ -184,7 +189,7 @@ class QueryUnderstandingEntityTypeValidationTest extends TestCase
         $llm = Mockery::mock(LlmProviderInterface::class);
         $llm->shouldReceive('chatJson')->once()->andReturn([
             'entity_types' => [], 'person_names' => [], 'property_concepts' => [],
-            'search_query' => 'x', 'is_possessive' => false, 'intent' => 'list',
+            'search_query' => 'x', 'possessive_words' => [], 'intent' => 'list',
             'question_type' => 'data_query', 'clarified_question' => '', 'search_tags' => $tags,
         ]);
         $logger = Mockery::mock(AiLogger::class);

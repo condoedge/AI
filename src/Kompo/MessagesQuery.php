@@ -492,6 +492,37 @@ class MessagesQuery extends ChatMessagesQuery
     }
 
     /**
+     * Server-side round-trip of the export chip of a CAPPED list (export_* `mode=rerun`,
+     * eval p18-A roster "25 of 523").
+     *
+     * Every other chip's action runs when the bubble renders; this one re-executes a query,
+     * so it runs HERE, on the click: the chip posts the message id + the invocation's
+     * fingerprint, and the answer (the download link, or a visible failure) lands in the
+     * chip's own panel.
+     *
+     * Who and what, at click time:
+     *  - the message is looked up inside $this->conversation — the CLICKING user's own
+     *    conversation (created() scopes it to auth()->id()); a foreign or unknown message
+     *    id resolves to nothing;
+     *  - the client-supplied fingerprint only selects an invocation stored on that message;
+     *  - the query re-run is the one recorded with that message, executed as auth()->user()
+     *    through the scoped executor (fresh tenant scope, read-only, one rate-limit charge),
+     *    after the action's authorize() is re-run — MessageBubbleRenderer::exportRecordedResult.
+     */
+    public function exportRecordedResult($messageId = null, $fingerprint = null)
+    {
+        $message = $this->conversation && $messageId !== null && (is_int($messageId) || is_string($messageId))
+            ? $this->conversation->messages()->find($messageId)
+            : null;
+
+        if (!$message || $message->role !== 'assistant') {
+            return $this->bubbleRenderer()->exportFailure();
+        }
+
+        return $this->bubbleRenderer()->exportRecordedResult($message, $fingerprint, auth()->user());
+    }
+
+    /**
      * Stamp resolved_invocations[fingerprint] = 'approved' on the (ownership-scoped) message
      * after a confirmed approval. Best-effort: absent ids and unknown messages are ignored —
      * the approval itself already succeeded and must not be reported as failed. The fingerprint
@@ -598,7 +629,8 @@ class MessagesQuery extends ChatMessagesQuery
             }
         }
 
-        $sample = $this->conversation?->metadata['last_result_sample'] ?? [];
+        // The sample lives in context_snapshot (written by ConversationContextManager::recordResponse).
+        $sample = $this->conversation?->getLastResultSample() ?? [];
         return is_array($sample) ? $sample : [];
     }
 

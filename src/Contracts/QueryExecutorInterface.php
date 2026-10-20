@@ -40,42 +40,4 @@ interface QueryExecutorInterface
      * @return int Count of results
      */
     public function executeCount(?string $cypherQuery, array $parameters = [], array $options = []): int;
-
-    /**
-     * Execute query with pagination
-     *
-     * @param string $cypherQuery Query to execute
-     * @param int $page Page number (1-indexed)
-     * @param int $perPage Results per page
-     * @param array $parameters Query parameters
-     * @param array $options Execution options
-     * @return array Paginated results with keys:
-     *               - data: Current page results
-     *               - pagination: Pagination metadata (current_page, per_page, total, last_page)
-     *               - stats: Execution statistics
-     */
-    public function executePaginated(
-        ?string $cypherQuery,
-        int $page = 1,
-        int $perPage = 20,
-        array $parameters = [],
-        array $options = []
-    ): array;
-
-    /**
-     * Explain a query (show execution plan without running)
-     *
-     * @param string $cypherQuery Query to explain
-     * @param array $parameters Query parameters
-     * @return array Execution plan details
-     */
-    public function explain(?string $cypherQuery, array $parameters = []): array;
-
-    /**
-     * Test if a query is valid (dry run)
-     *
-     * @param string $cypherQuery Query to test
-     * @return bool True if query is valid
-     */
-    public function test(?string $cypherQuery): bool;
 }

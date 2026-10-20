@@ -178,11 +178,6 @@ A complete real entry (`CondoEdge/config/ai-entities/condo.php:1213` — Reserva
             ['type' => 'CONTACT',  'target_label' => 'Contact',  'foreign_key' => 'contact_id', /* … */],
         ],
     ],
-    'vector' => [
-        'collection' => 'reservations',
-        'embed_fields' => ['note'],
-        'metadata' => ['id', 'start_date', 'end_date', 'status', 'num_people', /* … */],
-    ],
     'security' => [
         'team_resolution' => 'union',
         'team_path' => 'resource.union.team_id',
@@ -403,10 +398,7 @@ binding rationale at `src/AiServiceProvider.php:364-377`):
 ```php
 'actions' => [
     // \App\Ai\Actions\ExportRollCallAction::class,
-    'token_ttl' => env('AI_ACTION_TOKEN_TTL', 900),          // reserved non-class keys coexist
-    'native_tools' => (bool) env('AI_ACTION_NATIVE_TOOLS', false),
-    'tool_rounds' => (int) env('AI_ACTION_TOOL_ROUNDS', 2),
-    'max_tool_calls' => (int) env('AI_ACTION_MAX_TOOL_CALLS', 5),
+    'token_ttl' => env('AI_ACTION_TOKEN_TTL', 900),          // reserved non-class key coexists
 ],
 ```
 
@@ -443,38 +435,13 @@ fresh server-side `authorize()` before the write ever happens.
    row, then calls the wrapped domain method. Cancel discards. An expired or replayed token is
    rejected at decode.
 
-### The native tool channel
-
-By default actions ride the markdown link grammar above. `ai.actions.native_tools`
-(**default `false`**, `config/ai.php:1224`) switches to offering them as *native provider tools*
-(OpenAI/Anthropic tool calling). The single decision point is `ActionToolGate`
-(`src/Services/Actions/ActionToolGate.php:86-108`):
-
-- terse response styles (`minimal`, `concise`) → **no** action channel at all;
-- kill switch off → markdown (today's behavior, byte-identical);
-- on, but the resolved `response_generation` provider doesn't implement
-  `ToolCallingLlmInterface` → markdown, with a **loud per-turn warning** (capability drift must
-  never be silent);
-- on + capable provider + non-empty *relevance-scoped* tool set → native.
-
-What actually flips when you enable it: the model receives tool specs instead of the link-grammar
-prompt section (never both); a tool loop runs with hard caps — `tool_rounds` (default 2) LLM
-rounds, `max_tool_calls` (default 5) dispatches, then one forced no-tools call closes the prose
-(`src/Services/Actions/ToolLoopRunner.php`); telemetry (`channel`, `rounds`, `tool_calls`,
-`degraded`) rides the response metadata. **Mutating actions keep the exact same signed-token
-approval gate on both channels** — a tool call to a mutating action produces a Pending result
-and an ApprovalCard, and the model is explicitly told the action has NOT run. Full design:
-`docs/audit/94b-native-tool-calling-design.md`.
-
-Staged rollout (the design's own posture — default-off kill switch, telemetry before tuning):
-
-1. Leave `AI_ACTION_NATIVE_TOOLS=false` in production (nothing changes; the gate short-circuits
-   before any spec is built).
-2. Enable in staging with a tools-capable `response_generation` provider; both shipped providers
-   qualify (`src/LlmProviders/OpenAiLlmProvider.php`, `AnthropicLlmProvider.php`).
-3. Watch the `tool_calling` response metadata and the capability-drift log warning; tune
-   `tool_rounds`/`max_tool_calls` on evidence.
-4. Then flip production. The env var is the instant rollback.
+Links and actions are attached by code under the answer (`ai.attached_actions`; generic actions
+declare their placement with `'entity' => 'Unit', 'kind' => 'list'|'create'|'report'`, an entity
+action may be flagged `'primary' => true`; the profile/team identity links default to the
+`profile.show` / `teams.show` routes or reuse a host action named under
+`attached_actions.identity.{profile|team}.action`). The opt-in native tool channel (`ai.actions.native_tools` and friends) was removed
+2026-10-01 — remove any `AI_ACTION_NATIVE_TOOLS` / `AI_ACTION_TOOL_ROUNDS` /
+`AI_ACTION_MAX_TOOL_CALLS` / `AI_ACTION_NATIVE_QUERY_TOOL` env entries; they are no longer read.
 
 ---
 
@@ -604,7 +571,7 @@ php artisan ai:discover                  # write config/entities.php from Nodeab
 php artisan ai:validate-config           # structural check; non-zero exit on errors
 # … hand-review the catalog against section 4 before ingesting …
 
-php artisan ai:ingest --fresh            # bulk: all Nodeable entities -> Neo4j nodes/edges + Qdrant embeddings
+php artisan ai:ingest --fresh            # bulk: all Nodeable entities -> Neo4j nodes/edges (records are not embedded; --fresh also empties every Qdrant collection)
 php artisan ai:sync-relationships        # reconcile edges skipped because targets weren't ingested yet
 php artisan ai:index-context             # context_index collection (semantic context selection)
 php artisan ai:index-semantic            # semantic_entities/_scopes/_templates (fuzzy detection)

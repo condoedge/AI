@@ -88,7 +88,10 @@ interface GraphStoreInterface
     /**
      * Get database schema information
      *
-     * Returns information about node labels, relationship types, and properties
+     * Returns information about node labels, relationship types, and properties.
+     * `relationshipPatterns` is a list of {from_label, type, to_label, count}, or
+     * null when the pattern scan FAILED (unknown — consumers must not read it as
+     * "no edges"; GraphSchemaCache does not cache such a schema).
      *
      * @return array Schema information
      */

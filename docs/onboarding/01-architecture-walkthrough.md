@@ -42,7 +42,7 @@ read only that. The full pipeline is orchestrated by `AiManager::answerQuestion(
  response generation ---------- priority-ordered prompt sections, grounding on rows+files,
    |                            abstention when there is nothing to ground on
    v
- actions ---------------------- markdown action:// links  OR  native tool loop;
+ actions ---------------------- markdown action:// / entity:// links;
    |                            mutating actions -> signed token -> approval card
    v
  rendering -------------------- bubbles, rich data tables, file citation cards,
@@ -116,8 +116,7 @@ context inside `AiManager::retrieveAndSetFileContext` (`src/Services/AiManager.p
   selection (STEP 2, `:272`), then focused collaborators in `src/Services/Retrieval/`
   (`SimilarQuerySearcher` for past Q→Cypher pairs, `SchemaProjector` for the
   relevance-filtered schema, `EntityMetadataBuilder` for detected entity/scope metadata,
-  `TokenBudgeter`; optional `HybridFuser`/`LlmReranker` behind `ai.rag.hybrid_enabled` /
-  `rerank_enabled`, both default off).
+  `TokenBudgeter`).
 - `src/Services/SemanticContextSelector.php` — vector lookup against the `context_index`
   collection (built by `ai:index-context`); soft-seeds the conversation's focused entity and
   the `page_context` entity type so follow-ups and "this unit" resolve
@@ -188,8 +187,6 @@ security boundary is the next stage, which re-analyzes everything from scratch
 
 **Key classes.**
 - `src/Services/QueryGenerator.php` — owns the LLM retry/validate loop and prompt assembly.
-- `src/Services/TemplateMatcher.php` — the LLM-free template path (used when confidence ≥
-  `ai.query_generation.template_confidence_threshold`, default 0.8).
 - `src/Services/SemanticPromptBuilder.php` + `src/Services/PromptSections/` — the
   priority-ordered sections composing the query prompt (schema, detected entities/scopes,
   similar queries, conversation/page context, tenant-scoping rules, user context...).
@@ -208,7 +205,7 @@ limits/retries under `ai.query_generation`; per-stage model via
 `ai.llm_roles.query_generation`.
 
 **Tests.** `tests/Unit/Services/QueryGeneratorTest.php` (+ `...SecurityTest`,
-`...SubsetTest`, `...RoleSeparationTest`), `tests/Unit/Services/TemplateMatcherTest.php`,
+`...SubsetTest`, `...RoleSeparationTest`, `...SchemaRepairTest`),
 `tests/Unit/Services/PromptSections/`. Deep dives: `layers/07-prompt-assembly-query.md`,
 `layers/08-query-gen-exec-graph.md`.
 
@@ -292,7 +289,7 @@ never be overridden by user text (`src/Services/ResponseGenerator.php:20-37`).
   calls the LLM; consults the action gate once per turn (stage 8).
 - `src/Services/ResponseSections/` — the sections: `IdentitySection`,
   `PrivacyAndSecurityGuidelinesSection`, `OriginalQuestionSection`, `ResultsDataSection`,
-  `FileContextSection`, `ResponseEntityActionsSection`, `ResponseGuardrailsSection`, ...
+  `FileContextSection`, `AttachedActionsSection`, `ResponseGuardrailsSection`, ...
 - `src/Services/AssistantIdentity.php` — white-label name/persona/language policy.
 
 **Grounding and abstention.** Knowledge questions skip Cypher *only when documents were
@@ -317,42 +314,32 @@ turns).
 `tests/Unit/Services/ResponseSections/`, `tests/Unit/Services/AssistantIdentityTest.php`.
 Deep dive: `layers/09-response-identity.md`.
 
-## Stage 8 — Actions: two transports, one door, deferred approval
+## Stage 8 — Actions: one transport, one door, deferred approval
 
 **What/why.** Lets the assistant *do* things — export, link to a record, propose a mutation
-— with host-side, config-only effort. Two transports exist; both converge on the same
-canonical value object and the same dispatch pipeline, so authorization and approval
-semantics cannot diverge (invariant #3, single path; invariant #2, approval gate).
+— with host-side, config-only effort. Since 2026-10-01 links and actions are attached by CODE (`ActionAttacher`, actions plan B1–B5): record chips, identity links (my profile / my team), next steps by answer shape and digest section links are computed from rows, labels, QU fields and permissions, persisted as message `metadata.invocations` and re-authorized at every render. The response model only narrates: it gets one line + the attached chip labels (`AttachedActionsSection`) and may reference a row with `{{record:N}}`, substituted by code.
+Persisted invocations and any (backstop-validated) markdown link converge on the same canonical
+value object and the same dispatch pipeline, so authorization
+and approval semantics cannot diverge (invariant #3, single path; invariant #2, approval gate).
+(The opt-in native tool loop was removed 2026-10-01.)
 
 **Key classes (under `src/Services/Actions/` unless noted).**
 - `AiActionRegistry.php` — resolves keys to `AiActionInterface` implementations registered
-  via `ai.actions` (class-strings), `ai.entity_actions`, `ai.generic_actions`
-  (config/ai.php:1183-1316).
-- `ActionToolGate.php` — THE channel decision, once per turn: `None` for terse styles,
-  `Native` iff `ai.actions.native_tools` is on AND the provider implements
-  `ToolCallingLlmInterface` AND the relevance-scoped tool set is non-empty, else `Markdown`
-  (loud warning on capability drift). Abstention turns never consult it (`:12-31`).
-- `ToolLoopRunner.php` — the bounded native loop (≤ `ai.actions.tool_rounds`, default 2;
-  ≤ `max_tool_calls` dispatches, default 5; one forced no-tools call closes prose).
+  via `ai.actions` (class-strings), `ai.entity_actions`, `ai.generic_actions`.
 - `ActionInvocation.php` — the canonical `(key, entityType, entityId, params, text)` unit
-  both transports produce; only schema-filtered params are ever persisted.
+  links and persisted message invocations produce; only schema-filtered params are ever persisted.
 - `ActionDispatcher.php` — the single door: filter params → fresh `authorize()` → read-only
   actions run `handle()` immediately; `mutates()` actions are *deferred* behind a signed
   `PendingActionToken.php` and returned as `ActionKind::Pending` (`:11-27`).
 
-**The deferred-approval handshake.** The authoritative sequence diagram is
-`docs/audit/94b-native-tool-calling-design.md` §2.1 — read it rather than this summary. The
-essentials: in the native loop a mutating tool call **never executes**; the model receives a
-tool result saying "proposed, NOT performed, user must confirm", the loop-time token is
-discarded, and the filtered invocation is persisted on the assistant message
-(`AskQuestionUseCase.php:146-153`). At **every render**, the invocation is re-dispatched —
-fresh `authorize()`, fresh token, fresh TTL — and a Pending result becomes an
-`ApprovalCard` (`src/Kompo/Actions/ApprovalCard.php`). The user's Confirm round-trips to
-`MessagesQuery::approveAiAction` (`src/Kompo/MessagesQuery.php:395`) →
+**The deferred-approval handshake.** At **every render**, each action link (and each
+invocation persisted in the assistant message's `metadata.invocations` — the seam reserved
+for code-attached record chips) is re-dispatched — fresh `authorize()`, fresh token, fresh
+TTL — and a Pending result becomes an `ApprovalCard` (`src/Kompo/Actions/ApprovalCard.php`).
+The user's Confirm round-trips to `MessagesQuery::approveAiAction` →
 `ActionDispatcher::approve()`: HMAC → TTL → user binding → fresh `authorize()` → single-use
-nonce → only then `handle()`. The markdown transport reaches the identical gate through its
-link parser. **A mutating action never executes server-side before explicit user approval,
-regardless of transport.**
+nonce → only then `handle()`. **A mutating action never executes server-side before explicit
+user approval.**
 
 **Contract.** In: the turn's `PipelineContext` + registry. Out: executed read-only results
 (tables/exports/links as `ActionKind`-typed `AiActionResult`s) and persisted pending
@@ -361,13 +348,13 @@ invocations awaiting approval.
 **Host extension.** Implement `AiActionInterface` (key, schema, `authorize()`, `mutates()`,
 `handle()`) and list the class in `ai.actions`; or declare `entity_actions`/`generic_actions`
 in config (`ModelMethodMutationAction` gives approval-gated model-method writes with zero new
-code). Flip `AI_ACTION_NATIVE_TOOLS=true` only with a tool-capable provider.
+code).
 
 **Tests.** `tests/Unit/Services/Actions/` (`ApprovalFlowTest`, `PendingActionTokenTest`,
-`ToolLoopRunnerTest`, `ToolApprovalParityTest`, `ActionInvocationTest`),
-`tests/Feature/ActionApprovalRoundTripTest.php`,
-`tests/Feature/NativeToolActionRoundTripTest.php`. Deep dives: `layers/11-agentic-actions.md`,
-`docs/audit/94-action-and-extensibility-abstraction.md`, `94b-native-tool-calling-design.md`.
+`ActionInvocationTest`), `tests/Unit/Kompo/MessageInvocationRenderTest.php`,
+`tests/Unit/Feature/ActionApprovalRoundTripTest.php`. Deep dives: `layers/11-agentic-actions.md`,
+`docs/audit/94-action-and-extensibility-abstraction.md` (`94b-native-tool-calling-design.md` is
+historical — the native tool loop was removed 2026-10-01).
 
 ## Stage 9 — Rendering: bubbles, cards, exports
 

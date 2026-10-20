@@ -74,11 +74,11 @@ class TenantScopingRulesSection extends BasePromptSection
         $lines[] = '  - Apply the filter to the node\'s OWN variable; reuse the variable, do not rebind it.';
         $lines[] = '  - $ai_team_ids is provided automatically — never inline team ids as a list.';
         $lines[] = '  - Combine multiple node filters with AND in a single WHERE per query part.';
+        // Tenant-specific UNION rules only; the generic "same column aliases" rule is in
+        // QueryRulesSection so it ships even with scoping off (review M-3).
         $lines[] = 'UNION RULES (critical):';
         $lines[] = '  - Treat each UNION branch as a complete, independent query: MATCH its own';
         $lines[] = '    labelled nodes AND add their $ai_team_ids filter INSIDE that branch.';
-        $lines[] = '  - Every branch\'s RETURN must project the SAME column names/aliases';
-        $lines[] = '    (e.g. RETURN x AS result) so the UNION branches share the same columns.';
         $lines[] = '  - Express team scoping as a WHERE predicate whenever possible; if a relationship';
         $lines[] = '    MATCH is required, place it before the branch\'s RETURN and do NOT add the';
         $lines[] = '    helper node to the RETURN.';

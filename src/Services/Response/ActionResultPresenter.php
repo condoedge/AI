@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Response;
 
 use Condoedge\Ai\Kompo\Actions\ApprovalCard;
+use Condoedge\Ai\Kompo\Support\SuggestionSubmit;
 use Condoedge\Ai\Services\Actions\ActionKind;
 use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 
@@ -23,10 +24,15 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
  *   may have promised a confirmation card that render-time authorize() now denies, and silence
  *   next to that promise reads as a broken UI, so a neutral "no longer available" notice is
  *   rendered instead (never the internal reason).
+ * - Follow-up question results render the suggestion chip whose click sends the question
+ *   as the user's next message (nothing is posted or executed at render).
  * - Plain renderables (Kompo elements) pass straight through.
  */
 class ActionResultPresenter
 {
+    /** Marks a follow-up question chip (the bubble renders those in a block of their own). */
+    public const FOLLOW_UP_CLASS = 'cdge-follow-up';
+
     /**
      * Turn an AiActionResult into the element to drop into the message.
      *
@@ -60,6 +66,10 @@ class ActionResultPresenter
             return $this->renderDownload($result->payload);
         }
 
+        if ($result->kind === ActionKind::FollowUp) {
+            return $this->renderFollowUp($result->payload);
+        }
+
         $renderable = $result->renderable;
 
         // Deferred mutating action → confirmation card, NEVER inline execution.
@@ -68,6 +78,36 @@ class ActionResultPresenter
         }
 
         return $renderable;
+    }
+
+    /**
+     * A follow-up question chip: a suggestion whose click sends its question as the user's
+     * next message — client-side only. The element carries ONE interaction, the welcome
+     * suggestions' own script ({@see SuggestionSubmit::fillAndSendJs()}: fill the composer,
+     * click the real send button), so the click goes through the typed-send path and
+     * nothing is posted or executed at render.
+     *
+     * Encoding: the question enters the script JSON-hex-encoded (SuggestionSubmit) and the
+     * label is HTML-escaped (Kompo link labels render through v-html client-side) — the
+     * text can neither break out of the script nor inject markup. The bubble styles the
+     * chip ({@see \Condoedge\Ai\Kompo\Support\MessageBubbleRenderer::followUpBlock()});
+     * FOLLOW_UP_CLASS only marks it.
+     */
+    private function renderFollowUp(mixed $payload): mixed
+    {
+        $question = is_array($payload) && is_string($payload['question'] ?? null) ? trim($payload['question']) : '';
+        if ($question === '') {
+            return null;
+        }
+        $label = is_string($payload['label'] ?? null) && trim($payload['label']) !== '' ? trim($payload['label']) : $question;
+
+        if (!function_exists('_Link')) {
+            // No Kompo runtime (unit context): the structured intent.
+            return ['type' => 'follow_up', 'question' => $question, 'label' => $label];
+        }
+
+        return _Link(e($label))->icon('chat-bubble-left-ellipsis')->class(self::FOLLOW_UP_CLASS)
+            ->onClick(fn ($e) => $e->run(SuggestionSubmit::fillAndSendJs($question)));
     }
 
     /**

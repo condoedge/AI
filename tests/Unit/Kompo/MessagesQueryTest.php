@@ -285,6 +285,33 @@ class MessagesQueryTest extends TestCase
 
         $this->assertTrue(true, 'Presenter received a null PageContext (verified by Mockery)');
     }
+
+    /**
+     * The fallback result set (used as render context for render_table/export_* actions)
+     * must come from the conversation's context_snapshot — that is where
+     * ConversationContextManager::recordResponse writes last_result_sample — not from
+     * `metadata`, which never holds it.
+     *
+     * @test
+     */
+    public function message_result_set_falls_back_to_the_context_snapshot_sample(): void
+    {
+        $sample = [['name' => 'Unit 402', 'balance' => 120.5]];
+
+        $conversation = AiConversation::create([
+            'user_id' => $this->user->id,
+            'metadata' => ['pinned' => false],
+            'context_snapshot' => ['last_result_sample' => $sample],
+        ]);
+        $message = $conversation->messages()->create([
+            'role' => 'assistant',
+            'content' => 'Here you go',
+        ]);
+
+        $query = new TestableMessagesQuery($conversation, null);
+
+        $this->assertSame($sample, $query->exposedMessageResultSet($message));
+    }
 }
 
 /**
@@ -305,5 +332,10 @@ class TestableMessagesQuery extends MessagesQuery
     public function settings(): ChatSettingsInterface
     {
         return $this->testSettings;
+    }
+
+    public function exposedMessageResultSet($message): array
+    {
+        return $this->messageResultSet($message);
     }
 }

@@ -12,7 +12,6 @@ use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
-use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
 use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
 use Mockery;
 use InvalidArgumentException;
@@ -44,9 +43,7 @@ class DataIngestionServiceTest extends TestCase
     {
         parent::setUp();
 
-        $this->mockVectorStore = Mockery::mock(VectorStoreInterface::class);
         $this->mockGraphStore = Mockery::mock(GraphStoreInterface::class);
-        $this->mockEmbeddingProvider = Mockery::mock(EmbeddingProviderInterface::class);
 
         // Single-entity ingest/sync lazily ensures the target collection exists
         // before embedding (DataIngestionService::ingestToVector ->
@@ -54,10 +51,6 @@ class DataIngestionServiceTest extends TestCase
         // Report the collection as already present so the real vector path is
         // exercised instead of failing on an un-mocked call. byDefault() lets a
         // specific test override this if it ever needs to.
-        $this->mockVectorStore
-            ->shouldReceive('collectionExists')
-            ->andReturn(true)
-            ->byDefault();
 
         // ingestBatch() first filters out entities already present in the graph
         // via graphStore->query(MATCH ... WHERE n.id IN $ids). Default to "none
@@ -69,9 +62,7 @@ class DataIngestionServiceTest extends TestCase
             ->byDefault();
 
         $this->service = new DataIngestionService(
-            $this->mockVectorStore,
-            $this->mockGraphStore,
-            $this->mockEmbeddingProvider
+            $this->mockGraphStore
         );
     }
 
@@ -88,9 +79,7 @@ class DataIngestionServiceTest extends TestCase
     public function test_constructor_accepts_valid_dependencies()
     {
         $service = new DataIngestionService(
-            $this->mockVectorStore,
-            $this->mockGraphStore,
-            $this->mockEmbeddingProvider
+            $this->mockGraphStore
         );
 
         $this->assertInstanceOf(DataIngestionService::class, $service);
@@ -120,25 +109,41 @@ class DataIngestionServiceTest extends TestCase
             ->once()
             ->with('TestEntity', Mockery::type('array'));
 
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->with('Test Entity Test Description')
-            ->andReturn([0.1, 0.2, 0.3]);
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once()
-            ->with('test_collection', Mockery::type('array'));
-
         // Act
         $result = $this->service->ingest($entity);
 
         // Assert
         $this->assertTrue($result['graph_stored']);
-        $this->assertTrue($result['vector_stored']);
         $this->assertEquals(0, $result['relationships_created']);
         $this->assertEmpty($result['errors']);
+    }
+
+    /**
+     * Review I-2: auto-sync (observers/jobs) never ran the command flush. A write that
+     * creates a label the cached schema lacks flushes it; a known label does not.
+     *
+     * @dataProvider cachedLabels
+     */
+    public function test_ingest_flushes_the_schema_cache_only_for_a_new_label(array $cachedLabels, bool $expectFlushed)
+    {
+        config(['ai.graph.neo4j.database' => 'neo4j']);
+        \Illuminate\Support\Facades\Cache::forever('ai:schema:v1:neo4j', [
+            'labels' => $cachedLabels, 'relationshipTypes' => [], 'relationshipPatterns' => [],
+        ]);
+        $entity = $this->createMockEntity(['id' => 1, 'name' => 'A', 'description' => 'B']);
+        $this->mockGraphStore->shouldReceive('createNode')->once();
+
+        $this->service->ingest($entity);
+
+        $this->assertSame(!$expectFlushed, \Illuminate\Support\Facades\Cache::has('ai:schema:v1:neo4j'));
+    }
+
+    public static function cachedLabels(): array
+    {
+        return [
+            'label already known' => [['TestEntity'], false],
+            'label new to the graph' => [['Other'], true],
+        ];
     }
 
     public function test_ingest_syncs_decimal_cast_attributes_as_floats()
@@ -156,15 +161,6 @@ class DataIngestionServiceTest extends TestCase
                 $capturedProperties = $properties;
                 return true;
             }));
-
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->andReturn([0.1]);
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once();
 
         // Act
         $this->service->ingest($entity);
@@ -190,40 +186,6 @@ class DataIngestionServiceTest extends TestCase
             ->andThrow(new Exception('Graph connection failed'));
 
         // Expect DataConsistencyException to be thrown
-        $this->expectException(DataConsistencyException::class);
-        $this->expectExceptionMessageMatches('/Graph store failed for entity 1/');
-
-        // Act
-        $this->service->ingest($entity);
-    }
-
-    public function test_ingest_continues_when_vector_store_fails()
-    {
-        // Arrange
-        $entity = $this->createMockEntity([
-            'id' => 1,
-            'name' => 'Test',
-            'description' => 'Desc'
-        ]);
-
-        // Graph store succeeds
-        $this->mockGraphStore
-            ->shouldReceive('createNode')
-            ->once();
-
-        // Rollback (deleteNode) also fails - simulating critical failure
-        $this->mockGraphStore
-            ->shouldReceive('deleteNode')
-            ->once()
-            ->andThrow(new Exception('Rollback failed'));
-
-        // Vector store throws exception
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->andThrow(new Exception('Embedding API failed'));
-
-        // Assert - expect DataConsistencyException when rollback fails
         $this->expectException(DataConsistencyException::class);
         $this->expectExceptionMessageMatches('/Graph store failed for entity 1/');
 
@@ -291,21 +253,12 @@ class DataIngestionServiceTest extends TestCase
             );
 
         // Vector store expectations
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->andReturn([0.1, 0.2]);
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once();
 
         // Act
         $result = $this->service->ingest($entity);
 
         // Assert
         $this->assertTrue($result['graph_stored']);
-        $this->assertTrue($result['vector_stored']);
         $this->assertEquals(1, $result['relationships_created']);
     }
 
@@ -327,17 +280,13 @@ class DataIngestionServiceTest extends TestCase
         $entity = $this->createMockEntity(['id' => 1, 'name' => 'Test', 'description' => 'Desc']);
 
         $this->mockGraphStore->shouldReceive('createNode')->once();
-        $this->mockEmbeddingProvider->shouldReceive('embed')->once()->andReturn([0.1]);
-        $this->mockVectorStore->shouldReceive('upsert')->once();
 
         // Act
         $result = $this->service->ingest($entity);
 
         // Assert
         $this->assertIsArray($result);
-        $this->assertArrayHasKeys(['graph_stored', 'vector_stored', 'relationships_created', 'errors'], $result);
         $this->assertIsBool($result['graph_stored']);
-        $this->assertIsBool($result['vector_stored']);
         $this->assertIsInt($result['relationships_created']);
         $this->assertIsArray($result['errors']);
     }
@@ -362,74 +311,6 @@ class DataIngestionServiceTest extends TestCase
                        $properties['email'] === 'test@example.com';
             }))
             ->andReturn(999);
-
-        $this->mockEmbeddingProvider->shouldReceive('embed')->once()->andReturn([0.1]);
-        $this->mockVectorStore->shouldReceive('upsert')->once();
-
-        // Act
-        $this->service->ingest($entity);
-
-        // Assert - Mockery will verify the expectations
-        $this->assertTrue(true);
-    }
-
-    public function test_ingest_calls_embedding_provider_embed_with_correct_text()
-    {
-        // Arrange
-        $entity = $this->createMockEntity([
-            'id' => 1,
-            'name' => 'John Doe',
-            'description' => 'Software Engineer'
-        ]);
-
-        $this->mockGraphStore->shouldReceive('createNode')->once();
-
-        // Expect embed to be called with concatenated fields
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->with('John Doe Software Engineer')
-            ->andReturn([0.1, 0.2]);
-
-        $this->mockVectorStore->shouldReceive('upsert')->once();
-
-        // Act
-        $this->service->ingest($entity);
-
-        // Assert - Mockery will verify the expectations
-        $this->assertTrue(true);
-    }
-
-    public function test_ingest_calls_vector_store_upsert_with_correct_data()
-    {
-        // Arrange
-        $entity = $this->createMockEntity([
-            'id' => 555,
-            'name' => 'Test',
-            'description' => 'Desc',
-            'category' => 'TypeA'
-        ]);
-
-        $this->mockGraphStore->shouldReceive('createNode')->once();
-
-        $vector = [0.1, 0.2, 0.3];
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->andReturn($vector);
-
-        // Expect upsert to be called with collection and points array
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once()
-            ->with('test_collection', Mockery::on(function ($points) use ($vector) {
-                return is_array($points) &&
-                       count($points) === 1 &&
-                       $points[0]['id'] === 555 &&
-                       $points[0]['vector'] === $vector &&
-                       $points[0]['payload']['id'] === 555 &&
-                       $points[0]['payload']['category'] === 'TypeA';
-            }));
 
         // Act
         $this->service->ingest($entity);
@@ -457,21 +338,8 @@ class DataIngestionServiceTest extends TestCase
             ->times(3);
 
         // Embedding provider should use embedBatch (once, not 3 times)
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embedBatch')
-            ->once()
-            ->with(Mockery::type('array'))
-            ->andReturn([
-                [0.1, 0.2],
-                [0.3, 0.4],
-                [0.5, 0.6]
-            ]);
 
         // Vector store upsert (once per collection)
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once()
-            ->with('test_collection', Mockery::type('array'));
 
         // Act
         $result = $this->service->ingestBatch($entities);
@@ -484,73 +352,6 @@ class DataIngestionServiceTest extends TestCase
         $this->assertEmpty($result['errors']);
     }
 
-    public function test_ingest_batch_uses_embed_batch_for_efficiency()
-    {
-        // Arrange
-        $entities = [
-            $this->createMockEntity(['id' => 1, 'name' => 'A', 'description' => 'B']),
-            $this->createMockEntity(['id' => 2, 'name' => 'C', 'description' => 'D']),
-        ];
-
-        $this->mockGraphStore->shouldReceive('createNode')->times(2);
-
-        // Critical: embedBatch should be called ONCE, not embed() twice
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embedBatch')
-            ->once()
-            ->with(['A B', 'C D'])
-            ->andReturn([[0.1], [0.2]]);
-
-        // embed() should NOT be called at all
-        $this->mockEmbeddingProvider
-            ->shouldNotReceive('embed');
-
-        $this->mockVectorStore->shouldReceive('upsert')->once();
-
-        // Act
-        $this->service->ingestBatch($entities);
-
-        // Assert - Mockery will verify the expectations
-        $this->assertTrue(true);
-    }
-
-    public function test_ingest_batch_handles_partial_failures()
-    {
-        // Arrange
-        $entities = [
-            $this->createMockEntity(['id' => 1, 'name' => 'Entity 1', 'description' => 'Desc 1']),
-            $this->createMockEntity(['id' => 2, 'name' => 'Entity 2', 'description' => 'Desc 2']),
-        ];
-
-        // First entity succeeds in graph, second fails
-        $this->mockGraphStore
-            ->shouldReceive('createNode')
-            ->twice()
-            ->andReturnUsing(function ($label, $props) {
-                if ($props['id'] === 2) {
-                    throw new Exception('Graph error for entity 2');
-                }
-                return $props['id']; // Return the ID for successful calls
-            });
-
-        // Vector store succeeds for all
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embedBatch')
-            ->once()
-            ->andReturn([[0.1], [0.2]]);
-
-        $this->mockVectorStore->shouldReceive('upsert')->once();
-
-        // Act
-        $result = $this->service->ingestBatch($entities);
-
-        // Assert
-        $this->assertEquals(2, $result['total']);
-        $this->assertEquals(1, $result['succeeded']); // Entity 1 fully succeeded
-        $this->assertEquals(1, $result['partially_succeeded']); // Entity 2 partial (vector only)
-        $this->assertEquals(0, $result['failed']);
-    }
-
     public function test_ingest_batch_returns_correct_summary_structure()
     {
         // Arrange
@@ -559,8 +360,6 @@ class DataIngestionServiceTest extends TestCase
         ];
 
         $this->mockGraphStore->shouldReceive('createNode')->once();
-        $this->mockEmbeddingProvider->shouldReceive('embedBatch')->once()->andReturn([[0.1]]);
-        $this->mockVectorStore->shouldReceive('upsert')->once();
 
         // Act
         $result = $this->service->ingestBatch($entities);
@@ -598,8 +397,6 @@ class DataIngestionServiceTest extends TestCase
         ];
 
         $this->mockGraphStore->shouldReceive('createNode')->times(2);
-        $this->mockEmbeddingProvider->shouldReceive('embedBatch')->once()->andReturn([[0.1], [0.2]]);
-        $this->mockVectorStore->shouldReceive('upsert')->once();
 
         // Act
         $result = $this->service->ingestBatch($entities);
@@ -623,12 +420,6 @@ class DataIngestionServiceTest extends TestCase
             ->shouldReceive('deleteNode')
             ->once()
             ->with('TestEntity', 123)
-            ->andReturn(true);
-
-        $this->mockVectorStore
-            ->shouldReceive('deletePoints')
-            ->once()
-            ->with('test_collection', [123])
             ->andReturn(true);
 
         // Act
@@ -676,30 +467,6 @@ class DataIngestionServiceTest extends TestCase
         $this->service->remove($entity);
     }
 
-    public function test_remove_calls_delete_node_and_delete_points_with_correct_ids()
-    {
-        // Arrange
-        $entity = $this->createMockEntity(['id' => 789, 'name' => 'Test', 'description' => 'Desc']);
-
-        $this->mockGraphStore
-            ->shouldReceive('deleteNode')
-            ->once()
-            ->with('TestEntity', 789)
-            ->andReturn(true);
-
-        $this->mockVectorStore
-            ->shouldReceive('deletePoints')
-            ->once()
-            ->with('test_collection', [789])
-            ->andReturn(true);
-
-        // Act
-        $result = $this->service->remove($entity);
-
-        // Assert - Mockery will verify the expectations were met
-        $this->assertTrue($result);
-    }
-
     // =========================================================================
     // sync() Method Tests
     // =========================================================================
@@ -723,14 +490,6 @@ class DataIngestionServiceTest extends TestCase
             ->with('TestEntity', Mockery::type('array'));
 
         // Vector store
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->andReturn([0.1]);
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once();
 
         // Act
         $result = $this->service->sync($entity);
@@ -738,7 +497,6 @@ class DataIngestionServiceTest extends TestCase
         // Assert
         $this->assertEquals('created', $result['action']);
         $this->assertTrue($result['graph_synced']);
-        $this->assertTrue($result['vector_synced']);
     }
 
     public function test_sync_updates_entity_when_it_exists()
@@ -760,14 +518,6 @@ class DataIngestionServiceTest extends TestCase
             ->with('TestEntity', 1, Mockery::type('array'));
 
         // Vector store
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->andReturn([0.1]);
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once();
 
         // Act
         $result = $this->service->sync($entity);
@@ -775,7 +525,6 @@ class DataIngestionServiceTest extends TestCase
         // Assert
         $this->assertEquals('updated', $result['action']);
         $this->assertTrue($result['graph_synced']);
-        $this->assertTrue($result['vector_synced']);
     }
 
     public function test_sync_update_path_syncs_decimal_cast_attributes_as_floats()
@@ -798,15 +547,6 @@ class DataIngestionServiceTest extends TestCase
                 return true;
             }));
 
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->andReturn([0.1]);
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once();
-
         // Act
         $this->service->sync($entity);
 
@@ -822,68 +562,17 @@ class DataIngestionServiceTest extends TestCase
 
         $this->mockGraphStore->shouldReceive('nodeExists')->once()->andReturn(false);
         $this->mockGraphStore->shouldReceive('createNode')->once();
-        $this->mockEmbeddingProvider->shouldReceive('embed')->once()->andReturn([0.1]);
-        $this->mockVectorStore->shouldReceive('upsert')->once();
 
         // Act
         $result = $this->service->sync($entity);
 
         // Assert
         $this->assertEquals('created', $result['action']);
-    }
-
-    public function test_sync_handles_mixed_success_scenarios()
-    {
-        // Arrange
-        $entity = $this->createMockEntity(['id' => 1, 'name' => 'Test', 'description' => 'Desc']);
-
-        $this->mockGraphStore->shouldReceive('nodeExists')->once()->andReturn(false);
-
-        // Graph succeeds
-        $this->mockGraphStore->shouldReceive('createNode')->once();
-
-        // Vector fails
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->once()
-            ->andThrow(new Exception('Vector failed'));
-
-        // Act
-        $result = $this->service->sync($entity);
-
-        // Assert
-        $this->assertEquals('created', $result['action']);
-        $this->assertTrue($result['graph_synced']);
-        $this->assertFalse($result['vector_synced']);
-        $this->assertNotEmpty($result['errors']);
     }
 
     // =========================================================================
     // Edge Case Tests
     // =========================================================================
-
-    public function test_ingest_handles_entity_with_empty_embed_fields()
-    {
-        // Arrange
-        $entity = $this->createMockEntity([
-            'id' => 1,
-            'name' => '',  // Empty
-            'description' => ''  // Empty
-        ]);
-
-        // Graph store succeeds
-        $this->mockGraphStore->shouldReceive('createNode')->once();
-
-        // Graph store rollback succeeds when vector fails
-        $this->mockGraphStore->shouldReceive('deleteNode')->once()->andReturn(true);
-
-        // Expect DataConsistencyException (vector fails, rollback succeeds)
-        $this->expectException(DataConsistencyException::class);
-        $this->expectExceptionMessage('Vector store failed, rolled back graph insert for entity 1');
-
-        // Act
-        $this->service->ingest($entity);
-    }
 
     public function test_ingest_skips_relationships_when_foreign_key_is_null()
     {
@@ -900,48 +589,11 @@ class DataIngestionServiceTest extends TestCase
         // createRelationship should NOT be called when foreign key is null
         $this->mockGraphStore->shouldNotReceive('createRelationship');
 
-        $this->mockEmbeddingProvider->shouldReceive('embed')->once()->andReturn([0.1]);
-        $this->mockVectorStore->shouldReceive('upsert')->once();
-
         // Act
         $result = $this->service->ingest($entity);
 
         // Assert
         $this->assertEquals(0, $result['relationships_created']);
-    }
-
-    public function test_ingest_batch_groups_entities_by_collection()
-    {
-        // Arrange - Create entities with different collections
-        $entity1 = $this->createMockEntity(['id' => 1, 'name' => 'A', 'description' => 'B'], 'collection_1');
-        $entity2 = $this->createMockEntity(['id' => 2, 'name' => 'C', 'description' => 'D'], 'collection_2');
-        $entity3 = $this->createMockEntity(['id' => 3, 'name' => 'E', 'description' => 'F'], 'collection_1');
-
-        $this->mockGraphStore->shouldReceive('createNode')->times(3);
-
-        // embedBatch should be called once per collection group
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embedBatch')
-            ->twice()
-            ->andReturn([[0.1], [0.2]]);
-
-        // upsert should be called once per collection
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->with('collection_1', Mockery::type('array'))
-            ->once();
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->with('collection_2', Mockery::type('array'))
-            ->once();
-
-        // Act
-        $result = $this->service->ingestBatch([$entity1, $entity2, $entity3]);
-
-        // Assert - Verify all entities succeeded
-        $this->assertEquals(3, $result['total']);
-        $this->assertEquals(3, $result['succeeded']);
     }
 
     public function test_remove_validates_entity_is_nodeable()
@@ -975,14 +627,6 @@ class DataIngestionServiceTest extends TestCase
                 label: 'TestEntity',
                 properties: ['id', 'name', 'email'],
                 relationships: []
-            )
-        );
-
-        $entity->shouldReceive('getVectorConfig')->andReturn(
-            new VectorConfig(
-                collection: $collection,
-                embedFields: ['name', 'description'],
-                metadata: ['id', 'category']
             )
         );
 
@@ -1025,15 +669,6 @@ class DataIngestionServiceTest extends TestCase
                     relationships: []
                 );
             }
-
-            public function getVectorConfig(): VectorConfig
-            {
-                return new VectorConfig(
-                    collection: 'test_collection',
-                    embedFields: ['name', 'description'],
-                    metadata: ['id']
-                );
-            }
         };
     }
 
@@ -1059,14 +694,6 @@ class DataIngestionServiceTest extends TestCase
                         properties: []
                     )
                 ]
-            )
-        );
-
-        $entity->shouldReceive('getVectorConfig')->andReturn(
-            new VectorConfig(
-                collection: 'test_collection',
-                embedFields: ['name', 'description'],
-                metadata: ['id']
             )
         );
 

@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Console\Commands;
 
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Services\BatchDataIngestionService;
+use Condoedge\Ai\Console\Commands\Concerns\FlushesGraphSchemaCache;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Symfony\Component\Finder\Finder;
@@ -32,6 +33,8 @@ use Symfony\Component\Finder\Finder;
  */
 class SyncRelationshipsCommand extends Command
 {
+    use FlushesGraphSchemaCache;
+
     /**
      * The name and signature of the console command.
      *

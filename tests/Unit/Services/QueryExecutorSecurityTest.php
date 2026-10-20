@@ -35,30 +35,6 @@ class QueryExecutorSecurityTest extends TestCase
     }
 
     /** @test */
-    public function extracts_primary_entity_from_cypher(): void
-    {
-        $reflection = new \ReflectionClass($this->executor);
-        $method = $reflection->getMethod('extractPrimaryEntity');
-        $method->setAccessible(true);
-
-        $this->assertEquals('Invoice', $method->invoke($this->executor, 'MATCH (i:Invoice) RETURN i'));
-        $this->assertEquals('Person', $method->invoke($this->executor, 'MATCH (p:Person)-[:BELONGS_TO]->(t:Team)'));
-        $this->assertEquals('InvoiceItem', $method->invoke($this->executor, 'MATCH (ii:InvoiceItem)'));
-    }
-
-    /** @test */
-    public function extracts_entity_alias_from_cypher(): void
-    {
-        $reflection = new \ReflectionClass($this->executor);
-        $method = $reflection->getMethod('extractEntityAlias');
-        $method->setAccessible(true);
-
-        $this->assertEquals('i', $method->invoke($this->executor, 'MATCH (i:Invoice) RETURN i', 'Invoice'));
-        $this->assertEquals('inv', $method->invoke($this->executor, 'MATCH (inv:Invoice)', 'Invoice'));
-        $this->assertEquals('person', $method->invoke($this->executor, 'MATCH (person:Person)', 'Person'));
-    }
-
-    /** @test */
     public function detects_count_queries(): void
     {
         $reflection = new \ReflectionClass($this->executor);
@@ -194,31 +170,6 @@ class QueryExecutorSecurityTest extends TestCase
         $result = $this->invokeInjectTeamFilter('MATCH (i:Invoice)', 'WHERE i.team_id IN $ai_team_ids');
 
         $this->assertNull($result);
-    }
-
-    /** @test */
-    public function returns_default_alias_when_entity_not_found_in_query(): void
-    {
-        $reflection = new \ReflectionClass($this->executor);
-        $method = $reflection->getMethod('extractEntityAlias');
-        $method->setAccessible(true);
-
-        $result = $method->invoke($this->executor, 'MATCH (x:OtherEntity)', 'Invoice');
-        $this->assertEquals('i', $result);
-
-        $result = $method->invoke($this->executor, 'MATCH (x:OtherEntity)', 'Person');
-        $this->assertEquals('p', $result);
-    }
-
-    /** @test */
-    public function returns_null_when_no_entity_in_query(): void
-    {
-        $reflection = new \ReflectionClass($this->executor);
-        $method = $reflection->getMethod('extractPrimaryEntity');
-        $method->setAccessible(true);
-
-        $this->assertNull($method->invoke($this->executor, 'RETURN 1'));
-        $this->assertNull($method->invoke($this->executor, 'CALL db.labels()'));
     }
 
     // =========================================================================

@@ -6,7 +6,6 @@ use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Context\ConversationContextManager;
 use Condoedge\Ai\Services\Context\EntityExtractor;
-use Condoedge\Ai\Services\Context\ReferenceResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Orchestra\Testbench\TestCase;
 
@@ -44,61 +43,103 @@ class ConversationContextManagerTest extends TestCase
     public function setUp(): void
     {
         parent::setUp();
-        $this->manager = new ConversationContextManager(
-            new EntityExtractor(),
-            new ReferenceResolver()
-        );
+        $this->manager = new ConversationContextManager(new EntityExtractor());
     }
 
     /** @test */
-    public function it_processes_question_and_updates_context(): void
+    public function there_is_no_pre_pipeline_question_analysis(): void
+    {
+        // Phase 2.B: the regex layer (processQuestion → EntityExtractor word lists +
+        // ReferenceResolver) is gone; QU owns follow-up / entities / intent.
+        $this->assertFalse(method_exists($this->manager, 'processQuestion'));
+    }
+
+    /** @test */
+    public function a_turn_without_cypher_takes_its_focus_and_query_type_from_qu(): void
+    {
+        // Documents answer / export-of-previous: no cypher executed, so the focus
+        // comes from THIS turn's QU entity types (stamped on metadata by the
+        // pipeline) — never from matching labels inside the question text.
+        $conversation = AiConversation::create([
+            'user_id' => 1,
+            'context_snapshot' => ['focused_entity' => 'Team', 'mentioned_entities' => ['Team']],
+        ]);
+
+        $this->manager->recordResponse($conversation, 'The declaration says...', '', [
+            'data' => [],
+            'metadata' => ['entity_types' => ['Unit', 'Owner'], 'intent' => 'lookup'],
+        ]);
+
+        $conversation->refresh();
+        $this->assertSame('Unit', $conversation->getFocusedEntity());
+        $this->assertSame(['Team', 'Unit', 'Owner'], $conversation->getMentionedEntities());
+        $this->assertSame('lookup', $conversation->context_snapshot['last_query_type']);
+    }
+
+    /** @test */
+    public function the_executed_cypher_focus_wins_over_qu_entity_types(): void
     {
         $conversation = AiConversation::create(['user_id' => 1]);
-        $schema = ['labels' => ['Customer', 'Order']];
 
-        $result = $this->manager->processQuestion(
-            $conversation,
-            'How many customers do we have?',
-            $schema
-        );
+        $this->manager->recordResponse($conversation, '3 invoices.', 'MATCH (i:Invoice) RETURN i.id AS id', [
+            'data' => [['id' => 1]],
+            'metadata' => ['entity_types' => ['Unit']],
+        ]);
 
-        $this->assertEquals('Customer', $result['focused_entity']);
-        $this->assertEquals('count', $result['query_type']);
-
-        // Context should be updated on conversation
         $conversation->refresh();
-        $this->assertEquals('Customer', $conversation->getFocusedEntity());
+        $this->assertSame('Invoice', $conversation->getFocusedEntity());
+    }
+
+    /** @test P-1: the `$pii_…` parameters travel with the recorded query to the next turn. */
+    public function the_recorded_query_keeps_its_pii_parameters_for_the_next_turn(): void
+    {
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        $this->manager->recordResponse($conversation, 'Karen.', 'MATCH (u:User) WHERE u.email = $pii_0123456789ab RETURN u.name AS name', [
+            'data' => [['name' => 'Karen']],
+            'cypher_parameters' => ['pii_0123456789ab' => 'karen@x.test'],
+        ]);
+
+        $conversation->refresh();
+        $context = $this->manager->buildPromptContext($conversation);
+        $this->assertSame(['pii_0123456789ab' => 'karen@x.test'], $context['last_cypher_parameters']);
     }
 
     /** @test */
-    public function it_resolves_follow_up_questions(): void
+    public function a_turn_with_neither_cypher_nor_qu_entities_preserves_the_previous_focus(): void
     {
         $conversation = AiConversation::create([
             'user_id' => 1,
-            'context_snapshot' => [
-                'focused_entity' => 'Customer',
-                'last_query_type' => 'count',
-            ],
+            'context_snapshot' => ['focused_entity' => 'Team'],
         ]);
 
-        // Add a previous message with cypher
-        $conversation->messages()->create([
-            'role' => 'assistant',
-            'content' => 'There are 150 customers.',
-            'cypher_query' => 'MATCH (c:Customer) RETURN count(c)',
+        $this->manager->recordResponse($conversation, 'Hello!', '', ['data' => []]);
+
+        $conversation->refresh();
+        $this->assertSame('Team', $conversation->getFocusedEntity());
+    }
+
+    /** @test */
+    public function mentioned_entities_is_bounded_to_the_most_recent(): void
+    {
+        $previous = [];
+        for ($i = 1; $i <= 12; $i++) {
+            $previous[] = "Label{$i}";
+        }
+        $conversation = AiConversation::create([
+            'user_id' => 1,
+            'context_snapshot' => ['mentioned_entities' => $previous],
         ]);
 
-        $result = $this->manager->processQuestion(
-            $conversation,
-            'and those in Sales team?',
-            ['labels' => ['Customer', 'Team']]
-        );
+        $this->manager->recordResponse($conversation, 'ok', 'MATCH (c:Customer) RETURN c.name AS name', [
+            'data' => [['name' => 'A']],
+        ]);
 
-        $this->assertTrue($result['is_follow_up']);
-        $this->assertEquals('Customer', $result['resolved_entity']);
-        // Resolve, don't rewrite (item A): the ask is preserved verbatim; the
-        // referent rides in resolved_entity + the context snapshot.
-        $this->assertSame('and those in Sales team?', $result['enriched_question']);
+        $conversation->refresh();
+        $mentioned = $conversation->getMentionedEntities();
+        $this->assertCount(ConversationContextManager::MAX_MENTIONED_ENTITIES, $mentioned);
+        $this->assertSame('Customer', end($mentioned), 'the newest entity type is kept (last)');
+        $this->assertNotContains('Label1', $mentioned, 'the oldest ones fall off');
     }
 
     /** @test */
@@ -210,6 +251,46 @@ class ConversationContextManagerTest extends TestCase
         $this->assertSame('overdue invoices', $conversation->context_snapshot['last_subject']);
     }
 
+    /**
+     * @test Eval p9-B resilience t3 (2026-10-01): roster (rows) -> "add their
+     * last login" (rows) -> "Where can I add new members?" (documents, 0 rows,
+     * QU subject "add new team members") -> "export that members list". The
+     * export re-ran the recorded roster query but was titled "Add new team
+     * members": the docs turn overwrote last_subject while preserve-on-empty
+     * kept the rows. last_subject describes the RECORDED RESULT, so it is
+     * written only by a turn that recorded rows.
+     */
+    public function a_turn_without_rows_does_not_overwrite_the_subject_of_the_recorded_result(): void
+    {
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        $this->manager->recordResponse(
+            $conversation,
+            'Here are your members with their last login.',
+            'MATCH (u:User) RETURN u.name AS member_name, u.last_login_at AS last_login',
+            [
+                'data' => [['member_name' => 'Julie', 'last_login' => '2023-11-24']],
+                'metadata' => ['subject' => 'team members last login'],
+            ]
+        );
+
+        $this->manager->recordResponse(
+            $conversation,
+            'You can add new members from the team settings page.',
+            null,
+            [
+                'data' => [],
+                'metadata' => ['subject' => 'add new team members', 'entity_types' => ['TeamInvitation']],
+            ]
+        );
+
+        $conversation->refresh();
+        $snapshot = $conversation->context_snapshot;
+
+        $this->assertSame('team members last login', $snapshot['last_subject']);
+        $this->assertStringContainsString('last_login', $snapshot['last_cypher_query']);
+    }
+
     /** @test */
     public function it_builds_context_for_prompt(): void
     {
@@ -260,7 +341,48 @@ class ConversationContextManagerTest extends TestCase
     }
 
     /** @test */
-    public function it_stores_detected_template_in_context(): void
+    public function default_history_size_comes_from_chat_config(): void
+    {
+        config(['ai.chat.max_history_messages' => 7]);
+        $conversation = AiConversation::create(['user_id' => 1]);
+
+        for ($i = 0; $i < 12; $i++) {
+            $conversation->messages()->create([
+                'role' => $i % 2 === 0 ? 'user' : 'assistant',
+                'content' => "Message {$i}",
+            ]);
+        }
+
+        $promptContext = $this->manager->buildPromptContext($conversation);
+
+        $this->assertCount(7, $promptContext['recent_exchanges']);
+    }
+
+    /** @test */
+    public function assistant_answer_summary_cap_defaults_to_800_chars(): void
+    {
+        $conversation = AiConversation::create(['user_id' => 1]);
+        $conversation->messages()->create(['role' => 'assistant', 'content' => str_repeat('a', 2000)]);
+
+        $summary = $this->manager->buildPromptContext($conversation)['recent_exchanges'][0]['answer_summary'];
+
+        $this->assertSame(str_repeat('a', 800) . '...', $summary);
+    }
+
+    /** @test */
+    public function assistant_answer_summary_cap_is_configurable(): void
+    {
+        config(['ai.chat.history_answer_chars' => 50]);
+        $conversation = AiConversation::create(['user_id' => 1]);
+        $conversation->messages()->create(['role' => 'assistant', 'content' => str_repeat('b', 400)]);
+
+        $summary = $this->manager->buildPromptContext($conversation)['recent_exchanges'][0]['answer_summary'];
+
+        $this->assertSame(str_repeat('b', 50) . '...', $summary);
+    }
+
+    /** @test */
+    public function it_stores_query_type_in_context(): void
     {
         $conversation = AiConversation::create(['user_id' => 1]);
 
@@ -270,7 +392,6 @@ class ConversationContextManagerTest extends TestCase
             'MATCH (c:Customer) RETURN count(c)',
             [
                 'data' => [['count' => 150]],
-                'detected_template' => 'count',
                 'query_type' => 'aggregation',
             ]
         );
@@ -278,101 +399,6 @@ class ConversationContextManagerTest extends TestCase
         $conversation->refresh();
         $snapshot = $conversation->context_snapshot;
 
-        $this->assertEquals('count', $snapshot['last_detected_template']);
         $this->assertEquals('aggregation', $snapshot['last_query_type']);
-    }
-
-    /** @test */
-    public function it_persists_available_actions_in_context_snapshot(): void
-    {
-        $conversation = AiConversation::create([
-            'user_id' => 1,
-            'title' => 'Test',
-        ]);
-
-        $queryResult = [
-            'data' => [
-                ['id' => '123', 'name' => 'John', '_label' => 'Person'],
-            ],
-            'available_actions' => [
-                'Person' => [
-                    ['action_key' => 'profile', 'label' => 'View Profile'],
-                    ['action_key' => 'edit', 'label' => 'Edit'],
-                ],
-            ],
-        ];
-
-        $this->manager->recordResponse(
-            $conversation,
-            'Here is John.',
-            'MATCH (p:Person) RETURN p',
-            $queryResult
-        );
-
-        $conversation->refresh();
-        $snapshot = $conversation->context_snapshot;
-
-        $this->assertArrayHasKey('last_available_actions', $snapshot);
-        $this->assertArrayHasKey('Person', $snapshot['last_available_actions']);
-        $this->assertCount(2, $snapshot['last_available_actions']['Person']);
-    }
-
-    /** @test */
-    public function it_preserves_actions_when_new_response_has_none(): void
-    {
-        $conversation = AiConversation::create([
-            'user_id' => 1,
-            'title' => 'Test',
-            'context_snapshot' => [
-                'last_available_actions' => [
-                    'Person' => [['action_key' => 'profile', 'label' => 'View Profile']],
-                ],
-            ],
-        ]);
-
-        // New response has no actions
-        $this->manager->recordResponse(
-            $conversation,
-            'Count is 5.',
-            'MATCH (p:Person) RETURN count(p)',
-            ['data' => [['count' => 5]]]
-        );
-
-        $conversation->refresh();
-        $snapshot = $conversation->context_snapshot;
-
-        // Previous actions should be preserved
-        $this->assertArrayHasKey('last_available_actions', $snapshot);
-        $this->assertArrayHasKey('Person', $snapshot['last_available_actions']);
-    }
-
-    /** @test */
-    public function it_persists_visualization_metadata(): void
-    {
-        $conversation = AiConversation::create([
-            'user_id' => 1,
-            'title' => 'Test',
-        ]);
-
-        $queryResult = [
-            'data' => [['month' => 'Jan', 'count' => 10]],
-            'visualizations' => [
-                ['type' => 'bar_chart', 'title' => 'Monthly Counts', 'x_axis' => 'month', 'y_axis' => 'count'],
-            ],
-        ];
-
-        $this->manager->recordResponse(
-            $conversation,
-            'Here is a chart.',
-            'MATCH (n) RETURN n.month, count(n)',
-            $queryResult
-        );
-
-        $conversation->refresh();
-        $snapshot = $conversation->context_snapshot;
-
-        $this->assertArrayHasKey('last_visualizations', $snapshot);
-        $this->assertCount(1, $snapshot['last_visualizations']);
-        $this->assertEquals('bar_chart', $snapshot['last_visualizations'][0]['type']);
     }
 }

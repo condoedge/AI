@@ -441,31 +441,4 @@ class AliasGenerator
 
         return $className;
     }
-
-    /**
-     * Get collection name for vector storage
-     *
-     * Returns a lowercase, underscored collection name.
-     *
-     * @param string|Model $model Model class name or instance
-     * @return string Collection name
-     */
-    public function generateCollectionName(string|Model $model): string
-    {
-        $modelInstance = $this->resolveModel($model);
-
-        try {
-            // Use table name for collection (already pluralized)
-            $table = $modelInstance->getTable();
-            if ($table !== null) {
-                return $table;
-            }
-        } catch (\Throwable $e) {
-            // Fall back to class-based name if table not configured
-        }
-
-        // Fallback: use class basename in snake_case, pluralized
-        $className = class_basename($modelInstance);
-        return Str::plural(Str::snake($className));
-    }
 }

@@ -16,8 +16,6 @@ use Illuminate\Database\Eloquent\Model;
  *       ->label('Customer')
  *       ->properties('id', 'name', 'email')
  *       ->relationship('PURCHASED', 'Order', 'order_id')
- *       ->collection('customers')
- *       ->embedFields('name', 'description')
  *       ->aliases('customer', 'client')
  *       ->description('Customer entity')
  *       ->toArray();
@@ -187,81 +185,6 @@ class NodeableConfig
         }
 
         $this->config['graph']['relationships'][] = $relationship;
-        return $this;
-    }
-
-    // =========================================================================
-    // Vector Configuration Methods
-    // =========================================================================
-
-    /**
-     * Set the Qdrant collection name
-     *
-     * @param string $collection Collection name (e.g., 'customers', 'orders')
-     * @return self
-     */
-    public function collection(string $collection): self
-    {
-        if (!isset($this->config['vector'])) {
-            $this->config['vector'] = [];
-        }
-        $this->config['vector']['collection'] = $collection;
-        return $this;
-    }
-
-    /**
-     * Set fields to embed for vector search
-     *
-     * Accepts fields as multiple arguments or arrays:
-     *   ->embedFields('name', 'description')
-     *   ->embedFields(['name', 'description'])
-     *
-     * @param string|array ...$fields Field names to embed
-     * @return self
-     */
-    public function embedFields(string|array ...$fields): self
-    {
-        if (!isset($this->config['vector'])) {
-            $this->config['vector'] = [];
-        }
-
-        // Flatten nested arrays
-        $flattened = [];
-        foreach ($fields as $field) {
-            if (is_array($field)) {
-                $flattened = array_merge($flattened, $field);
-            } else {
-                $flattened[] = $field;
-            }
-        }
-
-        $this->config['vector']['embed_fields'] = $flattened;
-        return $this;
-    }
-
-    /**
-     * Set metadata fields for vector storage
-     *
-     * @param string|array ...$fields Metadata field names
-     * @return self
-     */
-    public function vectorMetadata(string|array ...$fields): self
-    {
-        if (!isset($this->config['vector'])) {
-            $this->config['vector'] = [];
-        }
-
-        // Flatten nested arrays
-        $flattened = [];
-        foreach ($fields as $field) {
-            if (is_array($field)) {
-                $flattened = array_merge($flattened, $field);
-            } else {
-                $flattened[] = $field;
-            }
-        }
-
-        $this->config['vector']['metadata'] = $flattened;
         return $this;
     }
 
@@ -446,21 +369,6 @@ class NodeableConfig
     }
 
     /**
-     * Create VectorConfig from this builder
-     *
-     * @return VectorConfig
-     * @throws \LogicException If vector config is not set
-     */
-    public function toVectorConfig(): VectorConfig
-    {
-        if (!isset($this->config['vector'])) {
-            throw new \LogicException('Vector configuration not set');
-        }
-
-        return VectorConfig::fromArray($this->config['vector']);
-    }
-
-    /**
      * Check if graph configuration is set
      *
      * @return bool
@@ -468,16 +376,6 @@ class NodeableConfig
     public function hasGraphConfig(): bool
     {
         return isset($this->config['graph']);
-    }
-
-    /**
-     * Check if vector configuration is set
-     *
-     * @return bool
-     */
-    public function hasVectorConfig(): bool
-    {
-        return isset($this->config['vector']);
     }
 
     /**

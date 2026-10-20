@@ -161,23 +161,45 @@ class AiManagerDigestRoutingTest extends TestCase
         $this->assertArrayNotHasKey('skip_security', $captured['options']);
         $this->assertSame(0, $this->searchCalls, 'file search must never run on a digest turn');
 
-        $this->assertSame('Your attention digest.', $result['answer']);
+        // p12 H1: the model frames, code renders the section (heading + table).
+        $this->assertStringStartsWith('Your attention digest.', $result['answer']);
+        $this->assertStringContainsString("| Title |
+| --- |
+| Fix roof |", $result['answer']);
         $this->assertNull($result['cypher']);
         $this->assertSame('open_tasks', $result['metadata']['response']['digest']['sources'][0]['key']);
         $this->assertSame([['id' => 1, 'title' => 'Fix roof', 'attention_source' => 'open_tasks']], $result['data'], 'digest rows feed the conversation write-back');
     }
 
     /** @test */
-    public function a_follow_up_reference_is_never_a_digest(): void
+    public function a_digest_request_wins_even_when_qu_also_flags_a_follow_up(): void
     {
+        // Task 1.27 (a), live digest t2: after a single-meeting turn, QU flagged
+        // "Give me an excel of everything needing my attention" as BOTH a digest
+        // and a follow-up; the follow-up guard won and the previous 1-row result
+        // was exported. A broad attention ask is a digest — the digest composer
+        // owns the combined export ask (export_followup_offered).
         $this->configureSource();
-        $ctx = $this->makeContext(digestRequest: true, followUp: true);
+        $ctx = $this->makeContext(digestRequest: true, followUp: true, exportFormat: 'excel');
 
-        $this->runNormalTurn($ctx);
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+        $this->mockQueryGenerator->shouldReceive('generate')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+        $this->mockQueryExecutor->shouldReceive('execute')->once()->andReturn(new QueryExecutionResult(
+            success: true, data: [['id' => 1, 'title' => 'Fix roof']], stats: [], metadata: [], errors: [],
+        ));
 
-        $result = $this->manager->answerQuestion($ctx->question, ['user' => (object) ['id' => 13]]);
+        $result = $this->manager->answerQuestion(
+            'Give me an excel of everything needing my attention',
+            ['user' => (object) ['id' => 13], 'conversation_context' => [
+                'last_cypher_query' => 'MATCH (m:Meeting) RETURN m.title AS title',
+                'last_result_sample' => [['title' => 'AGM']],
+            ]]
+        );
 
-        $this->assertSame('normal answer', $result['answer'], 'the normal pipeline owns follow-up turns');
+        $this->assertStringStartsWith('Your attention digest.', $result['answer']);
+        $this->assertSame('excel', $result['metadata']['response']['digest']['export_followup_offered']);
+        $this->assertArrayNotHasKey('export_source', $result['metadata']['response'], 'the previous result must not be exported');
     }
 
     /** @test */
@@ -210,8 +232,8 @@ class AiManagerDigestRoutingTest extends TestCase
     public function a_combined_digest_and_export_ask_runs_the_digest_and_acknowledges_the_export(): void
     {
         // Amendment B1: digestRequest + exportFormat must not silently drop the
-        // export — the composer is told, offers the follow-up as the single
-        // deepening offer, and stamps the marker for graders.
+        // export — the composer is told, the export chip is attached by code
+        // (actions plan B4), and the marker is stamped for graders.
         $this->configureSource();
         $ctx = $this->makeContext(digestRequest: true, exportFormat: 'excel');
 
@@ -233,7 +255,10 @@ class AiManagerDigestRoutingTest extends TestCase
         foreach ($this->chatMessages[0] ?? [] as $message) {
             $prompt .= ($message['content'] ?? '') . "\n";
         }
-        $this->assertStringContainsString('export that', $prompt, 'the composer is instructed to offer the follow-up export');
+        // Actions plan B4: the export is an attached chip (code), never a prose "export that" offer.
+        $this->assertStringNotContainsString('export that', $prompt);
+        $this->assertStringContainsString('attached below', $prompt, 'the composer acknowledges the attached file');
+        $this->assertContains('export_excel', array_column($result['metadata']['response']['invocations'] ?? [], 'key'));
         $this->assertSame(0, $this->searchCalls);
     }
 

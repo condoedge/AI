@@ -109,7 +109,6 @@ class ContextQualityTest extends TestCase
         $entityConfigs = [
             'App\\Models\\Team' => [
                 'graph' => ['label' => 'Team', 'properties' => ['id', 'name']],
-                'vector' => ['collection' => 'teams', 'embed_fields' => ['name']],
                 'metadata' => ['aliases' => ['team', 'group']],
             ],
         ];
@@ -151,7 +150,6 @@ class ContextQualityTest extends TestCase
         $entityConfigs = [
             'App\\Models\\Team' => [
                 'graph' => ['label' => 'Team', 'properties' => ['id', 'name']],
-                'vector' => ['collection' => 'teams', 'embed_fields' => ['name']],
                 'metadata' => ['aliases' => ['team']],
             ],
         ];

@@ -152,6 +152,118 @@ final class StatedNumber
     }
 
     /**
+     * Every stated QUANTITY in free text, parsed typographically (Phase 8-B
+     * AnswerValidator). Locale groupings are understood ("11,493.17",
+     * "11 493,17 $", NBSP / narrow-NBSP groups, "1,50" decimal comma). Tokens
+     * that are structurally something else are skipped: ordered-list markers,
+     * multi-part tokens joined by - / : (dates, times, ranges, fractions), and
+     * digits glued to letters ("310A", "2e"). An ambiguous token ("1,500" =
+     * 1500 or 1.5) yields every reading in `values`; callers accept any.
+     *
+     * @return list<array{raw: string, values: list<float>, decimals: int, money: bool, offset: int}>
+     */
+    public static function quantities(string $text): array
+    {
+        // Same structural strip as appears(), but offset-preserving (blanked, not
+        // removed) so a caller can patch the original text at `offset`.
+        $blank = static fn (array $m): string => str_repeat(' ', strlen($m[0]));
+        $text = (string) preg_replace_callback('/^[ \t]*\d+[.)](?=\s)/m', $blank, $text);
+        $text = (string) preg_replace_callback('/\d+(?:[\/:\-–]\d+)+/u', $blank, $text);
+
+        $pattern = '/(?<![\p{L}\p{N}_])([1-9]\d{0,2}(?:[,.\x{00A0}\x{202F} ]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d+)?)(?![\p{L}\p{N}_])/u';
+        if (!preg_match_all($pattern, $text, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($matches as $match) {
+            [$raw, $offset] = $match[1];
+            $values = self::readings($raw);
+            if ($values === []) {
+                continue;
+            }
+            $before = substr($text, max(0, $offset - 3), min(3, $offset));
+            $after = substr($text, $offset + strlen($raw), 3);
+            $out[] = [
+                'raw' => $raw,
+                'values' => $values,
+                'decimals' => self::decimalsOf($raw),
+                'money' => preg_match('/[$€£]/u', $before . $after) === 1,
+                'offset' => $offset,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Whether $value is supported by $evidence: equal within a cent, or equal to
+     * an evidence figure rounded to the answer's own precision ("11 493 $" for
+     * 11493.17). Pure arithmetic tolerance — formatting never decides.
+     *
+     * @param list<float> $values   readings of one stated token
+     * @param list<float> $evidence
+     */
+    public static function supported(array $values, int $decimals, array $evidence): bool
+    {
+        foreach ($values as $value) {
+            $value = abs($value);
+            foreach ($evidence as $known) {
+                $known = abs($known);
+                if (abs($value - $known) < 0.005) {
+                    return true;
+                }
+                if ($decimals < 2 && abs(round($known, $decimals) - $value) < 0.005) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Every numeric reading of a raw token. "11,493.17" → 11493.17; "11 493,17"
+     * → 11493.17; "1,500" → 1500 and 1.5; "10,5" → 10.5.
+     *
+     * @return list<float>
+     */
+    private static function readings(string $raw): array
+    {
+        $raw = str_replace(["\u{00A0}", "\u{202F}"], ' ', $raw);
+
+        if (self::isGrouping($raw)) {
+            // Last separator followed by 1-2 digits is the decimal mark.
+            $decimal = '';
+            if (preg_match('/^(.*\d{3})([.,])(\d{1,2})$/', $raw, $m) === 1) {
+                [$raw, $decimal] = [$m[1], '.' . $m[3]];
+            }
+            $grouped = (float) (preg_replace('/[^\d]/', '', $raw) . $decimal);
+            $values = [$grouped];
+            // "1,500" / "1.500" alone may also be a 3-decimal reading.
+            if ($decimal === '' && preg_match('/^\d{1,3}[.,]\d{3}$/', $raw) === 1) {
+                $values[] = (float) str_replace(',', '.', $raw);
+            }
+
+            return $values;
+        }
+
+        return [(float) str_replace(',', '.', $raw)];
+    }
+
+    private static function decimalsOf(string $raw): int
+    {
+        $pattern = self::isGrouping($raw) ? '/\d{3}[.,](\d{1,2})$/' : '/[.,](\d+)$/';
+
+        return preg_match($pattern, $raw, $m) === 1 ? strlen($m[1]) : 0;
+    }
+
+    private static function isGrouping(string $raw): bool
+    {
+        return preg_match('/^[1-9]\d{0,2}(?:[,. \x{00A0}\x{202F}]\d{3})+(?:[.,]\d{1,2})?$/u', $raw) === 1;
+    }
+
+    /**
      * Remove digit occurrences that are STRUCTURALLY something other than a
      * stated quantity: ordered-list markers and multi-part digit tokens.
      */

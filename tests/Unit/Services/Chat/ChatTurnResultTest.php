@@ -15,7 +15,6 @@ class ChatTurnResultTest extends TestCase
         $result = new ChatTurnResult(
             answer: 'You have 3 parking spaces.',
             data: [['id' => 1]],
-            suggestions: ['Show details'],
             sources: [],
         );
 

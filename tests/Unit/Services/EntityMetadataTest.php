@@ -397,62 +397,6 @@ class EntityMetadataTest extends TestCase
     }
 
     // =========================================================================
-    // getAllEntityMetadata() Tests
-    // =========================================================================
-
-    /**
-     * Test that getAllEntityMetadata returns all metadata
-     */
-    public function test_get_all_entity_metadata_returns_all_metadata()
-    {
-        $allMetadata = $this->service->getAllEntityMetadata();
-
-        $this->assertArrayHasKey('Person', $allMetadata);
-        $this->assertArrayHasKey('Order', $allMetadata);
-        $this->assertArrayNotHasKey('Team', $allMetadata); // No metadata
-    }
-
-    /**
-     * Test that getAllEntityMetadata returns complete metadata structure
-     */
-    public function test_get_all_entity_metadata_returns_complete_structure()
-    {
-        $allMetadata = $this->service->getAllEntityMetadata();
-
-        $personMetadata = $allMetadata['Person'];
-
-        $this->assertArrayHasKey('aliases', $personMetadata);
-        $this->assertArrayHasKey('description', $personMetadata);
-        $this->assertArrayHasKey('scopes', $personMetadata);
-        $this->assertArrayHasKey('common_properties', $personMetadata);
-    }
-
-    /**
-     * Test that getAllEntityMetadata returns empty when no entities have metadata
-     */
-    public function test_get_all_entity_metadata_returns_empty_when_no_metadata()
-    {
-        // Create service with entity configs without metadata
-        $configsWithoutMetadata = [
-            'Team' => [
-                'graph' => ['label' => 'Team'],
-            ],
-        ];
-
-        $service = new ContextRetriever(
-            $this->mockVectorStore,
-            $this->mockGraphStore,
-            $this->mockEmbeddingProvider,
-            $this->logger,
-            $configsWithoutMetadata
-        );
-
-        $allMetadata = $service->getAllEntityMetadata();
-
-        $this->assertEmpty($allMetadata);
-    }
-
-    // =========================================================================
     // retrieveContext() Integration Tests
     // =========================================================================
 

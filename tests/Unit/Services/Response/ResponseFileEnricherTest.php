@@ -779,4 +779,28 @@ class ResponseFileEnricherTest extends TestCase
         $this->assertEquals('/files/42/preview', $database['preview_url']);
         $this->assertTrue($database['can_download']);
     }
+
+    /**
+     * @test The articles an answer names are recorded with the cited passage whatever
+     * punctuation lists them — and a range names all of its articles. Live (2026-10-06):
+     * "(art. 1064; 1068)" recorded 1064 only, so the next turn's deepening contract
+     * served 1068 again as new.
+     */
+    public function cited_articles_are_read_from_a_punctuated_list_and_from_a_range(): void
+    {
+        $fileContext = ['relevant_files' => [[
+            'file_id' => 123,
+            'filename' => 'code.md',
+            'snippet' => "**1063.** One.\n\n**1064.** Two.\n\n**1065.** Three.\n\n**1066.** Four.\n\n**1068.** Five.\n\n**1069.** Six.",
+            'relevance' => 0.85,
+            'chunk_index' => 4,
+            'source' => 'database',
+        ]]];
+
+        $semicolon = $this->enricher->buildReferencedFiles('You contribute to the expenses (art. 1064; 1068) [1].', $fileContext);
+        $this->assertSame([1064, 1068], $semicolon[0]['cited_articles']);
+
+        $range = $this->enricher->buildReferencedFiles('Your rights are set out in art. 1063–1066 [1].', $fileContext);
+        $this->assertSame([1063, 1064, 1065, 1066], $range[0]['cited_articles']);
+    }
 }

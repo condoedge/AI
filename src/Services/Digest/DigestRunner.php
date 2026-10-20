@@ -152,6 +152,7 @@ class DigestRunner
                 actionKey: $source['action_key'],
                 entity: $source['entity'],
                 emptyText: $source['empty_text'],
+                cypher: $source['cypher'],
             );
         } catch (\Throwable $e) {
             \Log::warning("Digest source '{$key}' failed: " . $e->getMessage());
@@ -195,6 +196,7 @@ class DigestRunner
                 actionKey: $source['action_key'],
                 entity: $source['entity'],
                 emptyText: $source['empty_text'],
+                cypher: $source['fallback_cypher'],
             );
         } catch (\Throwable $e) {
             \Log::warning("Digest source '{$key}': fallback failed — keeping the honest-empty: " . $e->getMessage());
@@ -248,6 +250,7 @@ class DigestRunner
             entity: $source['entity'],
             emptyText: $source['empty_text'],
             error: $error,
+            cypher: $source['cypher'],
         );
     }
 
@@ -264,6 +267,7 @@ class DigestRunner
             entity: $source['entity'],
             emptyText: $source['empty_text'],
             fallbackError: $fallbackError,
+            cypher: $source['cypher'],
         );
     }
 }

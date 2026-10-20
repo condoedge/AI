@@ -11,7 +11,6 @@ use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Condoedge\Ai\Services\Discovery\PropertyDiscoverer;
 use Condoedge\Ai\Services\Discovery\RelationshipDiscoverer;
 use Condoedge\Ai\Services\Discovery\AliasGenerator;
-use Condoedge\Ai\Services\Discovery\EmbedFieldDetector;
 
 /**
  * Entity Auto-Discovery Integration Test
@@ -42,11 +41,8 @@ class EntityAutoDiscoveryTest extends TestCase
         $this->assertContains('name', $config['graph']['properties']);
         $this->assertContains('email', $config['graph']['properties']);
 
-        // Assert vector configuration
-        $this->assertArrayHasKey('vector', $config);
-        $this->assertEquals('test_customers', $config['vector']['collection']);
-        $this->assertIsArray($config['vector']['embed_fields']);
-        $this->assertIsArray($config['vector']['metadata']);
+        // Records are written to the graph only: discovery emits no vector block
+        $this->assertArrayNotHasKey('vector', $config);
 
         // Assert metadata
         $this->assertArrayHasKey('metadata', $config);

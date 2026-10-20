@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\PromptSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\Retrieval\EntitySelectionPruner;
 
 class CurrentUserContextSection extends BasePromptSection
 {
@@ -45,14 +46,33 @@ class CurrentUserContextSection extends BasePromptSection
         $output .= "Current team ID: " . $currentTeamId . "\n";
         $output .= "Current team name: " . $currentTeamName . "\n\n";
 
+        // Task 5.11: render only what the selected labels can use. $selected is null
+        // when the prompt carries no projected schema (render everything, as before).
+        $selected = $this->selectedLabels($context);
+
         if ($isAuthenticated) {
             $output .= $this->formatIdentityAnchors($currentUserId, $currentTeamId);
-            $output .= $this->formatContactDisambiguation();
+            $profile = $this->profileLabel();
+            if ($profile !== null && ($selected === null || isset($selected[strtolower($profile)]))) {
+                $output .= $this->formatContactDisambiguation($profile);
+            }
         }
 
-        // Include user entity paths when QU detected possessive language
-        if ($isAuthenticated && $isPossessive) {
-            $output .= $this->formatUserEntityPaths();
+        // PERSONAL possession ("my unit", "do I have…") gets the user's ownership paths.
+        // COLLECTIVE possession ("our meetings", "we owe") is the TEAM's data: it gets only
+        // the team-scope guidance — handing it the personal paths made the generator answer
+        // "no meetings linked to you" for "When is our next meeting?" (eval p16). The
+        // personal/collective judgment is QU's verified possessive_scope, not left to the
+        // Cypher model.
+        if ($isAuthenticated && $context->qu->isPersonalPossessive()) {
+            $output .= $this->formatUserEntityPaths($this->pathLabels($context, $selected));
+        } elseif ($isAuthenticated && $context->qu->isCollectivePossessive()) {
+            $output .= "COLLECTIVE POSSESSIVE: the question speaks for the user's organization (\"our …\", \"we …\"). "
+                . "It is about the TEAM'S data, not this person's own records: anchor the query on the current team scope "
+                . "(the Current team ID above / the \$ai_team_ids tenant filter) over the team-level entities, and do NOT "
+                . "route it through the user's personal ownership.
+
+";
         }
 
         return $output;
@@ -75,15 +95,49 @@ class CurrentUserContextSection extends BasePromptSection
     }
 
     /**
-     * "Contact" is both a normal word and often a domain entity label. Own-profile
-     * wording should not become a broad Contact query unless the user clearly asks
-     * for contact records.
+     * The host's PROFILE entity: the label the configured ai.user_entity_paths start
+     * from, bound to the current user id (e.g. (c:Contact {user_id: $userId}) → Contact).
+     * The most frequent such label, identity labels excluded; null when no path starts
+     * from a user-bound node (then there is no profile entity to disambiguate).
      */
-    private function formatContactDisambiguation(): string
+    private function profileLabel(): ?string
+    {
+        $paths = config('ai.user_entity_paths', []);
+        if (!is_array($paths) || $paths === []) {
+            return null;
+        }
+
+        $identity = config('ai.semantic_context.always_include_identity_labels', ['User', 'Team']);
+        $identity = array_fill_keys(array_map('strtolower', is_array($identity) ? array_filter($identity, 'is_string') : []), true);
+
+        $counts = [];
+        foreach ($paths as $path) {
+            $cypher = is_array($path) ? ($path['cypher'] ?? null) : null;
+            if (!is_string($cypher)
+                || !preg_match('/\(\s*\w*\s*:\s*`?([A-Za-z_][A-Za-z0-9_]*)`?\s*\{[^}]*\$userId[^}]*\}\s*\)/', $cypher, $m)
+                || isset($identity[strtolower($m[1])])) {
+                continue;
+            }
+            $counts[$m[1]] = ($counts[$m[1]] ?? 0) + 1;
+        }
+        if ($counts === []) {
+            return null;
+        }
+        arsort($counts);
+
+        return (string) array_key_first($counts);
+    }
+
+    /**
+     * The profile entity's name ("Contact") is both a normal word and a domain label.
+     * Own-profile wording should not become a broad profile-entity query unless the
+     * user clearly asks for those records.
+     */
+    private function formatContactDisambiguation(string $profile): string
     {
         $output = "CONTACT WORDING DISAMBIGUATION:\n";
         $output .= "- Own-profile wording in any language (for example \"my contact information\", \"my profile\", \"my information\", \"my email\", \"my name\", or \"my team\") means this authenticated user and active team context.\n";
-        $output .= "- Do not use the Contact entity for those own-profile phrases unless the user explicitly asks for contact records, a contacts list, another person's contact, or a configured ownership path requires the current user's profile row.\n\n";
+        $output .= "- Do not use the {$profile} entity for those own-profile phrases unless the user explicitly asks for {$profile} records, a list of them, another person's record, or a configured ownership path requires the current user's profile row.\n\n";
 
         return $output;
     }
@@ -130,14 +184,74 @@ class CurrentUserContextSection extends BasePromptSection
     }
 
     /**
-     * Format user entity paths that teach the LLM how to find "my X" entities.
+     * Lower-cased labels of the projected schema (what the schema cards show), or
+     * null when the context carries none.
+     *
+     * @return array<string, true>|null
      */
-    private function formatUserEntityPaths(): string
+    private function selectedLabels(PipelineContext $context): ?array
+    {
+        $labels = array_filter((array) ($context->graphSchema['labels'] ?? []), fn ($l) => is_string($l) && $l !== '');
+        if ($labels === []) {
+            return null;
+        }
+
+        return array_fill_keys(array_map('strtolower', $labels), true);
+    }
+
+    /**
+     * The labels whose ownership paths may render: the selected labels minus those the
+     * entity-selection pruner kept only to join or scope the seeds (identity / tenant /
+     * closure / ownership) — a label on BoardMember's path is not what "my X" asks for.
+     *
+     * @param array<string, true>|null $selected
+     * @return array<string, true>|null
+     */
+    private function pathLabels(PipelineContext $context, ?array $selected): ?array
+    {
+        $tiers = (array) ($context->selectionInfo['selection_tiers'] ?? []);
+        if ($selected === null || $tiers === []) {
+            return $selected;
+        }
+
+        $support = [
+            EntitySelectionPruner::TIER_IDENTITY,
+            EntitySelectionPruner::TIER_TENANT,
+            EntitySelectionPruner::TIER_CLOSURE,
+            EntitySelectionPruner::TIER_OWNERSHIP,
+        ];
+        foreach ($tiers as $label => $tier) {
+            if (is_string($label) && in_array($tier, $support, true)) {
+                unset($selected[strtolower($label)]);
+            }
+        }
+
+        return $selected;
+    }
+
+    /**
+     * Format user entity paths that teach the LLM how to find "my X" entities —
+     * only the paths whose target label is selected (all when $selected is null).
+     *
+     * @param array<string, true>|null $selected
+     */
+    private function formatUserEntityPaths(?array $selected = null): string
     {
         $paths = config('ai.user_entity_paths', []);
 
-        if (empty($paths)) {
+        if (!is_array($paths) || empty($paths)) {
             return '';
+        }
+
+        if ($selected !== null) {
+            $paths = array_filter(
+                $paths,
+                fn ($path, $label) => is_string($label) && isset($selected[strtolower($label)]),
+                ARRAY_FILTER_USE_BOTH
+            );
+            if ($paths === []) {
+                return '';
+            }
         }
 
         $output = "IMPORTANT - USER OWNERSHIP PATHS (PERSONAL possessives ONLY):\n";

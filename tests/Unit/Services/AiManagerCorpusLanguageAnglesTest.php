@@ -27,10 +27,11 @@ use Mockery;
  * language as a SEPARATE angle (a pure single-language probe), so a question in
  * one language still retrieves documents written in another.
  *
- * The translations are produced once by the Query-Understanding layer and carried
- * on QueryUnderstandingResult::corpusTranslations. AiManager::retrieveAndSetFileContext
- * adds each as an extra fan-out angle. With no configured corpus languages (and
- * thus no translations), the fan-out is unchanged — zero added cost.
+ * The per-language probes are carried on QueryUnderstandingResult::corpusTranslations
+ * (probe slot 1; filled by the focused DocumentProbeWriter call since eval p15, no
+ * longer by the QU call — see AiManagerDocumentProbeTest). This test pins the SLOT
+ * plumbing: AiManager::retrieveAndSetFileContext adds each value as an extra fan-out
+ * angle; with an empty slot the fan-out is unchanged — zero added cost.
  */
 class AiManagerCorpusLanguageAnglesTest extends TestCase
 {
@@ -96,7 +97,6 @@ class AiManagerCorpusLanguageAnglesTest extends TestCase
         $ctx->qu = $qu;
         $ctx->similarQueries = [];
         $ctx->graphSchema = ['labels' => ['Unit']];
-        $ctx->relevantEntities = [];
 
         return $ctx;
     }

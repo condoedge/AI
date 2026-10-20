@@ -4,7 +4,6 @@ namespace Condoedge\Ai\Tests\Unit\Domain\ValueObjects;
 
 use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
 use Condoedge\Ai\Domain\ValueObjects\NodeableConfig;
-use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
 use Condoedge\Ai\Tests\TestCase;
 use Illuminate\Database\Eloquent\Model;
 
@@ -37,9 +36,8 @@ class NodeableConfigTest extends TestCase
                 'label' => 'Customer',
                 'properties' => ['id', 'name'],
             ],
-            'vector' => [
-                'collection' => 'customers',
-                'embed_fields' => ['name'],
+            'metadata' => [
+                'aliases' => ['customer'],
             ],
         ];
 
@@ -155,46 +153,6 @@ class NodeableConfigTest extends TestCase
             'foreign_key' => 'team_id',
             'properties' => ['since' => 'joined_at'],
         ], $config['graph']['relationships'][0]);
-    }
-
-    // =========================================================================
-    // Vector Configuration Tests
-    // =========================================================================
-
-    public function test_can_set_collection()
-    {
-        $config = NodeableConfig::for('Customer')
-            ->collection('customers')
-            ->toArray();
-
-        $this->assertEquals('customers', $config['vector']['collection']);
-    }
-
-    public function test_can_set_embed_fields_with_multiple_arguments()
-    {
-        $config = NodeableConfig::for('Customer')
-            ->embedFields('name', 'description', 'bio')
-            ->toArray();
-
-        $this->assertEquals(['name', 'description', 'bio'], $config['vector']['embed_fields']);
-    }
-
-    public function test_can_set_embed_fields_with_array()
-    {
-        $config = NodeableConfig::for('Customer')
-            ->embedFields(['name', 'description'])
-            ->toArray();
-
-        $this->assertEquals(['name', 'description'], $config['vector']['embed_fields']);
-    }
-
-    public function test_can_set_vector_metadata()
-    {
-        $config = NodeableConfig::for('Customer')
-            ->vectorMetadata('id', 'status', 'created_at')
-            ->toArray();
-
-        $this->assertEquals(['id', 'status', 'created_at'], $config['vector']['metadata']);
     }
 
     // =========================================================================
@@ -332,9 +290,6 @@ class NodeableConfigTest extends TestCase
             ->label('Customer')
             ->properties('id', 'name')
             ->relationship('PURCHASED', 'Order', 'order_id')
-            ->collection('customers')
-            ->embedFields('name')
-            ->vectorMetadata('id')
             ->aliases('customer')
             ->description('Customer entity')
             ->scope('active', ['filter' => ['status' => 'active']])
@@ -363,11 +318,6 @@ class NodeableConfigTest extends TestCase
                     ],
                 ],
             ],
-            'vector' => [
-                'collection' => 'customers',
-                'embed_fields' => ['name', 'email'],
-                'metadata' => ['id', 'status'],
-            ],
             'metadata' => [
                 'aliases' => ['customer', 'client'],
                 'description' => 'Customer entity',
@@ -379,9 +329,6 @@ class NodeableConfigTest extends TestCase
             ->label('Customer')
             ->properties('id', 'name', 'email')
             ->relationship('PURCHASED', 'Order', 'order_id')
-            ->collection('customers')
-            ->embedFields('name', 'email')
-            ->vectorMetadata('id', 'status')
             ->aliases('customer', 'client')
             ->description('Customer entity')
             ->toArray();
@@ -397,8 +344,6 @@ class NodeableConfigTest extends TestCase
             'Customer' => NodeableConfig::for('Customer')
                 ->label('Customer')
                 ->properties('id', 'name')
-                ->collection('customers')
-                ->embedFields('name')
                 ->toArray(),
         ];
 
@@ -423,19 +368,6 @@ class NodeableConfigTest extends TestCase
         $this->assertEquals(['id', 'name'], $graphConfig->properties);
     }
 
-    public function test_can_convert_to_vector_config()
-    {
-        $builder = NodeableConfig::for('Customer')
-            ->collection('customers')
-            ->embedFields('name', 'description');
-
-        $vectorConfig = $builder->toVectorConfig();
-
-        $this->assertInstanceOf(VectorConfig::class, $vectorConfig);
-        $this->assertEquals('customers', $vectorConfig->collection);
-        $this->assertEquals(['name', 'description'], $vectorConfig->embedFields);
-    }
-
     public function test_throws_exception_when_converting_without_graph_config()
     {
         $builder = NodeableConfig::for('Customer');
@@ -446,16 +378,6 @@ class NodeableConfigTest extends TestCase
         $builder->toGraphConfig();
     }
 
-    public function test_throws_exception_when_converting_without_vector_config()
-    {
-        $builder = NodeableConfig::for('Customer');
-
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('Vector configuration not set');
-
-        $builder->toVectorConfig();
-    }
-
     public function test_can_check_if_graph_config_is_set()
     {
         $builder = NodeableConfig::for('Customer');
@@ -463,15 +385,6 @@ class NodeableConfigTest extends TestCase
 
         $builder->label('Customer')->properties('id');
         $this->assertTrue($builder->hasGraphConfig());
-    }
-
-    public function test_can_check_if_vector_config_is_set()
-    {
-        $builder = NodeableConfig::for('Customer');
-        $this->assertFalse($builder->hasVectorConfig());
-
-        $builder->collection('customers')->embedFields('name');
-        $this->assertTrue($builder->hasVectorConfig());
     }
 
     public function test_can_check_if_metadata_is_set()
@@ -494,9 +407,6 @@ class NodeableConfigTest extends TestCase
             ->properties('id', 'first_name', 'last_name', 'email', 'status')
             ->relationship('MEMBER_OF', 'Team', 'team_id')
             ->relationship('HAS_ROLE', 'PersonTeam')
-            ->collection('people')
-            ->embedFields('first_name', 'last_name', 'bio')
-            ->vectorMetadata('id', 'email', 'status')
             ->aliases('person', 'people', 'user', 'member')
             ->description('Individuals in the system')
             ->scope('active', [
@@ -538,7 +448,6 @@ class NodeableConfigTest extends TestCase
 
         // Verify structure
         $this->assertArrayHasKey('graph', $config);
-        $this->assertArrayHasKey('vector', $config);
         $this->assertArrayHasKey('metadata', $config);
         $this->assertArrayHasKey('auto_sync', $config);
 
@@ -546,11 +455,6 @@ class NodeableConfigTest extends TestCase
         $this->assertEquals('Person', $config['graph']['label']);
         $this->assertCount(5, $config['graph']['properties']);
         $this->assertCount(2, $config['graph']['relationships']);
-
-        // Verify vector
-        $this->assertEquals('people', $config['vector']['collection']);
-        $this->assertCount(3, $config['vector']['embed_fields']);
-        $this->assertCount(3, $config['vector']['metadata']);
 
         // Verify metadata
         $this->assertCount(4, $config['metadata']['aliases']);
@@ -605,19 +509,7 @@ class NodeableConfigTest extends TestCase
             ->toArray();
 
         $this->assertArrayHasKey('graph', $config);
-        $this->assertArrayNotHasKey('vector', $config);
         $this->assertArrayNotHasKey('metadata', $config);
-    }
-
-    public function test_can_build_vector_only_config()
-    {
-        $config = NodeableConfig::for('Document')
-            ->collection('documents')
-            ->embedFields('content')
-            ->toArray();
-
-        $this->assertArrayHasKey('vector', $config);
-        $this->assertArrayNotHasKey('graph', $config);
     }
 
     public function test_properties_replace_previous_properties()

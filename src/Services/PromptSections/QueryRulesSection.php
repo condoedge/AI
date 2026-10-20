@@ -90,15 +90,25 @@ class QueryRulesSection extends BasePromptSection
                "   - Use only labels and relationships from the GRAPH SCHEMA block\n" .
                "   - Use only properties that exist in the GRAPH SCHEMA block\n" .
                "   - CRITICAL: Use the EXACT relationship directions shown (arrows matter!)\n" .
-               "   - CRITICAL: Use the EXACT data formats from the EXAMPLE ENTITIES block (strings vs dates)\n\n";
+               "   - CRITICAL: Respect each property's stored type as shown on its GRAPH SCHEMA card (name:Type)\n\n";
     }
 
+    /**
+     * Matches the graph as ingested (Task 5.8, verified live on CondoEdge 2026-09-30):
+     * date columns are ISO-8601 strings with a time part ('2021-07-05T04:00:00.000000Z',
+     * valueType STRING); `due_at < datetime()` matched 0 of 6006 invoices while
+     * `due_at < toString(date())` matched them. The cards tag such properties
+     * `String(ISO date)` and digit-string codes `String(numeric)` (PropertyTypeSampler).
+     * Revisit when typed ingestion (Phase 9) stores real temporal values.
+     */
     private function formatDataTypeRules(): string
     {
         return "2. DATA TYPE RULES:\n" .
-               "   - Dates stored as STRINGS (e.g., '2024-01-15'): compare as strings using < > = operators\n" .
-               "   - For relative date comparisons (today, now, current), use toString(date()) — this returns today's date as a string\n" .
-               "   - NEVER hardcode specific dates — use toString(date()) for 'today', 'current', 'upcoming', 'past', etc.\n" .
+               "   - Follow each property's type on its GRAPH SCHEMA card.\n" .
+               "   - When the card shows String(ISO date) (an ISO-8601 string, e.g. '2024-01-15T05:00:00.000000Z'): compare as strings, never against date()/datetime() values — a string compared with datetime() matches nothing. For relative dates (today, now, overdue, upcoming, past) compare with toString(date()), e.g. x.due_at < toString(date()) — that is a day boundary: an item due today counts as NOT yet overdue. To match a whole day compare substring(x.due_at, 0, 10) = '2024-01-15'\n" .
+               "   - A Date/DateTime-typed property compares with date()/datetime() directly (e.g. x.due_at < date())\n" .
+               "   - NEVER hardcode today's date — use date()/toString(date())\n" .
+               "   - A String(numeric) property holds digit strings: compare it with a quoted value (x.code = '2'), not a number\n" .
                "   - EXCEPTION: If the DETECTED BUSINESS CONCEPTS block provides a CYPHER PATTERN, use that pattern EXACTLY as written\n\n";
     }
 
@@ -109,8 +119,8 @@ class QueryRulesSection extends BasePromptSection
                "   - (a)-[:REL]->(b) means relationship goes FROM a TO b\n" .
                "   - (a)<-[:REL]-(b) means relationship goes FROM b TO a\n" .
                "   - Do NOT infer relationship traversals from *_id properties, Eloquent relation names, natural-language phrases, or configured foreign_key metadata\n" .
-               "   - Use a relationship traversal only when the exact source label, relationship type, target label, and direction are present in the ENTITY RELATIONSHIPS block or in a DETECTED BUSINESS CONCEPTS block CYPHER PATTERN\n" .
-               "   - If a node exposes a scalar foreign-key property such as current_team_id, team_id, or user_id and the exact edge is not present in the ENTITY RELATIONSHIPS block, filter on that property with WHERE instead of traversing an invented edge\n" .
+               "   - Use a relationship traversal only when the exact source label, relationship type, target label, and direction are listed in the out/in edges of a GRAPH SCHEMA card or in a DETECTED BUSINESS CONCEPTS block CYPHER PATTERN\n" .
+               "   - If a node exposes a scalar foreign-key property such as current_team_id, team_id, or user_id and the exact edge is not listed on its GRAPH SCHEMA card (see the card's fk (no edge) line), filter on that property with WHERE instead of traversing an invented edge\n" .
                "   - Getting the direction wrong will return zero results!\n\n";
     }
 
@@ -118,8 +128,7 @@ class QueryRulesSection extends BasePromptSection
     {
         return "4. BUSINESS RULES:\n" .
                "   - CRITICAL: If the DETECTED BUSINESS CONCEPTS block has a CYPHER PATTERN, you MUST use it in your WHERE clause\n" .
-               "   - Check the EXAMPLE ENTITIES block to determine the data type of status/role/type fields — some are integers, some are strings\n" .
-               "   - Check the DETECTED ENTITIES block for enum value mappings before filtering on status/role/type fields\n" .
+               "   - Before filtering on a status/role/type field, use the {code=meaning} enum legend on the GRAPH SCHEMA card, written in the property's type (Integer → 2, String(numeric) → '2')\n" .
                "   - Apply filters exactly as specified in scope definitions\n" .
                "   - Use DISTINCT when specified to avoid duplicates\n" .
                "   - When returning entity data, JOIN to related entities to get human-readable names (e.g., JOIN Contact for BoardMember)\n\n";
@@ -129,9 +138,22 @@ class QueryRulesSection extends BasePromptSection
     {
         return "5. FIELD PROJECTION:\n" .
                "   - If the REQUESTED ATTRIBUTES block lists data concepts, each mapped property MUST appear in the RETURN clause as an output column\n" .
-               "   - RETURN requested attributes as columns in addition to an identifying column (name or id) — do NOT only use them in a WHERE filter\n" .
+               "   - RETURN requested attributes as columns in addition to a human-readable identifying column (the record's name, title or number, as listed on its GRAPH SCHEMA card) — do NOT only use them in a WHERE filter\n" .
+               // Eval p9-B digest t1 (2026-10-01): "when was our last meeting?"
+               // returned date + id only, so neither the answer nor the chip could
+               // name the meeting.
+               "   - When the rows are records, return that human-readable identifying column even when the question asks only for its date or amount (\"when was the last X\" returns X's name with its date) — an id alone identifies nothing to the user\n" .
+               // Actions plan B1: the record chips under the answer are attached by code
+               // from the rows' ids — a record row without its id gets no link.
+               "   - When the rows are records — one row per unit, supplier, meeting, member…, including per-record aggregates (WITH u, sum(...)) — ALSO return each record's id (e.g. u.id AS unit_id): the system uses it to attach the record's link and never shows it. Omit it only for a single overall total or count.\n" .
                "   - A request to see/include an attribute is a projection requirement, not just a filter\n" .
-               "   - PRECEDENCE: REQUESTED ATTRIBUTES OVERRIDE any column list suggested in an entity description — descriptions offer default columns, the user's requested attributes always win, joining to related entities when the attribute lives there\n\n";
+               "   - PRECEDENCE: REQUESTED ATTRIBUTES OVERRIDE any column list suggested in an entity description — descriptions offer default columns, the user's requested attributes always win, joining to related entities when the attribute of the listed records lives there — but an attribute no property holds for the listed records is omitted (not recorded), never taken from another entity's field\n" .
+               // Eval p9 (2026-10-01): "with contact info" projected every scalar
+               // property of the joined Contact, including a never-populated flag.
+               "   - Return the identifying column(s) plus the columns the question asks for — never every property of a joined entity\n" .
+               // Eval p9 (2026-10-01): User -> Contact -> ContactDirectory OPTIONAL
+               // MATCHes fanned 523 members out to 530 / 1352 rows.
+               "   - ROW GRAIN: return ONE row per record of the entity being listed (the members, units, invoices… the question enumerates). When a joined entity can match SEVERAL times per record (a one-to-many relationship), aggregate it per record instead of returning one row per match: WITH r, collect(DISTINCT x.value) AS values for a list of values, or WITH r, head(collect(x)) AS x for one related record. Never let a join duplicate the listed records or inflate their count\n\n";
     }
 
     private function formatBestPractices(): string
@@ -140,17 +162,20 @@ class QueryRulesSection extends BasePromptSection
                "   - Always include LIMIT clause (default LIMIT 100)\n" .
                "   - Use DISTINCT when traversing relationships\n" .
                "   - Use descriptive variable names (p for Person, o for Order, etc.)\n" .
+               // Generic Cypher correctness — needed with or without tenant scoping, so it
+               // lives here, once; TenantScopingRulesSection keeps only the per-branch
+               // team-filter placement (review M-3).
+               "   - With UNION, every branch's RETURN must project the same column names/aliases in the same order (e.g. RETURN x.name AS name)\n" .
                "   - Optimize for performance (use indexes, avoid cartesian products)\n\n";
     }
 
     private function formatOutputFormat(): string
     {
         return "7. OUTPUT FORMAT:\n" .
-               "   - Return ONLY the Cypher query\n" .
-               "   - NO markdown code blocks\n" .
-               "   - NO explanations or comments\n" .
-               "   - NO formatting or decorations\n" .
-               "   - Just clean, executable Cypher\n\n";
+               "   - Respond with ONE JSON object and nothing else:\n" .
+               "     {\"needs_query\": true, \"cypher\": \"<the Cypher query>\", \"reason\": \"<one short sentence>\"}\n" .
+               "   - \"cypher\" is clean, executable Cypher: NO markdown code blocks, NO comments, NO decorations\n" .
+               "   - Set \"needs_query\": false and \"cypher\": null ONLY when no query is needed or possible (see YOUR TASK)\n\n";
     }
 
     private function formatReadOnlyConstraint(): string

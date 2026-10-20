@@ -22,22 +22,23 @@ final class ChatTurnResult
     /**
      * @param string          $answer           The assistant answer text (or the user-facing error text when failed).
      * @param array            $data             Structured query/result data for rich rendering.
-     * @param array            $suggestions      Follow-up suggestions.
      * @param array            $sources          Referenced files / citations.
      * @param string|null      $cypher           The executed Cypher (for metadata/debug only — never shown to users).
      * @param AiMessage|null   $assistantMessage The persisted assistant message row, so the view renders it directly.
      * @param string|null      $error            Translation key / message when this turn failed; null on success.
      * @param bool             $degraded         True when answered from an abstention/empty-context fallback rather than data.
+     * @param array            $metadata         The pipeline's response metadata (metadata.response: style,
+     *                                           result counts, export payload, digest/clarify markers...).
      */
     public function __construct(
         public readonly string $answer,
         public readonly array $data = [],
-        public readonly array $suggestions = [],
         public readonly array $sources = [],
         public readonly ?string $cypher = null,
         public readonly ?AiMessage $assistantMessage = null,
         public readonly ?string $error = null,
         public readonly bool $degraded = false,
+        public readonly array $metadata = [],
     ) {
     }
 

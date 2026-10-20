@@ -26,7 +26,11 @@ interface LlmProviderInterface
      * Useful for structured outputs like query generation
      *
      * @param array $messages Array of messages
-     * @param array $options Optional parameters
+     * @param array $options Optional parameters. `json_schema` => ['name' => string,
+     *        'schema' => array] asks for the reply under a STRICT JSON Schema (every
+     *        declared key present, values of their declared type): honoured by providers
+     *        with structured outputs, ignored by every other one — a caller must still
+     *        tolerate a reply that leaves keys out.
      * @return object|array Decoded JSON response
      * @throws \Exception If request fails or response is not valid JSON
      */

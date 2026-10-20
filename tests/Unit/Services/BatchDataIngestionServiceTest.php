@@ -12,7 +12,6 @@ use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
-use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
 use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
 use Condoedge\Ai\Support\AiLogger;
 use Illuminate\Database\Eloquent\Relations\Relation;
@@ -44,29 +43,17 @@ class BatchDataIngestionServiceTest extends TestCase
         parent::setUp();
 
         $this->mockInner = Mockery::mock(DataIngestionServiceInterface::class);
-        $this->mockVectorStore = Mockery::mock(VectorStoreInterface::class);
         $this->mockGraphStore = Mockery::mock(GraphStoreInterface::class);
-        $this->mockEmbeddingProvider = Mockery::mock(EmbeddingProviderInterface::class);
         $this->mockLogger = Mockery::mock(AiLogger::class)->shouldIgnoreMissing();
 
         // The batch vector path ensures the target collection exists before
         // upserting (BatchDataIngestionService::batchIngestToVector calls
         // embeddingProvider->getDimensions() then vectorStore->ensureCollection()).
         // Provide these so the real path runs; byDefault() lets a test override.
-        $this->mockEmbeddingProvider
-            ->shouldReceive('getDimensions')
-            ->andReturn(1536)
-            ->byDefault();
-
-        $this->mockVectorStore
-            ->shouldReceive('ensureCollection')
-            ->byDefault();
 
         $this->service = new BatchDataIngestionService(
             $this->mockInner,
-            $this->mockVectorStore,
             $this->mockGraphStore,
-            $this->mockEmbeddingProvider,
             $this->mockLogger,
         );
     }
@@ -171,14 +158,6 @@ class BatchDataIngestionServiceTest extends TestCase
             ->andReturn([]);
 
         // Vector store expectations
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embedBatch')
-            ->once()
-            ->andReturn([[0.1, 0.2], [0.3, 0.4]]);
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once();
 
         // Act
         $result = $this->service->ingestBatch([$entityA, $entityB]);
@@ -214,24 +193,15 @@ class BatchDataIngestionServiceTest extends TestCase
             ->once()
             ->andThrow(new \Exception('Graph error'));
 
-        // Vector store succeeds for all
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embedBatch')
-            ->once()
-            ->andReturn([[0.1], [0.2], [0.3]]);
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once();
-
         // Act
         $result = $this->service->ingestBatch([$entity1, $entity2, $entity3]);
 
         // Assert
         $this->assertEquals(3, $result['total']);
-        $this->assertEquals(2, $result['succeeded']);       // entity1 + entity2 (both stores ok)
-        $this->assertEquals(1, $result['partially_succeeded']); // entity3 (vector ok, graph failed)
-        $this->assertEquals(0, $result['failed']);
+        $this->assertEquals(2, $result['succeeded']);       // entity1 + entity2 (graph ok)
+        $this->assertEquals(0, $result['partially_succeeded']); // records are not embedded: no second store
+        $this->assertEquals(1, $result['failed']);          // entity3 (graph failed)
+        $this->assertSame('Graph ingestion failed', $result['errors'][2]);
         $this->assertArrayHasKeys(['total', 'succeeded', 'partially_succeeded', 'failed', 'errors'], $result);
     }
 
@@ -451,13 +421,6 @@ class BatchDataIngestionServiceTest extends TestCase
                 relationships: [],
             )
         );
-        $entity->shouldReceive('getVectorConfig')->andReturn(
-            new VectorConfig(
-                collection: 'test_collection',
-                embedFields: ['name'],
-                metadata: ['id'],
-            )
-        );
 
         // Capture what gets sent to graph store
         $capturedBatch = null;
@@ -474,14 +437,6 @@ class BatchDataIngestionServiceTest extends TestCase
             ->andReturn([]);
 
         // Vector expectations
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embedBatch')
-            ->once()
-            ->andReturn([[0.1, 0.2]]);
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once();
 
         // Act
         $this->service->ingestBatch([$entity]);
@@ -529,15 +484,6 @@ class BatchDataIngestionServiceTest extends TestCase
                     relationships: [],
                 );
             }
-
-            public function getVectorConfig(): VectorConfig
-            {
-                return new VectorConfig(
-                    collection: 'test_collection',
-                    embedFields: ['name'],
-                    metadata: ['id'],
-                );
-            }
         };
 
         // Capture what gets sent to graph store
@@ -555,14 +501,6 @@ class BatchDataIngestionServiceTest extends TestCase
             ->andReturn([]);
 
         // Vector expectations
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embedBatch')
-            ->once()
-            ->andReturn([[0.1, 0.2]]);
-
-        $this->mockVectorStore
-            ->shouldReceive('upsert')
-            ->once();
 
         // Act
         $this->service->ingestBatch([$entity]);
@@ -600,14 +538,6 @@ class BatchDataIngestionServiceTest extends TestCase
                 label: $label,
                 properties: $properties,
                 relationships: [],
-            )
-        );
-
-        $entity->shouldReceive('getVectorConfig')->andReturn(
-            new VectorConfig(
-                collection: $collection,
-                embedFields: ['name'],
-                metadata: ['id'],
             )
         );
 

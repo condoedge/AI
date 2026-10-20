@@ -61,4 +61,35 @@ class LlmResolverTest extends TestCase
 
         $this->assertSame($first, $second);
     }
+
+    public function test_an_isolated_provider_of_a_role_is_the_same_model_under_another_circuit_breaker(): void
+    {
+        config()->set('ai.llm.default', 'openai');
+        config()->set('ai.llm.openai', ['api_key' => 'sk-base', 'model' => 'gpt-4o']);
+
+        $resolver = new LlmResolver($this->defaultProvider(), ['query_understanding' => ['model' => 'gpt-4o-mini']]);
+        $chat = $resolver->forRole('query_understanding');
+        $index = $resolver->isolated('query_understanding', 'llm_index');
+
+        $this->assertNotSame($chat, $index);
+        $this->assertSame('gpt-4o-mini', $index->getModel());
+        $this->assertSame('llm', $chat->circuitBreakerName(), 'the chat keeps the shared breaker');
+        $this->assertSame('llm_index', $index->circuitBreakerName());
+        $this->assertSame($index, $resolver->isolated('query_understanding', 'llm_index'), 'memoized');
+
+        // A role without a configuration of its own: the default model, still isolated.
+        $plain = $resolver->isolated('query_generation', 'llm_index');
+        $this->assertSame('gpt-4o', $plain->getModel());
+        $this->assertSame('llm_index', $plain->circuitBreakerName());
+    }
+
+    public function test_a_provider_the_resolver_cannot_rebuild_is_shared_rather_than_lost(): void
+    {
+        // A host bound its own provider class: there is no configuration to build a second one from.
+        config()->set('ai.llm.default', 'in-house');
+        $default = $this->defaultProvider();
+        $resolver = new LlmResolver($default, []);
+
+        $this->assertSame($default, $resolver->isolated('query_understanding', 'llm_index'));
+    }
 }

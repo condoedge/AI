@@ -9,8 +9,8 @@ use Condoedge\Ai\Services\PromptSections\TaskInstructionsSection;
 use PHPUnit\Framework\TestCase;
 
 /**
- * E1: TaskInstructionsSection is collapsed to its UNIQUE signal — the NO QUERY REQUIRED
- * escape hatch and the "CYPHER QUERY:" cue — dropping the 7-item list that merely restated
+ * E1: TaskInstructionsSection is collapsed to its UNIQUE signal — the no-query escape
+ * hatch (needs_query=false, Task 5.6) and the response cue — dropping the 7-item list that merely restated
  * QueryRulesSection's OUTPUT-FORMAT / relationship / data-format rules.
  *
  * Pure string behavior — no container needed.
@@ -23,12 +23,14 @@ class TaskInstructionsSectionTest extends TestCase
     }
 
     /** @test */
-    public function it_keeps_the_no_query_required_escape_hatch_and_the_cypher_cue(): void
+    public function it_keeps_the_structured_no_query_escape_hatch_and_the_response_cue(): void
     {
         $output = $this->format();
 
-        $this->assertStringContainsString('NO QUERY REQUIRED', $output);
-        $this->assertStringContainsString('CYPHER QUERY:', $output);
+        // Task 5.6: the escape hatch is the JSON contract, not an exact-match sentinel.
+        $this->assertStringContainsString('"needs_query": false', $output);
+        $this->assertStringNotContainsString('NO QUERY REQUIRED', $output);
+        $this->assertStringEndsWith(TaskInstructionsSection::RESPONSE_CUE, $output);
     }
 
     /** @test */
@@ -52,6 +54,6 @@ class TaskInstructionsSectionTest extends TestCase
         $output = $section->format('q', new PipelineContext(), []);
 
         $this->assertStringContainsString('Do the special thing.', $output);
-        $this->assertStringContainsString('CYPHER QUERY:', $output);
+        $this->assertStringEndsWith(TaskInstructionsSection::RESPONSE_CUE, $output);
     }
 }

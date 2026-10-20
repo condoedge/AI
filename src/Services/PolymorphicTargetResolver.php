@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services;
 
+use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Facades\Log;
 
@@ -46,15 +47,9 @@ final class PolymorphicTargetResolver
         $class = Relation::getMorphedModel($morphValue)
             ?? (class_exists($morphValue) ? $morphValue : null);
 
-        // 2. Class -> catalog label; FQCN key first, basename second
-        //    (mirrors HasNodeableConfig::readFromEntitiesConfig).
-        $label = null;
-        if ($class !== null) {
-            $entities = config('entities', []);
-            $label = $entities[$class]['graph']['label']
-                ?? $entities[class_basename($class)]['graph']['label']
-                ?? null;
-        }
+        // 2. Class -> catalog label; FQCN key first, basename second (mirrors
+        //    HasNodeableConfig::readFromEntitiesConfig) — via the shared index.
+        $label = $class !== null ? EntityLabelIndex::shared()->labelForClass($class) : null;
 
         if ($label === null && !isset($this->logged[$morphValue])) {
             Log::info('Polymorphic morph value has no catalog label; edges for it will be skipped', [

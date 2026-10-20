@@ -6,30 +6,27 @@ namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
-use Illuminate\Support\Facades\Log;
+use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
+use Condoedge\Ai\Support\AliasNormalizer;
 
 /**
  * SemanticIndexer
  *
- * Builds and maintains vector store indexes for semantic matching.
- * Indexes entity names, scopes, and templates with their embeddings
- * to enable fast semantic search.
+ * Builds and maintains the vector store index for semantic entity matching.
+ * Indexes entity names, aliases and descriptions with their embeddings
+ * (read by SchemaProjector's entity-label fallback).
  *
- * Collections Created:
+ * Collection created:
  * - semantic_entities: Entity names, aliases, descriptions
- * - semantic_scopes: Scope names, descriptions, concepts
- * - semantic_templates: Query template descriptions
  *
  * @package Condoedge\Ai\Services
  */
 class SemanticIndexer
 {
     /**
-     * Collection names
+     * Collection name
      */
     private const COLLECTION_ENTITIES = 'semantic_entities';
-    private const COLLECTION_SCOPES = 'semantic_scopes';
-    private const COLLECTION_TEMPLATES = 'semantic_templates';
 
     /**
      * Create semantic indexer instance
@@ -43,52 +40,6 @@ class SemanticIndexer
         private readonly VectorStoreInterface $vectorStore,
         private array $entityConfigs = []
     ) {
-    }
-
-    /**
-     * Rebuild all semantic indexes
-     *
-     * This will:
-     * 1. Delete existing collections
-     * 2. Create new collections
-     * 3. Index all entities, scopes, and templates
-     *
-     * @param array|null $templates Optional query templates to index
-     * @return array Summary of indexing operations
-     */
-    public function rebuildIndexes(?array $templates = null): array
-    {
-        $results = [
-            'entities' => null,
-            'scopes' => null,
-            'templates' => null,
-            'errors' => [],
-        ];
-
-        try {
-            $results['entities'] = $this->indexEntities(rebuild: true);
-        } catch (\Exception $e) {
-            $results['errors'][] = "Entities indexing failed: {$e->getMessage()}";
-            Log::error('Failed to index entities', ['error' => $e->getMessage()]);
-        }
-
-        try {
-            $results['scopes'] = $this->indexScopes(rebuild: true);
-        } catch (\Exception $e) {
-            $results['errors'][] = "Scopes indexing failed: {$e->getMessage()}";
-            Log::error('Failed to index scopes', ['error' => $e->getMessage()]);
-        }
-
-        if ($templates) {
-            try {
-                $results['templates'] = $this->indexTemplates($templates, rebuild: true);
-            } catch (\Exception $e) {
-                $results['errors'][] = "Templates indexing failed: {$e->getMessage()}";
-                Log::error('Failed to index templates', ['error' => $e->getMessage()]);
-            }
-        }
-
-        return $results;
     }
 
     /**
@@ -129,17 +80,21 @@ class SemanticIndexer
                 'description' => $metadata['description'] ?? null,
             ];
 
-            // Index aliases
-            if (!empty($metadata['aliases'])) {
-                foreach ($metadata['aliases'] as $alias) {
-                    $points[] = [
-                        'id' => ++$pointId,
-                        'text' => $alias,
-                        'entity' => $entityName,
-                        'type' => 'alias',
-                        'description' => $metadata['description'] ?? null,
-                    ];
-                }
+            // Index the words for this entity once each: every name it goes by,
+            // written as words ("visit detail"), then its real synonyms. Derivable
+            // spellings (plural, accent-less, snake_case) are not embedded again.
+            $words = array_unique(array_merge(
+                array_map([AliasNormalizer::class, 'phrase'], EntityLabelIndex::namesOf((string) $entityName, $config)),
+                EntityLabelIndex::synonymsOf((string) $entityName, $config)
+            ));
+            foreach ($words as $alias) {
+                $points[] = [
+                    'id' => ++$pointId,
+                    'text' => $alias,
+                    'entity' => $entityName,
+                    'type' => 'alias',
+                    'description' => $metadata['description'] ?? null,
+                ];
             }
 
             // Index description as searchable text
@@ -160,153 +115,6 @@ class SemanticIndexer
         return [
             'collection' => $collection,
             'total_entities' => count($this->entityConfigs),
-            'total_points' => count($points),
-            'inserted' => $inserted,
-        ];
-    }
-
-    /**
-     * Index all scopes with their names, descriptions, and concepts
-     *
-     * Creates/updates the semantic_scopes collection with scope information
-     * from all entities.
-     *
-     * @param bool $rebuild If true, delete and recreate collection
-     * @return array Indexing summary
-     */
-    public function indexScopes(bool $rebuild = false): array
-    {
-        $collection = self::COLLECTION_SCOPES;
-
-        // Prepare collection
-        if ($rebuild) {
-            $this->recreateCollection($collection);
-        } elseif (!$this->vectorStore->collectionExists($collection)) {
-            $this->createCollection($collection);
-        }
-
-        // Gather all scope texts to index
-        $points = [];
-        $pointId = 0;
-        $scopeCount = 0;
-
-        foreach ($this->entityConfigs as $entityName => $config) {
-            $metadata = $config['metadata'] ?? [];
-
-            if (empty($metadata['scopes'])) {
-                continue;
-            }
-
-            foreach ($metadata['scopes'] as $scopeName => $scopeConfig) {
-                $scopeCount++;
-
-                // Index scope name
-                $points[] = [
-                    'id' => ++$pointId,
-                    'text' => $scopeName,
-                    'entity' => $entityName,
-                    'scope' => $scopeName,
-                    'type' => 'name',
-                    'description' => $scopeConfig['description'] ?? null,
-                    'concept' => $scopeConfig['concept'] ?? null,
-                ];
-
-                // Index description
-                if (!empty($scopeConfig['description'])) {
-                    $points[] = [
-                        'id' => ++$pointId,
-                        'text' => $scopeConfig['description'],
-                        'entity' => $entityName,
-                        'scope' => $scopeName,
-                        'type' => 'description',
-                        'description' => $scopeConfig['description'],
-                        'concept' => $scopeConfig['concept'] ?? null,
-                    ];
-                }
-
-                // Index concept
-                if (!empty($scopeConfig['concept'])) {
-                    $points[] = [
-                        'id' => ++$pointId,
-                        'text' => $scopeConfig['concept'],
-                        'entity' => $entityName,
-                        'scope' => $scopeName,
-                        'type' => 'concept',
-                        'description' => $scopeConfig['description'] ?? null,
-                        'concept' => $scopeConfig['concept'],
-                    ];
-                }
-            }
-        }
-
-        // Batch insert
-        $inserted = $this->indexPoints($collection, $points);
-
-        return [
-            'collection' => $collection,
-            'total_scopes' => $scopeCount,
-            'total_points' => count($points),
-            'inserted' => $inserted,
-        ];
-    }
-
-    /**
-     * Index query templates with their descriptions and patterns
-     *
-     * Creates/updates the semantic_templates collection with template information.
-     *
-     * @param array $templates Query templates configuration
-     * @param bool $rebuild If true, delete and recreate collection
-     * @return array Indexing summary
-     */
-    public function indexTemplates(array $templates, bool $rebuild = false): array
-    {
-        $collection = self::COLLECTION_TEMPLATES;
-
-        // Prepare collection
-        if ($rebuild) {
-            $this->recreateCollection($collection);
-        } elseif (!$this->vectorStore->collectionExists($collection)) {
-            $this->createCollection($collection);
-        }
-
-        // Gather template texts to index
-        $points = [];
-        $pointId = 0;
-
-        foreach ($templates as $templateName => $templateConfig) {
-            // Index template description (primary search text)
-            if (!empty($templateConfig['description'])) {
-                $points[] = [
-                    'id' => ++$pointId,
-                    'text' => $templateConfig['description'],
-                    'template' => $templateName,
-                    'type' => 'description',
-                    'pattern' => $templateConfig['pattern'] ?? null,
-                    'cypher' => $templateConfig['cypher'] ?? null,
-                ];
-            }
-
-            // Index example queries if available
-            if (!empty($templateConfig['examples'])) {
-                foreach ($templateConfig['examples'] as $example) {
-                    $points[] = [
-                        'id' => ++$pointId,
-                        'text' => $example,
-                        'template' => $templateName,
-                        'type' => 'example',
-                        'pattern' => $templateConfig['pattern'] ?? null,
-                    ];
-                }
-            }
-        }
-
-        // Batch insert
-        $inserted = $this->indexPoints($collection, $points);
-
-        return [
-            'collection' => $collection,
-            'total_templates' => count($templates),
             'total_points' => count($points),
             'inserted' => $inserted,
         ];
@@ -400,13 +208,11 @@ class SemanticIndexer
     {
         return [
             'entities' => self::COLLECTION_ENTITIES,
-            'scopes' => self::COLLECTION_SCOPES,
-            'templates' => self::COLLECTION_TEMPLATES,
         ];
     }
 
     /**
-     * Check if all collections exist
+     * Check if the collection exists
      *
      * @return array Status of each collection
      */
@@ -414,8 +220,6 @@ class SemanticIndexer
     {
         return [
             'entities' => $this->vectorStore->collectionExists(self::COLLECTION_ENTITIES),
-            'scopes' => $this->vectorStore->collectionExists(self::COLLECTION_SCOPES),
-            'templates' => $this->vectorStore->collectionExists(self::COLLECTION_TEMPLATES),
         ];
     }
 

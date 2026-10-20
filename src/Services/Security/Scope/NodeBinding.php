@@ -29,7 +29,25 @@ final class NodeBinding
          * only adds a dead `IS NULL` disjunct (scope still enforced); the flag
          * is therefore derived from the clause that introduces the binding.
          */
-        public readonly bool $optional = false
+        public readonly bool $optional = false,
+        /**
+         * OPTIONAL bindings only — the binding's OWN OPTIONAL MATCH clause.
+         * Cypher attaches a WHERE to the clause directly before it, and a WHERE
+         * on an OPTIONAL MATCH only decides whether THAT pattern matches; it
+         * never filters variables bound by EARLIER clauses. The null-tolerant
+         * scope must therefore be spliced into the WHERE of the clause that
+         * binds the variable (security review 2026-10-01, P1).
+         *
+         * Byte offset of the first clause-level token after the clause's
+         * pattern (its own WHERE keyword, or the next clause head / anchor):
+         * where a fresh WHERE is inserted. -1 = unknown (the injector then
+         * falls back to a strictly-filtering row-level `WITH * WHERE`).
+         */
+        public readonly int $clauseInsertOffset = -1,
+        /** Byte offset of the clause's own WHERE keyword (-1 if none). */
+        public readonly int $clauseWhereOffset = -1,
+        /** Byte offset just past the clause's own WHERE predicate (-1 if none). */
+        public readonly int $clauseWhereEndOffset = -1
     ) {
     }
 }

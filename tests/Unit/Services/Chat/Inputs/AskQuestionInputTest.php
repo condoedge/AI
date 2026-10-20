@@ -43,16 +43,29 @@ class AskQuestionInputTest extends TestCase
         $this->assertSame('Unit', $input->pageContext->entityType);
     }
 
-    public function test_page_context_is_the_last_promoted_parameter_and_nullable(): void
+    public function test_page_context_keeps_its_position_and_only_optional_parameters_follow(): void
     {
-        // Reflection guards the additive contract: pageContext must be the trailing
-        // parameter, nullable, and default null so it never breaks positional callers.
+        // Reflection guards the additive contract: pageContext stays the 6th parameter,
+        // nullable and default null, and everything after it is optional, so no
+        // positional caller ever breaks.
         $params = (new \ReflectionMethod(AskQuestionInput::class, '__construct'))->getParameters();
-        $last = end($params);
+        $page = $params[5];
 
-        $this->assertSame('pageContext', $last->getName());
-        $this->assertTrue($last->allowsNull());
-        $this->assertTrue($last->isDefaultValueAvailable());
-        $this->assertNull($last->getDefaultValue());
+        $this->assertSame('pageContext', $page->getName());
+        $this->assertTrue($page->allowsNull());
+        $this->assertTrue($page->isDefaultValueAvailable());
+        $this->assertNull($page->getDefaultValue());
+
+        foreach (array_slice($params, 6) as $param) {
+            $this->assertTrue($param->isDefaultValueAvailable(), "{$param->getName()} must be optional");
+        }
+    }
+
+    public function test_the_extra_observer_and_pipeline_options_default_to_nothing(): void
+    {
+        $input = new AskQuestionInput(question: 'q', conversation: new AiConversation());
+
+        $this->assertNull($input->observer);
+        $this->assertSame([], $input->pipelineOptions);
     }
 }

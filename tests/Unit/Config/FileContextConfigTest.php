@@ -20,7 +20,6 @@ class FileContextConfigTest extends TestCase
         $this->assertArrayHasKey('physical_collection', $config);
         $this->assertArrayHasKey('max_references', $config);
         $this->assertArrayHasKey('min_relevance_score', $config);
-        $this->assertArrayHasKey('include_snippets', $config);
         $this->assertArrayHasKey('snippet_length', $config);
         $this->assertArrayHasKey('file_model', $config);
         $this->assertArrayHasKey('access_scope', $config);
@@ -83,10 +82,10 @@ class FileContextConfigTest extends TestCase
         $this->assertEquals('documentation_chunks', $config['physical_collection']);
         $this->assertEquals(5, $config['max_references']);
         $this->assertEquals(0.4, $config['min_relevance_score']);
-        $this->assertTrue($config['include_snippets']);
-        // Snippet budget was raised so the model can quote the actual clause; the
-        // multi-chunk stitch count is also configurable.
-        $this->assertEquals(1200, $config['snippet_length']);
+        // Snippet budget must fit the ±2 context-window stitch (~5 chunks of
+        // ~1000 chars) — Task 1.2 raised it from 1200, which cut the window to
+        // ~one chunk. The multi-chunk stitch count is also configurable.
+        $this->assertEquals(6000, $config['snippet_length']);
         $this->assertEquals(3, $config['snippet_chunks']);
         $this->assertNull($config['access_resolver']);
     }

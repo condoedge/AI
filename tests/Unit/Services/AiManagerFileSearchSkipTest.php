@@ -100,7 +100,6 @@ class AiManagerFileSearchSkipTest extends TestCase
         );
         $ctx->similarQueries = [];
         $ctx->graphSchema = ['labels' => ['User']];
-        $ctx->relevantEntities = [];
 
         return $ctx;
     }
@@ -140,6 +139,38 @@ class AiManagerFileSearchSkipTest extends TestCase
         $this->assertSame(0, $this->searchCalls, 'File search must not run at all for a skipped data query');
         $this->assertSame([], $ctx->fileContext, 'No chunks may be admitted into a skipped turn');
         $this->assertSame('ok', $result['answer'], 'The data pipeline still answers normally');
+    }
+
+    /**
+     * @test Eval p15: every execution of ONE turn (main query, companion counts, collapse and
+     * export re-runs, repairs) shares one rate-limit batch key - one charge per user action;
+     * the next turn gets a new key.
+     */
+    public function all_executions_of_a_turn_share_one_rate_limit_batch(): void
+    {
+        $batches = [];
+        $this->mockQueryExecutor->shouldReceive('execute')->andReturnUsing(function ($cypher, $params = [], $options = []) use (&$batches) {
+            $batches[] = $options['rate_limit_batch'] ?? null;
+
+            return new QueryExecutionResult(success: true, data: [['c' => 12]], stats: [], metadata: [], errors: []);
+        });
+        $this->mockQueryExecutor->shouldReceive('executeCount')->andReturnUsing(function ($cypher, $params = [], $options = []) use (&$batches) {
+            $batches[] = $options['rate_limit_batch'] ?? null;
+
+            return 1;
+        });
+
+        $this->runTurn($this->makeContext('data_query'));
+        $first = array_values(array_unique($batches));
+        $this->assertCount(1, $first, 'one batch key for the whole turn');
+        $this->assertStringStartsWith('turn:', (string) $first[0]);
+
+        $batches = [];
+        $this->mockContext->shouldReceive('retrieveContext')->andReturn($this->makeContext('data_query'));
+        $this->manager->answerQuestion('How many members does my team have?', ['user' => (object) ['id' => 1]]);
+        $second = array_values(array_unique($batches));
+        $this->assertCount(1, $second);
+        $this->assertNotSame($first[0], $second[0], 'a new turn is a new charge');
     }
 
     /** @test */
@@ -219,6 +250,42 @@ class AiManagerFileSearchSkipTest extends TestCase
         $this->assertTrue((bool) ($ctx->fileContext['enumeration'] ?? false), 'Enumeration must still fire');
         $this->assertSame(0, $this->searchCalls, 'Enumeration answers the listing without semantic search');
         $this->assertStringContainsString('lease.pdf', $result['answer']);
+    }
+
+    /**
+     * @test
+     * Eval p10-A excel: "give me that as an Excel with their contact info" after a roster
+     * turn came back intent=file_listing + follow_up_reference=true; enumeration answered
+     * with 50 files and no query ran. A follow-up on a recorded DATA result is never a
+     * file listing — the data pipeline (extend the previous query) must run.
+     */
+    public function a_follow_up_on_a_recorded_data_result_is_never_a_file_listing(): void
+    {
+        config(['ai.file_context.enumeration.enabled' => true]);
+        config(['ai.file_context.enumeration.intents' => ['file_listing']]);
+
+        $ctx = new PipelineContext();
+        $ctx->question = 'Give me that as an Excel with their contact info';
+        $ctx->qu = new QueryUnderstandingResult(
+            searchQuery: 'team members contact info',
+            intent: 'file_listing',
+            questionType: 'data_query',
+            followUpReference: true,
+            exportFormat: 'excel',
+        );
+        $ctx->similarQueries = [];
+        $ctx->graphSchema = ['labels' => ['User']];
+        $ctx->conversationContext = [
+            'last_result_sample' => [['member_name' => 'Ana', 'role' => 'Admin']],
+            'last_cypher_query' => 'MATCH (u:User) RETURN u.name AS member_name',
+        ];
+
+        $this->mockFileContextProvider->shouldNotReceive('getFileEnumerationContext');
+
+        $this->runTurn($ctx);
+
+        $this->assertFalse((bool) ($ctx->fileContext['enumeration'] ?? false), 'No file enumeration on a data follow-up');
+        $this->assertNotNull($ctx->queryResult->cypher ?? null, 'The data query must run');
     }
 
     /** @test */

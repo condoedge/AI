@@ -65,15 +65,48 @@ class TenantScopingRulesSectionTest extends TestCase
     }
 
     /** @test */
-    public function it_includes_union_column_consistency_rules(): void
+    public function it_includes_only_the_tenant_specific_union_rules(): void
     {
         config(['ai.security.enabled' => true]);
         config(['entities.Invoice.security.team_path' => 'team_id']);
 
         $out = $this->section()->format('q', $this->contextWithLabels(['Invoice']), []);
 
-        $this->assertStringContainsStringIgnoringCase('UNION', $out);
-        $this->assertStringContainsStringIgnoringCase('same column', $out);
+        // Per-branch team filter placement stays here...
+        $this->assertStringContainsString('$ai_team_ids filter INSIDE that branch', $out);
+        // ...the generic column-alias rule moved to QueryRulesSection (review M-3).
+        $this->assertStringNotContainsStringIgnoringCase('same column', $out);
+    }
+
+    /** @test Task 5.8: the UNION rules were duplicated verbatim in SemanticPromptBuilder. */
+    public function the_assembled_prompt_carries_the_union_rules_exactly_once(): void
+    {
+        config(['ai.security.enabled' => true]);
+        config(['ai.security.enforce_scopeable_subset' => true]);
+        config(['entities.Invoice.security.team_path' => 'team_id']);
+
+        $prompts = (new \Condoedge\Ai\Services\SemanticPromptBuilder())
+            ->buildPrompts('list invoices', $this->contextWithLabels(['Invoice']));
+        $whole = $prompts['system'] . "\n" . $prompts['user'];
+
+        $this->assertSame(1, substr_count($whole, 'UNION RULES'));
+        $this->assertSame(1, substr_count($whole, 'complete, independent query'));
+        $this->assertSame(1, substr_count($whole, 'same column names/aliases'), 'one generic UNION column rule');
+        // The non-duplicated shape rules stay in the builder's system framing.
+        $this->assertStringContainsString('QUERY SHAPE RULES', $prompts['system']);
+    }
+
+    /** @test Review M-3: with tenant scoping OFF the generic UNION column rule still ships, once. */
+    public function the_generic_union_column_rule_survives_when_scoping_is_off(): void
+    {
+        config(['ai.security.enabled' => false]);
+
+        $prompts = (new \Condoedge\Ai\Services\SemanticPromptBuilder())
+            ->buildPrompts('list invoices', $this->contextWithLabels(['Invoice']));
+        $whole = $prompts['system'] . "\n" . $prompts['user'];
+
+        $this->assertSame(1, substr_count($whole, 'same column names/aliases'));
+        $this->assertStringNotContainsString('UNION RULES', $whole);
     }
 
     /** @test */

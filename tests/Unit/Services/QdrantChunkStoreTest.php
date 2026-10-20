@@ -636,7 +636,9 @@ class QdrantChunkStoreTest extends TestCase
                 $this->testCollection,
                 $queryEmbedding,
                 10,
-                [],
+                // Unfiltered document search still leaves out chunks a document
+                // map marked out of scope (see QdrantChunkStoreScopeFilterTest).
+                ['must_not' => [['key' => 'map.scope', 'match' => ['value' => 'out']]]],
                 0.0
             )
             ->andReturn([

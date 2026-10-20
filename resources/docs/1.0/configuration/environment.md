@@ -52,7 +52,6 @@ AI_PROJECT_DOMAIN=e-commerce
 ## Neo4j Configuration
 
 ```env
-NEO4J_ENABLED=true
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USERNAME=neo4j
 NEO4J_PASSWORD=your-secure-password
@@ -61,7 +60,6 @@ NEO4J_DATABASE=neo4j
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `NEO4J_ENABLED` | bool | true | Enable Neo4j integration |
 | `NEO4J_URI` | string | bolt://localhost:7687 | Connection URI |
 | `NEO4J_USERNAME` | string | neo4j | Database username |
 | `NEO4J_PASSWORD` | string | — | Database password |
@@ -72,7 +70,6 @@ NEO4J_DATABASE=neo4j
 ## Qdrant Configuration
 
 ```env
-QDRANT_ENABLED=true
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
 QDRANT_API_KEY=
@@ -81,7 +78,6 @@ QDRANT_TIMEOUT=30
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `QDRANT_ENABLED` | bool | true | Enable Qdrant integration |
 | `QDRANT_HOST` | string | localhost | Qdrant hostname |
 | `QDRANT_PORT` | int | 6333 | Qdrant port |
 | `QDRANT_API_KEY` | string | null | API key (cloud only) |
@@ -194,27 +190,17 @@ AI_AUTO_SYNC_EAGER_LOAD=true
 ## Query Generation
 
 ```env
-AI_QUERY_DEFAULT_LIMIT=100
-AI_QUERY_MAX_LIMIT=1000
 AI_ALLOW_WRITE_OPS=false
 AI_QUERY_MAX_RETRIES=3
 AI_QUERY_TEMPERATURE=0.1
 AI_QUERY_MAX_COMPLEXITY=100
-AI_ENABLE_TEMPLATES=true
-AI_TEMPLATE_THRESHOLD=0.8
-AI_QUERY_TIMEOUT=30
-AI_CACHE_TTL=3600
 ```
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `AI_QUERY_DEFAULT_LIMIT` | int | 100 | Default result limit |
-| `AI_QUERY_MAX_LIMIT` | int | 1000 | Maximum result limit |
 | `AI_ALLOW_WRITE_OPS` | bool | false | Allow write operations |
 | `AI_QUERY_MAX_RETRIES` | int | 3 | Query retry attempts |
 | `AI_QUERY_TEMPERATURE` | float | 0.1 | Query generation temperature |
-| `AI_QUERY_TIMEOUT` | int | 30 | Query timeout (seconds) |
-| `AI_CACHE_TTL` | int | 3600 | Cache duration (seconds) |
 
 ---
 
@@ -222,12 +208,9 @@ AI_CACHE_TTL=3600
 
 ```env
 AI_EXEC_TIMEOUT=30
-AI_EXEC_MAX_TIMEOUT=120
 AI_EXEC_DEFAULT_LIMIT=100
-AI_EXEC_MAX_LIMIT=1000
 AI_EXEC_READ_ONLY=true
 AI_EXEC_FORMAT=table
-AI_EXEC_ENABLE_EXPLAIN=true
 AI_EXEC_LOG_SLOW=true
 AI_EXEC_SLOW_THRESHOLD=1000
 ```
@@ -235,7 +218,6 @@ AI_EXEC_SLOW_THRESHOLD=1000
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `AI_EXEC_TIMEOUT` | int | 30 | Execution timeout (seconds) |
-| `AI_EXEC_MAX_TIMEOUT` | int | 120 | Max timeout |
 | `AI_EXEC_READ_ONLY` | bool | true | Read-only mode |
 | `AI_EXEC_LOG_SLOW` | bool | true | Log slow queries |
 | `AI_EXEC_SLOW_THRESHOLD` | int | 1000 | Slow query threshold (ms) |
@@ -248,10 +230,6 @@ AI_EXEC_SLOW_THRESHOLD=1000
 AI_RESPONSE_FORMAT=text
 AI_RESPONSE_STYLE=friendly
 AI_RESPONSE_MAX_LENGTH=100
-AI_RESPONSE_TEMPERATURE=0.3
-AI_RESPONSE_INSIGHTS=true
-AI_RESPONSE_VIZ=true
-AI_RESPONSE_SUMMARIZE_THRESHOLD=10
 AI_RESPONSE_HIDE_TECHNICAL=true
 AI_RESPONSE_HIDE_STATS=true
 AI_RESPONSE_HIDE_PROJECT=true
@@ -268,50 +246,19 @@ AI_RESPONSE_HIDE_PROJECT=true
 
 ---
 
-## RAG (Context Retrieval)
-
-```env
-AI_VECTOR_SEARCH_LIMIT=5
-AI_SIMILARITY_THRESHOLD=0.7
-AI_INCLUDE_SCHEMA=true
-AI_INCLUDE_EXAMPLES=true
-```
-
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `AI_VECTOR_SEARCH_LIMIT` | int | 5 | Similar queries to retrieve |
-| `AI_SIMILARITY_THRESHOLD` | float | 0.7 | Minimum similarity score |
-| `AI_INCLUDE_SCHEMA` | bool | true | Include graph schema |
-| `AI_INCLUDE_EXAMPLES` | bool | true | Include example entities |
-
----
-
 ## Semantic Matching
 
 ```env
-AI_SEMANTIC_MATCHING=true
-AI_FALLBACK_EXACT_MATCH=true
-AI_SEMANTIC_THRESHOLD_ENTITY=0.75
-AI_SEMANTIC_THRESHOLD_SCOPE=0.70
-AI_SEMANTIC_THRESHOLD_TEMPLATE=0.65
-AI_SEMANTIC_THRESHOLD_LABEL=0.70
-AI_SEMANTIC_CACHE_EMBEDDINGS=true
 ```
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `AI_SEMANTIC_MATCHING` | bool | true | Enable semantic matching |
-| `AI_FALLBACK_EXACT_MATCH` | bool | true | Fallback to exact matching |
-| `AI_SEMANTIC_THRESHOLD_ENTITY` | float | 0.75 | Entity detection threshold |
-| `AI_SEMANTIC_THRESHOLD_SCOPE` | float | 0.70 | Scope detection threshold |
-| `AI_SEMANTIC_CACHE_EMBEDDINGS` | bool | true | Cache embeddings in memory |
 
 ---
 
 ## Semantic Context Selection
 
 ```env
-AI_SEMANTIC_CONTEXT_ENABLED=true
 AI_SEMANTIC_CONTEXT_COLLECTION=context_index
 AI_SEMANTIC_CONTEXT_THRESHOLD=0.65
 AI_SEMANTIC_CONTEXT_TOP_K=10
@@ -320,7 +267,6 @@ AI_SEMANTIC_CONTEXT_DIMENSION=1536
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `AI_SEMANTIC_CONTEXT_ENABLED` | bool | true | Enable semantic context selection |
 | `AI_SEMANTIC_CONTEXT_COLLECTION` | string | context_index | Qdrant collection name |
 | `AI_SEMANTIC_CONTEXT_THRESHOLD` | float | 0.65 | Similarity threshold |
 | `AI_SEMANTIC_CONTEXT_TOP_K` | int | 10 | Max context items |
@@ -333,23 +279,16 @@ AI_SEMANTIC_CONTEXT_DIMENSION=1536
 ```env
 AI_FILE_PROCESSING_ENABLED=true
 AI_FILE_COLLECTION=file_chunks
-AI_FILE_CHUNK_SIZE=1000
-AI_FILE_CHUNK_OVERLAP=200
-AI_FILE_PRESERVE_SENTENCES=true
 AI_FILE_QUEUE=false
 AI_FILE_QUEUE_THRESHOLD=5242880
 AI_FILE_FAIL_SILENTLY=true
-AI_FILE_SEARCH_LIMIT=10
 ```
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `AI_FILE_PROCESSING_ENABLED` | bool | true | Enable file processing |
 | `AI_FILE_COLLECTION` | string | file_chunks | Qdrant collection |
-| `AI_FILE_CHUNK_SIZE` | int | 1000 | Chunk size (chars) |
-| `AI_FILE_CHUNK_OVERLAP` | int | 200 | Chunk overlap (chars) |
 | `AI_FILE_QUEUE` | bool | false | Queue file processing |
-| `AI_FILE_SEARCH_LIMIT` | int | 10 | Default search limit |
 
 ---
 
@@ -424,8 +363,6 @@ AI_AUTO_SYNC_QUEUE=false
 AI_RESPONSE_STYLE=friendly
 
 # Semantic features
-AI_SEMANTIC_MATCHING=true
-AI_SEMANTIC_CONTEXT_ENABLED=true
 
 # Debugging (disable in production)
 AI_DEBUG=false

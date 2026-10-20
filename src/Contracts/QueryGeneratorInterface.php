@@ -46,24 +46,4 @@ interface QueryGeneratorInterface
      * @throws \InvalidArgumentException If query is empty
      */
     public function validate(?string $cypherQuery, array $options = []): array;
-
-    /**
-     * Get available query templates
-     *
-     * @return array Array of template metadata:
-     *               - name: Template identifier
-     *               - description: What the template does
-     *               - pattern: Natural language pattern it matches
-     *               - example_question: Example question
-     *               - example_cypher: Example generated query
-     */
-    public function getTemplates(): array;
-
-    /**
-     * Detect which template (if any) matches the question
-     *
-     * @param string $question Natural language question
-     * @return string|null Template name or null if no match
-     */
-    public function detectTemplate(string $question): ?string;
 }

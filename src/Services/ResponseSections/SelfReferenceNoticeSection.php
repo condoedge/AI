@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\ResponseSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\Response\PiiMasker;
 
 /**
  * SelfReferenceNoticeSection
@@ -23,7 +24,9 @@ use Condoedge\Ai\DTOs\PipelineContext;
  * never a third party or a contact route.
  *
  * PII note: this section only ever quotes values that are ALREADY in the results
- * data the model sees — it introduces no new personal data into the prompt.
+ * data the model sees — it introduces no new personal data into the prompt. A
+ * masked identifying field (ai.access_control.identifying_fields) is quoted as its
+ * per-turn token ([email#1]); detection itself always runs on the REAL values.
  *
  * Priority 52: immediately after ResultsDataSection (50), so the note sits right
  * under the data it corrects, before entity actions (55).
@@ -70,14 +73,22 @@ class SelfReferenceNoticeSection extends BaseResponseSection
 
         [$primaryMarker, $emailMarker] = [self::THATS_YOU_MARKERS[0], self::THATS_YOU_MARKERS[1]];
 
+        // Detection ran on the REAL values (above); the note quotes them the way the
+        // model sees them — masked identifying fields appear as their turn token.
+        $masker = PiiMasker::for($context);
+
         foreach ($matches as $match) {
+            $value = $match['kind'] === 'email'
+                ? (string) $masker->maskField('email', $match['value'])
+                : $masker->maskText($match['value']);
+
             if ($match['kind'] === 'email') {
-                $output .= "- The email '{$match['value']}' in the data IS the current user's own email address — "
+                $output .= "- The email '{$value}' in the data IS the current user's own email address — "
                     . "that is THEM. NEVER present it as contact information, as \"how to reach\" their team, "
                     . "or as belonging to someone else. If it is relevant, say it is their own (e.g. \"{$primaryMarker}\" "
                     . "/ \"{$emailMarker}\").\n";
             } else {
-                $output .= "- The name '{$match['value']}' in the data IS the current user's own name — "
+                $output .= "- The name '{$value}' in the data IS the current user's own name — "
                     . "that record is about THEM. NEVER describe this person as a third party to contact; "
                     . "if it is relevant, acknowledge it is the user themself (e.g. \"{$primaryMarker}\").\n";
             }
@@ -152,17 +163,33 @@ class SelfReferenceNoticeSection extends BaseResponseSection
      */
     private function matches(PipelineContext $context): array
     {
-        $user = $this->authUser();
-        if ($user === null) {
+        $data = $context->executionResult->data;
+        if (!is_array($data) || $data === []) {
+            return [];
+        }
+
+        return self::selfValuesIn(array_slice($data, 0, self::SAMPLE_ROWS), $this->authUser());
+    }
+
+    /**
+     * The user's own identity values (email / full name, case-insensitive exact) found
+     * in $rows — THE self-reference detection, shared with the action attacher (B2: the
+     * user's own row in a result attaches their profile link).
+     *
+     * @return list<array{kind: 'email'|'name', value: string}>
+     */
+    public static function selfValuesIn(array $rows, mixed $user): array
+    {
+        if (!is_object($user) || $rows === []) {
             return [];
         }
 
         $needles = [];
-        $email = $this->scalarString($user->email ?? null);
+        $email = self::scalarString($user->email ?? null);
         if ($email !== null) {
             $needles['email'] = mb_strtolower($email);
         }
-        $name = $this->scalarString($user->name ?? null);
+        $name = self::scalarString($user->name ?? null);
         if ($name !== null) {
             $needles['name'] = mb_strtolower($name);
         }
@@ -171,15 +198,8 @@ class SelfReferenceNoticeSection extends BaseResponseSection
             return [];
         }
 
-        $data = $context->executionResult->data;
-        if (!is_array($data) || $data === []) {
-            return [];
-        }
-
-        $sample = array_slice($data, 0, self::SAMPLE_ROWS);
-
         $found = [];
-        $this->scan($sample, $needles, $found, 0);
+        self::scan($rows, $needles, $found, 0);
 
         return array_values($found);
     }
@@ -190,7 +210,7 @@ class SelfReferenceNoticeSection extends BaseResponseSection
      * @param array<string, string> $needles kind => lowercased identity value
      * @param array<string, array{kind: string, value: string}> $found kind => match
      */
-    private function scan(mixed $node, array $needles, array &$found, int $depth): void
+    private static function scan(mixed $node, array $needles, array &$found, int $depth): void
     {
         if (count($found) === count($needles) || $depth > self::MAX_DEPTH) {
             return;
@@ -198,7 +218,7 @@ class SelfReferenceNoticeSection extends BaseResponseSection
 
         if (is_array($node)) {
             foreach ($node as $child) {
-                $this->scan($child, $needles, $found, $depth + 1);
+                self::scan($child, $needles, $found, $depth + 1);
                 if (count($found) === count($needles)) {
                     return;
                 }
@@ -207,7 +227,7 @@ class SelfReferenceNoticeSection extends BaseResponseSection
             return;
         }
 
-        $value = $this->scalarString($node);
+        $value = self::scalarString($node);
         if ($value === null) {
             return;
         }
@@ -223,7 +243,7 @@ class SelfReferenceNoticeSection extends BaseResponseSection
     /**
      * Trimmed non-empty string form of a scalar, else null.
      */
-    private function scalarString(mixed $value): ?string
+    private static function scalarString(mixed $value): ?string
     {
         if (!is_string($value)) {
             return null;

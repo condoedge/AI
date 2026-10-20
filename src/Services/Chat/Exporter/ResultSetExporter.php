@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Chat\Exporter;
 
 use Condoedge\Ai\Services\Actions\Results\AiActionResult;
+use Condoedge\Ai\Services\Response\ResponseEntityEnricher;
+use Condoedge\Ai\Services\Response\TableRenderer;
 
 /**
  * ResultSetExporter
@@ -21,6 +23,9 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
  *
  * Nothing here imports those classes at the top of the file — every reference is a string
  * passed to class_exists()/new, so the package autoloads cleanly without them installed.
+ *
+ * TABLE SHAPE: headers/cells come from THE TableRenderer (Phase 8 batch A — the former
+ * private toMatrix() is gone); this class keeps the redaction rules TableRenderer reuses.
  *
  * EXPORT PRIVACY (the file must not leak schema internals):
  *   Both toExcel()/toPdf() project rows through {@see redact()} before serializing, so the
@@ -93,7 +98,47 @@ class ResultSetExporter
             );
         }
 
-        [$headers, $matrix] = $this->toMatrix($this->redact($rows));
+        return $this->rowsToWorkbook($this->redact($rows), $title);
+    }
+
+    /**
+     * Export the composed export DOCUMENT's rows (ExportResponseComposer's
+     * `export_document_rows` — already redacted for that source) to .xlsx
+     * directly: no rows → markdown → re-parsed cells round trip. Decorations are
+     * still stripped; redaction is NOT re-applied (an identity export kept its
+     * fields deliberately).
+     *
+     * $headers (column key => header) is the composed document's own header row
+     * (`export_document_headers`): the worksheet is headed exactly as the document
+     * table is — a column by what it holds, never by an alias that says something
+     * else (eval p17-B cold-roster-excel: emails under "Contact Info"). A column
+     * without one keeps its humanized key.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<string, string> $headers
+     */
+    public function documentRowsToExcel(array $rows, string $title = 'document', array $headers = []): AiActionResult
+    {
+        if (!$this->canExportExcel()) {
+            return AiActionResult::error(
+                'Excel export is unavailable: install the "maatwebsite/excel" (phpoffice/phpspreadsheet) package to enable it.'
+            );
+        }
+
+        return $this->rowsToWorkbook($this->stripDecorations($rows), $title, $headers);
+    }
+
+    /**
+     * One worksheet from already-projected rows: TableRenderer headers (humanized
+     * labels, or the caller's column => header overrides) + typed cells (numbers
+     * stay numbers, formula-injection guarded).
+     *
+     * @param array<int, mixed> $rows
+     * @param array<string, string> $labels column key => header overrides
+     */
+    private function rowsToWorkbook(array $rows, string $title, array $labels = []): AiActionResult
+    {
+        [$headers, $matrix] = (new TableRenderer($this))->matrix($rows, ['redact' => false, 'labels' => $labels]);
         if (empty($matrix)) {
             return AiActionResult::error('Nothing to export: the result set is empty.');
         }
@@ -110,7 +155,11 @@ class ResultSetExporter
             $this->writeRow($sheet, $rowIndex++, $headers);
         }
         foreach ($matrix as $dataRow) {
-            $this->writeRow($sheet, $rowIndex++, $dataRow);
+            $col = 1;
+            foreach ($dataRow as $cell) {
+                $this->writeTypedCell($sheet, $this->columnLetter($col++) . $rowIndex, (string) $cell);
+            }
+            $rowIndex++;
         }
 
         $writer = new $writerClass($spreadsheet);
@@ -134,13 +183,38 @@ class ResultSetExporter
      */
     public function toPdf(array $rows, string $title = 'export'): AiActionResult
     {
+        return $this->rowsToPdf($this->redact($rows), $title);
+    }
+
+    /**
+     * Export already-projected rows to a tabular PDF under the given column headers
+     * (column key => header) — the PDF twin of {@see documentRowsToExcel()}: decorations
+     * are stripped, redaction is NOT re-applied (the caller projected the rows), and a
+     * column without a header keeps its humanized key.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<string, string> $headers
+     */
+    public function documentRowsToPdf(array $rows, string $title = 'document', array $headers = []): AiActionResult
+    {
+        return $this->rowsToPdf($this->stripDecorations($rows), $title, $headers);
+    }
+
+    /**
+     * One landscape table from already-projected rows.
+     *
+     * @param array<int, mixed> $rows
+     * @param array<string, string> $labels column key => header overrides
+     */
+    private function rowsToPdf(array $rows, string $title, array $labels = []): AiActionResult
+    {
         if (!$this->canExportPdf()) {
             return AiActionResult::error(
                 'PDF export is unavailable: install the "barryvdh/laravel-dompdf" (dompdf/dompdf) package to enable it.'
             );
         }
 
-        [$headers, $matrix] = $this->toMatrix($this->redact($rows));
+        [$headers, $matrix] = (new TableRenderer($this))->matrix($rows, ['redact' => false, 'labels' => $labels]);
         if (empty($matrix)) {
             return AiActionResult::error('Nothing to export: the result set is empty.');
         }
@@ -380,9 +454,14 @@ class ResultSetExporter
     private function splitTableRow(string $line): array
     {
         $line = trim($line);
-        $line = preg_replace('/^\||\|$/', '', $line) ?? $line;
+        $line = preg_replace('/^\||(?<!\\\\)\|$/', '', $line) ?? $line;
 
-        return array_map(fn ($cell) => $this->validUtf8(trim($cell)), explode('|', $line));
+        // Split on UNESCAPED pipes, then undo TableRenderer's markdown escapes (P-5)
+        // so a cell reads "service_comptable", not "service\_comptable".
+        return array_map(
+            fn ($cell) => $this->validUtf8(trim((string) preg_replace('/\\\\([\\\\\[\]()*_`|])/', '$1', $cell))),
+            preg_split('/(?<!\\\\)\|/', $line) ?: [$line]
+        );
     }
 
     /**
@@ -452,6 +531,12 @@ class ResultSetExporter
      */
     public function redact(array $rows, ?array $piiColumns = null): array
     {
+        // UI decorations are never data: entity-action enrichment keys and the
+        // `_label` marker are stripped from EVERY export row, even when redaction
+        // is disabled (they would otherwise ship as Has Actions / Entity Type /
+        // Action Links / Label columns).
+        $rows = $this->stripDecorations($rows);
+
         if (!$this->redactionEnabled()) {
             return $rows;
         }
@@ -499,6 +584,26 @@ class ResultSetExporter
         }
 
         return false;
+    }
+
+    /**
+     * Drop the UI decoration keys (entity-action enrichment + `_label`) from every row.
+     * Public so the one TableRenderer strips exactly the same keys when redaction is off.
+     *
+     * @param array<int, mixed> $rows
+     * @return array<int, mixed>
+     */
+    public function stripDecorations(array $rows): array
+    {
+        $decorations = array_fill_keys(ResponseEntityEnricher::DECORATION_KEYS, true);
+
+        foreach ($rows as $i => $row) {
+            if (is_array($row)) {
+                $rows[$i] = array_diff_key($row, $decorations);
+            }
+        }
+
+        return $rows;
     }
 
     private function redactionEnabled(): bool
@@ -569,37 +674,6 @@ class ResultSetExporter
     }
 
     /**
-     * Normalize rows into [headers, matrix-of-string-rows].
-     *
-     * @param array<int, array<string, mixed>> $rows
-     * @return array{0: string[], 1: array<int, array<int, string>>}
-     */
-    private function toMatrix(array $rows): array
-    {
-        $rows = array_values(array_filter($rows, 'is_array'));
-
-        $headers = [];
-        foreach ($rows as $row) {
-            foreach (array_keys($row) as $key) {
-                if (!in_array($key, $headers, true)) {
-                    $headers[] = (string) $key;
-                }
-            }
-        }
-
-        $matrix = [];
-        foreach ($rows as $row) {
-            $cells = [];
-            foreach ($headers as $h) {
-                $cells[] = $this->stringify($row[$h] ?? '');
-            }
-            $matrix[] = $cells;
-        }
-
-        return [$headers, $matrix];
-    }
-
-    /**
      * @param array<int, string> $cells
      */
     private function writeRow(object $sheet, int $rowIndex, array $cells): void
@@ -663,20 +737,6 @@ class ResultSetExporter
         return $html;
     }
 
-    private function stringify(mixed $value): string
-    {
-        if (is_scalar($value) || $value === null) {
-            return $this->validUtf8((string) $value);
-        }
-
-        $encoded = json_encode(
-            $value,
-            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE
-        );
-
-        return is_string($encoded) ? $this->validUtf8($encoded) : '';
-    }
-
     /**
      * Excel column index (1-based) → letter (A, B, …, AA).
      */
@@ -693,7 +753,9 @@ class ResultSetExporter
 
     private function safeFilename(string $title, string $ext): string
     {
-        $base = preg_replace('/[^A-Za-z0-9_\-]+/', '_', $this->validUtf8($title)) ?: 'export';
+        // Transliterate first (titles follow the question's language: "Rôles de l'équipe"
+        // → "Roles_de_l_equipe", not "R_les_de_l_quipe").
+        $base = preg_replace('/[^A-Za-z0-9_\-]+/', '_', \Illuminate\Support\Str::ascii($this->validUtf8($title))) ?: 'export';
         $base = trim($base, '_') ?: 'export';
         return $base . '.' . $ext;
     }

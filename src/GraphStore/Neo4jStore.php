@@ -169,7 +169,11 @@ class Neo4jStore implements GraphStoreInterface
 
             if (!empty($response['errors'])) {
                 $error = $response['errors'][0];
-                throw new \RuntimeException("Neo4j query error: {$error['message']}");
+                // Keep the Neo4j status code (Neo.ClientError.Statement.SyntaxError …):
+                // it is the structural signal that tells a repairable query error
+                // from an infrastructure failure (see ExecutionErrorClassifier).
+                $code = is_string($error['code'] ?? null) && $error['code'] !== '' ? "[{$error['code']}] " : '';
+                throw new \RuntimeException("Neo4j query error: {$code}{$error['message']}");
             }
 
             return $this->extractResults($response);
@@ -200,6 +204,9 @@ class Neo4jStore implements GraphStoreInterface
         try {
             $schema['relationshipPatterns'] = $this->getRelationshipPatterns();
         } catch (\Throwable $e) {
+            // null = UNKNOWN (the full-graph scan failed, e.g. timed out) — never []
+            // ("the graph has no edges"). GraphSchemaCache refuses to cache it.
+            $schema['relationshipPatterns'] = null;
             Log::warning('Failed to retrieve Neo4j relationship patterns', [
                 'error' => $e->getMessage(),
             ]);

@@ -70,6 +70,39 @@ class SimilarQuerySearcherTest extends TestCase
     }
 
     /** @test */
+    public function it_drops_examples_below_the_similarity_threshold_even_if_the_store_returns_them(): void
+    {
+        // Task 1.9: few-shot examples must clear ai.query_generation.example_min_similarity.
+        // Not every vector store enforces score_threshold server-side, so the
+        // searcher enforces it too (0.79 dropped at 0.80; 0.80 kept).
+        $this->embeddingProvider->shouldReceive('embed')->andReturn([0.1]);
+        $this->vectorStore->shouldReceive('search')->andReturn([
+            ['score' => 0.93, 'payload' => ['question' => 'Close', 'cypher_query' => 'MATCH (a) RETURN a']],
+            ['score' => 0.80, 'payload' => ['question' => 'At threshold', 'cypher_query' => 'MATCH (b) RETURN b']],
+            ['score' => 0.79, 'payload' => ['question' => 'Just below', 'cypher_query' => 'MATCH (c) RETURN c']],
+        ]);
+
+        $results = $this->searcher->search('q', 'questions', 5, 0.80);
+
+        $this->assertSame(['Close', 'At threshold'], array_column($results, 'question'));
+    }
+
+    /** @test */
+    public function it_drops_results_that_carry_no_score(): void
+    {
+        // Review M-6: an unscored hit cannot prove it clears the threshold.
+        $this->embeddingProvider->shouldReceive('embed')->andReturn([0.1]);
+        $this->vectorStore->shouldReceive('search')->andReturn([
+            ['score' => 0.9, 'payload' => ['question' => 'Scored', 'cypher_query' => 'MATCH (a) RETURN a']],
+            ['payload' => ['question' => 'Unscored', 'cypher_query' => 'MATCH (b) RETURN b']],
+        ]);
+
+        $results = $this->searcher->search('q', 'questions', 5, 0.80);
+
+        $this->assertSame(['Scored'], array_column($results, 'question'));
+    }
+
+    /** @test */
     public function it_skips_entries_missing_question_or_query(): void
     {
         $this->embeddingProvider->shouldReceive('embed')->andReturn([0.1]);

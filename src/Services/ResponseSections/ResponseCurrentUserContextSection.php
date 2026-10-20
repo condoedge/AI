@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\ResponseSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\Response\PiiMasker;
 
 /**
  * ResponseCurrentUserContextSection
@@ -51,8 +52,14 @@ class ResponseCurrentUserContextSection extends BaseResponseSection
         // PII minimization — same gate as the query-generation side: the email ships
         // only when explicitly enabled by config, or when the question is about the
         // user's own data (so the model can recognize the user's own records).
+        // When email is an identifying field (ai.access_control.identifying_fields)
+        // it ships as the turn's token — the SAME token the user's own rows carry —
+        // so the model can still recognise the user's records without the value.
         if ($this->emailEnabled() || $context->qu->isPossessive) {
-            $output .= '- Email: ' . ($user?->email ?? 'N/A') . "\n";
+            $email = $user?->email ?? null;
+            $output .= '- Email: ' . (is_string($email) && $email !== ''
+                ? (string) PiiMasker::for($context)->maskField('email', $email)
+                : 'N/A') . "\n";
         }
 
         $output .= '- User ID: ' . (auth()->id() ?? 'N/A') . "\n";
@@ -69,6 +76,33 @@ class ResponseCurrentUserContextSection extends BaseResponseSection
         $output .= "- Never present the user's own contact details (their own name, email, or phone appearing in the data) as the way to \"reach\" or \"contact\" their team — they ARE that person. If a contact in the data resolves to the current user themself, say so naturally (e.g. \"that's you\") instead of telling them to contact themselves.\n\n";
 
         return $output;
+    }
+
+    /**
+     * The identity VALUES this section gives the model as words — the user's own name and the
+     * current team's name, exactly as {@see format()} prints them (never the email, which is
+     * PII-gated, nor an id). Code treats them as KNOWN when it judges whether a lead only
+     * restates (eval p20-A roster: "Here are the members of your team, Novo Gestion, along with
+     * their roles:" — DataAnswerPlan::knownIdentity()). [] without an authenticated user.
+     *
+     * @return list<string>
+     */
+    public function identityValues(): array
+    {
+        if (!$this->isAuthenticated()) {
+            return [];
+        }
+
+        try {
+            $name = auth()->user()?->name ?? null;
+        } catch (\Throwable $e) {
+            $name = null;
+        }
+
+        return array_values(array_filter(
+            [$name, $this->teamDisplayName($this->currentTeam())],
+            static fn ($value): bool => is_string($value) && trim($value) !== ''
+        ));
     }
 
     /**

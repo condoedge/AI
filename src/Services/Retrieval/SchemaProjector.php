@@ -106,6 +106,54 @@ class SchemaProjector
     }
 
     /**
+     * Project the full schema onto EXACTLY the given labels (the pruned selection,
+     * Task 5.10), keeping their selection order: labels absent from the graph are
+     * dropped, relationship patterns are kept when both ends are projected, and
+     * the relationship-type list is derived from those patterns.
+     *
+     * @param string[] $labels
+     */
+    public function projectLabels(array $fullSchema, array $labels): array
+    {
+        $available = array_fill_keys(array_filter((array) ($fullSchema['labels'] ?? []), 'is_string'), true);
+        $projected = [];
+        foreach ($labels as $label) {
+            if (is_string($label) && isset($available[$label])) {
+                $projected[$label] = true;
+            }
+        }
+        $projected = array_keys($projected);
+
+        $patterns = $projected === []
+            ? []
+            : $this->filterRelationshipPatterns((array) ($fullSchema['relationshipPatterns'] ?? []), $projected);
+
+        $types = [];
+        foreach ($patterns as $pattern) {
+            $types[$pattern['type']] = true;
+        }
+
+        $properties = [];
+        $propertyKeys = [];
+        foreach ($projected as $label) {
+            if (isset($fullSchema['properties'][$label]) && is_array($fullSchema['properties'][$label])) {
+                $properties[$label] = $fullSchema['properties'][$label];
+                foreach ($fullSchema['properties'][$label] as $property) {
+                    $propertyKeys[$property] = true;
+                }
+            }
+        }
+
+        return [
+            'labels' => $projected,
+            'relationships' => array_keys($types),
+            'relationshipPatterns' => $patterns,
+            'properties' => $properties,
+            'propertyKeys' => array_keys($propertyKeys),
+        ];
+    }
+
+    /**
      * Filter schema to only include specific labels.
      */
     public function filterByLabels(array $schema, array $labels): array

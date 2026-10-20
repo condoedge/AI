@@ -56,4 +56,33 @@ class AiServiceProviderRoleWiringTest extends TestCase
 
         $this->assertSame('gpt-4o-responsegen', $this->injectedLlm($generator)->getModel());
     }
+
+    /**
+     * The document-map BUILD (thousands of index-time calls in a backfill) must not
+     * be able to open the circuit breaker the live chat's calls go through: its
+     * providers fail under a breaker of their own.
+     */
+    public function test_the_document_map_builder_calls_fail_under_their_own_circuit_breaker(): void
+    {
+        // The chunk store is not what this test is about (and would need an embedding key).
+        $this->app->instance(
+            \Condoedge\Ai\Contracts\ChunkStoreInterface::class,
+            \Mockery::mock(\Condoedge\Ai\Contracts\ChunkStoreInterface::class)
+        );
+        $builder = $this->app->make(\Condoedge\Ai\Services\Files\DocumentMapBuilder::class);
+        $ref = new \ReflectionClass($builder);
+
+        foreach (['gistLlm' => 'gpt-4o', 'scopeLlm' => 'gpt-4o-querygen'] as $property => $model) {
+            $prop = $ref->getProperty($property);
+            $prop->setAccessible(true);
+            $llm = $prop->getValue($builder);
+
+            $this->assertSame($model, $llm->getModel(), "{$property}: the role's own model");
+            $this->assertSame('llm_index', $llm->circuitBreakerName(), "{$property}: not the chat's breaker");
+        }
+
+        // The chat's providers keep theirs.
+        $chat = $this->app->make(\Condoedge\Ai\Services\LlmResolver::class)->forRole('query_generation');
+        $this->assertSame('llm', $chat->circuitBreakerName());
+    }
 }

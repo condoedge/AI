@@ -124,6 +124,33 @@ class RegenerateAnswerUseCaseTest extends TestCase
     }
 
     /** @test */
+    public function the_llm_call_is_not_made_inside_a_database_transaction(): void
+    {
+        $conversation = AiConversation::create(['user_id' => 1]);
+        $userMsg = $conversation->messages()->create(['role' => 'user', 'content' => 'What is 2+2?']);
+        $conversation->messages()->create(['role' => 'assistant', 'content' => 'It is 4.']);
+
+        // RefreshDatabase holds an outer test transaction: measure relative to it.
+        $baseline = \Illuminate\Support\Facades\DB::transactionLevel();
+        $levelDuringCall = null;
+
+        $ai = $this->mockAi();
+        $ai->shouldReceive('getSchema')->andReturn(['labels' => [], 'relationships' => []]);
+        $ai->shouldReceive('answerQuestion')->once()->andReturnUsing(function () use (&$levelDuringCall) {
+            $levelDuringCall = \Illuminate\Support\Facades\DB::transactionLevel();
+
+            return ['answer' => 'Regenerated: 4', 'cypher' => null, 'data' => [], 'suggestions' => [], 'referenced_files' => []];
+        });
+
+        $result = $this->useCase()->execute($conversation, $userMsg, 'friendly', (object) ['id' => 1]);
+
+        $this->assertFalse($result->failed());
+        $this->assertSame($baseline, $levelDuringCall, 'AI::answerQuestion must run outside any DB transaction');
+        // Truncation still happened before the call.
+        $this->assertSame(1, $conversation->messages()->where('role', 'assistant')->count());
+    }
+
+    /** @test */
     public function security_gate_blocks_injection_during_regenerate(): void
     {
         $conversation = AiConversation::create(['user_id' => 1]);

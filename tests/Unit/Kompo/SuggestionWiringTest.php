@@ -5,11 +5,9 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Tests\Unit\Kompo;
 
 use Condoedge\Ai\DTOs\PageContext;
-use Condoedge\Ai\Kompo\Support\RichDataRenderer;
 use Condoedge\Ai\Kompo\Support\SuggestionSubmit;
 use Condoedge\Ai\Kompo\Support\WelcomeSuggestions;
 use Condoedge\Ai\Services\Settings\UserChatSettings;
-use Condoedge\Ai\Services\UI\ConfigChatThemeFactory;
 use Orchestra\Testbench\TestCase;
 
 /**
@@ -22,12 +20,11 @@ use Orchestra\Testbench\TestCase;
  *  - WelcomeSuggestions — page_examples-vs-global resolution, show_suggestions gate,
  *    max_suggestions cap (MessagesQuery::resolveExampleQuestions delegates to it verbatim).
  *  - SuggestionSubmit  — the run()-JS payload every suggestion element (welcome examples in
- *    MessagesQuery::welcomeState and follow-up chips in RichDataRenderer) triggers: it fills
+ *    MessagesQuery::welcomeState) triggers: it fills
  *    the composer input and clicks the real send button, i.e. the SAME submit handler a typed
  *    send goes through (typed-send parity — no parallel send implementation).
- *  - RichDataRenderer::renderSuggestions — asserts the actual komponent wiring: the chip's
- *    click interaction is a runJs of SuggestionSubmit::fillAndSendJs, NOT the old
- *    selfPost('askSuggestion') that waited for the whole LLM turn with no optimistic echo.
+ *  (The per-message follow-up suggestion chips were removed 2026-10-01, actions plan B3:
+ *   nothing produced them; next steps are code-attached action chips.)
  *
  * The browser-side optimistic behavior itself (bubble + typing indicator appearing before the
  * answer) is a MANUAL CHECK — see the workflow report.
@@ -211,116 +208,5 @@ class SuggestionWiringTest extends TestCase
         $this->assertStringContainsString($bs . 'u0027', $js); // apostrophe, hex-escaped
         $this->assertStringContainsString($bs . 'u0022', $js); // double quote, hex-escaped
         $this->assertStringContainsString($bs . 'u003C', $js); // '<', hex-escaped
-    }
-
-    /* ---------------- RichDataRenderer: follow-up chip wiring ---------------- */
-
-    /** @test */
-    public function follow_up_chips_trigger_the_composer_submit_not_a_separate_endpoint(): void
-    {
-        $renderer = new RichDataRenderer(
-            (new ConfigChatThemeFactory())->create(),
-            $this->settings(['max_suggestions' => 3]),
-        );
-
-        $rendered = $renderer->renderSuggestions(['Show me more details']);
-
-        $chips = $this->elementsWithInteractions($rendered);
-        $this->assertCount(1, $chips, 'Expected exactly one interactive chip');
-
-        [$interactionType, $actionType, $jsFunction] = $this->firstInteraction($chips[0]);
-
-        $this->assertSame('click', $interactionType);
-        $this->assertSame('runJs', $actionType, 'Chip must run client JS, not post to a separate endpoint');
-        $this->assertSame(
-            SuggestionSubmit::fillAndSendJs('Show me more details'),
-            $jsFunction,
-            'Chip click must be the exact fill-composer-and-click-send payload (typed-send parity)',
-        );
-    }
-
-    /** @test */
-    public function follow_up_chips_are_capped_at_max_suggestions(): void
-    {
-        $renderer = new RichDataRenderer(
-            (new ConfigChatThemeFactory())->create(),
-            $this->settings(['max_suggestions' => 2]),
-        );
-
-        $rendered = $renderer->renderSuggestions(['A', 'B', 'C', 'D']);
-
-        $this->assertCount(2, $this->elementsWithInteractions($rendered));
-    }
-
-    /** @test */
-    public function follow_up_chip_labels_are_html_escaped_for_the_v_html_link_sink(): void
-    {
-        // Kompo Link labels render through v-html client-side, and follow-up suggestions come
-        // from persisted LLM output (message metadata) — the label must be entity-escaped
-        // while the click payload keeps the RAW question (JSON_HEX_*-escaped separately).
-        $hostile = '<img src=x onerror=alert(1)> question';
-
-        $renderer = new RichDataRenderer(
-            (new ConfigChatThemeFactory())->create(),
-            $this->settings(['max_suggestions' => 3]),
-        );
-
-        $chips = $this->elementsWithInteractions($renderer->renderSuggestions([$hostile]));
-        $this->assertCount(1, $chips);
-
-        $this->assertSame(e($hostile), $chips[0]->label, 'Chip label must be HTML-escaped');
-        $this->assertStringNotContainsString('<img', $chips[0]->label);
-
-        [, , $jsFunction] = $this->firstInteraction($chips[0]);
-        $this->assertSame(
-            SuggestionSubmit::fillAndSendJs($hostile),
-            $jsFunction,
-            'Click payload must carry the raw question, not the entity-encoded label',
-        );
-    }
-
-    /* ---------------- helpers ---------------- */
-
-    /**
-     * Depth-first collect of every element in a Kompo tree carrying interactions.
-     *
-     * @return array<int, object>
-     */
-    private function elementsWithInteractions($element): array
-    {
-        $found = [];
-
-        if (!is_object($element)) {
-            return $found;
-        }
-
-        // property_exists guards: Kompo elements have a magic __get that THROWS on unknown
-        // properties, so `?? []` would not save us here.
-        if (property_exists($element, 'interactions') && !empty($element->interactions)) {
-            $found[] = $element;
-        }
-
-        $children = property_exists($element, 'elements') && is_array($element->elements)
-            ? $element->elements
-            : [];
-        foreach ($children as $child) {
-            $found = array_merge($found, $this->elementsWithInteractions($child));
-        }
-
-        return $found;
-    }
-
-    /**
-     * @return array{0:string,1:?string,2:?string} [interactionType, actionType, jsFunction]
-     */
-    private function firstInteraction(object $element): array
-    {
-        $interaction = $element->interactions[0];
-
-        return [
-            $interaction->interactionType,
-            $interaction->action->actionType ?? null,
-            $interaction->action->config('jsFunction') ?? null,
-        ];
     }
 }

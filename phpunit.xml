@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.0/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
          colors="true"
          stopOnFailure="false"
          failOnWarning="true"
@@ -13,6 +14,10 @@
             <directory>tests/Integration</directory>
         </testsuite>
     </testsuites>
+    <extensions>
+        <!-- Per-process/per-class Laravel services manifest (Windows rename flake); see tests/bootstrap.php -->
+        <bootstrap class="Condoedge\Ai\Tests\ManifestIsolationExtension"/>
+    </extensions>
     <source>
         <include>
             <directory suffix=".php">src</directory>
@@ -30,13 +35,11 @@
         <env name="NEO4J_USERNAME" value="neo4j"/>
         <env name="NEO4J_PASSWORD" value="o4@hTz!9vXlQ#2mP"/>
         <env name="NEO4J_DATABASE" value="neo4j"/>
-        <env name="NEO4J_ENABLED" value="true"/>
 
         <!-- Qdrant Test Configuration -->
         <env name="QDRANT_HOST" value="localhost"/>
         <env name="QDRANT_PORT" value="6333"/>
         <env name="QDRANT_API_KEY" value=""/>
         <env name="QDRANT_TIMEOUT" value="30"/>
-        <env name="QDRANT_ENABLED" value="true"/>
     </php>
 </phpunit>

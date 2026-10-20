@@ -9,7 +9,6 @@ use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
 use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
-use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
 use Condoedge\Ai\Services\RelationshipSyncer;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Mockery;
@@ -54,6 +53,40 @@ class RelationshipSyncerTest extends TestCase
         $count = $this->syncer->createRelationships($entity, $entity->getGraphConfig());
 
         $this->assertSame(1, $count);
+    }
+
+    /** Review I-2: an auto-sync write that creates an edge pattern the cached schema lacks flushes it. */
+    public function test_creating_a_relationship_pattern_unknown_to_the_cached_schema_flushes_it(): void
+    {
+        config(['ai.graph.neo4j.database' => 'neo4j']);
+        \Illuminate\Support\Facades\Cache::forever('ai:schema:v1:neo4j', [
+            'labels' => ['User', 'Team'], 'relationshipTypes' => [], 'relationshipPatterns' => [],
+        ]);
+        $entity = $this->makeEntity(['id' => 1, 'name' => 'Alice', 'team_id' => 42]);
+        $this->graphStore->shouldReceive('nodeExists')->andReturn(true);
+        $this->graphStore->shouldReceive('relationshipExists')->andReturn(false);
+        $this->graphStore->shouldReceive('createRelationship')->once();
+
+        $this->syncer->createRelationships($entity, $entity->getGraphConfig());
+
+        $this->assertFalse(\Illuminate\Support\Facades\Cache::has('ai:schema:v1:neo4j'));
+    }
+
+    public function test_creating_a_known_relationship_pattern_keeps_the_cached_schema(): void
+    {
+        config(['ai.graph.neo4j.database' => 'neo4j']);
+        \Illuminate\Support\Facades\Cache::forever('ai:schema:v1:neo4j', [
+            'labels' => ['User', 'Team'], 'relationshipTypes' => ['MEMBER_OF'],
+            'relationshipPatterns' => [['from_label' => 'User', 'type' => 'MEMBER_OF', 'to_label' => 'Team']],
+        ]);
+        $entity = $this->makeEntity(['id' => 1, 'name' => 'Alice', 'team_id' => 42]);
+        $this->graphStore->shouldReceive('nodeExists')->andReturn(true);
+        $this->graphStore->shouldReceive('relationshipExists')->andReturn(false);
+        $this->graphStore->shouldReceive('createRelationship')->once();
+
+        $this->syncer->createRelationships($entity, $entity->getGraphConfig());
+
+        $this->assertTrue(\Illuminate\Support\Facades\Cache::has('ai:schema:v1:neo4j'));
     }
 
     public function test_create_relationships_skips_null_foreign_key(): void
@@ -355,10 +388,6 @@ class RelationshipSyncerTest extends TestCase
                     ],
                 );
             }
-            public function getVectorConfig(): VectorConfig
-            {
-                return new VectorConfig('prices', ['id'], ['id']);
-            }
         };
     }
 
@@ -382,10 +411,6 @@ class RelationshipSyncerTest extends TestCase
                         ),
                     ],
                 );
-            }
-            public function getVectorConfig(): VectorConfig
-            {
-                return new VectorConfig('users', ['name'], ['id']);
             }
         };
     }

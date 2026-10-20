@@ -5,22 +5,12 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Tests\Unit\Services;
 
 use Condoedge\Ai\Contracts\LlmProviderInterface;
-use Condoedge\Ai\Contracts\ToolCallingLlmInterface;
-use Condoedge\Ai\DTOs\LlmToolCall;
-use Condoedge\Ai\DTOs\LlmToolTurn;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\DTOs\QueryUnderstandingResult;
-use Condoedge\Ai\Services\Actions\ActionDispatcher;
-use Condoedge\Ai\Services\Actions\ActionToolGate;
-use Condoedge\Ai\Services\Actions\AiActionRegistry;
-use Condoedge\Ai\Services\Actions\GraphQueryTool;
-use Condoedge\Ai\Services\Actions\ToolLoopRunner;
 use Condoedge\Ai\Services\ResponseGenerator;
 use Condoedge\Ai\Tests\TestCase;
-use Condoedge\Ai\Tests\Unit\Services\Actions\Stubs\RecordingQueryExecutor;
-use Condoedge\Ai\Tests\Unit\Services\Actions\Stubs\ScriptedToolProvider;
 use Mockery;
 
 /**
@@ -206,6 +196,95 @@ class ResponseGeneratorCitationEnforcementTest extends TestCase
         $this->assertArrayNotHasKey('citation_enforcement', $result['metadata']);
     }
 
+    // =========================================================================
+    // The uncited closing paragraph (eval p19-B remaining #6)
+    // =========================================================================
+
+    private const CITED = "A buyer is bound to pay the common expenses due on the fraction [1].\n\n"
+        . 'A co-owner is bound to contribute to the common expenses [1].';
+
+    /**
+     * @test eval p19-B rights t1: a document-grounded answer whose every claim is cited closed
+     * with "…feel free to ask!". The last paragraph has no marker after two cited blocks: it is
+     * dropped, and the trace says what was dropped.
+     */
+    public function p19_an_uncited_closing_paragraph_of_a_cited_answer_is_dropped(): void
+    {
+        $this->llmMock->shouldReceive('complete')->once()->andReturn(
+            self::CITED . "\n\nUnderstanding these obligations is crucial. If you have any specific questions, feel free to ask!"
+        );
+
+        $result = $this->generator->generate($this->fileGroundedContext());
+
+        $this->assertSame(self::CITED, $result['answer']);
+        $this->assertSame(
+            'Understanding these obligations is crucial. If you have any specific questions, feel free to ask!',
+            $result['metadata']['closing_dropped'] ?? null
+        );
+    }
+
+    /**
+     * @test eval p20-A tear-down, end to end: an uncited last paragraph that SUMMARIZES the cited
+     * blocks — the verdict of a yes/no question — is grounded in them and ships; nothing is
+     * flagged. And the prompt asked for that answer FIRST, with its citation.
+     */
+    public function p20_an_uncited_conclusion_grounded_in_the_cited_blocks_is_kept(): void
+    {
+        $prompts = [];
+        $answer = self::CITED . "\n\nIn summary, yes: as the buyer you are bound to pay the common expenses due on the fraction.";
+        $this->llmMock->shouldReceive('complete')->once()->andReturnUsing(function ($user) use (&$prompts, $answer) {
+            $prompts[] = $user;
+
+            return $answer;
+        });
+
+        $result = $this->generator->generate($this->fileGroundedContext());
+
+        $this->assertSame($answer, $result['answer']);
+        $this->assertArrayNotHasKey('closing_dropped', $result['metadata']);
+        // The positional "direct answer first" prompt line was reverted after eval p21.
+        $this->assertStringNotContainsString('START WITH THE DIRECT ANSWER', $prompts[0]);
+    }
+
+    /** @test A fully cited answer is untouched and carries no flag. */
+    public function p19_an_answer_without_an_uncited_closing_is_untouched(): void
+    {
+        $this->llmMock->shouldReceive('complete')->once()->andReturn(self::CITED . "\n\nInterest is owed on arrears [1].");
+
+        $result = $this->generator->generate($this->fileGroundedContext());
+
+        $this->assertSame(self::CITED . "\n\nInterest is owed on arrears [1].", $result['answer']);
+        $this->assertArrayNotHasKey('closing_dropped', $result['metadata']);
+    }
+
+    /** @test NOT on a data turn: there the narrative is a lead in front of code-rendered rows, with its own rules. */
+    public function p19_a_data_turn_keeps_its_last_paragraph(): void
+    {
+        $context = $this->fileGroundedContext();
+        $context->qu = new QueryUnderstandingResult(questionType: 'data_query');
+        $context->queryResult = new QueryGenerationResult(cypher: 'MATCH (u:Unit) RETURN u.name AS unit_name', explanation: 'x', confidence: 1.0);
+        $context->executionResult = new QueryExecutionResult(success: true, data: [['unit_name' => '101']]);
+        $answer = self::CITED . "\n\nUnit 101 is the only one concerned.";
+        $this->llmMock->shouldReceive('complete')->once()->andReturn($answer);
+
+        $result = $this->generator->generate($context, ['style' => 'concise']);
+
+        $this->assertStringContainsString('Unit 101 is the only one concerned.', $result['answer']);
+        $this->assertArrayNotHasKey('closing_dropped', $result['metadata']);
+    }
+
+    /** @test Not where citations are not required (terse styles, the kill switch): no rule to enforce. */
+    public function p19_the_closing_is_kept_where_citations_are_not_required(): void
+    {
+        config(['ai.response_generation.citation_enforcement' => false]);
+        $answer = self::CITED . "\n\nFeel free to ask about anything else!";
+        $this->llmMock->shouldReceive('complete')->once()->andReturn($answer);
+
+        $result = $this->generator->generate($this->fileGroundedContext());
+
+        $this->assertSame($answer, $result['answer']);
+    }
+
     /** @test */
     public function terse_styles_are_exempt_because_their_contract_forbids_markers(): void
     {
@@ -218,141 +297,5 @@ class ResponseGeneratorCitationEnforcementTest extends TestCase
 
             $this->assertArrayNotHasKey('citation_enforcement', $result['metadata'], "style {$style}");
         }
-    }
-
-    // =========================================================================
-    // Native tool-loop path: enforcement must never regenerate BLIND to in-loop
-    // tool results (the initial prompt pair is not the full transcript there).
-    // =========================================================================
-
-    /**
-     * A tool-capable scripted provider that also satisfies LlmProviderInterface,
-     * counting complete() calls so the tests can prove whether the blind
-     * regeneration ran.
-     */
-    private function toolCapableProvider(array $script, string $completeReply): LlmProviderInterface&ToolCallingLlmInterface
-    {
-        return new class($script, $completeReply) implements LlmProviderInterface, ToolCallingLlmInterface {
-            public int $completeCalls = 0;
-            private ScriptedToolProvider $inner;
-
-            public function __construct(array $script, private string $completeReply)
-            {
-                $this->inner = new ScriptedToolProvider($script);
-            }
-
-            public function chatWithTools(array $messages, array $toolSpecs, array $options = []): LlmToolTurn
-            {
-                return $this->inner->chatWithTools($messages, $toolSpecs, $options);
-            }
-
-            public function formatToolResults(LlmToolTurn $turn, array $results): array
-            {
-                return $this->inner->formatToolResults($turn, $results);
-            }
-
-            public function complete(string $prompt, ?string $systemPrompt = null, array $options = []): string
-            {
-                $this->completeCalls++;
-
-                return $this->completeReply;
-            }
-
-            public function chat(array $messages, array $options = []): string
-            {
-                return '';
-            }
-
-            public function chatJson(array $messages, array $options = []): object|array
-            {
-                return [];
-            }
-
-            public function stream(array $messages, callable $callback, array $options = []): void
-            {
-            }
-
-            public function getModel(): string
-            {
-                return 'scripted';
-            }
-
-            public function getProvider(): string
-            {
-                return 'test';
-            }
-
-            public function getMaxTokens(): int
-            {
-                return 8000;
-            }
-
-            public function countTokens(string $text): int
-            {
-                return strlen($text);
-            }
-        };
-    }
-
-    /**
-     * A ResponseGenerator wired for the NATIVE channel with a controlled
-     * (recording, no-backend) run_query tool.
-     */
-    private function nativeGeneratorFor(LlmProviderInterface&ToolCallingLlmInterface $provider): ResponseGenerator
-    {
-        config([
-            'ai.actions.native_tools' => true,
-            'ai.actions.native_query_tool' => true,
-            'ai.entity_actions' => [],
-            'ai.generic_actions' => [],
-        ]);
-
-        $registry = new AiActionRegistry();
-        $registry->registerGeneric(new GraphQueryTool(
-            new RecordingQueryExecutor(new QueryExecutionResult(success: true, data: [['x' => 1]]))
-        ));
-
-        return new ResponseGenerator(
-            $provider,
-            ['default_format' => 'text', 'default_style' => 'friendly', 'default_max_length' => 200],
-            new ActionToolGate($registry),
-            new ToolLoopRunner(new ActionDispatcher($registry), toolRounds: 2, maxToolCalls: 5)
-        );
-    }
-
-    /** @test */
-    public function a_tool_loop_draft_with_executed_tool_calls_skips_the_blind_regeneration_and_keeps_the_draft(): void
-    {
-        $provider = $this->toolCapableProvider([
-            new LlmToolTurn(null, [
-                new LlmToolCall('c1', 'run_query', ['cypher' => 'MATCH (n) RETURN n']),
-            ], ['role' => 'assistant'], 'tool_calls'),
-            new LlmToolTurn('Uncited answer informed by tool results.', [], ['role' => 'assistant'], 'stop'),
-        ], 'Never used [1].');
-
-        $result = $this->nativeGeneratorFor($provider)->generate($this->fileGroundedContext());
-
-        // The draft is kept: a complete() retry from the INITIAL prompts alone
-        // would be blind to the executed tool round recorded in metadata.
-        $this->assertSame('Uncited answer informed by tool results.', $result['answer']);
-        $this->assertSame('skipped_tool_results', $result['metadata']['citation_enforcement'] ?? null);
-        $this->assertSame(0, $provider->completeCalls, 'No blind complete() regeneration may run');
-        $this->assertSame(1, $result['metadata']['tool_calling']['tool_calls'] ?? null);
-    }
-
-    /** @test */
-    public function a_tool_loop_draft_with_zero_tool_calls_still_gets_the_enforcement_retry(): void
-    {
-        // No tool call was made, so the initial prompt pair IS the full
-        // transcript — the bounded retry is faithful and must still fire.
-        $provider = $this->toolCapableProvider([
-            new LlmToolTurn('Uncited draft.', [], ['role' => 'assistant'], 'stop'),
-        ], 'The documents state it plainly [1].');
-
-        $result = $this->nativeGeneratorFor($provider)->generate($this->fileGroundedContext());
-
-        $this->assertSame('The documents state it plainly [1].', $result['answer']);
-        $this->assertSame('recovered', $result['metadata']['citation_enforcement'] ?? null);
-        $this->assertSame(1, $provider->completeCalls, 'Exactly one enforcement retry');
     }
 }

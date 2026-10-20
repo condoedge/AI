@@ -129,6 +129,12 @@ final class PendingActionToken
             return null;
         }
 
+        // Fail closed on a nonce-less token: without a nonce it cannot be single-use protected, so
+        // a confirmed mutation could be replayed. issue() always mints one.
+        if (!isset($payload['n']) || !is_string($payload['n']) || $payload['n'] === '') {
+            return null;
+        }
+
         $decoded = new self(
             (string) $payload['k'],
             isset($payload['e']) ? ($payload['e'] !== null ? (string) $payload['e'] : null) : null,

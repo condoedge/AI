@@ -88,6 +88,22 @@ class ResultSetExporterTest extends TestCase
     }
 
     /**
+     * @test Eval p12-B: export titles are now localized ("Rôles des membres de l'équipe");
+     * the filename transliterates accents instead of mangling them ("R_les_..._quipe").
+     */
+    public function a_localized_title_becomes_a_transliterated_filename(): void
+    {
+        $method = new \ReflectionMethod(ResultSetExporter::class, 'safeFilename');
+        $method->setAccessible(true);
+
+        $this->assertSame(
+            'Roles_des_membres_de_l_equipe.xlsx',
+            $method->invoke(new ResultSetExporter(), "Rôles des membres de l'équipe", 'xlsx')
+        );
+        $this->assertSame('report.pdf', $method->invoke(new ResultSetExporter(), 'report', 'pdf'));
+    }
+
+    /**
      * @test
      *
      * EXPORT PRIVACY: exports must NOT serialize raw rows — internal id-ish columns

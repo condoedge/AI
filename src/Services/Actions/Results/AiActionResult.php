@@ -20,6 +20,8 @@ use Condoedge\Ai\Services\Actions\ActionKind;
  *   - Export  : ['content'=>bytes, 'mime'=>string, 'filename'=>string].
  *   - Pending : ['token'=>string,'action_key'=>string,'label'=>string,'text'=>string,
  *                'confirm_message'=>string].
+ *   - FollowUp: ['question'=>string, 'label'=>string] — the question a click sends as the
+ *                user's next message, and the chip's label.
  *   - Error   : null (only $summaryForLlm carries the message).
  *
  * $summaryForLlm is a short, ID-free line the LLM can use to acknowledge the action.
@@ -72,6 +74,15 @@ final class AiActionResult
             array_merge($meta, ['token' => $token, 'confirm_message' => $confirmMessage]),
             $summaryForLlm,
         );
+    }
+
+    /**
+     * A suggested next question: the chip shows $label and its click sends $question as the
+     * user's next message. Nothing runs on the server until that message is sent.
+     */
+    public static function followUp(string $question, string $label, string $summaryForLlm = ''): self
+    {
+        return new self(ActionKind::FollowUp, ['question' => $question, 'label' => $label], $summaryForLlm);
     }
 
     /** A graceful failure: the summary is shown, nothing actionable is rendered. */

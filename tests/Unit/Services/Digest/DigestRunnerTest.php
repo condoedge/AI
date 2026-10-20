@@ -456,4 +456,39 @@ class DigestRunnerTest extends TestCase
         $this->assertSame('Review', $result->entity);
         $this->assertSame('No pending reviews — inbox clear.', $result->emptyText);
     }
+
+    /**
+     * @test p12 H2/H3: the cypher that produced the rows rides the result — the composer maps
+     * its projections to entity properties (declared money columns, enum legends). Fallback
+     * rows carry the FALLBACK cypher (their projections are the fallback's own).
+     */
+    public function the_executed_cypher_rides_the_result_primary_or_fallback(): void
+    {
+        $executor = Mockery::mock(QueryExecutorInterface::class);
+        $executor->shouldReceive('execute')->andReturnUsing(function ($cypher) {
+            if (str_contains($cypher, 'Bill')) {
+                return $this->ok([['id' => 1, 'due_amount' => 10.5]]);
+            }
+
+            return str_contains($cypher, 'DESC') ? $this->ok([['id' => 9, 'name' => 'Last AGM']]) : $this->ok([]);
+        });
+
+        $runner = new DigestRunner($executor, $this->registry([
+            'bills' => ['label' => 'Bills', 'cypher' => 'MATCH (b:Bill) RETURN b.id AS id, b.due_amount AS due_amount'],
+            'meetings' => [
+                'label' => 'Upcoming meetings',
+                'cypher' => 'MATCH (m:Meeting) RETURN m.id AS id',
+                'fallback_cypher' => 'MATCH (m:Meeting) RETURN m.id AS id, m.name AS name ORDER BY m.start_date DESC',
+                'fallback_label' => 'Recent meetings',
+            ],
+            'empty' => ['label' => 'Empty', 'cypher' => 'MATCH (e:Empty) RETURN e.id AS id'],
+        ]));
+
+        [$bills, $meetings, $empty] = $runner->run([]);
+
+        $this->assertSame('MATCH (b:Bill) RETURN b.id AS id, b.due_amount AS due_amount', $bills->cypher);
+        $this->assertSame('MATCH (m:Meeting) RETURN m.id AS id, m.name AS name ORDER BY m.start_date DESC', $meetings->cypher);
+        $this->assertSame('MATCH (e:Empty) RETURN e.id AS id', $empty->cypher);
+        $this->assertSame($bills->cypher, $bills->withRows([['id' => 2]])->cypher, 'withRows keeps the cypher');
+    }
 }

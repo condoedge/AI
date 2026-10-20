@@ -388,7 +388,6 @@ class AdversarialSecurityTest extends TestCase
         $graphMock = Mockery::mock(\Condoedge\Ai\Contracts\GraphStoreInterface::class);
 
         $generator = new QueryGenerator($llmMock, $graphMock, [
-            'enable_templates' => false,
             'allow_write_operations' => false,
         ]);
 
@@ -492,32 +491,6 @@ class AdversarialSecurityTest extends TestCase
     //==========================================================================
     // 4. TYPE SAFETY & VALIDATION EDGE CASES
     //==========================================================================
-
-    /** @test */
-    public function it_throws_exception_when_calling_getVectorConfig_on_non_vectorizable_entity()
-    {
-        $model = new class extends Model implements Nodeable {
-            use HasNodeableConfig;
-            protected $table = 'no_vector';
-
-            public function nodeableConfig(): array
-            {
-                return [
-                    'graph' => [
-                        'label' => 'NoVector',
-                        'properties' => ['id', 'name'],
-                        'relationships' => [],
-                    ],
-                    // NO VECTOR CONFIG
-                ];
-            }
-        };
-
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('is not vectorizable');
-
-        $model->getVectorConfig();
-    }
 
     /** @test */
     public function it_handles_invalid_nodeable_config_with_missing_required_fields()

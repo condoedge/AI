@@ -117,6 +117,7 @@ class ResponseCurrentUserContextSectionTest extends TestCase
     public function it_includes_user_email_when_the_config_flag_is_enabled(): void
     {
         config(['ai.prompt.include_user_email' => true]);
+        config(['ai.access_control.mask_identifying_fields' => false]);
         $this->authenticateUser();
 
         $output = $this->section->format($this->context(), []);
@@ -127,11 +128,30 @@ class ResponseCurrentUserContextSectionTest extends TestCase
     /** @test */
     public function it_includes_user_email_for_possessive_ownership_questions(): void
     {
+        config(['ai.access_control.mask_identifying_fields' => false]);
         $this->authenticateUser();
 
         $output = $this->section->format($this->context(possessive: true), []);
 
         $this->assertStringContainsString('j.rousseau@example.com', $output);
+    }
+
+    /** @test Phase 8 batch A: email is an identifying field — it ships as the turn token. */
+    public function a_masked_email_ships_as_the_turn_token_shared_with_the_rows(): void
+    {
+        config(['ai.access_control.identifying_fields' => ['*' => ['email']]]);
+        $this->authenticateUser();
+        $context = $this->context(possessive: true);
+
+        $output = $this->section->format($context, []);
+
+        $this->assertStringContainsString('- Email: [email#1]', $output);
+        $this->assertStringNotContainsString('j.rousseau@example.com', $output);
+        // The rows of the same turn reuse that token for the same address.
+        $this->assertSame(
+            [['email' => '[email#1]']],
+            \Condoedge\Ai\Services\Response\PiiMasker::for($context)->maskRows([['email' => 'J.Rousseau@example.com']])
+        );
     }
 
     /** @test */
@@ -164,6 +184,39 @@ class ResponseCurrentUserContextSectionTest extends TestCase
         $this->assertStringNotContainsString('Current team name: N/A', $output);
         // The insider-voice rule now names the organization.
         $this->assertStringContainsString('member of "Novo Gestion"', $output);
+    }
+
+    /**
+     * @test eval p20-A roster: the identity values this section GIVES the model — the user's own
+     * name and current team name — are exposed, so code can treat them as known words when it
+     * judges whether a lead only restates (DataAnswerPlan::knownIdentity).
+     */
+    public function it_exposes_the_identity_values_it_prints(): void
+    {
+        $user = new User();
+        $user->id = 13;
+        $user->name = 'Julie Rousseau';
+        $user->email = 'j.rousseau@example.com';
+        $user->currentTeam = (object) ['id' => 3, 'name' => 'Novo Gestion'];
+
+        Auth::shouldReceive('check')->andReturn(true);
+        Auth::shouldReceive('user')->andReturn($user);
+        Auth::shouldReceive('id')->andReturn(13);
+
+        $this->assertSame(['Julie Rousseau', 'Novo Gestion'], $this->section->identityValues());
+        // Exactly what the prompt prints — never the email (PII-gated) or an id.
+        $output = $this->section->format($this->context(), []);
+        foreach ($this->section->identityValues() as $value) {
+            $this->assertStringContainsString($value, $output);
+        }
+    }
+
+    /** @test */
+    public function without_an_authenticated_user_there_are_no_identity_values(): void
+    {
+        Auth::shouldReceive('check')->andReturn(false);
+
+        $this->assertSame([], $this->section->identityValues());
     }
 
     /** @test */

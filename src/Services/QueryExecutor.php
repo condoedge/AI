@@ -14,6 +14,8 @@ use Condoedge\Ai\Exceptions\SecurityException;
 use Condoedge\Ai\Models\AiQueryLog;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
 use Condoedge\Ai\Services\Security\AiSecurityService;
+use Condoedge\Ai\Services\Security\CypherCanonicalizer;
+use Condoedge\Ai\Services\Security\CypherLexer;
 use Condoedge\Ai\Services\Security\CypherScopeAnalyzer;
 use Condoedge\Ai\Services\Security\CypherStructuralValidator;
 use Condoedge\Ai\Services\Security\ScopeAcceptanceGate;
@@ -50,6 +52,12 @@ class QueryExecutor implements QueryExecutorInterface
     protected RateLimiter $rateLimiter;
 
     /**
+     * The cap on ALL users together (null = disabled). Charged after the acting
+     * user's own budget, so a user already over budget never consumes it.
+     */
+    protected ?RateLimiter $globalRateLimiter = null;
+
+    /**
      * Batch keys that already paid their (single) rate-limiter charge on this
      * executor instance. See {@see attemptRateLimit()} — request-scoped by
      * construction (the array lives on the instance, never in cache).
@@ -63,18 +71,26 @@ class QueryExecutor implements QueryExecutorInterface
      *
      * @param GraphStoreInterface $graphStore Graph database interface
      * @param array $config Configuration options
-     * @param RateLimiter|null $rateLimiter Optional rate limiter (creates default if null)
+     * @param RateLimiter|null $rateLimiter Optional per-user limiter (creates default if null)
+     * @param RateLimiter|null $globalRateLimiter Optional global cap (default from
+     *        ai.rate_limits.global_queries_per_minute; 0 / null disables it)
      */
     public function __construct(
         private readonly GraphStoreInterface $graphStore,
         private readonly array $config = [],
-        ?RateLimiter $rateLimiter = null
+        ?RateLimiter $rateLimiter = null,
+        ?RateLimiter $globalRateLimiter = null
     ) {
         $this->rateLimiter = $rateLimiter ?? new RateLimiter(
             key: 'query_executor',
             maxRequests: (int) config('ai.rate_limits.queries_per_minute', 30),
             windowSeconds: 60
         );
+
+        $globalMax = (int) config('ai.rate_limits.global_queries_per_minute', 300);
+        $this->globalRateLimiter = $globalRateLimiter ?? ($globalMax > 0
+            ? new RateLimiter(key: 'query_executor_global', maxRequests: $globalMax, windowSeconds: 60)
+            : null);
     }
 
     /**
@@ -126,9 +142,14 @@ class QueryExecutor implements QueryExecutorInterface
         $securityFilterApplied = $securityResult['filter_applied'];
 
         // Merge bound team-filter parameters (e.g. $ai_team_ids) into the query
-        // parameters. Caller-supplied keys win to avoid silent clobbering.
+        // parameters. SECURITY-DERIVED KEYS WIN (Task 1.26c): a caller passing its
+        // own `ai_team_ids` (e.g. via executeQuery(…, $parameters)) previously
+        // overrode the security value and widened the tenant scope. The reserved
+        // team-ids key is never caller-controlled — dropped even when the
+        // security layer set none (unfiltered / bypass paths).
+        unset($parameters[TeamPathResolver::TEAM_IDS_PARAM]);
         if (!empty($securityResult['parameters'])) {
-            $parameters = array_merge($securityResult['parameters'], $parameters);
+            $parameters = array_merge($parameters, $securityResult['parameters']);
         }
 
         // SECURITY: Enforce rate limiting to prevent DoS via expensive query flooding.
@@ -272,22 +293,108 @@ class QueryExecutor implements QueryExecutorInterface
     protected function attemptRateLimit(array $options): bool
     {
         $batch = $options['rate_limit_batch'] ?? null;
+        $scope = $this->rateLimitScope($options);
 
         if (!is_string($batch) || $batch === '') {
-            return $this->rateLimiter->attempt();
+            return $this->charge($scope);
         }
 
         if (isset($this->chargedRateLimitBatches[$batch])) {
             return true;
         }
 
-        if (!$this->rateLimiter->attempt()) {
+        if (!$this->charge($scope)) {
             return false;
         }
 
+        // Bounded: a long-lived worker (Octane, queue, the eval command) mints one key
+        // per turn / digest run — keep only the recent ones.
+        if (count($this->chargedRateLimitBatches) >= 256) {
+            $this->chargedRateLimitBatches = array_slice($this->chargedRateLimitBatches, -128, null, true);
+        }
         $this->chargedRateLimitBatches[$batch] = true;
 
         return true;
+    }
+
+    /**
+     * ADMISSION for one user action (a chat turn): take the turn's single rate-limit
+     * charge up front — before any LLM call is paid for — and, when the budget is full,
+     * WAIT IN LINE for the window to reopen instead of failing, as long as the wait fits
+     * $maxWaitSeconds. The caller's later executions carry the same rate_limit_batch and
+     * are free.
+     *
+     * Never throws. When the wait would exceed the bound nothing is consumed and
+     * `retry_after` says how many seconds until a slot frees, so the caller can tell the
+     * user exactly that.
+     *
+     * @param array<string, mixed> $options       must carry 'rate_limit_batch'; 'user' scopes the budget
+     * @param callable(int): void|null $sleep     test seam (defaults to sleep())
+     * @return array{admitted: bool, waited_seconds: int, retry_after: int}
+     */
+    public function admit(array $options, int $maxWaitSeconds = 20, ?callable $sleep = null): array
+    {
+        $sleep ??= static function (int $seconds): void {
+            sleep($seconds);
+        };
+        $scope = $this->rateLimitScope($options);
+        $waited = 0;
+
+        // Bounded loop: at most a few window reopenings fit in any sane $maxWaitSeconds.
+        for ($i = 0; $i < 10; $i++) {
+            $wait = max(
+                $this->rateLimiter->retryAfter($scope),
+                $this->globalRateLimiter?->retryAfter() ?? 0
+            );
+
+            if ($wait === 0) {
+                if ($this->attemptRateLimit($options)) {
+                    return ['admitted' => true, 'waited_seconds' => $waited, 'retry_after' => 0];
+                }
+                $wait = 1; // lost the slot to a concurrent request: re-check shortly
+            }
+
+            if ($waited + $wait > max(0, $maxWaitSeconds)) {
+                return ['admitted' => false, 'waited_seconds' => $waited, 'retry_after' => $wait];
+            }
+
+            $sleep($wait);
+            $waited += $wait;
+        }
+
+        return ['admitted' => false, 'waited_seconds' => $waited, 'retry_after' => 1];
+    }
+
+    /**
+     * One charge: the acting user's own budget first, then the global cap (all users
+     * together). A user already over their own budget is refused before the global cap
+     * is touched; when the global cap refuses, the user's slot stays spent for the window
+     * (fail-safe direction: never under-count).
+     */
+    private function charge(string $scope): bool
+    {
+        if (!$this->rateLimiter->attempt($scope)) {
+            return false;
+        }
+
+        return $this->globalRateLimiter === null || $this->globalRateLimiter->attempt();
+    }
+
+    /**
+     * The limiter budget this execution counts against: the acting user's own
+     * ("u:<id>"), so one user's activity never locks every other user out (the budget
+     * was one global counter until 2026-10-06). '' (the shared budget) when no user is
+     * threaded — console / system executions.
+     */
+    private function rateLimitScope(array $options): string
+    {
+        $user = $options['user'] ?? null;
+        if (!is_object($user)) {
+            return '';
+        }
+        $id = method_exists($user, 'getKey') ? $user->getKey() : ($user->id ?? null);
+
+        return is_scalar($id) && (string) $id !== '' ? 'u:' . $id : '';
     }
 
     /**
@@ -325,101 +432,6 @@ class QueryExecutor implements QueryExecutorInterface
                 0,
                 $e
             );
-        }
-    }
-
-    /**
-     * Execute query with pagination
-     *
-     * @param string $cypherQuery Query to execute
-     * @param int $page Page number (1-indexed)
-     * @param int $perPage Results per page
-     * @param array $parameters Query parameters
-     * @param array $options Execution options
-     * @return array Paginated results
-     */
-    public function executePaginated(
-        ?string $cypherQuery,
-        int $page = 1,
-        int $perPage = 20,
-        array $parameters = [],
-        array $options = []
-    ): array {
-        $page = max(1, $page);
-        $perPage = min($perPage, $this->config['max_limit'] ?? 1000);
-        $perPage = max(1, $perPage);
-
-        $offset = ($page - 1) * $perPage;
-
-        $total = $this->executeCount($cypherQuery, $parameters, $options);
-
-        $paginatedQuery = preg_replace('/\bLIMIT\s+\d+/i', '', $cypherQuery);
-        $paginatedQuery .= " SKIP {$offset} LIMIT {$perPage}";
-
-        $result = $this->execute($paginatedQuery, $parameters, $options);
-
-        $lastPage = (int) ceil($total / $perPage);
-
-        return [
-            'data' => $result->data,
-            'pagination' => [
-                'current_page' => $page,
-                'per_page' => $perPage,
-                'total' => $total,
-                'last_page' => $lastPage,
-                'from' => $offset + 1,
-                'to' => min($offset + $perPage, $total),
-            ],
-            'stats' => $result->stats,
-            'metadata' => $result->metadata,
-        ];
-    }
-
-    /**
-     * Explain a query (show execution plan)
-     *
-     * @param string $cypherQuery Query to explain
-     * @param array $parameters Query parameters
-     * @return array Execution plan details
-     */
-    public function explain(?string $cypherQuery, array $parameters = []): array
-    {
-        if (!($this->config['enable_explain'] ?? true)) {
-            throw new QueryExecutionException('EXPLAIN is disabled in configuration');
-        }
-
-        try {
-            $explainQuery = "EXPLAIN " . $cypherQuery;
-            $result = $this->graphStore->query($explainQuery, $parameters);
-
-            return [
-                'plan' => $result['plan'] ?? [],
-                'estimated_rows' => $result['estimated_rows'] ?? null,
-                'query' => $cypherQuery,
-            ];
-        } catch (\Exception $e) {
-            throw new QueryExecutionException(
-                "EXPLAIN failed: " . $e->getMessage(),
-                0,
-                $e
-            );
-        }
-    }
-
-    /**
-     * Test if a query is valid (dry run)
-     *
-     * @param string $cypherQuery Query to test
-     * @return bool True if query is valid
-     */
-    public function test(?string $cypherQuery): bool
-    {
-        try {
-            // Use EXPLAIN to validate without executing
-            $this->explain($cypherQuery);
-            return true;
-        } catch (\Exception $e) {
-            return false;
         }
     }
 
@@ -694,10 +706,10 @@ class QueryExecutor implements QueryExecutorInterface
     {
         $unfiltered = ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
 
-        // Skip if security filtering disabled in options
-        if (($options['skip_security'] ?? false) === true) {
-            return $unfiltered;
-        }
+        // NOTE (Task 1.26c): the former `$options['skip_security']` bypass was
+        // REMOVED — nothing in the package or in CondoEdge set it, and an options
+        // array built by pipeline code must never be able to switch tenant
+        // scoping off. Security is disabled only via config('ai.security.enabled').
 
         // Get security service
         $securityService = app(AiSecurityService::class);
@@ -707,6 +719,20 @@ class QueryExecutor implements QueryExecutorInterface
             return $unfiltered;
         }
 
+        // CANONICALIZATION (Task 1.26b) — runs BEFORE any analysis, in ONE place.
+        // Rejects whitespace/control/format characters Neo4j reads differently
+        // from the security lexer, and strips every comment. From here on EVERY
+        // step — analysis, coverage gate, acceptance gate, injection, validation
+        // AND the returned (executed) text, including the unfiltered/bypass paths
+        // — uses ONLY the canonical text, so what runs is byte-identical to what
+        // was analyzed (the `// … \r UNION ALL …` desync ran unscoped before).
+        $canonical = $this->cypherCanonicalizer()->canonicalize($cypherQuery);
+        if ($canonical['query'] === null) {
+            return $this->safeStopNoResult('(unanalyzed)', (string) $canonical['reason']);
+        }
+        $cypherQuery = $canonical['query'];
+        $unfiltered = ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
+
         // Resolve the acting user: prefer the user threaded through the pipeline
         // ($options['user']) over auth()->user(), because the real user is null
         // or wrong on CLI / queue / regeneration / impersonation paths.
@@ -714,9 +740,9 @@ class QueryExecutor implements QueryExecutorInterface
 
         // STRUCTURAL ANALYSIS (safe-by-construction): recognize the scopeable subset
         // and enumerate EVERY tenant-sensitive node binding on its own live alias.
-        // This replaces the former regex entity/alias detection. The legacy regex
-        // helpers (extractPrimaryEntity/…/injectTeamFilter) are retained only as
-        // thin shims for direct-call unit tests; the execution path never uses them.
+        // This replaces the former regex entity/alias detection. injectTeamFilter()
+        // is retained only as a thin shim for direct-call unit tests; the execution
+        // path never uses it.
         $plan = $this->scopeAnalyzer()->analyze($cypherQuery);
         $primaryBinding = $plan->primaryBinding();
         $primaryEntity = $primaryBinding?->label ?? '(unlabeled)';
@@ -766,8 +792,11 @@ class QueryExecutor implements QueryExecutorInterface
             return $unfiltered;
         }
 
-        // COUNT query with a single sensitive entity and global-count permission:
-        // preserve the legacy team-filter skip.
+        // PURE aggregate COUNT (the canonical query's only RETURN projects nothing
+        // but count(…) — no row data) over a single sensitive entity, for a user
+        // with global-count permission: preserve the legacy team-filter skip.
+        // A `count(` anywhere else (WITH head, literal, beside row data) never
+        // qualifies — see isCountQuery() (security review 2026-10-01, P2).
         if ($this->isCountQuery($cypherQuery) && $primaryBinding !== null) {
             $distinctLabels = $this->distinctSensitiveLabels($plan);
             if (count($distinctLabels) === 1
@@ -928,6 +957,11 @@ class QueryExecutor implements QueryExecutorInterface
         return app(SensitiveLabelCoverageGate::class);
     }
 
+    private function cypherCanonicalizer(): CypherCanonicalizer
+    {
+        return app(CypherCanonicalizer::class);
+    }
+
     /**
      * Decide what to do when a sensitive entity cannot be team-filtered.
      *
@@ -982,56 +1016,101 @@ class QueryExecutor implements QueryExecutorInterface
     }
 
     /**
-     * Extract primary entity (label) from Cypher query.
-     * Prioritizes the entity in the RETURN clause, falls back to first MATCH entity.
-     */
-    private function extractPrimaryEntity(string $query): ?string
-    {
-        // First, try to find the entity being RETURNED (this is the entity the user wants)
-        // Pattern: RETURN alias -> find what label that alias maps to
-        if (preg_match('/\bRETURN\s+(?:DISTINCT\s+)?(\w+)/i', $query, $returnMatch)) {
-            $returnAlias = $returnMatch[1];
-            // Find the label for this alias: (alias:Label) or (alias:`Label`) or (alias:Label {props})
-            if (preg_match('/\(\s*' . preg_quote($returnAlias, '/') . '\s*:\s*`?(\w+)`?\s*[{)]/i', $query, $labelMatch)) {
-                return $labelMatch[1];
-            }
-        }
-
-        // Fallback: match first (alias:Entity) pattern — handles backtick-quoted labels too
-        if (preg_match('/\(\s*\w+\s*:\s*`?(\w+)`?\s*[{)]/i', $query, $matches)) {
-            return $matches[1];
-        }
-        return null;
-    }
-
-    /**
-     * Extract the alias used for the primary entity.
-     * e.g., MATCH (i:Invoice) -> 'i'
-     */
-    private function extractEntityAlias(string $query, string $entity): string
-    {
-        // Match (alias:Entity) or (alias:`Entity`) or (alias:Entity {props})
-        if (preg_match('/\(\s*(\w+)\s*:\s*`?' . preg_quote($entity, '/') . '`?\s*[{)]/i', $query, $matches)) {
-            return $matches[1];
-        }
-        return strtolower(substr($entity, 0, 1));
-    }
-
-    /**
-     * Check if query is a COUNT query.
+     * Whether the query is a PURE aggregate count: its single top-level RETURN
+     * projects nothing but `count(…)` items (each optionally `AS alias`), so the
+     * result carries no row data. Only then may the global-count permission skip
+     * the team filter.
+     *
+     * Token-based on the canonical text (security review 2026-10-01, P2): the
+     * former `/\bCOUNT\s*\(/i` matched ANYWHERE — a `count(` in a WITH head, a
+     * string literal, or beside row data in the RETURN — and the whole row
+     * query then ran with NO tenant filter for a global-count user. Strings are
+     * opaque lexer literals and comments are no tokens; a UNION (another branch
+     * may return rows), a second top-level RETURN, or any non-count projection
+     * item → not a count query → filtered normally.
      */
     private function isCountQuery(string $query): bool
     {
-        return (bool) preg_match('/\bCOUNT\s*\(/i', $query);
-    }
+        $lexed = (new CypherLexer())->tokenize($query);
+        if ($lexed['error'] !== null) {
+            return false;
+        }
 
-    /**
-     * Whether the query binds graph nodes (a MATCH with a node pattern), as
-     * opposed to a pure scalar/introspection query (e.g. RETURN 1, CALL ...).
-     */
-    private function queryAccessesNodes(string $query): bool
-    {
-        return (bool) preg_match('/\bMATCH\s*\(/i', $query);
+        /** @var list<\Condoedge\Ai\Services\Security\Token> $tokens */
+        $tokens = $lexed['tokens'];
+        $n = count($tokens);
+
+        $returnIdx = null;
+        for ($i = 0; $i < $n; $i++) {
+            $t = $tokens[$i];
+            if (!$t->isTopLevel() || $t->type !== CypherLexer::T_WORD || $t->keywordAsIdentifier) {
+                continue;
+            }
+            if ($t->isWord('UNION')) {
+                return false;
+            }
+            if ($t->isWord('RETURN')) {
+                if ($returnIdx !== null) {
+                    return false;
+                }
+                $returnIdx = $i;
+            }
+        }
+        if ($returnIdx === null) {
+            return false;
+        }
+
+        $i = $returnIdx + 1;
+        if ($i < $n && $tokens[$i]->isWord('DISTINCT')) {
+            $i++;
+        }
+
+        // Each projection item: count ( <balanced> ) [AS <word>], comma-separated.
+        $items = 0;
+        while (true) {
+            if ($i + 1 >= $n
+                || !$tokens[$i]->isWord('count') || !$tokens[$i]->isTopLevel()
+                || !$tokens[$i + 1]->isPunct('(') || !$tokens[$i + 1]->isTopLevel()) {
+                return false;
+            }
+            // Skip to the matching top-level ')'.
+            $close = null;
+            for ($j = $i + 2; $j < $n; $j++) {
+                if ($tokens[$j]->isPunct(')') && $tokens[$j]->isTopLevel()) {
+                    $close = $j;
+                    break;
+                }
+            }
+            if ($close === null) {
+                return false;
+            }
+            $i = $close + 1;
+            $items++;
+
+            if ($i < $n && $tokens[$i]->isWord('AS')) {
+                if ($i + 1 >= $n || $tokens[$i + 1]->type !== CypherLexer::T_WORD) {
+                    return false;
+                }
+                $i += 2;
+            }
+
+            if ($i < $n && $tokens[$i]->isPunct(',') && $tokens[$i]->isTopLevel()) {
+                $i++;
+                continue;
+            }
+            break;
+        }
+
+        // Only result modifiers (ORDER BY / SKIP / LIMIT) or a trailing ';' may follow.
+        if ($i >= $n || $tokens[$i]->isPunct(';')) {
+            return $items > 0;
+        }
+        $next = $tokens[$i];
+
+        return $items > 0
+            && $next->type === CypherLexer::T_WORD
+            && !$next->keywordAsIdentifier
+            && ($next->isWord('ORDER') || $next->isWord('SKIP') || $next->isWord('LIMIT'));
     }
 
     /**

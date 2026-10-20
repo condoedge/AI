@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Console\Commands;
 
 use Condoedge\Ai\Contracts\FileProcessorInterface;
+use Condoedge\Ai\Console\Commands\Concerns\FlushesGraphSchemaCache;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -30,6 +31,8 @@ use Illuminate\Support\Facades\DB;
  */
 class ProcessFilesCommand extends Command
 {
+    use FlushesGraphSchemaCache;
+
     /**
      * The name and signature of the console command.
      *

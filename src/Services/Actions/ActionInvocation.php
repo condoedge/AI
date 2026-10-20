@@ -5,14 +5,13 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Actions;
 
 use Condoedge\Ai\Contracts\AiActionInterface;
-use Condoedge\Ai\DTOs\LlmToolCall;
 
 /**
  * ActionInvocation
  *
- * The canonical "the model asked for this action" value object BOTH transports converge on
- * before anything executes: native tool calls via {@see fromToolCall()}, markdown
- * action:// / entity:// regex captures via {@see fromLinkMatch()}. Everything downstream —
+ * The canonical "the model asked for this action" value object: markdown action:// /
+ * entity:// regex captures via {@see fromLinkMatch()}, persisted message-metadata records
+ * via {@see fromArray()}. Everything downstream —
  * registry resolve, filterParams, authorize, defer-or-run — is the one existing
  * ActionDispatcher pipeline; this type only normalizes how an invocation ARRIVES.
  *
@@ -26,7 +25,7 @@ final class ActionInvocation
 {
     /**
      * @param array<string, mixed> $params
-     * @param string $text  Display label the LLM chose (link text; '' for tool calls).
+     * @param string $text  Display label the LLM chose (link text; '' when code-attached).
      */
     public function __construct(
         public readonly string $key,
@@ -35,36 +34,6 @@ final class ActionInvocation
         public readonly array $params,
         public readonly string $text,
     ) {
-    }
-
-    /**
-     * Native transport. Entity tools are named {EntityType}__{key}; their entity_id argument
-     * is routed onto $entityId (the dispatch CONTEXT slot, mirroring the entity:// link
-     * path's id segment) and removed from the params, so filterParams() semantics match the
-     * link path exactly.
-     */
-    public static function fromToolCall(LlmToolCall $call): self
-    {
-        $entityType = null;
-        $key = $call->name;
-
-        $separator = strpos($call->name, '__');
-        if ($separator !== false && $separator > 0) {
-            $entityType = substr($call->name, 0, $separator);
-            $key = substr($call->name, $separator + 2);
-        }
-
-        $params = $call->args;
-        $entityId = null;
-        if ($entityType !== null) {
-            $id = $params[ModelMethodMutationAction::ID_PARAM] ?? null;
-            if (is_int($id) || (is_string($id) && $id !== '')) {
-                $entityId = $id;
-            }
-            unset($params[ModelMethodMutationAction::ID_PARAM]);
-        }
-
-        return new self($key, $entityType, $entityId, $params, '');
     }
 
     /**
@@ -165,7 +134,7 @@ final class ActionInvocation
      * sha1(key|type|id|ksort-canonical params) — the render-side dedupe key between parsed
      * markdown links and persisted invocations. Scalars are stringified so the same logical
      * invocation fingerprints identically whether its params arrived as link-query strings
-     * or as typed tool args. Excludes $text: the label is presentation, not identity.
+     * or as typed values from a persisted record. Excludes $text: the label is presentation, not identity.
      */
     public function fingerprint(): string
     {

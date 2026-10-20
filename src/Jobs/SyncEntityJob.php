@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Log;
 /**
  * Sync Entity Job
  *
- * Queues the synchronization of a Nodeable entity in Neo4j and Qdrant.
+ * Queues the synchronization of a Nodeable entity in the graph (Neo4j).
  * Triggered automatically when a model with HasNodeableConfig trait is updated.
  */
 class SyncEntityJob implements ShouldQueue

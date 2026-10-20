@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Chat\Inputs;
 
+use Condoedge\Ai\Contracts\PipelineObserverInterface;
 use Condoedge\Ai\DTOs\PageContext;
 use Condoedge\Ai\Models\AiConversation;
 
@@ -27,6 +28,16 @@ final class AskQuestionInput
      * @param bool              $allowAnonymous Explicit opt-in to run without a user (public queries).
      * @param PageContext|null  $pageContext    The page/record the chat was opened from. Null (default)
      *                                          keeps every existing call site working unchanged.
+     * @param PipelineObserverInterface|null $observer An ADDITIONAL observer of the whole turn
+     *                                          (security gate through persistence), fed beside the
+     *                                          persisted turn trace — observation only (e.g. the
+     *                                          dev-only eval harness recording verbatim prompts).
+     * @param array<string, mixed> $pipelineOptions Extra AiManager::answerQuestion options, filtered
+     *                                          to AskQuestionUseCase::ALLOWED_PIPELINE_OPTIONS
+     *                                          (today only store_examples); every other key
+     *                                          (skip_security, allow_write, read_only, limit, ...)
+     *                                          is silently dropped. They never override the turn's
+     *                                          own keys (style, user, conversation, page context).
      */
     public function __construct(
         public readonly string $question,
@@ -35,6 +46,8 @@ final class AskQuestionInput
         public readonly mixed $user = null,
         public readonly bool $allowAnonymous = false,
         public readonly ?PageContext $pageContext = null,
+        public readonly ?PipelineObserverInterface $observer = null,
+        public readonly array $pipelineOptions = [],
     ) {
     }
 }

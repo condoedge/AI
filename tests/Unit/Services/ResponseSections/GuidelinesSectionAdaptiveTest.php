@@ -7,6 +7,8 @@ namespace Condoedge\Ai\Tests\Unit\Services\ResponseSections;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\DTOs\QueryUnderstandingResult;
+use Condoedge\Ai\Services\Actions\ActionInvocation;
+use Condoedge\Ai\Services\Actions\Attach\AttachedActions;
 use Condoedge\Ai\Services\ResponseSections\GuidelinesSection;
 use Condoedge\Ai\Tests\TestCase;
 
@@ -33,6 +35,20 @@ class GuidelinesSectionAdaptiveTest extends TestCase
     private function format(PipelineContext $context, array $options = []): string
     {
         return (new GuidelinesSection())->format($context, $options);
+    }
+
+    /** @test eval p11-B digest t1: French rows dominated an English question's prompt. */
+    public function the_question_language_is_named_and_overrides_the_datas_language(): void
+    {
+        $context = new PipelineContext();
+        $context->qu = new QueryUnderstandingResult(questionType: 'data_query', language: 'en');
+        $context->executionResult = new QueryExecutionResult(success: true, data: [['name' => 'Assemblée annuelle']]);
+
+        $output = $this->format($context, ['style' => 'friendly']);
+
+        $this->assertStringContainsString("(the question's language: 'en')", $output);
+        $this->assertStringContainsString('even when the data, record names or documents are in another language', $output);
+        $this->assertStringNotContainsString("language: ''", $this->format($this->context('data_query'), ['style' => 'friendly']));
     }
 
     // =========================================================================
@@ -138,9 +154,74 @@ class GuidelinesSectionAdaptiveTest extends TestCase
         $output = $this->format($this->context('knowledge_query'), ['style' => 'friendly']);
 
         $this->assertMatchesRegularExpression('/laws?|regulations?/i', $output);
-        $this->assertStringContainsString('[N]', $output);
+        // Phase 8-B (8.2b): never the literal "[N]" grammar (echoed back live as "([N] 2)").
+        $this->assertStringNotContainsString('[N]', $output);
+        $this->assertStringContainsString('passage number in square brackets', $output);
         $this->assertStringContainsString('could not be found in the available documents', $output);
         $this->assertStringContainsString('general knowledge', $output);
+    }
+
+    /** @test */
+    public function the_citation_clause_names_the_real_passage_numbers_when_file_content_is_present(): void
+    {
+        $context = $this->context('knowledge_query');
+        $context->fileContext = ['relevant_files' => [
+            ['filename' => 'a.md', 'snippet' => 'A'], ['filename' => 'b.md', 'snippet' => 'B'], ['filename' => 'c.md', 'snippet' => 'C'],
+        ]];
+
+        $output = $this->format($context, ['style' => 'friendly']);
+
+        $this->assertStringContainsString('citing it with its passage number in square brackets — [1], [2] or [3]', $output);
+    }
+
+    /**
+     * @test eval p20-A tear-down ("Can I tear down the wall…?"): the answer opened with "To determine
+     * whether… consider the following points" and its only conclusion was an uncited last paragraph,
+     * which the closing rule then dropped. A positional "START WITH THE DIRECT ANSWER … the answer
+     * ENDS on the last point" line was tried — and REVERTED after eval p21: the buyer answer stopped
+     * at its verdict (no statement of common expenses) and the tear-down answer opened with a flat
+     * "No" no passage supports. The generic opening line stands on document answers too; the
+     * conclusion is protected by the closing rule instead (AnswerValidator::withoutUncitedClosing).
+     */
+    public function a_document_grounded_answer_keeps_the_generic_opening_line(): void
+    {
+        $context = $this->context('knowledge_query');
+        $context->fileContext = ['relevant_files' => [
+            ['filename' => 'a.md', 'snippet' => 'A'], ['filename' => 'b.md', 'snippet' => 'B'], ['filename' => 'c.md', 'snippet' => 'C'],
+        ]];
+
+        $output = $this->format($context, ['style' => 'friendly']);
+
+        $this->assertStringContainsString('Start with a direct answer to the question when the data supports one', $output);
+        $this->assertStringNotContainsString('START WITH THE DIRECT ANSWER', $output);
+        $this->assertStringNotContainsString('no closing summary', $output);
+    }
+
+    /**
+     * @test The positional rule belongs to a document-grounded answer only: a data turn (its lead is
+     * bounded by the data block), a turn without passages, a file LISTING and the one-line styles
+     * keep the generic opening line.
+     */
+    public function the_direct_answer_first_rule_is_for_document_grounded_answers_only(): void
+    {
+        $files = ['relevant_files' => [['filename' => 'a.md', 'snippet' => 'A']]];
+
+        $data = $this->context('data_query', [['id' => 1]]);
+        $data->fileContext = $files;
+        $hybridRows = $this->context('knowledge_query', [['id' => 1]]);
+        $hybridRows->fileContext = $files;
+        $listing = $this->context('knowledge_query');
+        $listing->fileContext = $files + ['enumeration' => true];
+
+        foreach ([$data, $hybridRows, $listing, $this->context('knowledge_query')] as $context) {
+            $output = $this->format($context, ['style' => 'friendly']);
+            $this->assertStringNotContainsString('START WITH THE DIRECT ANSWER', $output);
+            $this->assertStringContainsString('Start with a direct answer to the question when the data supports one', $output);
+        }
+
+        $terse = $this->context('knowledge_query');
+        $terse->fileContext = $files;
+        $this->assertStringNotContainsString('START WITH THE DIRECT ANSWER', $this->format($terse, ['style' => 'concise']));
     }
 
     /** @test */
@@ -161,7 +242,8 @@ class GuidelinesSectionAdaptiveTest extends TestCase
     /** @test */
     public function empty_results_get_a_next_step_instead_of_a_dead_end(): void
     {
-        $output = $this->format($this->context('data_query', []), ['style' => 'friendly']);
+        // The next step is the chip code attached (list / create page).
+        $output = $this->format($this->withChip($this->context('data_query', [])), ['style' => 'friendly']);
 
         $this->assertStringContainsString('feel free to ask', strtolower($output));
         $this->assertStringContainsString('next step', strtolower($output));
@@ -215,30 +297,44 @@ class GuidelinesSectionAdaptiveTest extends TestCase
     // G7) Universal concrete closer + action link on where/how questions
     // =========================================================================
 
-    /** @test */
-    public function every_answer_type_gets_the_concrete_closer_rule(): void
+    /** @test Actions plan B3: next steps are attached chips, so NO answer type ends with a prose offer. */
+    public function every_answer_type_gets_the_no_prose_offer_rule(): void
     {
-        // The closer rule must apply to ALL answer types, not only empty/data
-        // answers (iter-8: ~9 turns ended with a generic "feel free to ask"
-        // because the rule was scoped to data answers).
+        // iter-8: ~9 turns ended with a generic "feel free to ask"; the eval runs then
+        // showed "let me know" / "would you like…" offers where a chip belongs.
         foreach (['data_query', 'knowledge_query', 'hybrid'] as $type) {
             foreach ([[], [['id' => 1]]] as $data) {
                 $output = $this->format($this->context($type, $data), ['style' => 'friendly']);
 
-                $this->assertStringContainsString('feel free to ask', strtolower($output), "type={$type}");
-                $this->assertStringContainsString('concrete', strtolower($output), "type={$type}");
+                $this->assertStringContainsString('do not end with an offer', strtolower($output), "type={$type}");
+                $this->assertStringContainsString('let me know', strtolower($output), "type={$type}");
+                // No chips attached: the guideline must not claim (or deny) buttons.
+                $this->assertStringNotContainsString('attached as buttons', strtolower($output), "type={$type}");
+                $this->assertStringContainsString('do not mention links, buttons or attachments', strtolower($output), "type={$type}");
+
+                $withChips = $this->withChip($this->context($type, $data));
+                $this->assertStringContainsString('attached as buttons', strtolower($this->format($withChips, ['style' => 'friendly'])), "type={$type}");
             }
         }
     }
 
-    /** @test */
-    public function where_or_how_app_questions_require_the_matching_action_link(): void
+    private function withChip(PipelineContext $context): PipelineContext
     {
-        $output = $this->format($this->context('knowledge_query', []), ['style' => 'friendly']);
+        $context->attachedActions = new AttachedActions([
+            ['role' => AttachedActions::ROLE_NEXT, 'invocation' => new ActionInvocation('meetings', null, null, [], 'Meetings')],
+        ]);
 
-        $this->assertMatchesRegularExpression('/WHERE or HOW/i', $output);
-        $this->assertMatchesRegularExpression('/MUST include/i', $output);
-        $this->assertStringContainsString('action', strtolower($output));
+        return $context;
+    }
+
+    /** @test B5: WHERE/HOW answers point at the attached chip by name — never write a link. */
+    public function where_or_how_app_questions_point_at_the_attached_chip_without_a_link(): void
+    {
+        $output = $this->format($this->withChip($this->context('knowledge_query', [])), ['style' => 'friendly']);
+
+        $this->assertMatchesRegularExpression('/WHERE\/HOW/i', $output);
+        $this->assertStringNotContainsString('MUST include', $output);
+        $this->assertStringNotContainsString('action link', strtolower($output));
     }
 
     /** @test */
@@ -247,7 +343,7 @@ class GuidelinesSectionAdaptiveTest extends TestCase
         foreach (['minimal', 'concise'] as $style) {
             $output = $this->format($this->context('data_query', [['id' => 1]]), ['style' => $style]);
 
-            $this->assertStringNotContainsString('feel free to ask', strtolower($output), "style={$style}");
+            $this->assertStringNotContainsString('do not end with an offer', strtolower($output), "style={$style}");
         }
     }
 }

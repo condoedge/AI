@@ -9,8 +9,9 @@ Automatically generate entity configurations from your Eloquent models.
 Auto-discovery analyzes your Laravel models and generates configuration for:
 
 - **Neo4j**: Node labels, properties, relationships
-- **Qdrant**: Collections, embed fields, metadata
 - **Metadata**: Aliases, scopes, descriptions
+
+Records are stored in the graph only; they are not embedded. Qdrant holds the file chunks and the semantic indexes — see [Data ingestion](/docs/{{version}}/usage/data-ingestion).
 
 This saves time and ensures configurations stay in sync with your models.
 
@@ -46,11 +47,6 @@ return [
             'label' => 'Customer',
             'properties' => ['id', 'name', 'email', 'status'],
             'relationships' => [...],
-        ],
-        'vector' => [
-            'collection' => 'customers',
-            'embed_fields' => ['name', 'email'],
-            'metadata' => ['id', 'name', 'status'],
         ],
         'metadata' => [
             'aliases' => ['customer', 'client'],
@@ -118,17 +114,6 @@ Discovered from:
 **Excluded automatically:**
 - `password`, `remember_token`, `api_token`
 - Fields ending in `_token`, `_secret`
-- Custom exclusions in config
-
-```php
-// config/ai.php
-'discovery' => [
-    'exclude_properties' => [
-        'internal_notes',
-        'admin_flag',
-    ],
-],
-```
 
 ### Relationships
 
@@ -231,7 +216,7 @@ Auto-generated from relationship discriminator fields.
 
 ```php
 // config/ai.php
-'discovery' => [
+'auto_discovery' => [
     'role_mappings' => [
         'PersonTeam' => [
             'role_type' => [
@@ -268,71 +253,14 @@ Auto-generated from:
 - Class name variations
 - Common synonyms
 
-**Custom alias mappings:**
-
-```php
-// config/ai.php
-'discovery' => [
-    'alias_mappings' => [
-        'customers' => ['client', 'buyer', 'account'],
-        'orders' => ['purchase', 'transaction', 'sale'],
-    ],
-],
-```
-
-### Embed Fields
-
-Automatically selected:
-- Text fields (name, description, title, etc.)
-- Non-sensitive string fields
-- Fields likely to be searched
-
-**Prioritized:**
-1. `name`, `title`
-2. `description`, `summary`
-3. `email`, `company`
-4. Other string fields
-
-### Metadata Fields
-
-Automatically selected:
-- Primary key (`id`)
-- Status/type fields
-- Date fields
-- Foreign keys
-
 ---
 
 ## Customizing Discovery
 
-### Exclude Properties
-
-```php
-'discovery' => [
-    'exclude_properties' => [
-        'internal_notes',
-        'admin_only_field',
-        'legacy_*',  // Wildcard
-    ],
-],
-```
-
-### Custom Alias Mappings
-
-```php
-'discovery' => [
-    'alias_mappings' => [
-        'customers' => ['client', 'buyer', 'account', 'purchaser'],
-        'orders' => ['purchase', 'transaction', 'sale', 'booking'],
-        'products' => ['item', 'sku', 'merchandise'],
-    ],
-],
-```
-
 ### Role Mappings for Traversal Scopes
 
 ```php
-'discovery' => [
+'auto_discovery' => [
     'role_mappings' => [
         // Model name => [field => [value => scope_name]]
         'PersonTeam' => [
@@ -356,17 +284,20 @@ Automatically selected:
 ],
 ```
 
-### What to Discover
+### Enabling and Excluding Models
 
 ```php
-'discovery' => [
-    'properties' => true,
-    'relationships' => true,
-    'scopes' => true,
-    'aliases' => true,
-    'embed_fields' => true,
+'auto_discovery' => [
+    'enabled' => env('AI_AUTO_DISCOVERY_ENABLED', true),
+
+    // Model class-strings to skip during discovery
+    'excluded_models' => [
+        // App\Models\Secret::class,
+    ],
 ],
 ```
+
+To change individual properties or aliases for a model, override them in its `nodeableConfig()` method.
 
 ---
 
@@ -413,7 +344,7 @@ The `config/entities.php` file is the **source of truth**:
 │     └──> Empty: Throw RuntimeException                     │
 │                                                            │
 │  3. Merge model properties on top                          │
-│     └──> $embedFields, $graphLabel, $sensibleColumns       │
+│     └──> $graphLabel, $sensibleColumns                     │
 │     └──> $nodeableAliases, $graphRelationships             │
 │                                                            │
 │  4. Ensure minimum defaults                                │
@@ -437,7 +368,6 @@ class Customer extends Model implements Nodeable
     protected $fillable = ['name', 'email', 'company'];
 
     // These merge ON TOP of entities.php config
-    protected array $embedFields = ['name', 'company'];
     protected string $graphLabel = 'Customer';
     protected array $sensibleColumns = ['ssn'];
     protected array $nodeableAliases = ['customer', 'client'];
@@ -520,8 +450,7 @@ php artisan ai:index-semantic --rebuild
 
 ### Wrong Properties Discovered
 
-1. Add to `exclude_properties` config
-2. Or override with `nodeableConfig()` method
+1. Override with `nodeableConfig()` method
 
 ### Missing Relationships
 

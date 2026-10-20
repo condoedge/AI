@@ -7,7 +7,6 @@ namespace Condoedge\Ai\Tests\Unit\Services\Context;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Services\Context\ConversationContextManager;
 use Condoedge\Ai\Services\Context\EntityExtractor;
-use Condoedge\Ai\Services\Context\ReferenceResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Orchestra\Testbench\TestCase;
 
@@ -50,10 +49,7 @@ class AugmentationAnchorSnapshotTest extends TestCase
     public function setUp(): void
     {
         parent::setUp();
-        $this->manager = new ConversationContextManager(
-            new EntityExtractor(),
-            new ReferenceResolver()
-        );
+        $this->manager = new ConversationContextManager(new EntityExtractor());
     }
 
     /** @test */

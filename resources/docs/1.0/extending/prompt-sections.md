@@ -8,13 +8,13 @@ Customize the prompts sent to the LLM for query and response generation.
 
 The prompt builder uses modular sections to construct prompts. The system has two distinct pipelines:
 
-1. **Query Generator Pipeline** (17 sections) - Builds prompts for generating Cypher queries from natural language
-2. **Response Generator Pipeline** (12 sections) - Builds prompts for generating natural language responses from query results
+1. **Query Generator Pipeline** - Builds prompts for generating Cypher queries from natural language
+2. **Response Generator Pipeline** - Builds prompts for generating natural language responses from query results
 
 Each section handles a specific part of the prompt and can be:
-- Added dynamically via `SemanticPromptBuilder::addSection()` or `ResponseGenerator::addSection()`
-- Extended via `extendBuild()`
-- Removed or replaced at runtime
+- Added dynamically via `addModule()` on a `SemanticPromptBuilder` or `ResponseGenerator` instance
+- Registered application-wide via the `query_generator_sections` / `response_generator_sections` config lists
+- Removed at runtime via `removeModule()`
 - Conditionally included based on context
 
 ---
@@ -156,11 +156,13 @@ class AiExtensionServiceProvider extends ServiceProvider
     {
         // Add custom section to prompt builder
         $this->app->resolving(SemanticPromptBuilder::class, function ($builder) {
-            $builder->addSection(new BusinessRulesSection());
+            $builder->addModule(new BusinessRulesSection());
         });
     }
 }
 ```
+
+Alternatively, add `BusinessRulesSection::class` to the `query_generator_sections` list in your published `config/ai.php`.
 
 ### Step 3: Configure Rules
 
@@ -189,16 +191,12 @@ Sections are configured in `config/ai.php`:
     \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
     \Condoedge\Ai\Services\PromptSections\GenericContextSection::class,
     \Condoedge\Ai\Services\PromptSections\CurrentUserContextSection::class,
-    \Condoedge\Ai\Services\PromptSections\SchemaSection::class,
-    \Condoedge\Ai\Services\PromptSections\RelationshipsSection::class,
-    \Condoedge\Ai\Services\PromptSections\ExampleEntitiesSection::class,
+    \Condoedge\Ai\Services\PromptSections\SchemaCardsSection::class,
     \Condoedge\Ai\Services\PromptSections\FileContextSection::class,
     \Condoedge\Ai\Services\PromptSections\SimilarQueriesSection::class,
     \Condoedge\Ai\Services\PromptSections\ConversationContextSection::class,
     \Condoedge\Ai\Services\PromptSections\EntityActionAwarenessSection::class,
-    \Condoedge\Ai\Services\PromptSections\DetectedEntitiesSection::class,
     \Condoedge\Ai\Services\PromptSections\DetectedScopesSection::class,
-    fn(SemanticPromptBuilder $promptBuilder) => new \Condoedge\Ai\Services\PromptSections\PatternLibrarySection($promptBuilder->getPatternLibrary()),
     \Condoedge\Ai\Services\PromptSections\QueryRulesSection::class,
     \Condoedge\Ai\Services\PromptSections\QuestionSection::class,
     \Condoedge\Ai\Services\PromptSections\TaskInstructionsSection::class,
@@ -221,8 +219,7 @@ Sections are configured in `config/ai.php`:
     \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,
-    \Condoedge\Ai\Services\ResponseSections\ResponseEntityActionsSection::class,
-    \Condoedge\Ai\Services\ResponseSections\StatisticsSection::class,
+    \Condoedge\Ai\Services\ResponseSections\AttachedActionsSection::class,
     \Condoedge\Ai\Services\ResponseSections\GuidelinesSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResponseTaskSection::class,
 ]
@@ -241,16 +238,12 @@ The query generator pipeline builds prompts for converting natural language ques
 | 10 | ProjectContextSection | `project_context` | Adds project-level context (name, description, domain, business rules) to help the LLM understand the business domain |
 | 15 | GenericContextSection | `generic_context` | Adds current date/time context. Only included when question references time-related keywords |
 | 17 | CurrentUserContextSection | `current_user_context` | Adds authenticated user and team context (name, email, ID, team info) |
-| 20 | SchemaSection | `schema` | Provides Neo4j graph schema (labels, relationships, properties) |
-| 30 | RelationshipsSection | `relationships` | Shows entity relationships with EXACT directions. Critical for correct query generation |
-| 40 | ExampleEntitiesSection | `example_entities` | Shows actual data from Neo4j to help LLM understand data types, date formats, and property naming |
-| 45 | FileContextSection | `file_context` | Provides file context from vector search with citation instructions ([1], [2] markers) |
+| 20 | SchemaCardsSection | `schema` | One compact card per selected label: description + aliases, typed properties with declared enum legends, informative notes, the live directed edges (out/in), and fk hints for configured edges the graph lacks |
+| 45 | FileContextSection | `file_context` | Names of relevant documents only (no document text, no citation rules — the response prompt carries those) |
 | 50 | SimilarQueriesSection | `similar_queries` | Shows similar past queries for few-shot learning |
 | 55 | ConversationContextSection | `conversation_context` | Adds conversation history for follow-up questions and pronoun resolution |
 | 58 | EntityActionAwarenessSection | `entity_action_awareness` | Informs LLM that terms like "profile link" are UI actions, not database fields |
-| 60 | DetectedEntitiesSection | `detected_entities` | Shows entities detected in the user's question with metadata and properties |
 | 65 | DetectedScopesSection | `detected_scopes` | Shows business concepts (scopes) detected with semantic specifications |
-| 70 | PatternLibrarySection | `pattern_library` | Shows available reusable query patterns and templates |
 | 75 | QueryRulesSection | `query_rules` | Provides rules for query generation (schema compliance, data types, best practices) |
 | 80 | QuestionSection | `question` | Adds the user's question to the prompt |
 | 90 | TaskInstructionsSection | `task_instructions` | Final task instructions telling LLM to generate Cypher query |
@@ -269,9 +262,8 @@ The response generator pipeline builds prompts for converting query results into
 | 30 | OriginalQuestionSection | `question` | Shows the user's original question for context |
 | 45 | FileContextSection | `file_context` | Adds relevant file content with citation markers for the LLM to reference |
 | 45 | ResponseConversationContextSection | `conversation_context` | Adds conversation context including file references for follow-up questions |
-| 50 | ResultsDataSection | `data` | Shows the query results data (with configurable max items) |
-| 55 | ResponseEntityActionsSection | `entity_actions` | Informs AI about available entity actions and how to format action links |
-| 60 | StatisticsSection | `statistics` | Shows execution statistics (time, row count) |
+| 50 | ResultsDataSection | `data` | Shows the query results data (configurable max items), the row count / truncation total, and — only when execution stats are not hidden — the execution time |
+| 55 | AttachedActionsSection | `attached_actions` | One line: links/actions are attached by code; names the attached chips; `{{record:N}}` for inline record references |
 | 70 | GuidelinesSection | `guidelines` | Provides style-based guidelines (minimal, concise, friendly, detailed, technical) |
 | 80 | ResponseTaskSection | `task` | Final instruction telling LLM to generate the response |
 | 1000 | PrivacyAndSecurityGuidelinesSection | `security_restrictions` | Security and privacy guidelines to prevent data leakage (placed last for compliance) |
@@ -285,10 +277,10 @@ Sections are ordered by priority (lower = earlier in prompt). Standard priority 
 ### Query Generator Priorities
 - **10-19**: Project and generic context
 - **20-39**: Schema and structure
-- **40-49**: Examples and file context
+- **40-49**: File context
 - **50-59**: Similar queries and conversation
 - **60-69**: Detected entities and scopes
-- **70-79**: Patterns and rules
+- **70-79**: Calculations and rules
 - **80-89**: Question
 - **90+**: Task instructions
 
@@ -356,7 +348,6 @@ public function format(string $question, array $context, array $options = []): s
 {
     // Available in $context:
     $schema = $context['graph_schema'] ?? [];           // Neo4j schema info
-    $entities = $context['relevant_entities'] ?? [];    // Example entities
     $similar = $context['similar_queries'] ?? [];       // Similar past queries
     $entityMeta = $context['entity_metadata'] ?? [];    // Detected entities/scopes
     $fileContext = $context['file_context'] ?? [];      // File search results
@@ -405,10 +396,6 @@ class InsightsSection extends BaseResponseSection
 
     public function format(array $context, array $options = []): string
     {
-        if (!config('ai.response_generation.include_insights', true)) {
-            return '';
-        }
-
         return "## Additional Instructions\n\n" .
                "If the data reveals interesting patterns or anomalies, " .
                "briefly mention them. For example:\n" .
@@ -419,7 +406,7 @@ class InsightsSection extends BaseResponseSection
 
     public function shouldInclude(array $context, array $options = []): bool
     {
-        return config('ai.response_generation.include_insights', true);
+        return true;
     }
 }
 ```
@@ -507,10 +494,10 @@ class CustomQueryRulesSection extends QueryRulesSection
 // In service provider
 $this->app->resolving(SemanticPromptBuilder::class, function ($builder) {
     // Remove default section
-    $builder->removeSection('query_rules');
+    $builder->removeModule('query_rules');
 
     // Add custom replacement
-    $builder->addSection(new CustomQueryRulesSection());
+    $builder->addModule(new CustomQueryRulesSection());
 });
 ```
 

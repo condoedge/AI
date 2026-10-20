@@ -8,6 +8,7 @@ use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\Log;
 
 class HealthController extends Controller
 {
@@ -20,8 +21,10 @@ class HealthController extends Controller
             $graphStore = app(GraphStoreInterface::class);
             $graphStore->getSchema();
             $services['neo4j'] = ['status' => 'healthy'];
-        } catch (\Exception $e) {
-            $services['neo4j'] = ['status' => 'unhealthy', 'error' => $e->getMessage()];
+        } catch (\Throwable $e) {
+            // Never echo exception text (DSNs, hosts, credentials) — log it for operators.
+            $this->logFailure('neo4j', $e);
+            $services['neo4j'] = ['status' => 'unhealthy'];
             $healthy = false;
         }
 
@@ -29,8 +32,9 @@ class HealthController extends Controller
             $vectorStore = app(VectorStoreInterface::class);
             $vectorStore->listCollections();
             $services['qdrant'] = ['status' => 'healthy'];
-        } catch (\Exception $e) {
-            $services['qdrant'] = ['status' => 'unhealthy', 'error' => $e->getMessage()];
+        } catch (\Throwable $e) {
+            $this->logFailure('qdrant', $e);
+            $services['qdrant'] = ['status' => 'unhealthy'];
             $healthy = false;
         }
 
@@ -46,5 +50,14 @@ class HealthController extends Controller
             'services' => $services,
             'timestamp' => now()->toIso8601String(),
         ], $healthy ? 200 : 503);
+    }
+
+    private function logFailure(string $service, \Throwable $e): void
+    {
+        Log::warning("[AI health] {$service} check failed", [
+            'service' => $service,
+            'exception' => get_class($e),
+            'error' => $e->getMessage(),
+        ]);
     }
 }

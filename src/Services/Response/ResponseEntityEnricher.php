@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Response;
 
 use Condoedge\Ai\Services\Actions\AiActionRegistry;
+use Condoedge\Ai\Services\Actions\ModelMethodMutationAction;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
+use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
 
 /**
  * Response Entity Enricher
@@ -22,6 +24,22 @@ use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
  */
 class ResponseEntityEnricher
 {
+    /** Keys this enricher merges into rows — not query columns (column comparisons skip them). */
+    public const ENRICHMENT_KEYS = ['has_actions', 'available_actions', 'entity_type', 'action_links'];
+
+    /**
+     * Every non-data key a result row may carry: the enrichment keys plus the
+     * `_label` entity marker. Stripped from exports and ignored by column
+     * comparisons (AiManager::resultColumns, ResultSetExporter::stripDecorations).
+     *
+     * KNOWN LIMIT: a genuine query column aliased `entity_type` (or `has_actions`,
+     * …) is indistinguishable from the decoration and is dropped too. Renaming the
+     * enrichment key to something distinctive (e.g. `_entity_type`) was checked
+     * and deferred: the key is persisted in conversation snapshots (last_result_sample) that existing
+     * conversations replay, so a rename needs a read-both migration.
+     */
+    public const DECORATION_KEYS = [...self::ENRICHMENT_KEYS, '_label'];
+
     public function __construct(
         private EntityAutoDiscovery $discovery,
         private ?AiActionRegistry $registry = null,
@@ -45,16 +63,24 @@ class ResponseEntityEnricher
                 continue;
             }
 
-            $entityLabel = $result['_label'] ?? $result['type'] ?? null;
+            $entityLabel = $this->resolveEntityLabel($result);
 
-            if (!$entityLabel) {
+            if ($entityLabel === null) {
                 $enriched[] = $result;
                 continue;
             }
 
-            // 90c W6: per-row chips only for actions THIS user survives authorize() on
-            // (mutating actions pass through — they re-authorize against the resolved row).
-            $actions = $this->discovery->getAuthorizedEntityActions($entityLabel, $this->currentUser());
+            // 90c W6: per-row chips only for actions THIS user survives authorize() on.
+            // A1/A2: mutating actions additionally pass the FULL row gate (capability + row
+            // authorization + precondition) for THIS row — a rejected reservation is never
+            // offered an "approve" chip, a resident never gets one at all.
+            $user = $this->currentUser();
+            $actions = $this->rowAuthorizedActions(
+                $entityLabel,
+                $result,
+                $this->discovery->getAuthorizedEntityActions($entityLabel, $user),
+                $user
+            );
 
             $enriched[] = array_merge($result, [
                 'has_actions' => !empty($actions),
@@ -69,10 +95,41 @@ class ResponseEntityEnricher
     }
 
     /**
+     * The row's entity label: `_label` is authoritative. A `type` column is only a
+     * label when it is a string naming a registered entity — a query may alias ANY
+     * domain value as `type` (live: `t.team_type AS type` = 2), and treating that as
+     * an entity label crashed the turn (TypeError) or advertised actions for a
+     * non-entity.
+     */
+    private function resolveEntityLabel(array $row): ?string
+    {
+        $label = $row['_label'] ?? null;
+        if (is_string($label) && $label !== '') {
+            return $label;
+        }
+
+        $type = $row['type'] ?? null;
+        if (is_string($type) && $type !== '' && $this->isRegisteredEntityLabel($type)) {
+            return $type;
+        }
+
+        return null;
+    }
+
+    /**
+     * True when the label is a catalog entity: its configured graph label, or the
+     * basename of its config key (the shared EntityLabelIndex lookup).
+     */
+    private function isRegisteredEntityLabel(string $label): bool
+    {
+        return EntityLabelIndex::shared()->isRegistered($label);
+    }
+
+    /**
      * Build ready-to-render markdown action links for one row.
      *
      * @param array $row
-     * @param array $actions  From getEntityActions(): [['action_key','label','aliases'], ...]
+     * @param array $actions  From getAuthorizedEntityActions() + the per-row gate: [['action_key','label','aliases'], ...]
      * @return array<int, string>  e.g. ['[View John](entity://Person/152463/profile)']
      */
     private function buildActionLinks(string $entityLabel, array $row, array $actions): array
@@ -96,6 +153,59 @@ class ResponseEntityEnricher
         }
 
         return $links;
+    }
+
+    /**
+     * Keep read-only actions as advertised; keep a MUTATING action only when this row passes its
+     * full authorize() (the same gate dispatch + approval run). A row without an id cannot be
+     * verified, so its mutations are dropped (fail closed). A gate that throws drops the action.
+     *
+     * @param array<int, array<string, mixed>> $actions
+     * @return array<int, array<string, mixed>>
+     */
+    private function rowAuthorizedActions(string $entityLabel, array $row, array $actions, mixed $user): array
+    {
+        $registry = $this->actionRegistry();
+        if ($registry === null || $actions === []) {
+            return $actions;
+        }
+
+        $id = $this->extractEntityId($row);
+        $kept = [];
+        foreach ($actions as $entry) {
+            $key = is_array($entry) ? ($entry['action_key'] ?? null) : null;
+            $action = is_string($key) ? $registry->getEntity($entityLabel, $key) : null;
+
+            if ($action !== null && $action->mutates()) {
+                if ($id === null) {
+                    continue;
+                }
+                try {
+                    if (!$action->authorize($user, [ModelMethodMutationAction::ID_PARAM => $id])) {
+                        continue;
+                    }
+                } catch (\Throwable $e) {
+                    continue;
+                }
+            }
+
+            $kept[] = $entry;
+        }
+
+        return $kept;
+    }
+
+    private function actionRegistry(): ?AiActionRegistry
+    {
+        if ($this->registry !== null) {
+            return $this->registry;
+        }
+
+        try {
+            return function_exists('app') ? app(AiActionRegistry::class) : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**

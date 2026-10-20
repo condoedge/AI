@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Log;
 /**
  * Remove Entity Job
  *
- * Queues the removal of a Nodeable entity from Neo4j and Qdrant.
+ * Queues the removal of a Nodeable entity from the graph (Neo4j).
  * Triggered automatically when a model with HasNodeableConfig trait is deleted.
  */
 class RemoveEntityJob implements ShouldQueue

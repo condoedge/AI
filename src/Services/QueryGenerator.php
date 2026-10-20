@@ -9,10 +9,17 @@ use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryGenerationResult;
+use Condoedge\Ai\Exceptions\LlmInvalidJsonException;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
+use Condoedge\Ai\Services\Query\CypherBooleanPrecedence;
+use Condoedge\Ai\Services\Query\CypherScopeHint;
+use Condoedge\Ai\Services\Security\CypherSchemaValidator;
 use Condoedge\Ai\Services\Security\CypherScopeAnalyzer;
 use Condoedge\Ai\Support\AiLogger;
+use Condoedge\Ai\Support\PipelineObserverScope;
+use Condoedge\Ai\Support\TokenUsage;
+use Condoedge\Ai\Services\Response\PiiMasker;
 
 /**
  * Query Generator Service
@@ -20,9 +27,8 @@ use Condoedge\Ai\Support\AiLogger;
  * Transforms natural language questions into safe, valid Cypher queries
  * using LLM and context from RAG (graph schema, similar queries, examples).
  *
- * Validation/sanitization is delegated to {@see CypherValidator} and the
- * deterministic template path to {@see TemplateMatcher}; this class owns the
- * LLM retry/validate loop and prompt assembly.
+ * Validation/sanitization is delegated to {@see CypherValidator}; this class
+ * owns the (single) LLM retry/validate loop and prompt assembly.
  *
  * @package Condoedge\Ai\Services
  */
@@ -37,11 +43,6 @@ class QueryGenerator implements QueryGeneratorInterface
      * Cypher validation / sanitization (canonical keyword list lives here)
      */
     private CypherValidator $validator;
-
-    /**
-     * Deterministic, LLM-free template generation path
-     */
-    private TemplateMatcher $templateMatcher;
 
     /**
      * Rate limiter for LLM API calls
@@ -62,6 +63,19 @@ class QueryGenerator implements QueryGeneratorInterface
     private CypherScopeAnalyzer $scopeAnalyzer;
 
     /**
+     * Live-graph schema check of accepted drafts (Task 5.4): unknown labels,
+     * nonexistent relationship patterns / directions, nonexistent properties.
+     */
+    private CypherSchemaValidator $schemaValidator;
+
+    /**
+     * Draft-quality check (eval p22-1001-B): a predicate mixing OR / XOR with AND at
+     * one nesting level filters the last alternative only. Fed back like a schema
+     * violation. Never part of the security pipeline.
+     */
+    private CypherBooleanPrecedence $precedenceCheck;
+
+    /**
      * Constructor
      *
      * @param LlmProviderInterface $llm LLM provider for query generation
@@ -70,8 +84,9 @@ class QueryGenerator implements QueryGeneratorInterface
      * @param SemanticPromptBuilder|null $promptBuilder Optional semantic prompt builder
      * @param AiLogger|null $logger Optional logger instance
      * @param CypherValidator|null $validator Optional validator (canonical keyword list)
-     * @param TemplateMatcher|null $templateMatcher Optional template matcher
      * @param CypherScopeAnalyzer|null $scopeAnalyzer Optional subset recognizer
+     * @param CypherSchemaValidator|null $schemaValidator Optional live-schema validator
+     * @param CypherBooleanPrecedence|null $precedenceCheck Optional OR / AND precedence check
      */
     public function __construct(
         private readonly LlmProviderInterface $llm,
@@ -80,17 +95,17 @@ class QueryGenerator implements QueryGeneratorInterface
         ?SemanticPromptBuilder $promptBuilder = null,
         ?AiLogger $logger = null,
         ?CypherValidator $validator = null,
-        ?TemplateMatcher $templateMatcher = null,
-        ?CypherScopeAnalyzer $scopeAnalyzer = null
+        ?CypherScopeAnalyzer $scopeAnalyzer = null,
+        ?CypherSchemaValidator $schemaValidator = null,
+        ?CypherBooleanPrecedence $precedenceCheck = null
     ) {
-        $this->promptBuilder = $promptBuilder ?? new SemanticPromptBuilder(
-            new PatternLibrary()
-        );
+        $this->promptBuilder = $promptBuilder ?? new SemanticPromptBuilder();
         $this->rateLimiter = RateLimiter::forLlm();
         $this->logger = $logger ?? app(AiLogger::class);
         $this->validator = $validator ?? new CypherValidator();
-        $this->templateMatcher = $templateMatcher ?? new TemplateMatcher();
         $this->scopeAnalyzer = $scopeAnalyzer ?? new CypherScopeAnalyzer();
+        $this->schemaValidator = $schemaValidator ?? new CypherSchemaValidator();
+        $this->precedenceCheck = $precedenceCheck ?? new CypherBooleanPrecedence();
     }
 
     /**
@@ -111,87 +126,42 @@ class QueryGenerator implements QueryGeneratorInterface
         $allowWrite = $options['allow_write'] ?? $this->config['allow_write_operations'] ?? false;
         $explain = $options['explain'] ?? false;
 
-        // Check if templates are enabled.
-        // Skip templates only when HIGH-CONFIDENCE scopes are detected — these indicate
-        // the question has filtering conditions (e.g., "unpaid", "expired", "open") that
-        // templates can't handle. Low-confidence scope matches (< 0.7) are noise and
-        // should NOT prevent simple template queries like "How many units?".
-        $scopeBypassThreshold = $this->config['scope_bypass_threshold'] ?? 0.7;
-        $hasDetectedScopes = false;
-        foreach ($context->entityMetadata['detected_scopes'] ?? [] as $scope) {
-            if (($scope['match_score'] ?? 0) >= $scopeBypassThreshold) {
-                $hasDetectedScopes = true;
-                break;
-            }
-        }
+        // Execution repair (Task 5.5): regenerate from the generator's OWN failed
+        // draft + the Neo4j error.
+        $repair = is_array($options['repair'] ?? null) ? $options['repair'] : null;
 
-        if (($this->config['enable_templates'] ?? true) && !$hasDetectedScopes) {
-            $template = $this->detectTemplate($question);
-            if ($template) {
-                $this->logger->debug('query_generator', "Template matched: {$template}", [
-                    'question' => $question,
-                    'template' => $template,
-                ]);
+        // There is ONE generation path (Phase 2.B): the LLM, with the retry /
+        // validate / schema-repair loop below. The former regex template path
+        // (TemplateMatcher: English-only "show all X" / "how many X", naive
+        // singularization, and an "Unknown label" throw OUTSIDE this retry loop
+        // that hard-failed "How many residents?") was deleted.
 
-                $result = $this->templateMatcher->generateFromTemplate($question, $template, $context);
-                if ($result !== null) {
-                    // The deterministic path is safety-checked like the LLM path: a
-                    // template that produces invalid Cypher falls through to LLM
-                    // generation rather than shipping straight to the executor.
-                    $validation = $this->validate($result['cypher'], ['allow_write' => $allowWrite]);
-                    if ($validation['valid']) {
-                        $durationMs = $this->logger->stopTimer('query_generation');
-                        $this->logger->info('query_generator', 'Query generated via template', [
-                            'duration_ms' => $durationMs,
-                            'source' => 'template',
-                            'template' => $template,
-                            'confidence' => $result['confidence'],
-                        ]);
-                        return new QueryGenerationResult(
-                            cypher: $result['cypher'],
-                            explanation: $result['explanation'] ?? '',
-                            confidence: (float) ($result['confidence'] ?? 0.0),
-                            warnings: $result['warnings'] ?? [],
-                            metadata: $result['metadata'] ?? [],
-                        );
-                    }
-
-                    $this->logger->warning('query_generator', 'Template output failed validation, falling through to LLM', [
-                        'template' => $template,
-                        'errors' => $validation['errors'],
-                    ]);
-                }
-            } else {
-                $this->logger->debug('query_generator', 'No template matched for question', [
-                    'question' => $question,
-                ]);
-            }
-        } elseif ($hasDetectedScopes) {
-            $this->logger->debug('query_generator', 'Templates skipped (scopes detected)', [
-                'scope_count' => count($context->entityMetadata['detected_scopes'] ?? []),
-            ]);
-        }
-
-        // Try LLM generation with retries
+        // Try LLM generation with retries.
+        //
+        // One retry budget ($maxRetries LLM calls) covers every reason to redraft:
+        // an invalid / out-of-subset draft (hard — never returned) and a draft that
+        // uses a label / relationship / property the live graph does not have
+        // (soft, Task 5.4 — fed back as a schema repair; the best such draft is
+        // returned with schema_violations recorded when the budget runs out, since
+        // the security layer still guards execution). A predicate that mixes OR with
+        // AND at one level (eval p22-1001-B) is the same kind of soft redraft, with
+        // its own feedback and its own record (precedence_violations).
         $retryCount = 0;
-        $lastError = null;
-
-        // Prompt-capture seam for the eval harness: attach the VERBATIM final
-        // system/user strings to result metadata ONLY when explicitly requested,
-        // so production payloads never grow. On retries the LAST attempt's
-        // prompts win — that is the pair that produced the returned cypher.
-        $capturePrompts = ($options['capture_prompts'] ?? false) === true;
-        $capturedPrompts = null;
+        $lastError = $repair !== null ? $this->executionRepairFeedback($repair) : null;
+        $previousDraft = $repair !== null ? trim((string) ($repair['cypher'] ?? '')) : null;
+        $schemaFacts = $this->schemaValidationEnabled($options)
+            ? CypherSchemaValidator::schemaFromContext($context->graphSchema)
+            : null;
+        $checkPrecedence = $this->precedenceCheckEnabled($options);
+        $schemaRepairs = 0;
+        $softCandidate = null;
+        $runMeta = ['execution_repair' => $repair !== null, 'precedence_repaired' => []];
 
         while ($retryCount < $maxRetries) {
             try {
                 // Build prompt, split into system (identity + static rules) and user.
                 ['system' => $systemPrompt, 'user' => $userPrompt] =
-                    $this->buildPrompts($question, $context, $allowWrite, $lastError);
-
-                if ($capturePrompts) {
-                    $capturedPrompts = ['system' => $systemPrompt, 'user' => $userPrompt];
-                }
+                    $this->buildPrompts($question, $context, $allowWrite, $lastError, $previousDraft);
 
                 $this->logger->debug('query_generator', 'Sending prompt to LLM', [
                     'prompt_size_bytes' => strlen($systemPrompt) + strlen($userPrompt),
@@ -202,23 +172,17 @@ class QueryGenerator implements QueryGeneratorInterface
                     throw new QueryGenerationException('Rate limit exceeded for LLM API');
                 }
 
-                // Call LLM — identity/static rules in the real system role.
-                $response = $this->llm->complete($userPrompt, $systemPrompt !== '' ? $systemPrompt : null, [
-                    'temperature' => $temperature,
-                    'max_tokens' => 500,
-                ]);
+                $draft = $this->requestDraft($systemPrompt, $userPrompt, (float) $temperature, $context);
+                $runMeta['output_format'] = $draft['format'];
 
-                $this->logger->debug('query_generator', 'LLM response received', [
-                    'response_size_bytes' => strlen($response ?? ''),
-                    'raw_response' => $response,
-                ]);
-
-                if ($response == 'NO QUERY REQUIRED' || !isset($response) || empty($response)) {
+                // Structured "no query needed" (Task 5.6) — replaces the exact-match
+                // 'NO QUERY REQUIRED' sentinel that failed on punctuation/quotes.
+                if (!$draft['needs_query']) {
                     $durationMs = $this->logger->stopTimer('query_generation');
                     $this->logger->info('query_generator', 'No query required', [
                         'duration_ms' => $durationMs,
                         'source' => 'llm',
-                        'confidence' => 1.0,
+                        'reason' => $draft['reason'],
                     ]);
                     return new QueryGenerationResult(
                         cypher: '',
@@ -229,11 +193,21 @@ class QueryGenerator implements QueryGeneratorInterface
                             'template_used' => null,
                             'retry_count' => $retryCount,
                             'complexity' => 0,
-                        ] + ($capturedPrompts !== null ? ['prompts' => $capturedPrompts] : []),
+                            'no_query_reason' => $draft['reason'],
+                            'schema_violations' => [],
+                            'precedence_violations' => [],
+                            'repair_attempts' => $schemaRepairs,
+                        ] + $runMeta,
                     );
                 }
 
-                $cypher = $this->extractCypher($response);
+                $cypher = $draft['cypher'];
+
+                // P-1 (Phase 8-A review): the conversation reached this prompt MASKED,
+                // so a follow-up may reference a PII token ([email#1]). Rebind it as a
+                // query parameter carrying the real value BEFORE validation — never an
+                // inlined literal (which could alter the query's structure).
+                [$cypher] = $this->bindPiiTokens($cypher, $context);
 
                 $validation = $this->validate($cypher, ['allow_write' => $allowWrite]);
 
@@ -258,30 +232,54 @@ class QueryGenerator implements QueryGeneratorInterface
                 ]);
 
                 if ($validation['valid']) {
-                    $confidence = $this->calculateConfidence($cypher, $context);
-                    $durationMs = $this->logger->stopTimer('query_generation');
-                    $this->logger->info('query_generator', 'Query generated via LLM', [
-                        'duration_ms' => $durationMs,
-                        'source' => 'llm',
-                        'confidence' => $confidence,
-                        'retry_count' => $retryCount,
-                        'complexity' => $validation['complexity'],
+                    // Schema check (Task 5.4): only what the live graph PROVABLY lacks.
+                    $violations = $schemaFacts !== null
+                        ? $this->schemaValidator->validate($cypher, $schemaFacts)
+                        : [];
+                    // Precedence check (eval p22-1001-B): `A OR B AND C` at one level.
+                    $ambiguous = $checkPrecedence ? $this->precedenceCheck->violations($cypher) : [];
+
+                    if ($violations === [] && $ambiguous === []) {
+                        return $this->llmResult($cypher, $question, $context, $explain, $validation, $retryCount, [], $schemaRepairs, $runMeta);
+                    }
+
+                    // Keep the least-violating draft (latest on a tie) as the fallback.
+                    if ($softCandidate === null
+                        || count($violations) + count($ambiguous) <= count($softCandidate['violations']) + count($softCandidate['ambiguous'])) {
+                        $softCandidate = [
+                            'cypher' => $cypher,
+                            'validation' => $validation,
+                            'violations' => $violations,
+                            'ambiguous' => $ambiguous,
+                        ];
+                    }
+
+                    $retryCount++;
+                    if ($retryCount >= $maxRetries) {
+                        break;
+                    }
+
+                    $schemaRepairs++;
+                    $lastError = $this->draftRepairFeedback($violations, $ambiguous);
+                    $previousDraft = $cypher;
+                    if ($ambiguous !== []) {
+                        // What was sent back, for the trace (the predicates, not the instruction).
+                        $runMeta['precedence_repaired'] = array_values(array_unique(array_merge(
+                            $runMeta['precedence_repaired'],
+                            $this->precedenceCheck->ambiguousPredicates($cypher)
+                        )));
+                    }
+                    $this->logger->warning('query_generator', "Draft violates the graph schema or is ambiguous — regenerating (attempt {$retryCount}/{$maxRetries})", [
+                        'retry_number' => $retryCount,
+                        'violations' => $violations,
+                        'precedence_violations' => $ambiguous,
                     ]);
-                    return new QueryGenerationResult(
-                        cypher: $cypher,
-                        explanation: $explain ? $this->generateExplanation($cypher, $question) : '',
-                        confidence: $confidence,
-                        warnings: $validation['warnings'],
-                        metadata: [
-                            'template_used' => null,
-                            'retry_count' => $retryCount,
-                            'complexity' => $validation['complexity'],
-                        ] + ($capturedPrompts !== null ? ['prompts' => $capturedPrompts] : []),
-                    );
+                    continue;
                 }
 
                 // Validation failed, prepare for retry
                 $lastError = implode(', ', $validation['errors']);
+                $previousDraft = $cypher;
                 $retryCount++;
 
                 $this->logger->warning('query_generator', "Retrying query generation (attempt {$retryCount}/{$maxRetries})", [
@@ -308,6 +306,30 @@ class QueryGenerator implements QueryGeneratorInterface
             }
         }
 
+        // Budget spent on schema / precedence repairs: proceed with the best draft,
+        // recording its violations for trace / grading. Not blocked — the security
+        // layer still scopes and guards execution.
+        if ($softCandidate !== null) {
+            $this->logger->warning('query_generator', 'Returning a draft that still violates the graph schema or is ambiguous', [
+                'violations' => $softCandidate['violations'],
+                'precedence_violations' => $softCandidate['ambiguous'],
+                'repair_attempts' => $schemaRepairs,
+            ]);
+
+            return $this->llmResult(
+                $softCandidate['cypher'],
+                $question,
+                $context,
+                $explain,
+                $softCandidate['validation'],
+                $retryCount,
+                $softCandidate['violations'],
+                $schemaRepairs,
+                $runMeta,
+                $softCandidate['ambiguous']
+            );
+        }
+
         // All retries exhausted
         $durationMs = $this->logger->stopTimer('query_generation');
         $this->logger->error('query_generator', "Failed to generate valid query after {$maxRetries} attempts", [
@@ -316,12 +338,226 @@ class QueryGenerator implements QueryGeneratorInterface
             'max_retries' => $maxRetries,
         ]);
 
-        // Attach the LAST attempt's verbatim prompts (capture-mode only) so a
-        // failed generation is still inspectable by the eval trace — the prompts
-        // must not be lost precisely when the stage fails.
-        throw (new QueryGenerationException(
+        // Every attempt's verbatim prompt already reached the turn observer
+        // (promptBuilt above), so a failed generation stays inspectable.
+        throw new QueryGenerationException(
             "Failed to generate valid query after {$maxRetries} attempts. Last error: {$lastError}"
-        ))->setPrompts($capturedPrompts);
+        );
+    }
+
+    /**
+     * The accepted LLM draft as a result DTO.
+     *
+     * @param list<string> $violations schema violations the draft still has
+     * @param list<string> $ambiguous precedence violations the draft still has
+     */
+    private function llmResult(
+        string $cypher,
+        string $question,
+        PipelineContext $context,
+        bool $explain,
+        array $validation,
+        int $retryCount,
+        array $violations,
+        int $schemaRepairs,
+        array $runMeta,
+        array $ambiguous = []
+    ): QueryGenerationResult {
+        $confidence = $this->calculateConfidence($cypher, $context);
+        $durationMs = $this->logger->stopTimer('query_generation');
+        $this->logger->info('query_generator', 'Query generated via LLM', [
+            'duration_ms' => $durationMs,
+            'source' => 'llm',
+            'confidence' => $confidence,
+            'retry_count' => $retryCount,
+            'complexity' => $validation['complexity'],
+            'schema_violations' => count($violations),
+            'precedence_violations' => count($ambiguous),
+        ]);
+
+        return new QueryGenerationResult(
+            cypher: $cypher,
+            explanation: $explain ? $this->generateExplanation($cypher, $question) : '',
+            confidence: $confidence,
+            warnings: $validation['warnings'],
+            metadata: [
+                'template_used' => null,
+                'retry_count' => $retryCount,
+                'complexity' => $validation['complexity'],
+                'schema_violations' => $violations,
+                'precedence_violations' => $ambiguous,
+                'repair_attempts' => $schemaRepairs,
+            ] + $runMeta,
+            parameters: $this->bindPiiTokens($cypher, $context)[1],
+        );
+    }
+
+    /**
+     * Rebind PII tokens as `$pii_…` parameters (idempotent: an already-bound draft
+     * just resolves its parameters from this turn's map / the previous turn's).
+     *
+     * @return array{0: string, 1: array<string, string>}
+     */
+    private function bindPiiTokens(string $cypher, PipelineContext $context): array
+    {
+        $previous = $context->conversationContext['last_cypher_parameters'] ?? [];
+
+        return PiiMasker::for($context)->bindCypher($cypher, is_array($previous) ? $previous : []);
+    }
+
+    /**
+     * One structured generation call (Task 5.6): chatJson with the
+     * {"needs_query", "cypher", "reason"} contract. A reply the provider could not
+     * decode as JSON is read ONCE as free text (the pre-5.6 extraction) instead of
+     * re-requesting; a decoded reply that is not the contract object throws so the
+     * retry loop redrafts with a teachable error.
+     *
+     * @return array{needs_query: bool, cypher: string, reason: string, format: string}
+     */
+    private function requestDraft(string $systemPrompt, string $userPrompt, float $temperature, PipelineContext $context): array
+    {
+        $messages = TokenUsage::completeMessages($userPrompt, $systemPrompt !== '' ? $systemPrompt : null);
+        $observer = PipelineObserverScope::for($context);
+        $observer->promptBuilt('query_generation', $messages);
+
+        try {
+            $decoded = $this->llm->chatJson($messages, [
+                'temperature' => $temperature,
+                'max_tokens' => $this->maxOutputTokens(),
+            ]);
+        } catch (LlmInvalidJsonException $e) {
+            // A reply CUT at the output budget holds a query fragment: never run it
+            // as free text — redraft with a teachable error (same retry budget).
+            if ($e->truncated) {
+                $this->logger->warning('query_generator', 'Generation reply was cut at the output budget', [
+                    'reply_chars' => mb_strlen($e->rawText),
+                    'max_tokens' => $this->maxOutputTokens(),
+                ]);
+
+                throw new QueryGenerationException(
+                    'The reply was cut at the output budget — return a shorter query (fewer RETURN columns, no redundant clauses) in a complete JSON object.'
+                );
+            }
+
+            $this->logger->warning('query_generator', 'Generation reply was not valid JSON — falling back to free-text extraction', [
+                'reply_chars' => mb_strlen($e->rawText),
+            ]);
+
+            $cypher = $this->extractCypher($e->rawText);
+            if ($cypher === '') {
+                $this->logger->info('query_generator', 'Empty free-text generation reply read as needs_query=false (no query)');
+            }
+
+            return ['needs_query' => $cypher !== '', 'cypher' => $cypher, 'reason' => '', 'format' => 'text'];
+        } finally {
+            TokenUsage::report($observer, 'query_generation', $this->llm);
+        }
+
+        $reply = json_decode((string) json_encode($decoded), true);
+        if (!is_array($reply) || array_is_list($reply)) {
+            throw new QueryGenerationException(
+                'Reply with ONE JSON object {"needs_query": true|false, "cypher": "<query>"|null, "reason": "<short reason>"}.'
+            );
+        }
+
+        $cypher = is_string($reply['cypher'] ?? null) ? $this->extractCypher($reply['cypher']) : '';
+        $needsQuery = array_key_exists('needs_query', $reply)
+            ? filter_var($reply['needs_query'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? ($cypher !== '')
+            : $cypher !== '';
+        $reason = is_string($reply['reason'] ?? null) ? trim($reply['reason']) : '';
+
+        if ($needsQuery && $cypher === '') {
+            throw new QueryGenerationException(
+                'needs_query was true but "cypher" was empty — return the Cypher query in "cypher", or set needs_query to false.'
+            );
+        }
+
+        return ['needs_query' => $needsQuery, 'cypher' => $cypher, 'reason' => $reason, 'format' => 'json'];
+    }
+
+    /**
+     * Retry feedback for a draft that uses what the graph does not have.
+     *
+     * @param list<string> $violations
+     */
+    private function schemaRepairFeedback(array $violations): string
+    {
+        return "the query does not match the live graph schema:\n- " . implode("\n- ", $violations)
+            . "\nUse only the labels, relationship directions and properties that exist.";
+    }
+
+    /**
+     * Retry feedback for a draft that is valid Cypher but should be redrafted: what
+     * it uses that the graph does not have, and / or a predicate whose OR / AND
+     * precedence is ambiguous (each violation carries its own instruction).
+     *
+     * @param list<string> $violations schema violations
+     * @param list<string> $ambiguous precedence violations
+     */
+    private function draftRepairFeedback(array $violations, array $ambiguous): string
+    {
+        $parts = [];
+        if ($violations !== []) {
+            $parts[] = $this->schemaRepairFeedback($violations);
+        }
+        if ($ambiguous !== []) {
+            $parts[] = "the query's boolean logic is ambiguous as written:\n- " . implode("\n- ", $ambiguous)
+                . "\nAdd the parentheses and change nothing else in that predicate.";
+        }
+
+        return implode("\n", $parts);
+    }
+
+    /**
+     * Retry feedback for an execution-repair request: the Neo4j error of the
+     * generator's own draft (never the tenant-scoped rewrite).
+     */
+    private function executionRepairFeedback(array $repair): string
+    {
+        $error = trim((string) ($repair['error'] ?? ''));
+        $feedback = 'Neo4j rejected the query when executing it: ' . ($error !== '' ? $error : 'unknown error');
+
+        // Eval p12-1001-A: "Variable `x` not defined" alone let the model keep the
+        // out-of-scope use — the hint names the clause that dropped it (structural,
+        // from the error text + the draft).
+        $hint = CypherScopeHint::forError($error, trim((string) ($repair['cypher'] ?? '')));
+
+        return $hint !== null ? $feedback . "\n" . $hint : $feedback;
+    }
+
+    /**
+     * Whether generated drafts are checked against the live graph schema
+     * (config ai.query_generation.schema_validation, default on).
+     */
+    private function schemaValidationEnabled(array $options): bool
+    {
+        if (array_key_exists('schema_validation', $options)) {
+            return (bool) $options['schema_validation'];
+        }
+
+        return (bool) config('ai.query_generation.schema_validation', $this->config['schema_validation'] ?? true);
+    }
+
+    /**
+     * Whether generated drafts are checked for a predicate that mixes OR / XOR with
+     * AND at one nesting level (config ai.query_generation.precedence_check, default on).
+     */
+    private function precedenceCheckEnabled(array $options): bool
+    {
+        if (array_key_exists('precedence_check', $options)) {
+            return (bool) $options['precedence_check'];
+        }
+
+        return (bool) config('ai.query_generation.precedence_check', $this->config['precedence_check'] ?? true);
+    }
+
+    /**
+     * Output budget of one generation call: the JSON envelope adds ~40 tokens to
+     * the Cypher itself (config ai.query_generation.max_tokens, default 800).
+     */
+    private function maxOutputTokens(): int
+    {
+        return max(1, (int) ($this->config['max_tokens'] ?? config('ai.query_generation.max_tokens', 800)));
     }
 
     /**
@@ -360,48 +596,16 @@ class QueryGenerator implements QueryGeneratorInterface
     }
 
     /**
-     * Check if a label exists in the graph schema.
-     *
-     * @param string $label The label to validate
-     * @param array $validLabels Array of valid labels from schema
-     * @return bool True if the label is valid
-     */
-    public function isValidLabel(string $label, array $validLabels): bool
-    {
-        return $this->templateMatcher->isValidLabel($label, $validLabels);
-    }
-
-    /**
-     * Get available query templates
-     *
-     * @return array Array of template metadata
-     */
-    public function getTemplates(): array
-    {
-        return $this->templateMatcher->getTemplates();
-    }
-
-    /**
-     * Detect which template (if any) matches the question
-     *
-     * @param string $question Natural language question
-     * @return string|null Template name or null if no match
-     */
-    public function detectTemplate(string $question): ?string
-    {
-        return $this->templateMatcher->detectTemplate($question);
-    }
-
-    /**
      * Build the LLM prompt split by role (system / user).
      *
      * @param string $question User question
      * @param PipelineContext $context Pipeline context
      * @param bool $allowWrite Allow write operations
      * @param string|null $previousError Previous error for retry
+     * @param string|null $previousDraft The generator's own previous draft (shown back on retry)
      * @return array{system: string, user: string}
      */
-    private function buildPrompts(string $question, PipelineContext $context, bool $allowWrite, ?string $previousError): array
+    private function buildPrompts(string $question, PipelineContext $context, bool $allowWrite, ?string $previousError, ?string $previousDraft = null): array
     {
         // Always use SemanticPromptBuilder for consistent, high-quality prompts
         // It handles all context types including project metadata, entity metadata, scopes, etc.
@@ -413,9 +617,12 @@ class QueryGenerator implements QueryGeneratorInterface
 
         // Add retry context to the user message if needed (it concerns this attempt's data).
         if ($previousError) {
+            if ($previousDraft !== null && $previousDraft !== '') {
+                $prompts['user'] .= "\n\nYour previous query was:\n{$previousDraft}\n";
+            }
             $prompts['user'] .= "\n\nPrevious attempt failed with error: {$previousError}\n";
-            $prompts['user'] .= "Please fix the error and regenerate the query.\n\n";
-            $prompts['user'] .= "CYPHER QUERY:";
+            $prompts['user'] .= "Fix it and return the corrected query in the JSON object.\n\n";
+            $prompts['user'] .= "JSON RESPONSE:";
         }
 
         return $prompts;
@@ -449,7 +656,10 @@ class QueryGenerator implements QueryGeneratorInterface
     {
         try {
             $prompt = "Explain this Cypher query in simple terms for the question '{$question}':\n\n{$cypher}";
-            return $this->llm->complete($prompt, null, ['temperature' => 0.3, 'max_tokens' => 150]);
+            $explanation = $this->llm->complete($prompt, null, ['temperature' => 0.3, 'max_tokens' => 150]);
+            TokenUsage::report(PipelineObserverScope::current(), 'query_generation', $this->llm);
+
+            return $explanation;
         } catch (\Exception $e) {
             $this->logger->error('query_generator', 'Failed to generate explanation', [
                 'error' => $e->getMessage(),

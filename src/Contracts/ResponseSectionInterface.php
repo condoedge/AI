@@ -13,9 +13,8 @@ use Condoedge\Ai\DTOs\PipelineContext;
  * Each section is responsible for formatting a specific part of the explanation prompt.
  *
  * Sections are processed in priority order (lower = earlier) and can be:
- * - Added dynamically via ResponseGenerator::addSection()
- * - Extended via ResponseGenerator::extendBuild()
- * - Removed or replaced at runtime
+ * - Registered via config('ai.response_generator_sections')
+ * - Added/removed at runtime via ResponseGenerator::addModule()/removeModule()
  *
  * Example implementation:
  * ```php

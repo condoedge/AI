@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Tests\Unit\Services\PromptSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryUnderstandingResult;
 use Condoedge\Ai\Services\Actions\AiActionRegistry;
 use Condoedge\Ai\Services\PromptSections\EntityActionAwarenessSection;
 use Condoedge\Ai\Tests\TestCase;
@@ -30,14 +31,15 @@ class EntityActionAwarenessSectionTest extends TestCase
         $this->assertTrue($result);
     }
 
-    /** @test */
-    public function it_formats_action_awareness_with_context_ids(): void
+    /** @test Actions plan B5: no previous-result ids, no example — a record link is a data question. */
+    public function it_never_lists_previous_result_ids_and_routes_record_links_to_a_query(): void
     {
         config(['ai.entity_actions' => [
             'Person' => [
                 'profile' => [
                     'aliases' => ['profile link', 'profile page'],
                     'label' => 'View Profile',
+                    'action' => fn () => null,
                 ],
             ],
         ]]);
@@ -53,10 +55,16 @@ class EntityActionAwarenessSectionTest extends TestCase
         $output = $this->section->format('give me the profile link', $context, []);
 
         $this->assertStringContainsString('ACTION REQUESTS', $output);
-        $this->assertStringContainsString('profile link', $output);
         $this->assertStringContainsString('NOT database fields', $output);
-        $this->assertStringContainsString('NO QUERY REQUIRED', $output);
-        $this->assertStringContainsString('152463', $output);
+        $this->assertStringContainsString('`profile` (View Profile)', $output);
+        // Task 5.6: the pure-navigation escape hatch is the structured needs_query=false.
+        $this->assertStringContainsString('"needs_query": false', $output);
+        $this->assertStringContainsString('query it (returning its id)', $output);
+        $this->assertStringNotContainsString('152463', $output);
+        $this->assertStringNotContainsString('John Doe', $output);
+        $this->assertStringNotContainsString('Example:', $output);
+        $this->assertStringNotContainsString('CRITICAL RULE', $output);
+        $this->assertStringNotContainsString('profile link', $output, 'aliases are not shipped');
     }
 
     /** @test */
@@ -74,7 +82,7 @@ class EntityActionAwarenessSectionTest extends TestCase
     }
 
     /** @test */
-    public function it_formats_generic_actions_correctly(): void
+    public function it_lists_generic_actions_by_key_and_label(): void
     {
         config(['ai.entity_actions' => []]);
         config(['ai.generic_actions' => [
@@ -88,12 +96,9 @@ class EntityActionAwarenessSectionTest extends TestCase
 
         $output = $this->section->format('open settings', new PipelineContext(), []);
 
-        // The action is advertised by its registry key + description, and the aliases the user
-        // might say are still surfaced so the query generator won't treat them as DB fields.
-        $this->assertStringContainsString('settings', $output);
-        $this->assertStringContainsString('Open the settings page.', $output);
-        $this->assertStringContainsString('settings page', $output);
-        $this->assertStringContainsString('Generic Actions', $output);
+        $this->assertStringContainsString('`settings` (Settings)', $output);
+        $this->assertStringNotContainsString('settings page', $output);
+        $this->assertStringContainsString('- Generic:', $output);
     }
 
     /** @test */
@@ -101,53 +106,6 @@ class EntityActionAwarenessSectionTest extends TestCase
     {
         $this->assertEquals('entity_action_awareness', $this->section->getName());
         $this->assertEquals(58, $this->section->getPriority());
-    }
-
-    /** @test */
-    public function it_omits_the_example_block_when_there_are_no_prior_results(): void
-    {
-        // With no last_result_sample there are no entity IDs to act on, so the
-        // Example/CRITICAL-RULE filler has no referent and must not be emitted.
-        config(['ai.entity_actions' => [
-            'Person' => [
-                'profile' => ['aliases' => ['profile link'], 'label' => 'View Profile'],
-            ],
-        ]]);
-
-        // Focused on Person but with NO prior results in context.
-        $context = new PipelineContext();
-        $context->conversationContext = ['focused_entity' => 'Person'];
-
-        $output = $this->section->format('give me the profile link', $context, []);
-
-        // The action awareness block itself is still emitted (actions are advertised).
-        $this->assertStringContainsString('ACTION REQUESTS', $output);
-        $this->assertStringContainsString('NOT database fields', $output);
-
-        // But the no-referent filler is gone (no prior results to act on).
-        $this->assertStringNotContainsString('Example:', $output);
-        $this->assertStringNotContainsString('CRITICAL RULE', $output);
-    }
-
-    /** @test */
-    public function it_includes_the_example_block_when_prior_results_exist(): void
-    {
-        config(['ai.entity_actions' => [
-            'Person' => [
-                'profile' => ['aliases' => ['profile link'], 'label' => 'View Profile'],
-            ],
-        ]]);
-
-        $context = new PipelineContext();
-        $context->conversationContext = [
-            'focused_entity' => 'Person',
-            'last_result_sample' => [['id' => '99', 'name' => 'Jane']],
-        ];
-
-        $output = $this->section->format('give me the profile link', $context, []);
-
-        $this->assertStringContainsString('Example:', $output);
-        $this->assertStringContainsString('CRITICAL RULE', $output);
     }
 
     /** @test */
@@ -170,8 +128,8 @@ class EntityActionAwarenessSectionTest extends TestCase
         $this->assertStringContainsString('render_table', $output);
         $this->assertStringContainsString('export_pdf', $output);
 
-        // And their description (registry metadata) must surface, not just the bare key.
-        $this->assertStringContainsString('Export as an Excel (.xlsx) file.', $output);
+        // Described in full only when QU asked for that export (see the export test).
+        $this->assertStringNotContainsString('Export as an Excel (.xlsx) file.', $output);
     }
 
     /** @test */
@@ -187,18 +145,21 @@ class EntityActionAwarenessSectionTest extends TestCase
                     mutator: fn ($m) => null,
                     authorizer: fn ($user, $model, $input) => true,
                     description: 'Approve a pending reservation.',
+                    permission: fn ($user) => true,
                 ),
             ],
         ]]);
+
+        // A1/A2: mutations are only listed for a principal passing their capability.
+        $this->actingAs(new \Illuminate\Auth\GenericUser(['id' => 13]));
 
         $context = new PipelineContext();
         $context->conversationContext = ['focused_entity' => 'Reservation'];
 
         $output = $this->section->format('approve the reservation', $context, []);
 
-        // The action is advertised by key + description...
-        $this->assertStringContainsString('approve_reservation', $output);
-        $this->assertStringContainsString('Approve a pending reservation.', $output);
+        // The action is advertised by key + label...
+        $this->assertStringContainsString('`approve_reservation` (Approve reservation)', $output);
 
         // ...but the seeded entity-id carrier must NOT make the Reservation line read as a
         // param-taking action (built-in generic actions below legitimately carry params, so we
@@ -212,6 +173,93 @@ class EntityActionAwarenessSectionTest extends TestCase
         }
         $this->assertNotSame('', $approveLine);
         $this->assertStringNotContainsString('[accepts params]', $approveLine);
+    }
+
+    private function configureCatalog(): void
+    {
+        config(['ai.entity_actions' => [
+            'Unit' => [
+                'statement' => ['aliases' => ['account statement', 'unit statement'], 'label' => 'Account statement', 'action' => fn () => null],
+            ],
+            'Meeting' => [
+                'agenda' => ['aliases' => ['open agenda'], 'label' => 'Agenda', 'action' => fn () => null],
+            ],
+        ]]);
+        config(['ai.generic_actions' => [
+            'my_statement' => [
+                'aliases' => ['my statement', 'my balance', 'how much do I owe'],
+                'label' => 'My account statement',
+                'description' => 'My account statement.',
+                'action' => fn () => null,
+            ],
+            'calendar' => [
+                'aliases' => ['calendar', 'open calendar', 'schedule'],
+                'label' => 'Calendar',
+                'description' => 'Calendar.',
+                'action' => fn () => null,
+            ],
+        ]]);
+    }
+
+    private function dataQuestion(string $intent = 'lookup', ?string $exportFormat = null): PipelineContext
+    {
+        $context = new PipelineContext();
+        $context->qu = new QueryUnderstandingResult(
+            intent: $intent,
+            questionType: 'data_query',
+            exportFormat: $exportFormat,
+        );
+        $context->graphSchema = ['labels' => ['Unit', 'Invoice', 'Union']];
+
+        return $context;
+    }
+
+    /** @test */
+    public function a_data_question_gets_the_compact_action_list(): void
+    {
+        // Task 5.11: the full catalog with every alias (~5K chars) shipped on every
+        // turn. A question QU judged an informational data lookup only needs to know
+        // WHICH phrases are UI actions — the keys — plus the data-question guardrail.
+        $this->configureCatalog();
+
+        $output = $this->section->format('What does unit 310 owe?', $this->dataQuestion(), []);
+
+        $this->assertStringContainsString('ACTION REQUESTS', $output);
+        $this->assertStringContainsString('`my_statement`', $output);
+        $this->assertStringContainsString('`calendar`', $output);
+        $this->assertStringNotContainsString('user may say', $output);
+        $this->assertStringNotContainsString('how much do I owe', $output);
+        $this->assertStringContainsString('ACTIONS NEVER REPLACE DATA QUESTIONS', $output);
+        // The selected labels' entity actions are named (Unit is selected, Meeting is not).
+        $this->assertStringContainsString('`statement`', $output);
+        $this->assertStringNotContainsString('`agenda`', $output);
+    }
+
+    /** @test */
+    public function an_export_request_keeps_the_export_actions_described(): void
+    {
+        $this->configureCatalog();
+
+        $output = $this->section->format('Excel of unit 310 invoices', $this->dataQuestion('list', 'excel'), []);
+
+        $this->assertStringContainsString('Export as an Excel (.xlsx) file.', $output);
+        $this->assertStringNotContainsString('how much do I owe', $output);
+    }
+
+    /** @test Every turn (navigation asks and QU failures included) gets the same keys-only list. */
+    public function a_non_informational_question_gets_the_same_keys_only_list(): void
+    {
+        $this->configureCatalog();
+
+        $output = $this->section->format('open the calendar', $this->dataQuestion('other'), []);
+        $this->assertStringContainsString('`calendar` (Calendar)', $output);
+        $this->assertStringNotContainsString('user may say', $output);
+
+        $failed = new PipelineContext();
+        $failed->qu = QueryUnderstandingResult::failed();
+        $output = $this->section->format('open the calendar', $failed, []);
+        $this->assertStringContainsString('`calendar` (Calendar)', $output);
+        $this->assertStringNotContainsString('user may say', $output);
     }
 
     /** @test */
@@ -238,7 +286,7 @@ class EntityActionAwarenessSectionTest extends TestCase
         $this->assertStringContainsString('ACTIONS NEVER REPLACE DATA QUESTIONS', $output);
         $this->assertStringContainsString('MUST still generate the Cypher query', $output);
 
-        // With prior results (the CRITICAL RULE block present too).
+        // With prior results.
         $context = new PipelineContext();
         $context->conversationContext = [
             'focused_entity' => 'Account',
@@ -246,11 +294,6 @@ class EntityActionAwarenessSectionTest extends TestCase
         ];
         $output = $this->section->format('Show me the balance.', $context, []);
         $this->assertStringContainsString('ACTIONS NEVER REPLACE DATA QUESTIONS', $output);
-        // The guardrail precedes (and scopes) the NO-QUERY-REQUIRED escape hatch.
-        $this->assertLessThan(
-            strpos($output, 'CRITICAL RULE'),
-            strpos($output, 'ACTIONS NEVER REPLACE DATA QUESTIONS')
-        );
     }
 
     /** @test */
@@ -267,8 +310,7 @@ class EntityActionAwarenessSectionTest extends TestCase
 
         $output = $this->section->format('do the spy thing', new PipelineContext(), []);
 
-        $this->assertStringContainsString('spy_only_in_registry', $output);
-        $this->assertStringContainsString('A spy action known only to the registry', $output);
+        $this->assertStringContainsString('`spy_only_in_registry` (Spy Action)', $output);
     }
 }
 

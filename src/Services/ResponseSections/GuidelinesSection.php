@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\ResponseSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\Response\DataAnswerPlan;
 
 /**
  * GuidelinesSection
@@ -139,7 +140,13 @@ class GuidelinesSection extends BaseResponseSection
 
         $output = "Task: Answer the user's question based on the data.\n\n";
         $output .= "Guidelines:\n";
-        $output .= "- ALWAYS respond in the SAME LANGUAGE the user used in their question. If the question is in French, answer in French. If English, answer in English.\n";
+        // The QU-detected language is named explicitly: with French data rows and a French
+        // record name dominating the prompt, an English question was answered in French
+        // (eval p11-B digest t1) — the data's language never sets the answer's.
+        $language = trim((string) ($context->qu->language ?? ''));
+        $output .= "- ALWAYS respond in the SAME LANGUAGE the user used in their question"
+            . ($language !== '' ? " (the question's language: '{$language}')" : '')
+            . ". If the question is in French, answer in French. If English, answer in English — even when the data, record names or documents are in another language.\n";
         $output .= "- " . ($this->stylePrompts[$style] ?? $this->stylePrompts['friendly']) . "\n";
 
         // L1-B: question_type-adaptive length guidance (data question => concise
@@ -149,6 +156,12 @@ class GuidelinesSection extends BaseResponseSection
             $output .= "- " . $this->lengthGuidanceFor($context->qu->questionType) . "\n";
         }
 
+        // (A positional "START WITH THE DIRECT ANSWER … the answer ENDS on the last point" line for
+        // document answers was tried after eval p20 and REVERTED after p21: on a byte-identical
+        // passage block the buyer answer stopped at its verdict and dropped the statement of
+        // common expenses every earlier run gave, and the tear-down answer opened with a flat
+        // "No" no passage supports. A verdict asked for first is given WITHOUT its condition.)
+        $passages = empty($context->fileContext['enumeration']) ? count((array) ($context->fileContext['relevant_files'] ?? [])) : 0;
         $output .= "- Start with a direct answer to the question when the data supports one\n";
         $output .= "- Use specific data from the results\n";
         $output .= "- Keep response under {$maxLength} words\n";
@@ -156,22 +169,47 @@ class GuidelinesSection extends BaseResponseSection
         // L1-C: honesty/clarify affordance — an unanswerable result must never be
         // forced into a fabricated direct answer.
         $output .= "- If the retrieved data cannot actually answer the question (wrong level of detail, truncated or mixed results, or an ambiguous reference), say so plainly or ask ONE short clarifying question instead of forcing an answer. Never derive, estimate, or invent a figure the data does not directly state.\n";
-        $output .= "- Never present a partial list as complete: when more rows or results exist than are shown, say so explicitly.\n";
+        // On the deterministic-table path the system-rendered table carries its own
+        // "Showing X of Y" line — the model must not restate (or miscount) it.
+        // (ONE code-rendered record has no row count to disclose: the generic line.)
+        $systemTable = ($options[DataAnswerPlan::OPTION] ?? false) === true
+            && !empty($context->executionResult->data)
+            && DataAnswerPlan::for($context)->hasTable()
+            && !DataAnswerPlan::for($context)->isRecord();
+        $output .= $systemTable
+            ? "- The table the system renders at {{table}} discloses how many rows are shown out of the total; never present your narrative as covering rows it does not mention.\n"
+            : "- Never present a partial list as complete: when more rows or results exist than are shown, say so explicitly.\n";
 
-        // L1-D: citation-or-decline for law/rule/document claims. The [N]-marker
-        // clause is dropped for terse styles, matching FileContextSection which
-        // suppresses citation instructions there.
-        $citeClause = $isTerse ? '' : ', citing it with [N] markers when file content is provided';
+        // L1-D: citation-or-decline for law/rule/document claims. The marker clause
+        // is dropped for terse styles, matching FileContextSection which suppresses
+        // citation instructions there. Phase 8-B (8.2b): the clause names the REAL
+        // passage numbers when file content is present — never the literal "[N]"
+        // grammar, which the model echoed back ("([N] 2)" shipped live).
+        $citeClause = match (true) {
+            $isTerse => '',
+            $passages > 0 => ', citing it with its passage number in square brackets — '
+                . \Condoedge\Ai\Services\Response\AnswerValidator::choices($passages),
+            default => ', citing it with its passage number in square brackets when file content is provided',
+        };
         $output .= "- For claims about laws, regulations, policies, or document contents: state only what the retrieved file content actually supports{$citeClause}. If the available documents do not contain the answer, say it could not be found in the available documents — never answer such questions from general knowledge.\n";
 
-        // G7: the concrete-closer rule is UNIVERSAL — every answer type (data,
-        // knowledge, hybrid, empty or not) must end with one concrete next step,
-        // never a generic invitation. Previously scoped to empty results only,
-        // which left ~9 of 20 graded turns ending "feel free to ask". Suppressed
-        // for terse styles whose contract is a bare one-line answer.
+        // G7 (no generic closer, ~9 of 20 graded turns ended "feel free to ask") →
+        // actions plan B3: next steps are BUTTONS code attaches under the answer (list
+        // page, create, export, report, identity links) — the prose never ends with an
+        // offer ("let me know", "would you like…") or a generic invitation.
+        // Only claim buttons when code attached some: on a chip-less turn the claim
+        // contradicted the links block and the model narrated its absence (eval p11-B
+        // rights t1 printed "No links or files are attached below this answer.").
+        // D5 (eval p16-B): this rule had a direct contradiction in the data block of the
+        // same prompt — DataAnswerPlan asked for "at most one short closing next step"
+        // after {{table}} — and the model split the difference with a generic closer on
+        // every run. That instruction is gone, and on the table path the rule is now
+        // ENFORCED by position: DataAnswerPlan::finalize() drops what follows {{table}}.
         if (!$isTerse) {
-            $output .= "- End your answer with ONE concrete, relevant next step: the closest matching action available to you (as an action link when actions are available) or ONE specific follow-up grounded in this answer. Do NOT end with a bare invitation like \"feel free to ask\".\n";
-            $output .= "- When the question asks WHERE or HOW to do something in the app and a matching action is available to you, you MUST include that action's link in your answer.\n";
+            $hasChips = $context->attachedActions !== null && !$context->attachedActions->isEmpty();
+            $output .= $hasChips
+                ? "- Do NOT end with an offer or a question (\"let me know\", \"would you like…\", \"feel free to ask\"): next steps are attached as buttons below your answer. When one of them answers a WHERE/HOW question, say so in one short sentence by its name.\n"
+                : "- Do NOT end with an offer or a question (\"let me know\", \"would you like…\", \"feel free to ask\"), and do not mention links, buttons or attachments.\n";
         }
 
         // L1-E: empty results additionally demand an honest "nothing was found".
@@ -180,7 +218,7 @@ class GuidelinesSection extends BaseResponseSection
         // the retrieved chunks ARE the grounding) this guideline would wrongly
         // instruct the model to say nothing was found.
         if (empty($context->executionResult->data) && empty($context->fileContext['relevant_files'])) {
-            $output .= "- The results are empty: say clearly that nothing was found, then offer the most relevant next step — the closest matching action available to you, or ONE more specific question that is likely to succeed.\n";
+            $output .= "- The results are empty: say clearly that nothing was found.\n";
         }
 
         // The "don't reveal how you got it" rule is stated ONCE here, and applies to

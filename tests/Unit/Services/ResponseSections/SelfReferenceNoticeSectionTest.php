@@ -74,7 +74,10 @@ class SelfReferenceNoticeSectionTest extends TestCase
         $output = $this->section->format($context, []);
 
         $this->assertStringContainsString('SELF-REFERENCE IN THE RESULTS', $output);
-        $this->assertStringContainsString("'j.rousseau@example.com'", $output);
+        // Detection ran on the real value; the note quotes the masked token (email is
+        // an identifying field — Phase 8 batch A), never the address itself.
+        $this->assertStringContainsString("'[email#1]'", $output);
+        $this->assertStringNotContainsString('j.rousseau@example.com', $output);
         $this->assertStringContainsString("current user's own email address", $output);
         $this->assertStringContainsString("that's you", $output);
         $this->assertStringContainsString('Never tell the user to contact themselves', $output);
@@ -89,7 +92,19 @@ class SelfReferenceNoticeSectionTest extends TestCase
         ]);
 
         $this->assertTrue($this->section->shouldInclude($context, []));
-        // The note quotes the value exactly as it appears in the data.
+        // Masked (identifying field): the note quotes the turn token.
+        $this->assertStringContainsString("'[email#1]'", $this->section->format($context, []));
+    }
+
+    /** @test */
+    public function with_masking_off_the_note_quotes_the_value_exactly_as_in_the_data(): void
+    {
+        config(['ai.access_control.mask_identifying_fields' => false]);
+        $this->authenticateUser(email: 'j.rousseau@example.com');
+        $context = $this->contextWithData([
+            ['email' => 'J.Rousseau@Example.COM'],
+        ]);
+
         $this->assertStringContainsString("'J.Rousseau@Example.COM'", $this->section->format($context, []));
     }
 

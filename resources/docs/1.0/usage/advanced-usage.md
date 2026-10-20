@@ -52,11 +52,6 @@ class Customer extends Model implements Nodeable
             ->properties('id', 'name', 'email', 'company', 'status', 'country')
             ->relationship('orders', 'Order', 'PLACED_ORDER', 'customer_id')
 
-            // Qdrant vector configuration
-            ->collection('customers')
-            ->embedFields('name', 'company')
-            ->metadata(['id', 'name', 'company', 'status', 'country'])
-
             // Metadata for RAG
             ->aliases('customer', 'client', 'account', 'buyer')
             ->description('Customer entity with orders and billing information');
@@ -130,42 +125,7 @@ Define a relationship to another entity:
 ->relationship('warehouse', 'Warehouse', 'SHIPPED_FROM', 'warehouse_id')
 ```
 
-### Vector Configuration Methods
-
-#### `collection(string $collection): self`
-
-Set Qdrant collection name:
-
-```php
-->collection('customers')  // Stores vectors in 'customers' collection
-```
-
-#### `embedFields(string ...$fields): self`
-
-Fields to concatenate and embed:
-
-```php
-->embedFields('name', 'email', 'company')
-
-// These fields will be concatenated: "John Doe john@example.com Acme Corp"
-// Then embedded into a vector
-```
-
-**Best practices:**
-- Include text fields with semantic meaning
-- Avoid IDs, dates, or numeric codes
-- Include 2-4 fields typically
-
-#### `metadata(array $metadata): self`
-
-Metadata fields to store in Qdrant (for filtering):
-
-```php
-->metadata(['id', 'name', 'company', 'status', 'country'])
-
-// These fields can be used for filtering vector searches
-// Example: Find similar customers WHERE country = 'USA'
-```
+There are no vector configuration methods. Records are stored in the graph only; they are not embedded. Qdrant holds the file chunks and the semantic indexes — see [Data ingestion](/docs/{{version}}/usage/data-ingestion).
 
 ### Metadata Configuration Methods
 
@@ -259,9 +219,6 @@ public function nodeableConfig(): NodeableConfig
     // Add extra fields in production
     if (app()->environment('production')) {
         $config->properties('id', 'name', 'email', 'company', 'revenue', 'tier');
-        $config->embedFields('name', 'company', 'description');
-    } else {
-        $config->embedFields('name');
     }
 
     return $config;
@@ -304,9 +261,6 @@ public function nodeableConfig(): NodeableConfig
     // Include sensitive fields only for admins
     if ($user && $user->hasRole('admin')) {
         $config->properties('id', 'title', 'content', 'author_id', 'internal_notes');
-        $config->embedFields('title', 'content', 'internal_notes');
-    } else {
-        $config->embedFields('title', 'content');
     }
 
     return $config;
@@ -343,7 +297,6 @@ class Customer extends Model implements Nodeable
 return [
     'App\Models\Customer' => [
         'graph' => ['label' => 'Customer', 'properties' => ['id', 'name']],
-        'vector' => ['collection' => 'customers'],
     ]
 ];
 ```
@@ -505,17 +458,13 @@ $service = new MyService($contextMock);
 
 ```php
 use Condoedge\Ai\Services\DataIngestionService;
-use Condoedge\Ai\VectorStore\QdrantStore;
 use Condoedge\Ai\GraphStore\Neo4jStore;
-use Condoedge\Ai\EmbeddingProviders\OpenAiEmbeddingProvider;
 
-// Instantiate dependencies
-$vectorStore = new QdrantStore(['host' => 'localhost', 'port' => 6333]);
+// Instantiate dependencies (records are written to the graph only)
 $graphStore = new Neo4jStore(['uri' => 'bolt://localhost:7687']);
-$embedProvider = new OpenAiEmbeddingProvider(['api_key' => env('OPENAI_API_KEY')]);
 
 // Create service
-$ingestion = new DataIngestionService($vectorStore, $graphStore, $embedProvider);
+$ingestion = new DataIngestionService($graphStore);
 
 // Use service (only if auto-sync disabled)
 $status = $ingestion->ingest($customer);

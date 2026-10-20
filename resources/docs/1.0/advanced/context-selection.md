@@ -60,7 +60,6 @@ Response
 ### Enable Context Selection
 
 ```env
-AI_SEMANTIC_CONTEXT_ENABLED=true
 ```
 
 ### Settings

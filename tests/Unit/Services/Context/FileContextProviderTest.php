@@ -10,7 +10,6 @@ use Condoedge\Ai\DTOs\FileChunk;
 use Condoedge\Ai\Services\Context\FileContextProvider;
 use Condoedge\Ai\Services\Context\FilenameExtractor;
 use Condoedge\Ai\Services\FileSearchService;
-use Condoedge\Ai\Services\Retrieval\RerankerInterface;
 use Mockery;
 use Mockery\MockInterface;
 use Orchestra\Testbench\TestCase;
@@ -1424,8 +1423,9 @@ class FileContextProviderTest extends TestCase
     /** @test */
     public function it_enhances_query_with_conversation_context_for_follow_ups(): void
     {
-        // When question is a follow-up (contains "those", "them", etc.)
-        // and there's a focused entity, the query should include the entity context
+        // When QU judged the question a follow-up (follow_up_reference, threaded
+        // by AiManager) and there's a focused entity, the query should include
+        // the entity context
         $user = new \stdClass();
         $user->id = 1;
 
@@ -1480,6 +1480,7 @@ class FileContextProviderTest extends TestCase
                     'focused_entity' => 'Team',
                     'last_answer_summary' => 'Found 5 active teams...',
                 ],
+                'follow_up_reference' => true,
             ]
         );
 
@@ -1541,6 +1542,7 @@ class FileContextProviderTest extends TestCase
                     'focused_entity' => 'Team',
                     'last_answer_summary' => 'Found 5 active teams...',
                 ],
+                'follow_up_reference' => false,
             ]
         );
 
@@ -1594,35 +1596,38 @@ class FileContextProviderTest extends TestCase
             ->once()
             ->andReturn([1]);
 
-        // No conversation_context provided
+        // No conversation_context provided (even with a QU follow-up judgment)
         $result = $this->provider->searchRelevantFiles(
             'Which of those are active?',
-            $user
+            $user,
+            ['follow_up_reference' => true]
         );
 
         $this->assertCount(1, $result);
     }
 
     /** @test */
-    public function it_detects_various_follow_up_patterns(): void
+    public function the_follow_up_decision_is_qus_judgment_not_a_word_list(): void
     {
+        // Phase 2.B: the EN-only pronoun list ('those','them','these',...) is gone.
+        // A French follow-up is engaged by QU's followUpReference; an English
+        // pronoun WITHOUT QU's judgment no longer triggers anything.
         $user = new \stdClass();
         $user->id = 1;
 
-        $followUpPatterns = [
-            'Which of those are active?' => true,
-            'Show me more about them' => true,
-            'Are any of these verified?' => true,
-            'Which of the users have access?' => true,
-            'Can any of them edit documents?' => true,
-            'Are the same files still there?' => true,
-            'What is the total count?' => false, // Not a follow-up
-            'List all users' => false, // Not a follow-up
+        $cases = [
+            // question => [QU follow_up_reference, enhancement expected]
+            'Et celles-là ?' => [true, true],
+            'Et pour les unités de celles-ci ?' => [true, true],
+            'Which of those are active?' => [false, false],
+            'Can any of them edit documents?' => [false, false],
+            'What is the total count?' => [true, true],
+            'List all users' => [false, false],
         ];
 
         $testedPatterns = 0;
 
-        foreach ($followUpPatterns as $question => $isFollowUp) {
+        foreach ($cases as $question => [$quFollowUp, $isFollowUp]) {
             // Reset mocks
             Mockery::close();
 
@@ -1689,6 +1694,7 @@ class FileContextProviderTest extends TestCase
                     'conversation_context' => [
                         'focused_entity' => 'Team',
                     ],
+                    'follow_up_reference' => $quFollowUp,
                 ]
             );
 
@@ -1696,8 +1702,8 @@ class FileContextProviderTest extends TestCase
             $testedPatterns++;
         }
 
-        // Ensure we tested all patterns
-        $this->assertEquals(8, $testedPatterns, 'Should test all 8 follow-up patterns');
+        // Ensure we tested all cases
+        $this->assertEquals(6, $testedPatterns, 'Should test all 6 cases');
     }
 
     /** @test */
@@ -1754,76 +1760,11 @@ class FileContextProviderTest extends TestCase
                     'focused_entity' => '', // Empty entity
                     'last_answer_summary' => 'Some previous results...',
                 ],
+                'follow_up_reference' => true,
             ]
         );
 
         $this->assertCount(1, $result);
-    }
-
-    // =========================================================================
-    // Reranker single-path tests (D1)
-    // =========================================================================
-
-    /** @test */
-    public function it_always_invokes_the_injected_reranker(): void
-    {
-        $user = new \stdClass();
-        $user->id = 1;
-
-        $chunkA = new FileChunk(
-            fileId: 1, fileName: 'a.pdf', content: 'Alpha content',
-            embedding: [], chunkIndex: 0, totalChunks: 1,
-            startPosition: 0, endPosition: 13, metadata: []
-        );
-        $chunkB = new FileChunk(
-            fileId: 2, fileName: 'b.pdf', content: 'Beta content',
-            embedding: [], chunkIndex: 0, totalChunks: 1,
-            startPosition: 0, endPosition: 12, metadata: []
-        );
-
-        $this->searchService
-            ->shouldReceive('searchByContent')
-            ->once()
-            ->andReturn([
-                ['file_id' => 1, 'score' => 0.95, 'chunk_count' => 1, 'best_chunk' => $chunkA, 'chunks' => [$chunkA]],
-                ['file_id' => 2, 'score' => 0.85, 'chunk_count' => 1, 'best_chunk' => $chunkB, 'chunks' => [$chunkB]],
-            ]);
-
-        $this->accessResolver
-            ->shouldReceive('filterAccessibleFileIds')
-            ->once()
-            ->andReturn([1, 2]);
-
-        // Spy reranker: must be called exactly once with the query and the full
-        // candidate pool — even though no rerank_enabled config is set. It selects
-        // ONLY the lower-scored candidate (file 2), proving the reranker's selection
-        // (not the raw cosine order) is what flows downstream — i.e. it is always on
-        // the path, not gated off.
-        $reranker = Mockery::mock(RerankerInterface::class);
-        $reranker->shouldReceive('rerank')
-            ->once()
-            ->with('search query', Mockery::type('array'), Mockery::type('callable'), 5)
-            ->andReturnUsing(function ($query, $candidates, $textOf, $limit) {
-                $candidates = array_values($candidates);
-                // Keep only the file_id === 2 candidate.
-                $kept = array_values(array_filter($candidates, fn($c) => $c['file_id'] === 2));
-                return array_slice($kept, 0, $limit);
-            });
-
-        $provider = new FileContextProvider(
-            $this->searchService,
-            $this->accessResolver,
-            $this->filenameExtractor,
-            null,
-            $reranker
-        );
-
-        $result = $provider->searchRelevantFiles('search query', $user);
-
-        // The reranker dropped the top-scored file 1 and kept only file 2; that
-        // selection survives to the output, proving rerank() is always applied.
-        $this->assertCount(1, $result);
-        $this->assertEquals(2, $result[0]['file_id']);
     }
 
     // =========================================================================
@@ -2248,7 +2189,6 @@ class FileContextProviderTest extends TestCase
             $this->accessResolver,
             $this->filenameExtractor,
             null,
-            null,
             $chunkStore
         );
 
@@ -2274,6 +2214,212 @@ class FileContextProviderTest extends TestCase
         $posAfter = strpos($snippet, 'ARTICLE 20 following content');
         $this->assertLessThan($posBest, $posBefore);
         $this->assertLessThan($posAfter, $posBest);
+    }
+
+    /**
+     * Task 1.2: with the PACKAGE defaults (config/ai.php snippet_length /
+     * context_window / snippet_chunks — not a test override) a ±2 window of
+     * realistic ~1000-char chunks fits: neighbors on both sides survive the cap.
+     * The old 1200 default cut the stitched passage back to ~one chunk.
+     *
+     * @test
+     */
+    public function package_default_snippet_length_fits_a_two_chunk_window_of_realistic_chunks(): void
+    {
+        $package = require __DIR__ . '/../../../../config/ai.php';
+        $defaults = $package['file_context'];
+        config([
+            'ai.file_context.snippet_length' => $defaults['snippet_length'],
+            'ai.file_context.context_window' => $defaults['context_window'],
+            'ai.file_context.snippet_chunks' => $defaults['snippet_chunks'],
+            'ai.file_context.min_relevance_score' => 0.4,
+        ]);
+        $this->assertSame(2, (int) $defaults['context_window'], 'precondition: package window is ±2');
+
+        $user = new \stdClass();
+        $user->id = 1;
+
+        // ~1000-char chunks, the ingestion chunk size.
+        $body = fn (string $tag) => $tag . ' ' . str_repeat('lorem ipsum dolor sit amet ', 36);
+        $allChunks = [];
+        foreach ([22 => 'FAR-BEFORE-22', 23 => 'NEIGHBOR-BEFORE-23', 24 => 'BEST-24', 25 => 'NEIGHBOR-AFTER-25', 26 => 'FAR-AFTER-26'] as $i => $tag) {
+            $allChunks[] = $this->fileChunk(1, 'decl.pdf', $body($tag), $i);
+        }
+        $best = $allChunks[2];
+
+        $chunkStore = Mockery::mock(ChunkStoreInterface::class);
+        $chunkStore->shouldReceive('getFileChunks')->andReturn($allChunks);
+
+        $this->searchService->shouldReceive('searchByContent')->once()->andReturn([[
+            'file_id' => 1,
+            'collection' => '__primary__',
+            'score' => 0.61,
+            'chunk_count' => 1,
+            'best_chunk' => $best,
+            'chunks' => [$best],
+        ]]);
+        $this->accessResolver->shouldReceive('filterAccessibleFileIds')->once()->andReturn([1]);
+
+        $provider = new FileContextProvider(
+            $this->searchService,
+            $this->accessResolver,
+            $this->filenameExtractor,
+            null,
+            $chunkStore
+        );
+
+        $snippet = $provider->searchRelevantFiles('query', $user)[0]['snippet'];
+
+        foreach (['FAR-BEFORE-22', 'NEIGHBOR-BEFORE-23', 'BEST-24', 'NEIGHBOR-AFTER-25', 'FAR-AFTER-26'] as $tag) {
+            $this->assertStringContainsString($tag, $snippet, "±2 window chunk {$tag} was cut by the default snippet_length");
+        }
+    }
+
+    /**
+     * Content search results for three files a (0.90), b (0.80), c (0.70).
+     */
+    private function threeFileContentResults(): array
+    {
+        $results = [];
+        foreach ([[1, 'a.pdf', 0.90], [2, 'b.pdf', 0.80], [3, 'c.pdf', 0.70]] as [$id, $name, $score]) {
+            $chunk = $this->fileChunk($id, $name, "content of {$name}", 0);
+            $results[] = [
+                'file_id' => $id,
+                'collection' => '__primary__',
+                'score' => $score,
+                'chunk_count' => 1,
+                'best_chunk' => $chunk,
+                'chunks' => [$chunk],
+            ];
+        }
+
+        return $results;
+    }
+
+    /**
+     * Task 1.11: the final order is raw relevance.
+     *
+     * @test
+     */
+    public function the_final_order_is_raw_relevance(): void
+    {
+        config(['ai.file_context.min_relevance_score' => 0.4]);
+        $user = (object) ['id' => 1];
+
+        $this->searchService->shouldReceive('searchByContent')->once()->andReturn(array_reverse($this->threeFileContentResults()));
+        $this->accessResolver->shouldReceive('filterAccessibleFileIds')->once()->andReturn([1, 2, 3]);
+
+        $provider = new FileContextProvider(
+            $this->searchService,
+            $this->accessResolver,
+            $this->filenameExtractor
+        );
+
+        $result = $provider->searchRelevantFiles('q', $user);
+
+        $this->assertSame(['a.pdf', 'b.pdf', 'c.pdf'], array_column($result, 'filename'));
+    }
+
+    /**
+     * Task 1.12: a host priority boost is a TIEBREAK, never the primary key. A
+     * 0.41 team file (+1.0) must not outrank a 0.80 law chunk (+0.5).
+     *
+     * @test
+     */
+    public function host_priority_score_is_only_a_tiebreak_after_relevance(): void
+    {
+        config(['ai.file_context.min_relevance_score' => 0.4]);
+        $user = (object) ['id' => 1];
+
+        $team = $this->fileChunk(1, 'team-rules.pdf', 'team rules', 0);
+        $law = $this->fileChunk(2, 'civil-code.pdf', 'law article', 0);
+        $tieA = $this->fileChunk(3, 'tie-low-priority.pdf', 'tie a', 0);
+        $tieB = $this->fileChunk(4, 'tie-high-priority.pdf', 'tie b', 0);
+        $row = fn ($id, $chunk, $score) => [
+            'file_id' => $id, 'collection' => '__primary__', 'score' => $score,
+            'chunk_count' => 1, 'best_chunk' => $chunk, 'chunks' => [$chunk],
+        ];
+
+        $this->searchService->shouldReceive('searchByContent')->once()->andReturn([
+            $row(2, $law, 0.80), $row(3, $tieA, 0.60), $row(4, $tieB, 0.60), $row(1, $team, 0.41),
+        ]);
+        $this->accessResolver->shouldReceive('filterAccessibleFileIds')->once()->andReturn([1, 2, 3, 4]);
+
+        $enricher = new class implements \Condoedge\Ai\Contracts\FileContextEnricherInterface {
+            public function enrich(array $files, string $question, mixed $user): array
+            {
+                $boost = ['team-rules.pdf' => 1.0, 'civil-code.pdf' => 0.5, 'tie-low-priority.pdf' => 0.1, 'tie-high-priority.pdf' => 0.9];
+                foreach ($files as &$file) {
+                    $file['priority_score'] = $file['relevance'] + ($boost[$file['filename']] ?? 0.0);
+                }
+
+                return $files;
+            }
+        };
+
+        $provider = new FileContextProvider(
+            $this->searchService,
+            $this->accessResolver,
+            $this->filenameExtractor,
+            $enricher
+        );
+
+        $result = $provider->searchRelevantFiles('q', $user);
+
+        $this->assertSame(
+            ['civil-code.pdf', 'tie-high-priority.pdf', 'tie-low-priority.pdf', 'team-rules.pdf'],
+            array_column($result, 'filename'),
+            'relevance leads; priority_score only breaks the 0.60 tie'
+        );
+    }
+
+    /**
+     * Task 1.29 (supersedes M-2): when FileSearchService fused collections, the
+     * fusion_score decides which candidates survive THIS angle's cut (pool order:
+     * explicit filename match, then fused content by fusion) — but it is a
+     * per-angle, file-level number, so it is NOT carried onto the references and
+     * does not order them: every collection is searched with the same query
+     * embedding, so the final order is cosine relevance (priority tiebreak).
+     *
+     * @test
+     */
+    public function fusion_cuts_the_pool_but_references_are_ordered_by_cosine_and_carry_no_fusion_score(): void
+    {
+        config(['ai.file_context.min_relevance_score' => 0.4]);
+        $user = (object) ['id' => 1];
+
+        $a = $this->fileChunk(1, 'a-high-cosine.pdf', 'a', 0);
+        $b = $this->fileChunk(2, 'b-top-fused.pdf', 'b', 0);
+        $c = $this->fileChunk(4, 'c-weak-fused.pdf', 'c', 0);
+        $n = $this->fileChunk(3, 'named.pdf', 'n', 0);
+        $row = fn ($id, $chunk, $score, $extra = []) => [
+            'file_id' => $id, 'collection' => '__primary__', 'score' => $score,
+            'chunk_count' => 1, 'best_chunk' => $chunk, 'chunks' => [$chunk],
+        ] + $extra;
+
+        $this->filenameExtractor->shouldReceive('extract')->andReturn(['named.pdf']);
+        $this->searchService->shouldReceive('searchByFilename')->once()->andReturn([$row(3, $n, 0.85)]);
+        $this->searchService->shouldReceive('searchByContent')->once()->andReturn([
+            $row(1, $a, 0.90, ['fusion_score' => 0.016]),
+            $row(2, $b, 0.50, ['fusion_score' => 0.033]),
+            $row(4, $c, 0.95, ['fusion_score' => 0.010]),
+        ]);
+        $this->accessResolver->shouldReceive('filterAccessibleFileIds')->once()->andReturn([1, 2, 3, 4]);
+
+        $provider = new FileContextProvider(
+            $this->searchService,
+            $this->accessResolver,
+            $this->filenameExtractor
+        );
+
+        // limit 3: the fusion-ordered pool [named, b, a, c] is cut after a.
+        $result = $provider->searchRelevantFiles('q', $user, ['limit' => 3]);
+
+        $this->assertSame(['a-high-cosine.pdf', 'named.pdf', 'b-top-fused.pdf'], array_column($result, 'filename'));
+        $this->assertSame([0.90, 0.85, 0.50], array_column($result, 'relevance'), 'relevance stays raw cosine');
+        foreach ($result as $reference) {
+            $this->assertArrayNotHasKey('fusion_score', $reference);
+        }
     }
 
     /** @test */
@@ -2317,7 +2463,6 @@ class FileContextProviderTest extends TestCase
             $this->searchService,
             $this->accessResolver,
             $this->filenameExtractor,
-            null,
             null,
             $chunkStore
         );

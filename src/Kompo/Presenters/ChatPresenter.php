@@ -4,10 +4,6 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Kompo\Presenters;
 
-use Condoedge\Ai\Exceptions\CircuitBreakerOpenException;
-use Condoedge\Ai\Exceptions\QueryExecutionException;
-use Condoedge\Ai\Exceptions\QueryGenerationException;
-use Condoedge\Ai\Exceptions\QueryTimeoutException;
 use Condoedge\Ai\DTOs\PageContext;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
@@ -15,8 +11,8 @@ use Condoedge\Ai\Services\Chat\Inputs\AskQuestionInput;
 use Condoedge\Ai\Services\Chat\Results\ChatTurnResult;
 use Condoedge\Ai\Services\Chat\UseCases\AskQuestionUseCase;
 use Condoedge\Ai\Services\Chat\UseCases\EditMessageAndRegenerateUseCase;
+use Condoedge\Ai\Services\Chat\Support\FriendlyError;
 use Condoedge\Ai\Services\Chat\UseCases\RegenerateAnswerUseCase;
-use Illuminate\Database\QueryException;
 
 /**
  * The single Kompo <-> application seam for chat actions (modeled on Sisc's
@@ -138,36 +134,10 @@ class ChatPresenter
      *
      * Returns a translation key ('ai.chat.error-connection' | 'ai.chat.error-timeout' |
      * 'ai.chat.error-generic') so the view (or caller) translates it via __() at render time.
+     * The mapping itself lives in FriendlyError, shared with AskQuestionUseCase.
      */
     public function friendlyError(\Throwable $e): string
     {
-        // Database connection / query failures -> "having trouble connecting".
-        // QueryException covers driver errors; ConnectionException / PDOException cover the
-        // lower-level connect failures that may surface before a query is built.
-        if (
-            $e instanceof QueryException
-            || $e instanceof \Illuminate\Database\ConnectionException
-            || $e instanceof \PDOException
-        ) {
-            return 'ai.chat.error-connection';
-        }
-
-        // Query / request timeout -> "took too long, try a simpler question".
-        if ($e instanceof QueryTimeoutException) {
-            return 'ai.chat.error-timeout';
-        }
-
-        // Provider / LLM / query-pipeline failures and everything else -> generic guidance.
-        // (QueryGenerationException, QueryExecutionException, CircuitBreakerOpenException, and
-        // any unrecognized Throwable all resolve to the generic key.)
-        if (
-            $e instanceof QueryGenerationException
-            || $e instanceof QueryExecutionException
-            || $e instanceof CircuitBreakerOpenException
-        ) {
-            return 'ai.chat.error-generic';
-        }
-
-        return 'ai.chat.error-generic';
+        return FriendlyError::key($e);
     }
 }

@@ -37,11 +37,7 @@ namespace Condoedge\Ai\Services\Security;
 final class CypherStructuralValidator
 {
     /** Clause keywords that open a top-level clause (must never sit in clause position inside parens). */
-    private const CLAUSE_KEYWORDS = [
-        'MATCH', 'OPTIONAL', 'WITH', 'RETURN', 'ORDER', 'SKIP', 'LIMIT',
-        'CALL', 'UNION', 'CREATE', 'MERGE', 'DELETE', 'SET', 'REMOVE',
-        'FOREACH', 'UNWIND', 'WHERE',
-    ];
+    private const CLAUSE_KEYWORDS = [...CypherClauses::CLAUSE_HEADS, 'WHERE'];
 
     /** Boolean connectives that are only legal inside a WHERE predicate (at top level). */
     private const BOOLEAN_CONNECTIVES = ['AND', 'OR', 'XOR'];
@@ -74,8 +70,41 @@ final class CypherStructuralValidator
         $inTopLevelWhere = false;
         // Index of the previous top-level WORD clause keyword, to catch `WHERE ... WHERE`.
         $prevTopLevelClause = null;
+        // Last clause head per BRACE depth (paren/bracket depth 0), so a WHERE is
+        // checked against the clause it would attach to — `CALL (i) { RETURN … }
+        // WHERE` sees CALL at depth 0, not the RETURN inside the braces.
+        $lastClauseByBrace = [];
+
+        // A binary operator / connective with no right operand: followed by a
+        // closing delimiter (`(x.v =) AND …`) or by a clause keyword in clause
+        // position (`WHERE x.v = match OPTIONAL …`, `AND RETURN`). The injector
+        // produced the former from `WHERE x.v = match` (round 2, item 6).
+        foreach ($tokens as $idx => $t) {
+            $next = $tokens[$idx + 1] ?? null;
+            if ($next === null) {
+                break;
+            }
+            $isOperator = ($t->type === CypherLexer::T_PUNCT && in_array($t->value, ['=', ',', '+', '/', '^'], true))
+                || ($t->type === CypherLexer::T_WORD && !$t->keywordAsIdentifier
+                    && ($this->isBooleanConnective($t->value) || $this->matches($t->value, 'NOT')));
+            if (!$isOperator) {
+                continue;
+            }
+            if ($next->type === CypherLexer::T_PUNCT && in_array($next->value, [')', ']', '}'], true)) {
+                return "operator '{$t->value}' without a right operand at offset {$t->offset}";
+            }
+            if ($next->type === CypherLexer::T_WORD && !$next->keywordAsIdentifier
+                && ($this->isClauseKeyword($next->value) || $this->matches($next->value, 'WHERE'))
+                && !$this->isIdentifierPosition($tokens, $idx + 1)) {
+                return "operator '{$t->value}' followed by clause keyword '{$next->value}' at offset {$next->offset}";
+            }
+        }
 
         foreach ($tokens as $idx => $t) {
+            if ($t->isPunct('{')) {
+                unset($lastClauseByBrace[$t->braceDepth + 1]); // a new clause body opens
+                continue;
+            }
             if ($t->type !== CypherLexer::T_WORD) {
                 continue;
             }
@@ -101,6 +130,8 @@ final class CypherStructuralValidator
                 continue;
             }
 
+            $clauseLevel = $t->bracketDepth === 0;
+
             if ($this->matches($t->value, 'WHERE')) {
                 // Two adjacent top-level WHEREs with no pattern clause between them
                 // is the multi-binding splice mangle (`... WHERE ... WHERE ...`).
@@ -108,9 +139,27 @@ final class CypherStructuralValidator
                     && $this->matches($tokens[$prevTopLevelClause]->value, 'WHERE')) {
                     return "two adjacent WHERE clauses at offset {$t->offset}";
                 }
+                // A bare WHERE directly after a clause that cannot carry one
+                // (UNWIND … AS x, SET, CALL {…}, …) — the splice must re-open a
+                // row-level `WITH *` first (Task 1.26 defence in depth).
+                $attachedTo = $clauseLevel ? ($lastClauseByBrace[$t->braceDepth] ?? null) : null;
+                if ($attachedTo !== null && CypherClauses::in($attachedTo, CypherClauses::NO_WHERE_HEADS)) {
+                    return "WHERE cannot follow {$attachedTo} at offset {$t->offset}";
+                }
+                if ($clauseLevel) {
+                    $lastClauseByBrace[$t->braceDepth] = 'WHERE';
+                }
                 $inTopLevelWhere = true;
                 $prevTopLevelClause = $idx;
                 continue;
+            }
+
+            if ($clauseLevel && $this->isClauseKeyword($t->value)) {
+                $lastClauseByBrace[$t->braceDepth] = strtoupper($t->value);
+            } elseif ($clauseLevel && $this->matches($t->value, 'YIELD')
+                && ($lastClauseByBrace[$t->braceDepth] ?? null) === 'CALL') {
+                // Only a procedure CALL's own YIELD re-opens a WHERE-able clause.
+                $lastClauseByBrace[$t->braceDepth] = 'YIELD';
             }
 
             if ($this->isClauseKeyword($t->value)) {
@@ -200,7 +249,7 @@ final class CypherStructuralValidator
      * RETURN in a branch, or null when no top-level RETURN is present.
      *
      * A column's name is its explicit `AS <alias>` when present, else the verbatim
-     * (whitespace-collapsed, lowercased) projection expression — exactly what Neo4j
+     * (whitespace-collapsed, case-exact) projection expression — exactly what Neo4j
      * compares across UNION branches.
      *
      * @param list<Token> $tokens
@@ -234,6 +283,7 @@ final class CypherStructuralValidator
             $t = $tokens[$i];
             if ($t->type === CypherLexer::T_WORD && $t->parenDepth === 0
                 && $t->bracketDepth === 0 && $t->braceDepth === 0
+                && !$t->keywordAsIdentifier
                 && ($this->matches($t->value, 'ORDER') || $this->matches($t->value, 'SKIP')
                     || $this->matches($t->value, 'LIMIT'))) {
                 $projEnd = $i;
@@ -272,16 +322,17 @@ final class CypherStructuralValidator
             if ($t->type === CypherLexer::T_WORD && $this->matches($t->value, 'AS')
                 && $t->parenDepth === 0 && $t->bracketDepth === 0 && $t->braceDepth === 0) {
                 if ($i + 1 < $end && $tokens[$i + 1]->type === CypherLexer::T_WORD) {
-                    return strtolower($tokens[$i + 1]->value);
+                    return $tokens[$i + 1]->value; // column names are case-sensitive
                 }
             }
         }
 
-        // Otherwise the verbatim expression text (token values joined), lowercased.
+        // Otherwise the verbatim expression text (token values joined). EXACT case:
+        // Neo4j compares UNION column names case-sensitively (`Id` ≠ `id`).
         $parts = [];
         for ($i = $start; $i < $end; $i++) {
             $t = $tokens[$i];
-            $parts[] = $t->type === CypherLexer::T_PUNCT ? $t->value : strtolower($t->value);
+            $parts[] = $t->value;
         }
 
         return implode('', $parts);
@@ -296,7 +347,13 @@ final class CypherStructuralValidator
     private function isIdentifierPosition(array $tokens, int $idx): bool
     {
         $prev = $tokens[$idx - 1] ?? null;
-        return $prev !== null && ($prev->isPunct(':') || $prev->isPunct('.'));
+        if ($prev !== null && ($prev->isPunct(':') || $prev->isPunct('.'))) {
+            return true;
+        }
+
+        // A keyword-NAMED variable (`WHERE limit …`, `AS skip`, `order` without
+        // BY), flagged once by the lexer.
+        return $tokens[$idx]->keywordAsIdentifier;
     }
 
     private function isClauseKeyword(string $word): bool

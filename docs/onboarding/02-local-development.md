@@ -140,10 +140,10 @@ at the mirrored path:
 | You changed | Look in |
 |---|---|
 | `src/Services/QueryExecutor.php` | `tests/Unit/Services/QueryExecutorTest.php`, `QueryExecutorSecurityTest.php`, `QueryExecutorRateLimitTest.php`, `QueryExecutorTimeoutTest.php` |
-| `src/Services/Actions/*` | `tests/Unit/Services/Actions/*` (e.g. `PendingActionTokenTest.php`, `ToolLoopRunnerTest.php`, `ToolApprovalParityTest.php`) |
+| `src/Services/Actions/*` | `tests/Unit/Services/Actions/*` (e.g. `PendingActionTokenTest.php`, `ApprovalFlowTest.php`, `ActionInvocationTest.php`) |
 | `src/Kompo/*` (UI components) | `tests/Unit/Kompo/*` |
 | `src/GraphStore/`, `src/VectorStore/`, `src/LlmProviders/`, `src/EmbeddingProviders/` | `tests/Unit/<same dir>/` for contract behavior; `tests/Integration/<same dir>/` for the live round-trip |
-| Cross-component flows (approval round-trip, native tool calling, full pipeline) | `tests/Feature/` — e.g. `ActionApprovalRoundTripTest.php`, `NativeToolActionRoundTripTest.php`, `AiSystemFeatureTest.php` |
+| Cross-component flows (approval round-trip, full pipeline) | `tests/Unit/Feature/` — e.g. `ActionApprovalRoundTripTest.php`, `ActionLinkIntegrationTest.php` |
 
 Shared fixtures sit in `tests/Fixtures/`, test-only migrations/factories in `tests/database/`.
 
@@ -242,7 +242,7 @@ invariant survives, written *before* the change, and reviewer attention:
 | `src/Services/QueryExecutor.php` — `applySecurityFilter()` (`:652`) | Tenant isolation: team-based filters are injected into every secured Cypher query; fail-closed on label-free primaries and OR-precedence edge cases | `tests/Unit/Services/QueryExecutorSecurityTest.php` |
 | `src/Services/Actions/ActionDispatcher.php` — `approve()` (`:208-253`) | Mutating actions never execute inline. Approval re-verifies everything server-side: token decode (`:210-213`), null-user rejection (`:222-224`), ownership (`:226-228`), **fresh `authorize()`** (`:239`), single-use nonce claimed only after authorization (`:246-248`) | `tests/Feature/ActionApprovalRoundTripTest.php`, `tests/Unit/Services/Actions/MutationActionLinkFlowTest.php` |
 | `src/Services/Actions/PendingActionToken.php` | The deferred-action token is HMAC-signed over `APP_KEY`, TTL-bounded, and nonce-carrying — tamper-evidence + replay defense (docblock `:7-30` explains the threat model) | `tests/Unit/Services/Actions/PendingActionTokenTest.php` |
-| `src/Kompo/Actions/ApprovalCard.php` | The approval UI that round-trips to `MessagesQuery::approveAiAction` → `ActionDispatcher::approve()`; it is the only path by which a proposed mutation becomes real | `tests/Feature/ActionApprovalRoundTripTest.php`, `tests/Unit/Services/Actions/ToolApprovalParityTest.php` (the native tool channel must keep the **same** approval gate as the markdown-link channel) |
+| `src/Kompo/Actions/ApprovalCard.php` | The approval UI that round-trips to `MessagesQuery::approveAiAction` → `ActionDispatcher::approve()`; it is the only path by which a proposed mutation becomes real | `tests/Unit/Feature/ActionApprovalRoundTripTest.php`, `tests/Unit/Kompo/MessageInvocationRenderTest.php` (persisted message invocations must keep the **same** approval gate as markdown links) |
 
 If you touch the action system at all, read
 `docs/audit/94-action-and-extensibility-abstraction.md` and
@@ -256,7 +256,7 @@ this way (tokens minted at render, never persisted; both channels share one appr
 | `docs/audit/00-overview.md` | C4-style architecture overview of the whole package |
 | `docs/audit/layers/` | 17 layer deep-dives (`00-orchestration-entry.md` … `16-crosscutting.md`) — the per-subsystem reference |
 | `docs/audit/91-contracts-and-abstraction.md` | Container contracts, interfaces, and swap points |
-| `docs/audit/94-action-and-extensibility-abstraction.md` / `94b-native-tool-calling-design.md` | The action system and native tool-calling design |
+| `docs/audit/94-action-and-extensibility-abstraction.md` / `94b-native-tool-calling-design.md` | The action system (and the historical native tool-calling design — removed 2026-10-01) |
 | `docs/audit/96-condoedge-recommended-questions.md` | What the primary host (CondoEdge) actually asks of the system |
 | `docs/audit/EXECUTION-SUMMARY.md` | Verified suite status, what was hardened, and the honest scorecard |
 

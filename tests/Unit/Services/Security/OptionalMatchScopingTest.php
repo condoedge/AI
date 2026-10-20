@@ -123,9 +123,12 @@ class OptionalMatchScopingTest extends TestCase
 
         // It must be attached to the OPTIONAL MATCH's own WHERE (AND-merged into
         // the existing predicate), so a scoped-out invoice becomes null and does
-        // NOT contribute to the aggregates while the unit row survives.
+        // NOT contribute to the aggregates while the unit row survives. The
+        // existing predicate is always parenthesized before the AND-merge
+        // (security review 2026-10-01: OR/XOR precedence + fail-closed on a
+        // mis-bounded predicate).
         $this->assertMatchesRegularExpression(
-            '/toFloat\(i\.calc_due_amount\) > 0 AND \(i IS NULL OR EXISTS \{/',
+            '/OPTIONAL MATCH \(i:Invoice\) WHERE \(i\.customer_type = "unit" AND i\.customer_id = u\.id AND toFloat\(i\.calc_due_amount\) > 0\) AND \(i IS NULL OR EXISTS \{/',
             $out,
             "EXISTS scope not merged into the OPTIONAL MATCH's WHERE: {$out}"
         );
@@ -139,7 +142,7 @@ class OptionalMatchScopingTest extends TestCase
 
         // Original query parts intact.
         $this->assertStringContainsString('MATCH (u:Unit {name: "310"})-[:UNION]->(u1:Union) WHERE u1.team_id IN $ai_team_ids', $out);
-        $this->assertStringContainsString('OPTIONAL MATCH (i:Invoice) WHERE i.customer_type = "unit"', $out);
+        $this->assertStringContainsString('OPTIONAL MATCH (i:Invoice) WHERE (i.customer_type = "unit"', $out);
         $this->assertStringContainsString('RETURN u.id AS unit_id', $out);
 
         // Bound parameter only, never inlined ids.

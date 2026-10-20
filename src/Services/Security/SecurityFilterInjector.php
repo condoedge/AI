@@ -38,11 +38,17 @@ use Condoedge\Ai\Services\Security\Scope\ScopePlan;
  *     `MATCH (i)-[:REL]->(s:Union) WHERE s.team_id IN $ai_team_ids` on a null
  *     variable eliminates EVERY row, so its relationship scope is emitted as
  *     `(i IS NULL OR EXISTS { MATCH (i)-[:REL]->(ai_sN:Union) WHERE … })` and a
- *     direct scope as `(i IS NULL OR i.team_id IN $ai_team_ids)` — merged into
- *     the anchor-adjacent WHERE. Attached to the OPTIONAL MATCH's own WHERE this
- *     filters the optional match (a cross-tenant value becomes null, the row
- *     survives and the value never contributes); in a row-level position it
- *     keeps unmatched rows while still team-scoping every non-null value.
+ *     direct scope as `(i IS NULL OR i.team_id IN $ai_team_ids)` — spliced into
+ *     the WHERE of the OPTIONAL MATCH clause that BINDS i (AND-merged, existing
+ *     predicate parenthesized, or a fresh WHERE right after its pattern). There
+ *     it filters the optional match: a cross-tenant value becomes null, the row
+ *     survives and the value never contributes. It is NEVER placed on another
+ *     clause's WHERE: on a LATER OPTIONAL MATCH a WHERE only decides whether
+ *     that later pattern matches, so `… OPTIONAL MATCH (x) OPTIONAL MATCH (y)
+ *     WHERE <scope x> …` returned every cross-tenant x with y = null (security
+ *     review 2026-10-01 P1; live: 3963 of 6006 invoices out of tenant). If the
+ *     binding clause is unknown, the scope falls back to a row-level
+ *     `WITH * WHERE` (drops a cross-tenant row — strictly filtering).
  *     SECURITY INVARIANT: OPTIONAL variables are scoped null-tolerantly, never
  *     left unscoped.
  *   • When the clause immediately before the anchor is an OPTIONAL MATCH, a
@@ -119,6 +125,13 @@ final class SecurityFilterInjector
             return $cypher;
         }
 
+        // Edits must be pairwise disjoint (and no two pure inserts may share an
+        // offset — their relative order would be undefined). Anything else means
+        // two scoping decisions target the same bytes → fail closed.
+        if (!$this->editsAreDisjoint($edits)) {
+            return null;
+        }
+
         $rewritten = $this->applyEdits($cypher, $edits);
 
         // Runtime defence-in-depth: a structurally invalid rewrite must NEVER reach
@@ -146,9 +159,31 @@ final class SecurityFilterInjector
         array &$reserved,
         int &$aliasCounter
     ): ?array {
-        $whereParts = [];    // predicates AND-combined into the anchor-adjacent WHERE
-        $rowWhereParts = []; // mandatory predicates that need ROW-level `WITH * WHERE …`
+        $whereParts = [];    // MANDATORY predicates AND-combined into the anchor-adjacent WHERE
+        $rowWhereParts = []; // predicates that need ROW-level `WITH * WHERE …`
         $matchInserts = [];  // mandatory relationship MATCH ... WHERE blocks before anchor
+        /** @var array<int, array{where:int, whereEnd:int, parts:list<string>}> $clauseParts */
+        $clauseParts = [];   // OPTIONAL predicates, keyed by their OWN clause's insert offset
+
+        // An OPTIONAL binding's null-tolerant scope goes into the WHERE of the
+        // OPTIONAL MATCH that BINDS it (no match → null, row survives). A WHERE
+        // attached to any other clause is wrong: on a later OPTIONAL MATCH it
+        // only decides whether THAT pattern matches, so a cross-tenant value
+        // bound earlier flows through untouched (P1, live: 3963 cross-tenant
+        // invoices). Unknown clause → strictly-filtering row-level fallback.
+        $addOptional = static function (NodeBinding $binding, string $predicate) use (&$clauseParts, &$rowWhereParts): void {
+            if ($binding->clauseInsertOffset < 0) {
+                $rowWhereParts[] = $predicate;
+                return;
+            }
+            $key = $binding->clauseInsertOffset;
+            $clauseParts[$key] ??= [
+                'where' => $binding->clauseWhereOffset,
+                'whereEnd' => $binding->clauseWhereEndOffset,
+                'parts' => [],
+            ];
+            $clauseParts[$key]['parts'][] = $predicate;
+        };
 
         foreach ($scope->sensitiveBindings as $binding) {
             $clause = $filterFor($binding);
@@ -180,7 +215,7 @@ final class SecurityFilterInjector
                     // must still reach a permitted team ($ai_team_ids enforced),
                     // a null (no optional match) keeps the row. NEVER simply skip
                     // scoping for OPTIONAL variables.
-                    $whereParts[] = '(' . $binding->alias . ' IS NULL OR EXISTS { ' . $uniquified . ' })';
+                    $addOptional($binding, '(' . $binding->alias . ' IS NULL OR EXISTS { ' . $uniquified . ' })');
                 } else {
                     $matchInserts[] = $uniquified;
                 }
@@ -195,11 +230,12 @@ final class SecurityFilterInjector
             }
 
             if ($binding->optional) {
-                // Null-tolerant direct predicate: attached to the OPTIONAL MATCH's
-                // WHERE it filters the optional match (cross-tenant value → null,
-                // row survives); in a row-level position the IS-NULL disjunct keeps
-                // unmatched rows while non-null values stay team-scoped.
-                $whereParts[] = '(' . $binding->alias . ' IS NULL OR ' . $predicate . ')';
+                // Null-tolerant direct predicate, attached to the binding's OWN
+                // OPTIONAL MATCH's WHERE: it filters that optional match
+                // (cross-tenant value → null, row survives). In the row-level
+                // fallback the IS-NULL disjunct keeps unmatched rows while a
+                // cross-tenant non-null value drops the row.
+                $addOptional($binding, '(' . $binding->alias . ' IS NULL OR ' . $predicate . ')');
             } elseif ($scope->anchorClauseIsOptionalMatch) {
                 // The WHERE we would merge into / open belongs to an OPTIONAL
                 // MATCH: a mandatory binding's predicate there would only filter
@@ -279,6 +315,70 @@ final class SecurityFilterInjector
             // LAST, after the (self-contained) MATCH blocks, immediately before
             // the anchor.
             $insertBeforeAnchor .= 'WITH * WHERE ' . implode(' AND ', $rowWhereParts) . ' ';
+        }
+
+        if ($insertBeforeAnchor !== '' && $scope->anchorClauseRejectsWhere) {
+            // The clause before the anchor cannot carry a WHERE (UNWIND … AS x,
+            // SET …, CALL (…) {…}, …): a bare WHERE there is a SyntaxError, and a
+            // MATCH directly after an update clause needs a WITH first. `WITH *`
+            // keeps every variable live and re-opens a row-level clause, so the
+            // direct WHERE (row-level, strictly filtering) and MATCH-hop blocks
+            // attach validly. Any existing WHERE is necessarily closed by that
+            // clause, so the fresh-WHERE path above was taken; if not, the shape is
+            // not understood → fail closed.
+            if (str_starts_with($insertBeforeAnchor, 'AND ')) {
+                return null;
+            }
+            $insertBeforeAnchor = 'WITH * ' . $insertBeforeAnchor;
+        }
+
+        // OPTIONAL bindings: one WHERE edit per binding clause (several variables
+        // bound by the same OPTIONAL MATCH share it).
+        $clauseAtAnchor = '';
+        foreach ($clauseParts as $insertOffset => $clause) {
+            $combined = implode(' AND ', $clause['parts']);
+
+            if ($clause['where'] >= 0) {
+                // The clause has its own WHERE: ALWAYS parenthesize the existing
+                // predicate before AND-ing (OR / XOR bind looser than AND; and a
+                // mis-bounded predicate then yields unbalanced parens the
+                // structural validator rejects, instead of a valid-but-wrong
+                // conjunction).
+                $predStart = $clause['where'] + self::WHERE_LEN;
+                $predEnd = $clause['whereEnd'];
+                if ($predEnd <= $predStart || $predEnd > $anchor) {
+                    return null;
+                }
+                $existing = trim(substr($cypher, $predStart, $predEnd - $predStart));
+                if ($existing === '') {
+                    return null;
+                }
+                $edits[] = [$predStart, $predEnd, ' (' . $existing . ') AND ' . $combined . ' '];
+                continue;
+            }
+
+            if ($insertOffset > $anchor) {
+                return null; // the clause must close before this scope's anchor
+            }
+
+            if ($insertOffset === $anchor) {
+                // The binding clause is the last one before the anchor: its WHERE
+                // must come FIRST in the anchor insertion (before any row-level
+                // `WITH * …` / MATCH block, which would otherwise end the clause).
+                $clauseAtAnchor .= 'WHERE ' . $combined . ' ';
+                continue;
+            }
+
+            $edits[] = [$insertOffset, $insertOffset, $this->leftPad($cypher, $insertOffset) . 'WHERE ' . $combined . ' '];
+        }
+
+        if ($clauseAtAnchor !== '') {
+            if (str_starts_with($insertBeforeAnchor, 'AND ')) {
+                // A mandatory AND-merge into an anchor-adjacent WHERE cannot coexist
+                // with a WHERE-less OPTIONAL clause there — shape not understood.
+                return null;
+            }
+            $insertBeforeAnchor = $clauseAtAnchor . $insertBeforeAnchor;
         }
 
         if ($insertBeforeAnchor !== '') {
@@ -403,6 +503,27 @@ final class SecurityFilterInjector
         }
         $prev = $cypher[$offset - 1];
         return ($prev === ' ' || $prev === "\t" || $prev === "\n" || $prev === "\r") ? '' : ' ';
+    }
+
+    /**
+     * Whether no two edits overlap. A replacement [s,e) and an insert at e are
+     * disjoint; two inserts at the same offset are not (ambiguous order).
+     *
+     * @param list<array{0:int,1:int,2:string}> $edits
+     */
+    private function editsAreDisjoint(array $edits): bool
+    {
+        usort($edits, static fn($a, $b) => [$a[0], $a[1]] <=> [$b[0], $b[1]]);
+
+        for ($i = 1, $n = count($edits); $i < $n; $i++) {
+            [$prevStart, $prevEnd] = $edits[$i - 1];
+            [$start] = $edits[$i];
+            if ($start < $prevEnd || $start === $prevStart) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

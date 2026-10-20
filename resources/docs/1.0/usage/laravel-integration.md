@@ -88,7 +88,7 @@ class CustomerController extends Controller
         $question = $request->input('question');
 
         $context = $this->ai->retrieveContext($question, [
-            'collection' => 'customers',
+            'collection' => 'questions',
             'limit' => 10
         ]);
 
@@ -365,10 +365,11 @@ class IngestEntityJob implements ShouldQueue
 
     public function handle()
     {
-        $status = AI::ingest($this->entity);
-
-        if (!empty($status['errors'])) {
-            \Log::warning('Ingestion errors', $status['errors']);
+        try {
+            AI::ingest($this->entity);
+        } catch (\Condoedge\Ai\Exceptions\DataConsistencyException $e) {
+            // ingest() throws when the graph write fails
+            \Log::warning('Ingestion failed', $e->getContext());
         }
     }
 }
@@ -457,10 +458,10 @@ class AiController extends Controller
             'question' => 'required|string'
         ])['question'];
 
-        $similar = AI::searchSimilar($question, [
-            'collection' => 'entities',
-            'limit' => 10
-        ]);
+        // Similar past questions (the stored question→Cypher examples).
+        // Records are not searched semantically: they are queried through the graph.
+        $similar = app(\Condoedge\Ai\Contracts\ContextRetrieverInterface::class)
+            ->searchSimilar($question, 'questions', 10);
 
         return response()->json($similar);
     }
@@ -519,7 +520,6 @@ class CustomerAiTest extends TestCase
             ->once()
             ->andReturn([
                 'graph_stored' => true,
-                'vector_stored' => true,
                 'relationships_created' => 1,
                 'errors' => []
             ]);
@@ -535,11 +535,14 @@ class CustomerAiTest extends TestCase
 
     public function test_search_endpoint()
     {
-        AI::shouldReceive('searchSimilar')
+        // searchSimilar() lives on the context retriever, not on the AI facade
+        $retriever = \Mockery::mock(\Condoedge\Ai\Contracts\ContextRetrieverInterface::class);
+        $retriever->shouldReceive('searchSimilar')
             ->once()
             ->andReturn([
-                ['question' => 'Test', 'score' => 0.9, 'metadata' => []]
+                ['question' => 'Test', 'query' => 'MATCH (c:Customer) RETURN c', 'score' => 0.9]
             ]);
+        $this->app->instance(\Condoedge\Ai\Contracts\ContextRetrieverInterface::class, $retriever);
 
         $response = $this->postJson('/api/ai/search', [
             'question' => 'Show all customers'
@@ -547,7 +550,7 @@ class CustomerAiTest extends TestCase
 
         $response->assertStatus(200);
         $response->assertJsonStructure([
-            '*' => ['question', 'score', 'metadata']
+            '*' => ['question', 'query', 'score']
         ]);
     }
 }
@@ -570,7 +573,7 @@ class CustomerAiTest extends TestCase
     <div class="results">
         @foreach($results as $result)
             <div class="result">
-                <strong>{{ $result['metadata']['name'] }}</strong>
+                <strong>{{ $result['question'] }}</strong>
                 <span>Score: {{ $result['score'] }}</span>
             </div>
         @endforeach

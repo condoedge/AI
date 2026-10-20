@@ -200,6 +200,9 @@ class BoltNeo4jStore implements GraphStoreInterface
         try {
             $schema['relationshipPatterns'] = $this->getRelationshipPatterns();
         } catch (\Throwable $e) {
+            // null = UNKNOWN (the full-graph scan failed, e.g. timed out) — never []
+            // ("the graph has no edges"). GraphSchemaCache refuses to cache it.
+            $schema['relationshipPatterns'] = null;
             Log::warning('Failed to retrieve Neo4j relationship patterns', [
                 'error' => $e->getMessage(),
             ]);

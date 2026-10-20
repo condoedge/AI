@@ -8,10 +8,10 @@ use Condoedge\Ai\Services\Discovery\AiConfigEnhancer;
 use Condoedge\Ai\Services\Discovery\CodeExplorer;
 use Condoedge\Ai\Services\Discovery\DataExplorer;
 use Condoedge\Ai\Services\Discovery\LangExplorer;
+use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Support\RecordingPipelineObserver;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
-use Symfony\Component\Console\Output\BufferedOutput;
 
 /**
  * Post-ingestion AI enhancement command.
@@ -19,7 +19,7 @@ use Symfony\Component\Console\Output\BufferedOutput;
  * Runs AFTER discover + ingest + index. Uses the full pipeline to:
  * 1. Gather code+data context for each entity
  * 2. Generate test questions using LLM
- * 3. Run questions through ai:test-question
+ * 3. Run questions through the production pipeline (AI::answerQuestion)
  * 4. Feed results back to LLM for improvement
  * 5. Repeat N times for best config quality
  *
@@ -135,25 +135,11 @@ class EnhanceConfigCommand extends Command
                 $dataContext = $dataExplorer->explore($modelClass);
                 $langContext = $langExplorer->explore($codeContext['forms'] ?? [], base_path());
 
-                $testRunner = function (string $question) use ($userId): string {
+                $testRunner = function (string $question) use ($user): string {
                     $this->line("    Testing: <fg=gray>{$question}</>");
 
-                    $buffer = new BufferedOutput();
-
                     try {
-                        $exitCode = Artisan::call('ai:test-question', [
-                            'question' => $question,
-                            '--user' => $userId,
-                            '--debug' => true,
-                        ], $buffer);
-
-                        $output = $buffer->fetch();
-
-                        if ($exitCode !== 0) {
-                            return "PIPELINE ERROR (exit code {$exitCode}):\n{$output}";
-                        }
-
-                        return $output;
+                        return $this->runTestQuestion($question, $user);
                     } catch (\Throwable $e) {
                         return "ERROR: {$e->getMessage()}";
                     }
@@ -201,10 +187,74 @@ class EnhanceConfigCommand extends Command
             $this->comment('Next steps:');
             $this->line('  1. Review the enhanced config files');
             $this->line('  2. Re-index: php artisan ai:index-context && php artisan ai:index-scopes');
-            $this->line('  3. Validate: php artisan ai:test-question "your question" --user=' . $userId);
+            $this->line('  3. Validate: ask in the chat, or (dev) php artisan ai:eval --ask="your question" --user=' . $userId);
         }
 
         return empty($errors) ? self::SUCCESS : self::FAILURE;
+    }
+
+    /**
+     * Run ONE test question through the PRODUCTION pipeline (AI::answerQuestion)
+     * and describe what it did — understanding, selection, cypher, rows, errors,
+     * answer — as the plain-text feedback the enhancer LLM reads.
+     */
+    private function runTestQuestion(string $question, mixed $user): string
+    {
+        $recorder = new RecordingPipelineObserver();
+        $response = AI::answerQuestion($question, [
+            'user' => $user,
+            'observer' => $recorder,
+            // Enhancement probes must not write few-shot examples.
+            'store_examples' => false,
+        ]);
+
+        $lines = ["Question: {$question}"];
+
+        $understanding = $recorder->stageData('understanding') ?? [];
+        $qu = (array) ($understanding['qu'] ?? []);
+        $lines[] = 'Query Understanding:';
+        $lines[] = '  Question type: ' . ($qu['question_type'] ?? 'N/A');
+        $lines[] = '  Intent: ' . (($qu['intent'] ?? '') ?: 'N/A');
+        $lines[] = '  Entity types: ' . (empty($qu['entity_types']) ? 'NONE' : implode(', ', (array) $qu['entity_types']));
+        $lines[] = '  Property concepts: ' . (empty($qu['property_concepts']) ? 'NONE' : implode(', ', (array) $qu['property_concepts']));
+        $lines[] = '  Search query: ' . (($qu['search_query'] ?? '') ?: 'N/A');
+        $lines[] = 'Selected entities: ' . (empty($understanding['selected_entities'])
+            ? 'NONE'
+            : implode(', ', (array) $understanding['selected_entities']));
+
+        $generation = $recorder->stageData('query_generation');
+        if ($generation !== null) {
+            $lines[] = 'Cypher: ' . ($generation['cypher'] ?? 'NULL');
+            $lines[] = 'Confidence: ' . ($generation['confidence'] ?? 0);
+            if (!empty($generation['warnings'])) {
+                $lines[] = 'Warnings: ' . implode('; ', (array) $generation['warnings']);
+            }
+        } else {
+            $lines[] = 'Cypher: none (no query generated for this turn)';
+        }
+
+        $execution = $recorder->stageData('execution');
+        if ($execution !== null) {
+            $lines[] = 'Rows returned: ' . ($execution['row_count'] ?? 0);
+        }
+        $data = (array) ($response['data'] ?? []);
+        foreach (array_slice($data, 0, 3) as $i => $row) {
+            $lines[] = "  [{$i}] " . json_encode($row, JSON_UNESCAPED_UNICODE);
+        }
+
+        $errors = array_merge(
+            (array) ($understanding['errors'] ?? []),
+            array_map(static fn (array $e): string => "{$e['stage']}: {$e['message']}", $recorder->errors())
+        );
+        if ($errors !== []) {
+            $lines[] = 'Errors: ' . implode('; ', $errors);
+        }
+
+        $lines[] = 'Composition branch: ' . (($recorder->stageData('composition') ?? [])['branch'] ?? 'unknown');
+        $lines[] = '=== FINAL ANSWER ===';
+        $lines[] = (string) ($response['answer'] ?? 'No answer generated');
+
+        return implode("\n", $lines);
     }
 
     /**

@@ -41,7 +41,6 @@ class SetupCommandValidatesConfigTest extends TestCase
         config(['entities' => [
             TestCustomer::class => [
                 'graph' => ['label' => 'Customer', 'properties' => ['id', 'name']],
-                'vector' => ['collection' => 'customers', 'embed_fields' => ['name']],
             ],
         ]]);
 

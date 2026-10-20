@@ -10,9 +10,9 @@ use Condoedge\Ai\Services\Chat\Results\ChatTurnResult;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Edit an existing user message and regenerate the answer in one transaction:
- * update the content, then delegate to RegenerateAnswerUseCase (which owns
- * trailing-message truncation + the shared turn flow).
+ * Edit an existing user message and regenerate the answer: update the content (short
+ * transaction), then delegate to RegenerateAnswerUseCase (which owns trailing-message
+ * truncation + the shared turn flow). No transaction is held across the LLM calls.
  *
  * Concrete, container-autowired (not bound, not interfaced) per the Sisc UseCase convention.
  */
@@ -44,19 +44,18 @@ class EditMessageAndRegenerateUseCase
             throw new \InvalidArgumentException('Can only edit user messages');
         }
 
-        return DB::transaction(function () use ($conversation, $userMessage, $newContent, $style, $user, $allowAnonymous) {
-            // Update the edited user message in place.
-            $userMessage->update(['content' => $newContent]);
+        // Update the edited user message in place — a short write-only transaction. The
+        // regeneration below (multi-second LLM calls) must NOT run inside a transaction.
+        DB::transaction(fn () => $userMessage->update(['content' => $newContent]));
 
-            // Delegate truncation + regeneration to the single owner of that flow.
-            // refresh() so the regenerate path reads the updated content.
-            return $this->regenerateAnswerUseCase->execute(
-                conversation: $conversation,
-                userMessage: $userMessage->refresh(),
-                style: $style,
-                user: $user,
-                allowAnonymous: $allowAnonymous,
-            );
-        });
+        // Delegate truncation + regeneration to the single owner of that flow.
+        // refresh() so the regenerate path reads the updated content.
+        return $this->regenerateAnswerUseCase->execute(
+            conversation: $conversation,
+            userMessage: $userMessage->refresh(),
+            style: $style,
+            user: $user,
+            allowAnonymous: $allowAnonymous,
+        );
     }
 }

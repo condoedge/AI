@@ -4,10 +4,6 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\LlmProviders;
 
-use Condoedge\Ai\Contracts\ToolCallingLlmInterface;
-use Condoedge\Ai\DTOs\LlmToolCall;
-use Condoedge\Ai\DTOs\LlmToolTurn;
-use Condoedge\Ai\Services\Actions\ActionToolSpec;
 use Exception;
 
 /**
@@ -16,14 +12,11 @@ use Exception;
  * Request shaping and response extraction only; the cURL transport, streaming
  * loop, JSON extraction (the Messages API has no native JSON mode, so model
  * output may be fenced/prose-wrapped), error mapping and resilience live in the
- * shared base. Native tool turns (chatWithTools) reuse the same sendRequest()
- * path, so every loop round rides the shared circuit breaker + transient-only
- * retry; tool results go back as tool_result blocks inside a USER message,
- * Anthropic's required shape.
+ * shared base.
  *
  * @package Condoedge\Ai\LlmProviders
  */
-class AnthropicLlmProvider extends AbstractHttpLlmProvider implements ToolCallingLlmInterface
+class AnthropicLlmProvider extends AbstractHttpLlmProvider
 {
     private const API_ENDPOINT = 'https://api.anthropic.com/v1/messages';
     private const API_VERSION = '2023-06-01';
@@ -89,10 +82,6 @@ class AnthropicLlmProvider extends AbstractHttpLlmProvider implements ToolCallin
             $request['stream'] = true;
         }
 
-        if (isset($options['tools'])) {
-            $request['tools'] = $options['tools'];
-        }
-
         return $request;
     }
 
@@ -107,78 +96,9 @@ class AnthropicLlmProvider extends AbstractHttpLlmProvider implements ToolCallin
         return $text;
     }
 
-    public function chatWithTools(array $messages, array $toolSpecs, array $options = []): LlmToolTurn
-    {
-        if ($toolSpecs !== []) {
-            $options['tools'] = array_map(static fn (ActionToolSpec $spec) => [
-                'name' => $spec->name,
-                'description' => $spec->description,
-                'input_schema' => $spec->parameters,
-            ], array_values($toolSpecs));
-        }
-
-        $response = $this->sendRequest($this->shapeRequest($messages, $options), false);
-
-        return $this->extractToolTurn($response);
-    }
-
-    public function formatToolResults(LlmToolTurn $turn, array $results): array
-    {
-        $blocks = [];
-
-        foreach ($results as $callId => $result) {
-            $block = [
-                'type' => 'tool_result',
-                'tool_use_id' => (string) $callId,
-                'content' => is_array($result) ? (string) ($result['content'] ?? '') : (string) $result,
-            ];
-
-            if (is_array($result) && !empty($result['is_error'])) {
-                $block['is_error'] = true;
-            }
-
-            $blocks[] = $block;
-        }
-
-        // tool_result blocks must ride a USER message immediately after the assistant
-        // tool_use turn; the system-hoist loop in shapeRequest() leaves both untouched.
-        return [
-            $turn->rawAssistantMessage,
-            ['role' => 'user', 'content' => $blocks],
-        ];
-    }
-
-    private function extractToolTurn(array $response): LlmToolTurn
-    {
-        $content = (array) ($response['content'] ?? []);
-
-        $toolCalls = [];
-        foreach ($content as $block) {
-            if (!is_array($block) || ($block['type'] ?? null) !== 'tool_use') {
-                continue;
-            }
-
-            $input = $block['input'] ?? [];
-
-            $toolCalls[] = new LlmToolCall(
-                id: (string) ($block['id'] ?? ''),
-                name: (string) ($block['name'] ?? ''),
-                args: is_array($input) ? $input : [],
-                argsError: is_array($input) ? null : 'Tool input is not a JSON object',
-            );
-        }
-
-        return new LlmToolTurn(
-            text: $this->joinTextBlocks($content),
-            toolCalls: $toolCalls,
-            rawAssistantMessage: ['role' => 'assistant', 'content' => $content],
-            stopReason: $this->mapStopReason($response['stop_reason'] ?? null),
-        );
-    }
-
     /**
-     * Collect every text block in API order — text and tool_use blocks interleave at ANY
-     * index, so this must never assume content[0]. Null when no text block exists. A typeless
+     * Collect every text block in API order — text blocks may sit at ANY index, so this
+     * must never assume content[0]. Null when no text block exists. A typeless
      * block carrying a 'text' key is treated as text.
      *
      * @param array<int, mixed> $content
@@ -197,16 +117,19 @@ class AnthropicLlmProvider extends AbstractHttpLlmProvider implements ToolCallin
     }
 
     /**
-     * Normalize to the cross-provider vocabulary LlmToolTurn documents (the OpenAI terms).
+     * Anthropic messages: usage.input_tokens / output_tokens (no total on the wire).
      */
-    private function mapStopReason(mixed $stopReason): string
+    protected function extractUsage(array $response): ?array
     {
-        return match ($stopReason) {
-            'end_turn', 'stop_sequence' => 'stop',
-            'tool_use' => 'tool_calls',
-            'max_tokens' => 'length',
-            default => (string) ($stopReason ?? ''),
-        };
+        $usage = $response['usage'] ?? null;
+        if (!is_array($usage) || !isset($usage['input_tokens'], $usage['output_tokens'])) {
+            return null;
+        }
+
+        $input = (int) $usage['input_tokens'];
+        $output = (int) $usage['output_tokens'];
+
+        return ['input' => $input, 'output' => $output, 'total' => $input + $output];
     }
 
     protected function parseStreamChunk(array $chunk): ?string

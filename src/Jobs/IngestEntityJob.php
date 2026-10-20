@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Log;
 /**
  * Ingest Entity Job
  *
- * Queues the ingestion of a Nodeable entity into Neo4j and Qdrant.
+ * Queues the ingestion of a Nodeable entity into the graph (Neo4j).
  * Triggered automatically when a model with HasNodeableConfig trait is created.
  */
 class IngestEntityJob implements ShouldQueue

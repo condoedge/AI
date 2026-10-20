@@ -65,7 +65,7 @@ class FacadeTest extends TestCase
     /** @test */
     public function file_search_facade_advertises_real_methods(): void
     {
-        foreach (['searchByContent', 'searchByMetadata', 'hybridSearch'] as $method) {
+        foreach (['searchByContent', 'searchByFilename'] as $method) {
             $this->assertTrue(
                 method_exists(FileSearchService::class, $method),
                 "FileSearchService is missing advertised method [{$method}]."

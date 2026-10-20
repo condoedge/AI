@@ -103,6 +103,36 @@ class EditMessageAndRegenerateUseCaseTest extends TestCase
     }
 
     /** @test */
+    public function the_llm_call_is_not_made_inside_a_database_transaction(): void
+    {
+        $conversation = AiConversation::create(['user_id' => 1]);
+        $userMsg = $conversation->messages()->create(['role' => 'user', 'content' => 'What is 2+2?']);
+        $conversation->messages()->create(['role' => 'assistant', 'content' => 'It is 4.']);
+
+        // RefreshDatabase holds an outer test transaction: measure relative to it.
+        $baseline = \Illuminate\Support\Facades\DB::transactionLevel();
+        $levelDuringCall = null;
+        $contentSeenByAi = null;
+
+        $ai = $this->mockAi();
+        $ai->shouldReceive('getSchema')->andReturn(['labels' => [], 'relationships' => []]);
+        $ai->shouldReceive('answerQuestion')->once()->andReturnUsing(function ($question) use (&$levelDuringCall, &$contentSeenByAi) {
+            $levelDuringCall = \Illuminate\Support\Facades\DB::transactionLevel();
+            $contentSeenByAi = $question;
+
+            return ['answer' => 'It is 6.', 'cypher' => null, 'data' => [], 'suggestions' => [], 'referenced_files' => []];
+        });
+
+        $result = $this->useCase()->execute($conversation, $userMsg, 'What is 3+3?', 'friendly', (object) ['id' => 1]);
+
+        $this->assertFalse($result->failed());
+        $this->assertSame($baseline, $levelDuringCall, 'AI::answerQuestion must run outside any DB transaction');
+        // The edit was committed before the call and is what the AI answered.
+        $this->assertSame('What is 3+3?', $contentSeenByAi);
+        $this->assertSame('What is 3+3?', $userMsg->fresh()->content);
+    }
+
+    /** @test */
     public function it_throws_for_non_user_message(): void
     {
         $conversation = AiConversation::create(['user_id' => 1]);

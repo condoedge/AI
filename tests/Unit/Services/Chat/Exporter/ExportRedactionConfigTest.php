@@ -47,6 +47,40 @@ class ExportRedactionConfigTest extends TestCase
         $this->assertSame('Alice', $redacted[0]['name']);
     }
 
+    /**
+     * Task 1.27 follow-up: entity-action enrichment keys and the `_label` marker
+     * are UI decorations, never data — the xlsx/pdf matrix must not carry them,
+     * even when a host disables redaction (ai.export.redact_rows = false).
+     *
+     * @test
+     * @dataProvider redactionToggle
+     */
+    public function enrichment_keys_and_label_never_reach_the_export_matrix(bool $redactRows): void
+    {
+        config(['ai.export.redact_rows' => $redactRows]);
+        $rows = [[
+            '_label' => 'Team',
+            'name' => 'Board',
+            'has_actions' => true,
+            'available_actions' => [['action_key' => 'view']],
+            'entity_type' => 'Team',
+            'action_links' => ['[View: Board](entity://Team/3/view)'],
+        ]];
+
+        $exporter = new ResultSetExporter();
+        // Exactly the toExcel()/toPdf() write path (Phase 8 batch A): THE TableRenderer's
+        // matrix over redact($rows) — the exporter's private toMatrix() is gone.
+        [$headers] = (new \Condoedge\Ai\Services\Response\TableRenderer($exporter))
+            ->matrix($exporter->redact($rows), ['redact' => false]);
+
+        $this->assertSame(['Name'], $headers);
+    }
+
+    public static function redactionToggle(): array
+    {
+        return ['redaction on' => [true], 'redaction off' => [false]];
+    }
+
     /** @test */
     public function internal_id_columns_are_always_stripped_regardless_of_redact_columns(): void
     {

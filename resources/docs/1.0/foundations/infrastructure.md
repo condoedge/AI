@@ -26,7 +26,7 @@ docker run -d \
 
 - Set `NEO4J_dbms_security_procedures_unrestricted=apoc.*` only if you rely on APOC utilities.
 - Back up via `neo4j-admin database dump neo4j` before major upgrades.
-- Cap Bolt query timeout with `AI_QUERY_TIMEOUT` to avoid runaway Cypher.
+- Cap Bolt query timeout with `AI_EXEC_TIMEOUT` to avoid runaway Cypher.
 
 ## Qdrant
 
@@ -52,7 +52,6 @@ docker run -d \
 ### Performance Tips
 
 - Enable on-disk payloads for large metadata sets (`.config.storage = OnDisk`).
-- Keep `AI_VECTOR_SEARCH_LIMIT` modest (3-8) to limit payload sizes.
 - Batch embeddings (`AI::ingestBatch`) to reduce HTTP chatter.
 
 ## Documentation Portal (LaRecipe)

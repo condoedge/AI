@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\PromptSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\Response\PiiMasker;
+use Condoedge\Ai\Support\UntrustedLabel;
 
 /**
  * ConversationContextSection
@@ -51,6 +53,12 @@ class ConversationContextSection extends BasePromptSection
             return '';
         }
 
+        // P-1 (Phase 8-A review): previous answers now carry the real-value table and
+        // the sample carries real rows — both reach the query generator masked with the
+        // turn's ONE token map. A token the model copies into its cypher is rebound as a
+        // query parameter carrying the real value (PiiMasker::bindCypher).
+        $conversationContext = PiiMasker::for($context)->maskConversation($conversationContext);
+
         $output = "## Conversation Context\n\n";
 
         if (!empty($conversationContext['focused_entity'])) {
@@ -67,8 +75,15 @@ class ConversationContextSection extends BasePromptSection
             }
         }
 
-        if (!empty($conversationContext['last_cypher_query'])) {
-            $output .= "\n**Previous Query:**\n```cypher\n{$conversationContext['last_cypher_query']}\n```\n";
+        // The query the generator wrote last turn (eval p12-1001-A): a FanOutCollapse
+        // turn executed a per-anchor rewrite (`WITH u, collect(…) AS role` — every
+        // other pattern variable out of scope); extending THAT made the model use
+        // `t` after the WITH ("Variable `t` not defined"). The generator extends its
+        // own query; an extension that fans out again is collapsed again at
+        // execution. last_cypher_query (the rewrite) stays the re-execution source.
+        $previousQuery = $this->previousQuery($conversationContext);
+        if ($previousQuery !== null) {
+            $output .= "\n**Previous Query:**\n```cypher\n{$previousQuery}\n```\n";
             $resultCount = $conversationContext['last_result_count'] ?? 0;
             $output .= "Returned {$resultCount} results.\n";
         }
@@ -103,31 +118,21 @@ class ConversationContextSection extends BasePromptSection
             $output .= "\n**Files Referenced in Previous Response:**\n";
             foreach ($conversationContext['last_referenced_files'] as $file) {
                 // Handle both structures: name/id (from ResponseFileEnricher) and filename/file_id
-                $filename = $file['name'] ?? $file['filename'] ?? 'Unknown file';
+                $file = (array) $file;
+                $filename = UntrustedLabel::fileName((string) ($file['name'] ?? $file['filename'] ?? ''));
                 $fileId = $file['id'] ?? $file['file_id'] ?? '';
-                $snippet = $this->truncate($file['snippet'] ?? '', 100);
-                $output .= "- [{$filename}] (ID: {$fileId}): {$snippet}\n";
+                $fileId = is_int($fileId) ? (string) $fileId : UntrustedLabel::of(is_scalar($fileId) ? (string) $fileId : '');
+                $snippet = $this->truncate((string) ($file['snippet'] ?? ''), 100);
+                $output .= "- file (ID: {$fileId})\n";
+                // The file's name and the excerpt came from an untrusted document (an
+                // uploaded file is named by its uploader): both are spotlighted so they
+                // stay data, never instructions (same wrapper as current file text).
+                $output .= $this->spotlight(
+                    'File: ' . ($filename !== '' ? $filename : 'Unknown file') . ($snippet !== '' ? "\n" . $snippet : ''),
+                    'retrieved_document',
+                    ['source' => 'previous_turn']
+                ) . "\n";
             }
-        }
-
-        if (!empty($conversationContext['last_insights'])) {
-            $output .= "\n**Previous Insights:**\n";
-            foreach ($conversationContext['last_insights'] as $insight) {
-                $output .= "- {$insight}\n";
-            }
-        }
-
-        if (!empty($conversationContext['last_execution_stats']['was_truncated'])) {
-            $stats = $conversationContext['last_execution_stats'];
-            $rowsReturned = $stats['rows_returned'] ?? 0;
-            $rowsAvailable = $stats['rows_available'] ?? 0;
-            $output .= "\n**Note:** Previous results were truncated ";
-            $output .= "(showing {$rowsReturned} of {$rowsAvailable} available).\n";
-        }
-
-        $availableActions = $conversationContext['last_available_actions'] ?? [];
-        if (!empty($availableActions)) {
-            $output .= $this->formatAvailableActions($availableActions);
         }
 
         // AUGMENTATION ANCHOR (item B): QU judged this turn a follow-up that
@@ -189,28 +194,19 @@ class ConversationContextSection extends BasePromptSection
     }
 
     /**
-     * Format available actions for display in prompt
+     * The generator-facing previous query: last_generated_cypher (pre-collapse),
+     * else the recorded last_cypher_query (snapshots that predate the split).
      */
-    protected function formatAvailableActions(array $actions): string
+    private function previousQuery(array $conversationContext): ?string
     {
-        if (empty($actions)) {
-            return '';
-        }
-
-        $output = "\n**Available Actions from Previous Response:**\n";
-
-        foreach ($actions as $entityType => $entityActions) {
-            $output .= "- **{$entityType}:**\n";
-            foreach ($entityActions as $action) {
-                $actionKey = $action['action_key'] ?? 'unknown';
-                $label = $action['label'] ?? $actionKey;
-                $output .= "  - `{$actionKey}`: {$label}\n";
+        foreach (['last_generated_cypher', 'last_cypher_query'] as $key) {
+            $query = $conversationContext[$key] ?? null;
+            if (is_string($query) && trim($query) !== '') {
+                return $query;
             }
         }
 
-        $output .= "\nIf user asks about actions, reference the above.\n";
-
-        return $output;
+        return null;
     }
 
     /**

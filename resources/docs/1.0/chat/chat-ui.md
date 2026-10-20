@@ -88,7 +88,7 @@ Link to it with `->redirect('ai.chat.screen')`, or set `AI_CHAT_SURFACE=screen` 
 AI_CHAT_SURFACE=drawer
 ```
 
-There is no fluent builder on `AiChatFloating` (no `->position()`, `->theme()`, `->withLabel()`, `->withPulse()`, `->modalConfig()`). Visual defaults come from config (see below).
+There is no fluent builder on `AiChatFloating` (no `->position()`, `->theme()`, `->withLabel()`, `->withPulse()`, `->modalConfig()`). Visual defaults come from the theme configuration (see Theming below).
 
 ## Page Context
 
@@ -121,10 +121,8 @@ All chat defaults live under `config('ai.chat')` in `config/ai.php`, each backed
     'surface' => env('AI_CHAT_SURFACE', 'modal'),
 
     // Welcome screen
-    'welcome' => [
-        'title' => env('AI_CHAT_WELCOME_TITLE', 'AI Assistant'),
-        'message' => env('AI_CHAT_WELCOME_MESSAGE', 'Ask me anything about your data...'),
-    ],
+    'welcome_title' => env('AI_CHAT_WELCOME_TITLE', 'AI Assistant'),
+    'welcome_message' => env('AI_CHAT_WELCOME_MESSAGE', 'Ask me anything about your data...'),
 
     // Example questions on the welcome screen
     'example_questions' => [
@@ -137,15 +135,13 @@ All chat defaults live under `config('ai.chat')` in `config/ai.php`, each backed
         // 'Unit' => ['Show this unit\'s payment history', 'Who owns this unit?'],
     ],
 
-    // Persistence
-    'persist_history' => env('AI_CHAT_PERSIST_HISTORY', true),
-    'max_messages' => env('AI_CHAT_MAX_MESSAGES', 50),
-    'max_history_messages' => env('AI_CHAT_MAX_HISTORY_MESSAGES', 10), // sent to the LLM
+    // Conversation history sent to the LLM
+    'max_history_messages' => env('AI_CHAT_MAX_HISTORY_MESSAGES', 10),
 
     // UI features
     'show_timestamps' => env('AI_CHAT_SHOW_TIMESTAMPS', false),
     'show_avatars' => env('AI_CHAT_SHOW_AVATARS', true),
-    'show_typing_indicator' => env('AI_CHAT_SHOW_TYPING', true),
+    'show_typing' => env('AI_CHAT_SHOW_TYPING', true),
     'show_suggestions' => env('AI_CHAT_SHOW_SUGGESTIONS', true),
     'max_suggestions' => env('AI_CHAT_MAX_SUGGESTIONS', 3),
     'show_metrics' => env('AI_CHAT_SHOW_METRICS', false),
@@ -155,17 +151,10 @@ All chat defaults live under `config('ai.chat')` in `config/ai.php`, each backed
     'enable_feedback' => env('AI_CHAT_ENABLE_FEEDBACK', false),
     'enable_regenerate' => env('AI_CHAT_ENABLE_REGENERATE', true),
     'enable_edit' => env('AI_CHAT_ENABLE_EDIT', true),
-    'enable_markdown' => env('AI_CHAT_ENABLE_MARKDOWN', true),
     'response_style' => env('AI_CHAT_RESPONSE_STYLE', 'friendly'),
 
     // Input
     'input_placeholder' => env('AI_CHAT_INPUT_PLACEHOLDER', 'ai.chat.input-placeholder'),
-    'auto_focus' => env('AI_CHAT_AUTO_FOCUS', true),
-
-    // Surface-specific defaults
-    'floating' => ['position' => 'bottom-right', 'size' => 'lg', 'style' => 'gradient'],
-    'modal' => ['size' => 'xl', 'full_screen' => false],
-    'drawer' => ['position' => 'right', 'width' => '400px'],
 ],
 ```
 
@@ -189,58 +178,20 @@ See [Theming](theming) for the full theme surface.
 
 ## Custom Chat Service
 
-To change how questions are processed, implement `AiChatServiceInterface` and bind it.
+Chat turns are processed by `AskQuestionUseCase` (invoked through `ChatPresenter`), which owns the security gate, conversation context, `AI::answerQuestion` and message persistence. `AiChatServiceInterface` is only the availability seam: it has a single method, `isAvailable()`, which drives the chat surface's online badge. Implement and bind it to customize that check.
 
 ### 1. Implement the Interface
 
 ```php
 namespace App\Services;
 
-use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Services\Chat\AiChatServiceInterface;
 
 class CustomChatService implements AiChatServiceInterface
 {
-    /**
-     * @return array{
-     *   answer: string,
-     *   data: array,
-     *   suggestions: array<string>,
-     *   sources: array,
-     *   cypher_query: ?string
-     * }
-     */
-    public function askWithConversation(
-        string $question,
-        AiConversation $conversation,
-        array $options = []
-    ): array {
-        // $options may include 'style' and 'user' (for file-access authorization)
-        $answer = $this->processQuestion($question);
-
-        return [
-            'answer' => $answer,
-            'data' => [],
-            'suggestions' => ['Tell me more', 'Show related data'],
-            'sources' => [],
-            'cypher_query' => null,
-        ];
-    }
-
-    public function getSchema(): array
-    {
-        // ['labels' => [...], 'relationships' => [...], 'properties' => [...]]
-        return [];
-    }
-
     public function isAvailable(): bool
     {
         return true; // e.g. check API keys / store connectivity
-    }
-
-    protected function processQuestion(string $question): string
-    {
-        return "Response to: {$question}";
     }
 }
 ```
@@ -317,9 +268,8 @@ class CustomChatModal extends AiChatModal
 
 ### Messages not persisting
 
-1. Ensure `persist_history` is `true`.
-2. Check that sessions work in your app.
-3. Verify `max_messages` isn't set too low.
+1. Conversations are stored in the database: ensure the package migrations ran (`ai_conversations` / `ai_messages` tables).
+2. Check Laravel logs for errors raised while saving the turn.
 
 ### Styling issues
 

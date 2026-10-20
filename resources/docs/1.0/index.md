@@ -32,8 +32,8 @@
 - ## Advanced Topics
     - [Semantic Matching](/docs/{{version}}/advanced/semantic-matching)
     - [Context Selection (Token Optimization)](/docs/{{version}}/advanced/context-selection)
+    - [Document Map](/docs/{{version}}/advanced/document-map)
     - [Scopes & Business Logic](/docs/{{version}}/advanced/scopes)
-    - [Query Patterns](/docs/{{version}}/advanced/patterns)
     - [Auto-Discovery](/docs/{{version}}/advanced/auto-discovery)
     - [Security](/docs/{{version}}/advanced/security)
 - ## Extending

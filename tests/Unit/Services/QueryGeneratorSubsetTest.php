@@ -38,7 +38,6 @@ class QueryGeneratorSubsetTest extends TestCase
             'allow_write_operations' => false,
             'default_limit' => 100,
             'max_complexity' => 100,
-            'enable_templates' => false, // force the LLM path
         ]);
     }
 
@@ -46,6 +45,12 @@ class QueryGeneratorSubsetTest extends TestCase
     {
         Mockery::close();
         parent::tearDown();
+    }
+
+    /** A structured generation reply (Task 5.6 contract). */
+    private function draft(string $cypher): object
+    {
+        return (object) ['needs_query' => true, 'cypher' => $cypher, 'reason' => ''];
     }
 
     private function makeContext(): PipelineContext
@@ -60,14 +65,10 @@ class QueryGeneratorSubsetTest extends TestCase
     {
         // First draft: passes basic validation but is OUTSIDE the scopeable subset
         // (label-free node access) → would fail closed at execution.
-        $this->mockLlm->shouldReceive('complete')
-            ->once()
-            ->andReturn('MATCH (n) RETURN n LIMIT 100');
-
         // Second draft: in-subset.
-        $this->mockLlm->shouldReceive('complete')
-            ->once()
-            ->andReturn('MATCH (i:Invoice) RETURN i LIMIT 100');
+        $this->mockLlm->shouldReceive('chatJson')
+            ->twice()
+            ->andReturn($this->draft('MATCH (n) RETURN n LIMIT 100'), $this->draft('MATCH (i:Invoice) RETURN i LIMIT 100'));
 
         $result = $this->generator->generate('Which invoices exist?', $this->makeContext(), ['explain' => false]);
 
@@ -78,9 +79,9 @@ class QueryGeneratorSubsetTest extends TestCase
     /** @test */
     public function in_subset_draft_is_accepted_first_try(): void
     {
-        $this->mockLlm->shouldReceive('complete')
+        $this->mockLlm->shouldReceive('chatJson')
             ->once()
-            ->andReturn('MATCH (i:Invoice) WHERE i.status = "open" RETURN i LIMIT 100');
+            ->andReturn($this->draft('MATCH (i:Invoice) WHERE i.status = "open" RETURN i LIMIT 100'));
 
         $result = $this->generator->generate('Open invoices?', $this->makeContext(), ['explain' => false]);
 
@@ -93,9 +94,9 @@ class QueryGeneratorSubsetTest extends TestCase
     {
         config()->set('ai.security.enforce_scopeable_subset', false);
 
-        $this->mockLlm->shouldReceive('complete')
+        $this->mockLlm->shouldReceive('chatJson')
             ->once()
-            ->andReturn('MATCH (n) RETURN n LIMIT 100');
+            ->andReturn($this->draft('MATCH (n) RETURN n LIMIT 100'));
 
         $result = $this->generator->generate('Anything?', $this->makeContext(), ['explain' => false]);
 

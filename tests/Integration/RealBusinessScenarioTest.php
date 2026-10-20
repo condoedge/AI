@@ -182,7 +182,6 @@ class RealBusinessScenarioTest extends TestCase
 
         // Verify auto-discovery works
         $this->assertArrayHasKey('graph', $config);
-        $this->assertArrayHasKey('vector', $config);
         $this->assertArrayHasKey('metadata', $config);
 
         // Verify label (AliasGenerator strips the 'Test' prefix from test models)
@@ -247,7 +246,6 @@ class RealBusinessScenarioTest extends TestCase
 
         // Verify the model has everything needed for count queries
         $this->assertArrayHasKey('graph', $config);
-        $this->assertArrayHasKey('vector', $config);
 
         // Verify scopes that enable filtering
         $scopeAdapter = app(CypherScopeAdapter::class);
@@ -408,17 +406,13 @@ class RealBusinessScenarioTest extends TestCase
         $healthConfig = $discovery->discover(TestHealthRecord::class);
         $allergyConfig = $discovery->discover(TestAllergy::class);
 
-        // Verify health entities have embed fields for RAG
-        $healthEmbedFields = $healthConfig['vector']['embed_fields'] ?? [];
-        $allergyEmbedFields = $allergyConfig['vector']['embed_fields'] ?? [];
-
-        $this->assertNotEmpty($healthEmbedFields, 'Health records should have embed fields');
-        $this->assertNotEmpty($allergyEmbedFields, 'Allergies should have embed fields');
+        // Verify health entities are discovered as graph nodes (records are not embedded)
+        $this->assertNotEmpty($healthConfig['graph']['properties'] ?? [], 'Health records should have graph properties');
+        $this->assertNotEmpty($allergyConfig['graph']['properties'] ?? [], 'Allergies should have graph properties');
 
         echo "\n✓ Health management queries enabled:\n";
-        echo "  - Health records with " . count($healthEmbedFields) . " embed fields\n";
-        echo "  - Allergies with " . count($allergyEmbedFields) . " embed fields\n";
-        echo "  - RAG can provide health recommendations\n";
+        echo "  - Health records with " . count($healthConfig['graph']['properties']) . " graph properties\n";
+        echo "  - Allergies with " . count($allergyConfig['graph']['properties']) . " graph properties\n";
         echo "  - Aggregation can find person with most issues\n";
 
         $this->assertTrue(true);

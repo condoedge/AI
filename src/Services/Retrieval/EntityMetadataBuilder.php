@@ -6,7 +6,9 @@ namespace Condoedge\Ai\Services\Retrieval;
 
 use Condoedge\Ai\Domain\Traits\ResolvesEntityConfigKey;
 use Condoedge\Ai\DTOs\SemanticSelectionResult;
+use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
 use Condoedge\Ai\Services\ScopeSemanticMatcher;
+use Condoedge\Ai\Support\AliasNormalizer;
 
 /**
  * Builds the detected-entity / detected-scope / entity-metadata structure for a
@@ -126,19 +128,14 @@ class EntityMetadataBuilder
                 continue;
             }
 
+            // A name or alias is detected in ANY of its spellings (plural,
+            // accent-less, snake_case, spaced) — the config lists each word once.
             $isDetected = false;
-
-            $shortName = class_basename($entityName);
-            if (stripos($question, $shortName) !== false) {
-                $isDetected = true;
-            }
-
-            if (!$isDetected && !empty($metadata['aliases'])) {
-                foreach ($metadata['aliases'] as $alias) {
-                    if (strpos($questionLower, strtolower($alias)) !== false) {
-                        $isDetected = true;
-                        break;
-                    }
+            $terms = EntityLabelIndex::termsOf((string) $entityName, $config);
+            foreach ($terms as $term) {
+                if (is_string($term) && AliasNormalizer::mentions($question, $term)) {
+                    $isDetected = true;
+                    break;
                 }
             }
 

@@ -34,9 +34,9 @@ class OcrPdfParser implements PdfParserInterface
                     $ocrText = $this->extractTextFromImage($imagePath);
                     $finalText = $this->cleanExtractedText($ocrText);
 
-                    if ($finalText !== '') {
-                        $chunks[] = $finalText;
-                    }
+                    // Every page keeps its slot (even when empty) so page
+                    // numbers derived from the separators stay exact.
+                    $chunks[] = $finalText;
                 }
             } finally {
                 foreach ($images as $imagePath) {
@@ -46,7 +46,7 @@ class OcrPdfParser implements PdfParserInterface
                 }
             }
 
-            return implode(PHP_EOL . PHP_EOL, $chunks);
+            return $this->joinPages($chunks);
         }
 
         foreach ($nativePages as $index => $nativePageText) {
@@ -56,12 +56,26 @@ class OcrPdfParser implements PdfParserInterface
                 $finalText = $this->cleanExtractedText($this->extractTextFromPageImage($filename, $index + 1));
             }
 
-            if ($finalText !== '') {
-                $chunks[] = $finalText;
-            }
+            $chunks[] = $finalText;
         }
 
-        return implode(PHP_EOL . PHP_EOL, $chunks);
+        return $this->joinPages($chunks);
+    }
+
+    /**
+     * Join page texts with a form feed between pages ("\n\f\n") so the chunker
+     * can stamp each chunk with its page number (FileProcessor turns the form
+     * feed back into a newline before chunking). Empty pages keep their slot.
+     *
+     * @param list<string> $pages
+     */
+    private function joinPages(array $pages): string
+    {
+        if (array_filter($pages, static fn (string $p) => $p !== '') === []) {
+            return '';
+        }
+
+        return implode(PHP_EOL . "\f" . PHP_EOL, $pages);
     }
 
     private function extractTextFromPageImage(string $filename, int $pageNumber): string

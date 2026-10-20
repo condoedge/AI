@@ -17,6 +17,9 @@ class TaskInstructionsSection extends BasePromptSection
     protected string $name = 'task_instructions';
     protected int $priority = 90;
 
+    /** The generation cue: the reply is the structured JSON object (Task 5.6). */
+    public const RESPONSE_CUE = 'JSON RESPONSE ({"needs_query", "cypher", "reason"}):';
+
     /**
      * Custom instructions that can override or extend default
      */
@@ -40,18 +43,19 @@ class TaskInstructionsSection extends BasePromptSection
 
         if ($this->customInstructions !== null) {
             $output .= $this->customInstructions . "\n\n";
-            $output .= "CYPHER QUERY:";
+            $output .= self::RESPONSE_CUE;
             return $output;
         }
 
         // The OUTPUT-FORMAT, relationship-direction and data-format rules already live in the
         // QUERY GENERATION RULES block; this section carries only its unique signal: the
-        // escape hatch and the generation cue.
+        // structured no-query escape hatch and the response cue.
         $output .= "Generate a Cypher query that answers the user's question, following the QUERY GENERATION RULES.\n\n";
 
-        $output .= "If the question cannot be answered with a Cypher query based on the provided context, or a query is not required to answer it, return the exact text: 'NO QUERY REQUIRED'.\n\n";
+        $output .= "If the question cannot be answered with a Cypher query based on the provided context, or a query is not required to answer it, "
+            . "respond with {\"needs_query\": false, \"cypher\": null, \"reason\": \"<why>\"}.\n\n";
 
-        $output .= "CYPHER QUERY:";
+        $output .= self::RESPONSE_CUE;
 
         return $output;
     }

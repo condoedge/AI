@@ -178,4 +178,93 @@ class DocumentExcelExportTest extends TestCase
 
         $this->assertSame("| H |\n|---|\n| clean |", $exporter->documentMarkdown);
     }
+
+    /** @test Phase 8 batch A: no rows → markdown → re-parsed cells round trip. */
+    public function document_mode_writes_the_persisted_document_rows_directly(): void
+    {
+        $exporter = new class extends ResultSetExporter {
+            public ?array $documentRows = null;
+            public ?array $documentHeaders = null;
+            public ?string $documentMarkdown = null;
+
+            public function documentRowsToExcel(array $rows, string $title = 'document', array $headers = []): AiActionResult
+            {
+                $this->documentRows = $rows;
+                $this->documentHeaders = $headers;
+                return AiActionResult::error('captured');
+            }
+
+            public function documentToExcel(string $markdown, string $title = 'document'): AiActionResult
+            {
+                $this->documentMarkdown = $markdown;
+                return AiActionResult::error('captured');
+            }
+        };
+
+        $context = ActionContext::fromArray([
+            'document_markdown' => "| Name |\n|---|\n| Karen |",
+            'document_rows' => [['name' => 'Karen', 'due_amount' => 11493.17]],
+        ]);
+
+        (new ExportExcelAction($exporter))->handle(['mode' => 'document'], $context);
+
+        $this->assertSame([['name' => 'Karen', 'due_amount' => 11493.17]], $exporter->documentRows);
+        $this->assertSame([], $exporter->documentHeaders, 'a message persisted before the headers existed has none');
+        $this->assertNull($exporter->documentMarkdown, 'the markdown is not re-parsed when rows exist');
+    }
+
+    /**
+     * @test Eval p17-B cold-roster-excel: the composed document's own column headers (column
+     * key => header, persisted beside the rows) reach the .xlsx writer.
+     */
+    public function document_mode_hands_the_persisted_headers_to_the_writer(): void
+    {
+        $exporter = new class extends ResultSetExporter {
+            public ?array $documentHeaders = null;
+
+            public function documentRowsToExcel(array $rows, string $title = 'document', array $headers = []): AiActionResult
+            {
+                $this->documentHeaders = $headers;
+                return AiActionResult::error('captured');
+            }
+        };
+
+        $context = ActionContext::fromArray([
+            'document_rows' => [['name' => 'Julie', 'contact_info' => 'j@x.test']],
+            'document_headers' => ['name' => 'Name', 'contact_info' => 'Email', 7 => 'ignored', 'blank' => ' '],
+        ]);
+
+        (new ExportExcelAction($exporter))->handle(['mode' => 'document'], $context);
+
+        $this->assertSame(['name' => 'Name', 'contact_info' => 'Email'], $exporter->documentHeaders);
+    }
+
+    /** @test The header row of the workbook is the document's headers; keys without one keep their humanized key. */
+    public function the_workbook_header_row_uses_the_document_headers(): void
+    {
+        $exporter = $this->exporter();
+
+        if (!$exporter->canExportExcel()) {
+            $this->markTestSkipped('PhpSpreadsheet not installed (expected in the package vendor).');
+        }
+
+        $result = $exporter->documentRowsToExcel(
+            [['name' => 'Julie Rousseau', 'contact_info' => 'j.rousseau@novogestion.ca', 'last_login' => '2026-10-01']],
+            'Members',
+            ['name' => 'Name', 'contact_info' => 'Email']
+        );
+
+        $this->assertFalse($result->isError);
+
+        $tmp = tempnam(sys_get_temp_dir(), 'xlsx');
+        file_put_contents($tmp, $result->renderable['content'] ?? $result->payload['content'] ?? '');
+        $readerClass = '\\PhpOffice\\PhpSpreadsheet\\IOFactory';
+        $sheet = $readerClass::load($tmp)->getActiveSheet();
+        unlink($tmp);
+
+        $this->assertSame('Name', $sheet->getCell('A1')->getValue());
+        $this->assertSame('Email', $sheet->getCell('B1')->getValue());
+        $this->assertSame('Last Login', $sheet->getCell('C1')->getValue());
+        $this->assertSame('j.rousseau@novogestion.ca', $sheet->getCell('B2')->getValue());
+    }
 }

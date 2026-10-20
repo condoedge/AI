@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Console\Commands;
 
+use Condoedge\Ai\Console\Commands\Concerns\FlushesGraphSchemaCache;
 use Illuminate\Console\Command;
 
 /**
@@ -23,6 +24,8 @@ use Illuminate\Console\Command;
  */
 class SetupCommand extends Command
 {
+    use FlushesGraphSchemaCache;
+
     protected $signature = 'ai:setup
         {--discover : Also run ai:discover before ingestion (overwrites existing config)}
         {--fresh : Clear all stores before ingestion}
@@ -106,7 +109,7 @@ class SetupCommand extends Command
             }
 
             $steps[] = [
-                'label' => 'Ingest entities into Neo4j + Qdrant',
+                'label' => 'Ingest entities into the graph (Neo4j)',
                 'command' => 'ai:ingest',
                 'args' => $ingestArgs,
                 'check' => fn() => !empty(config('entities', [])),

@@ -183,15 +183,14 @@ The `EntityActionAwarenessSection` informs the AI during query generation about:
 
 This prevents the AI from trying to query for "profile_link" as a database column.
 
-### 2. AI Generates Action Links
+### 2. Code Attaches the Links (the AI only narrates)
 
-When responding, the `ResponseEntityActionsSection` teaches the AI:
-
-- The exact link format to use: `[text](entity://Type/id/action)`
-- Available actions for each entity type
-- Entity IDs from query results or conversation context
-
-The AI then includes properly formatted links in its response.
+Since 2026-10-01 the response model is never taught link syntax. After the query runs, the
+`ActionAttacher` builds chips from the rows (each record's primary action — the read action
+flagged `'primary' => true`, else the first read action — labelled with the record's name and
+homonym disambiguator), identity links and next steps by answer shape, for the actions the user
+passes. They are stored on the message and re-authorized at every render. The model may write
+`{{record:N}}` (N = the row number in its data summary); code replaces it with that row's link.
 
 ### 3. Links are Processed
 
@@ -309,6 +308,35 @@ For sensitive actions, include authorization in the resolver:
 
 The handler returns `null` for unresolvable links, which prevents broken links from appearing. Invalid entity types, action keys, or failed lookups silently skip rendering.
 
+### Approval-Gated Write Actions
+
+An entry may be a `ModelMethodMutationAction`. It wraps an EXISTING domain method (the state transition your UI already calls). It never runs at render time: the user gets an approval card, and the write only happens after they confirm and every gate has been re-checked on the server.
+
+```php
+'Reservation' => [
+    'approve_reservation' => new \Condoedge\Ai\Services\Actions\ModelMethodMutationAction(
+        key: 'approve_reservation',
+        label: 'Approve reservation',
+        finder: \App\Models\Reservation::class,                                    // ::find($id), locked re-fetch on write
+        mutator: fn ($reservation, array $input) => $reservation->approve(),        // the existing method
+        permission: fn ($user) => $user->hasPermission('reservation:manage'),       // the UI's capability
+        authorizer: fn ($user, $reservation, array $input)                          // ROW-level gate (tenancy)
+            => $reservation->team_id === $user->current_team_id,
+        precondition: 'isPending',                                                  // the state it applies to
+        entityType: 'Reservation',
+    ),
+],
+```
+
+Rules (a mutation that breaks them **fails closed**: it is never authorized and never advertised, and one error is logged):
+
+- **Explicit authorization is mandatory.** Do not rely on a generic CRUD policy ability (`update`, `delete`, ...) alone. CRUD policies often let the record's owner through, so a resident could "update" (approve) their own booking.
+- **A row-level gate is mandatory.** Declare an `authorizer:` or a transition-specific `ability:` alongside `permission:`. A permission is usually checked on the user's *current* team, not on the row's team, so without a row gate a manager of team A could act on team B's row by id. Pass `rowScoped: false` only for genuinely global (tenant-less) models.
+- **Precondition.** It is checked when the action is proposed, when it is approved, and once more inside the write transaction on the row re-fetched with `lockForUpdate()`. If two cards target the same row, the second one reports "not applied" instead of overwriting the first.
+- **Advertisement.** The action is offered (prompt, chips) only to users who pass `permission:`. Per-row chips only appear for rows that pass the full gate.
+
+**Single-use approval requires a shared, atomic cache store.** Each approval token carries a nonce, and the nonce is claimed with `Cache::add()` when the user confirms. If you run more than one app server, use a store that every server shares and that has an atomic `add`, such as `redis` or `database`. With a per-server store (`file`, `array`, or a local `apcu`), a captured token can be confirmed once on each server until it expires (`AI_ACTION_TOKEN_TTL`, default 900s).
+
 ---
 
 ## Integration with Conversation Context
@@ -323,7 +351,7 @@ User: "Give me the profile link for Acme"
 AI: "Here's the profile: [Acme Corp](entity://Customer/42/profile)"
 ```
 
-The `EntityActionAwarenessSection` instructs the AI to return "NO QUERY REQUIRED" when entity IDs are already available in context, and the `ResponseEntityActionsSection` provides those IDs for link generation.
+A link to a record already shown is answered from the rows: a follow-up that runs no query attaches the previous result's record chips; otherwise the generator re-queries the record (with its id) and the chip is attached from the new rows.
 
 ---
 

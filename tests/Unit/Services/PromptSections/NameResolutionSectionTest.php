@@ -87,4 +87,66 @@ class NameResolutionSectionTest extends TestCase
         // Attributes on related entities are reached by joining, not dropped.
         $this->assertStringContainsString('JOIN', $output);
     }
+    /**
+     * @test Eval p12-1001-A: REQUESTED ATTRIBUTES demanded "phone: RETURN the mapped
+     * property as a column" and its PRECEDENCE line overrode the User card's "no
+     * phone on record" — the generator borrowed the TEAM's t.contact_phone.
+     */
+    public function an_attribute_no_property_of_the_listed_records_holds_is_omitted_never_borrowed(): void
+    {
+        $output = $this->format($this->contextWith(propertyConcepts: ['contact', 'email', 'phone']));
+
+        // Demanded only when a property holds it for the listed records…
+        $this->assertStringContainsString('- phone: RETURN it as a column when a property holds it for the records being listed', $output);
+        $this->assertStringNotContainsString('- phone: RETURN the mapped property as a column', $output);
+        // …otherwise omitted and reported, never taken from another entity's field.
+        $this->assertStringContainsString('NOT RECORDED', $output);
+        $this->assertStringContainsString('do NOT return a column for it', $output);
+        $this->assertStringContainsString('NEVER fill it from another entity', $output);
+        // The precedence over description column lists stays, but never over "not recorded".
+        $this->assertStringContainsString('OVERRIDE any column list', $output);
+        $this->assertStringContainsString('never overrides a schema card that says an attribute is not recorded', $output);
+    }
+
+    /** @test Eval p13-A excel: "contact info" came back as `u.email AS contact`. */
+    public function requested_columns_are_named_after_the_property_not_the_users_word(): void
+    {
+        $output = $this->format($this->contextWith(propertyConcepts: ['contact', 'role']));
+
+        $this->assertStringContainsString('alias each returned column after the PROPERTY it holds (u.email AS email)', $output);
+        $this->assertStringContainsString('never after the word the user used for it', $output);
+    }
+
+    /** @test */
+    public function a_follow_up_names_the_entity_the_previous_rows_are(): void
+    {
+        // The roster's rows are User records (the recorded anchor label) — not the
+        // QU's first entity type (Team) nor the conversation focus (Team).
+        $context = new PipelineContext();
+        $context->qu = new QueryUnderstandingResult(
+            entityTypes: ['Team', 'TeamRole', 'User'],
+            propertyConcepts: ['phone'],
+            followUpReference: true,
+        );
+        $context->conversationContext = ['last_anchor_label' => 'User', 'focused_entity' => 'Team'];
+
+        $output = $this->format($context);
+
+        $this->assertStringContainsString('the User records being listed', $output);
+        $this->assertStringContainsString('- phone: RETURN it as a column when a property holds it for the User records being listed', $output);
+        $this->assertStringContainsString('not recorded for User', $output);
+    }
+
+    /** @test */
+    public function a_fresh_question_does_not_reuse_the_previous_rows_entity(): void
+    {
+        $context = new PipelineContext();
+        $context->qu = new QueryUnderstandingResult(propertyConcepts: ['phone'], followUpReference: false);
+        $context->conversationContext = ['last_anchor_label' => 'User'];
+
+        $output = $this->format($context);
+
+        $this->assertStringNotContainsString('User records', $output);
+        $this->assertStringContainsString('the records being listed', $output);
+    }
 }

@@ -86,7 +86,6 @@ class AiManagerFileContextTest extends TestCase
         $ctx->question = $question;
         $ctx->similarQueries = [];
         $ctx->graphSchema = $graphSchema;
-        $ctx->relevantEntities = [];
 
         return $ctx;
     }
@@ -195,7 +194,17 @@ class AiManagerFileContextTest extends TestCase
         $mockFileContextProvider = Mockery::mock(FileContextProvider::class);
         $mockFileContextProvider->shouldReceive('getFileContext')
             ->once()
-            ->with($question, $mockUser, [])
+            // Phase 7: every angle asks for the per-file passage budget — carries the
+            // fan-out's shared memo (FileContextProvider::TURN_MEMO) — and asks which
+            // chunks each snippet is made of, so overlapping passages can be joined
+            // (FileContextProvider::PASSAGE_CHUNKS, eval p18-B rights t0).
+            ->with($question, $mockUser, Mockery::on(static function ($options): bool {
+                return is_array($options)
+                    && ($options['chunks_per_file'] ?? null) === (int) config('ai.file_context.max_chunks_per_file', 5)
+                    && ($options[FileContextProvider::TURN_MEMO] ?? null) instanceof \ArrayObject
+                    && ($options[FileContextProvider::PASSAGE_CHUNKS] ?? null) === true
+                    && array_diff(array_keys($options), ['chunks_per_file', FileContextProvider::TURN_MEMO, FileContextProvider::PASSAGE_CHUNKS]) === [];
+            }))
             ->andReturn([
                 'relevant_files' => [
                     [
@@ -278,6 +287,112 @@ class AiManagerFileContextTest extends TestCase
 
         // Verify referenced_files is present in response
         $this->assertArrayHasKey('referenced_files', $result);
+    }
+
+    /** @test */
+    public function a_qu_judged_french_follow_up_engages_the_file_context_follow_up_angle(): void
+    {
+        // Phase 2.B: "Et celles-là ?" contains none of the removed EN pronoun list
+        // ('those','them',...). The follow-up behavior is engaged by QU's
+        // followUpReference: the verbatim-question angle is searched with the
+        // conversation focus threaded to the provider.
+        config(['ai.file_context.enabled' => true]);
+
+        $question = 'Et celles-là ?';
+        $mockUser = (object) ['id' => 1];
+        $conversation = ['focused_entity' => 'Team', 'recent_exchanges' => [['question' => 'Quelles équipes ?']]];
+
+        $calls = [];
+        $mockFileContextProvider = Mockery::mock(FileContextProvider::class);
+        $mockFileContextProvider->shouldReceive('getFileContext')
+            ->andReturnUsing(function ($q, $user, $options) use (&$calls) {
+                $calls[] = [$q, $options];
+
+                return ['relevant_files' => [], 'file_count' => 0, 'has_physical' => false, 'has_database' => false];
+            });
+        $this->rebuildManagerWithFileContext($mockFileContextProvider);
+
+        $ctx = $this->makePipelineContext($question, ['labels' => []]);
+        $ctx->qu = new \Condoedge\Ai\DTOs\QueryUnderstandingResult(
+            questionType: 'hybrid',
+            language: 'fr',
+            followUpReference: true,
+        );
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')->andReturn(new QueryGenerationResult(
+            cypher: 'MATCH (t:Team) RETURN t.name AS name',
+            explanation: '',
+            confidence: 0.9,
+            warnings: [],
+            metadata: [],
+        ));
+        $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
+        $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
+        $this->mockEmbedding->shouldReceive('embed')->andReturn(array_fill(0, 1536, 0.1));
+        $this->mockQueryExecutor->shouldReceive('execute')->andReturn(new QueryExecutionResult(
+            success: true,
+            data: [['name' => 'Équipe A']],
+            stats: [],
+            metadata: [],
+            errors: [],
+        ));
+        $this->mockResponseGenerator->shouldReceive('generate')->andReturn([
+            'answer' => 'Voici les équipes.',
+            'metadata' => [],
+        ]);
+
+        $this->manager->answerQuestion($question, ['user' => $mockUser, 'conversation_context' => $conversation]);
+
+        $verbatim = array_values(array_filter($calls, fn ($c) => $c[0] === $question));
+        $this->assertNotEmpty($verbatim, 'the verbatim question is a file-search angle');
+        $this->assertTrue($verbatim[0][1]['follow_up_reference'] ?? false, 'QU follow-up threads into the provider');
+        $this->assertSame('Team', $verbatim[0][1]['conversation_context']['focused_entity'] ?? null);
+    }
+
+    /** @test */
+    public function without_a_qu_follow_up_judgment_no_follow_up_options_reach_the_provider(): void
+    {
+        config(['ai.file_context.enabled' => true]);
+
+        $question = 'Which of those are active?';
+        $calls = [];
+        $mockFileContextProvider = Mockery::mock(FileContextProvider::class);
+        $mockFileContextProvider->shouldReceive('getFileContext')
+            ->andReturnUsing(function ($q, $user, $options) use (&$calls) {
+                $calls[] = [$q, $options];
+
+                return ['relevant_files' => [], 'file_count' => 0, 'has_physical' => false, 'has_database' => false];
+            });
+        $this->rebuildManagerWithFileContext($mockFileContextProvider);
+
+        $ctx = $this->makePipelineContext($question, ['labels' => []]);
+        $ctx->qu = new \Condoedge\Ai\DTOs\QueryUnderstandingResult(questionType: 'hybrid', followUpReference: false);
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+        $this->mockQueryGenerator->shouldReceive('generate')->andReturn(new QueryGenerationResult(
+            cypher: 'MATCH (t:Team) RETURN t.name AS name',
+            explanation: '',
+            confidence: 0.9,
+            warnings: [],
+            metadata: [],
+        ));
+        $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
+        $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
+        $this->mockEmbedding->shouldReceive('embed')->andReturn(array_fill(0, 1536, 0.1));
+        $this->mockQueryExecutor->shouldReceive('execute')->andReturn(new QueryExecutionResult(
+            success: true, data: [['name' => 'A']], stats: [], metadata: [], errors: [],
+        ));
+        $this->mockResponseGenerator->shouldReceive('generate')->andReturn(['answer' => 'A', 'metadata' => []]);
+
+        $this->manager->answerQuestion($question, [
+            'user' => (object) ['id' => 1],
+            'conversation_context' => ['focused_entity' => 'Team'],
+        ]);
+
+        $this->assertNotEmpty($calls);
+        foreach ($calls as [$q, $options]) {
+            $this->assertArrayNotHasKey('follow_up_reference', $options, "angle '{$q}' must carry no follow-up options");
+        }
     }
 
     /** @test */

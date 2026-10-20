@@ -5,9 +5,10 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Actions;
 
 use Condoedge\Ai\Contracts\AiActionInterface;
-use Condoedge\Ai\Contracts\QueryExecutorInterface;
+use Condoedge\Ai\Services\Actions\BuiltIn\AskFollowUpAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\ExportExcelAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\ExportPdfAction;
+use Condoedge\Ai\Services\Actions\BuiltIn\IdentityLinkAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\LinkAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\OpenModalAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\RenderTableAction;
@@ -20,6 +21,8 @@ use Condoedge\Ai\Services\Actions\BuiltIn\RenderTableAction;
  *     each wrapped in a {@see ConfigAiAction} adapter (backward-compatible),
  *   - Built-in generative-UI actions (open_modal, render_table, link, export_excel,
  *     export_pdf) that projects get for free,
+ *   - The package's internal built-in (ask_follow_up — the follow-up question chip):
+ *     resolvable, never listed,
  *   - Any explicitly-registered {@see AiActionInterface} instances/classes.
  *
  * SAFE DEFAULTS: config keys may be entirely absent — the registry never throws. Missing
@@ -46,6 +49,16 @@ class AiActionRegistry
 
     private bool $builtInsRegistered = false;
 
+    /**
+     * Built-ins the package attaches itself and nobody asks for by name (the follow-up
+     * question chip): resolvable for dispatch through {@see getGeneric()}, never LISTED by
+     * {@see genericActions()} / {@see relevantActions()} — so no prompt section or
+     * advertisement surface offers them to a model. Keyed by action key.
+     *
+     * @var array<string, AiActionInterface>
+     */
+    private array $internal = [];
+
     public function __construct(bool $registerBuiltIns = true)
     {
         if ($registerBuiltIns) {
@@ -53,7 +66,6 @@ class AiActionRegistry
         }
 
         $this->registerConfigActions();
-        $this->registerNativeQueryTool();
     }
 
     /**
@@ -92,6 +104,10 @@ class AiActionRegistry
                 $this->generic[$action->key()] = $action;
             }
         }
+
+        foreach ([new AskFollowUpAction()] as $action) {
+            $this->internal[$action->key()] = $action;
+        }
     }
 
     /**
@@ -120,48 +136,6 @@ class AiActionRegistry
     }
 
     /**
-     * Register the read-only run_query tool ONLY when both the native tool loop and its own
-     * flag are on (config('ai.actions.native_tools') AND config('ai.actions.native_query_tool'),
-     * both default OFF). It rides INSIDE the native loop, so it must never be registered — and so
-     * never offered — while native_tools is off. The executor is resolved from the container when
-     * bound; otherwise the tool resolves it lazily on dispatch. A built-in / explicitly-registered
-     * action under the same key is never clobbered.
-     */
-    private function registerNativeQueryTool(): void
-    {
-        if (!(bool) $this->cfg('ai.actions.native_tools', false)) {
-            return;
-        }
-        if (!(bool) $this->cfg('ai.actions.native_query_tool', false)) {
-            return;
-        }
-
-        $tool = new GraphQueryTool($this->resolveQueryExecutor());
-        if (!isset($this->generic[$tool->key()])) {
-            $this->generic[$tool->key()] = $tool;
-        }
-    }
-
-    /**
-     * The EXISTING executor the rest of the pipeline uses, resolved from the container when it is
-     * bound. Returns null in pure-unit/no-provider contexts; the tool then resolves it lazily.
-     */
-    private function resolveQueryExecutor(): ?QueryExecutorInterface
-    {
-        if (function_exists('app')) {
-            try {
-                if (app()->bound(QueryExecutorInterface::class)) {
-                    return app(QueryExecutorInterface::class);
-                }
-            } catch (\Throwable $e) {
-                // Container unavailable — let the tool resolve the executor lazily.
-            }
-        }
-
-        return null;
-    }
-
-    /**
      * @return AiActionInterface[]
      */
     private function defaultActions(): array
@@ -172,7 +146,48 @@ class AiActionRegistry
             new LinkAction(),
             new ExportExcelAction(),
             new ExportPdfAction(),
+            IdentityLinkAction::profile(),
+            IdentityLinkAction::team(),
         ];
+    }
+
+    /**
+     * Every entity label that has at least one configured/registered action.
+     *
+     * @return list<string>
+     */
+    public function entityLabels(): array
+    {
+        $labels = array_keys((array) $this->cfg('ai.entity_actions', []));
+        foreach (array_keys($this->entity) as $label) {
+            $labels[] = $label;
+        }
+
+        return array_values(array_unique(array_filter(array_map('strval', $labels), static fn (string $l) => $l !== '')));
+    }
+
+    /**
+     * The declarative, closure-free attributes of a config action entry — what the action
+     * attacher reads to place it (actions plan B1/B3):
+     *   - entity actions: `primary` (bool) — the record's main "open" action;
+     *   - generic actions: `entity` (label or list of labels) + `kind`
+     *     ('list' | 'create' | 'report') — the entity's list page, create form or report.
+     * Closures and instances carry no attributes ([]).
+     *
+     * @return array<string, mixed>
+     */
+    public function attributes(string $key, ?string $entityType = null): array
+    {
+        $entry = $entityType !== null
+            ? ((array) $this->cfg('ai.entity_actions', []))[$entityType][$key] ?? null
+            : ((array) $this->cfg('ai.generic_actions', []))[$key] ?? null;
+
+        if (!is_array($entry)) {
+            return [];
+        }
+
+        return array_filter($entry, static fn ($value, $name) => in_array($name, ['primary', 'entity', 'kind'], true)
+            && !$value instanceof \Closure, ARRAY_FILTER_USE_BOTH);
     }
 
     /**
@@ -207,7 +222,8 @@ class AiActionRegistry
             return $this->resolveConfigEntry($key, $config[$key]);
         }
 
-        return null;
+        // Last: a host action registered or configured under the same key wins.
+        return $this->internal[$key] ?? null;
     }
 
     /**

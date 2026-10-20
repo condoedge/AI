@@ -9,6 +9,10 @@ use Condoedge\Ai\Kompo\Actions\ApprovalCard;
 use Condoedge\Ai\Services\Actions\ActionDispatcher;
 use Condoedge\Ai\Services\Actions\ActionInvocation;
 use Condoedge\Ai\Services\Actions\AiActionRegistry;
+use Condoedge\Ai\Services\Actions\BuiltIn\AskFollowUpAction;
+use Condoedge\Ai\Services\Actions\BuiltIn\ExportExcelAction;
+use Condoedge\Ai\Services\Actions\BuiltIn\ExportPdfAction;
+use Condoedge\Ai\Services\Actions\BuiltIn\RecordedResultExport;
 use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 use Condoedge\Ai\Services\Response\ActionLinkHandler;
 use Condoedge\Ai\Services\Response\ActionResultPresenter;
@@ -25,7 +29,7 @@ use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
  * (condoedge/utils) through the ai-themed ThemedChatBubbleRenderer subclass: the user
  * message renders as the kit's ownBubble, the assistant message as otherBubble. What
  * stays here is everything ai-SPECIFIC: the markdown/link-processed assistant content,
- * rich-data renderables, file references, suggestions, metrics, the per-message action
+ * rich-data renderables, file references, metrics, the per-message action
  * bar and the persisted-invocation/approval cards — all passed to the kit as $content.
  *
  * Kompo round-trip note: the action-bar links call selfPost('feedback'|'regenerate'),
@@ -132,8 +136,13 @@ class MessageBubbleRenderer
         $linkContext = [
             'files' => $files,
             'result_set' => $resultSet,
+            // The text of the query those rows came from — display shaping only (a split
+            // name in one column, as the answer's table shows it); never executed here.
+            'result_cypher' => is_string($message->cypher_query ?? null) ? $message->cypher_query : null,
             'answer' => $message->content,
             'document_markdown' => $message->metadata['export_document_markdown'] ?? null,
+            'document_rows' => $message->metadata['export_document_rows'] ?? [],
+            'document_headers' => $message->metadata['export_document_headers'] ?? [],
             'user' => auth()->user(),
         ];
         $processed = $this->contentLinkProcessor->processForDirectRendering(
@@ -146,10 +155,9 @@ class MessageBubbleRenderer
 
         // Persisted native-turn invocations render beside the parsed links through the same
         // presenter, fingerprint-deduped so a link the model copied verbatim renders once.
-        $actionElements = array_merge(
-            $processed['elements'],
-            $this->renderPersistedInvocations($message, $linkContext),
-        );
+        // Follow-up question chips are not page links: they get a block of their own below.
+        [$invocationElements, $followUps] = $this->persistedInvocationElements($message, $linkContext);
+        $actionElements = array_merge($processed['elements'], $invocationElements);
 
         if (!empty($actionElements)) {
             // Action links arrive as bare _Link()s from config closures with no styling, so a
@@ -183,13 +191,13 @@ class MessageBubbleRenderer
             $content[] = $this->richData->renderFileReferences($files);
         }
 
-        $suggestions = $message->metadata['suggestions'] ?? [];
-        if ($this->settings->showSuggestions() && !empty($suggestions)) {
-            $content[] = $this->richData->renderSuggestions($suggestions);
-        }
-
         if ($this->settings->showMetrics() && $message->execution_time_ms) {
             $content[] = $this->richData->renderMetrics($message);
+        }
+
+        // Suggested next questions come last: after everything the answer itself shows.
+        if (($followUpBlock = $this->followUpBlock($followUps)) !== null) {
+            $content[] = $followUpBlock;
         }
 
         $content[] = $this->messageActionBar($message);
@@ -268,15 +276,21 @@ class MessageBubbleRenderer
     }
 
     /**
-     * Render the native-turn invocations persisted on the assistant message metadata.
+     * Render the action invocations persisted on the assistant message metadata (the seam
+     * for code-attached record chips; the native tool loop that first produced them was
+     * removed 2026-10-01).
      *
      * Mirrors the markdown link path: each invocation re-dispatches through the SAME
      * ActionDispatcher at every render (fresh authorize(), fresh token, fresh TTL) and
      * renders through the shared ActionResultPresenter. Fail-closed throughout: malformed
      * records, unknown keys and read-only failures render nothing. Parsed action:// /
-     * entity:// links render first and win by fingerprint, so a history-imitating model
-     * emitting both transports for the same action yields one element. An invocation marked
+     * entity:// links render first and win by fingerprint, so the same action offered
+     * both as a link and as a persisted invocation yields one element. An invocation marked
      * approved in resolved_invocations skips dispatch and shows a static done-note.
+     *
+     * Follow-up question chips ({@see AskFollowUpAction}) go through the very same path —
+     * their dispatch only builds the suggestion element; nothing runs until the click
+     * sends the message — and are returned after the other elements.
      *
      * @param mixed $message            The assistant AiMessage (metadata, content, id).
      * @param array<string, mixed> $context  The same context array the link path uses
@@ -285,9 +299,25 @@ class MessageBubbleRenderer
      */
     public function renderPersistedInvocations($message, array $context): array
     {
+        [$elements, $followUps] = $this->persistedInvocationElements($message, $context);
+
+        return [...$elements, ...$followUps];
+    }
+
+    /**
+     * The persisted invocations' elements in two groups: the links / actions / cards of the
+     * answer, and its follow-up question chips — the bubble shows the latter in a block of
+     * their own ({@see followUpBlock()}), whatever order the message stored them in.
+     *
+     * @param mixed $message
+     * @param array<string, mixed> $context
+     * @return array{0: array<int, mixed>, 1: array<int, mixed>} [action elements, follow-up chips]
+     */
+    public function persistedInvocationElements($message, array $context): array
+    {
         $records = $message->metadata['invocations'] ?? null;
         if (!is_array($records) || $records === []) {
-            return [];
+            return [[], []];
         }
 
         $linkFingerprints = $this->parsedLinkFingerprints((string) $message->content);
@@ -295,6 +325,7 @@ class MessageBubbleRenderer
         $resolved = is_array($resolved) ? $resolved : [];
 
         $elements = [];
+        $followUps = [];
         $seen = [];
 
         foreach ($records as $record) {
@@ -321,6 +352,13 @@ class MessageBubbleRenderer
                 continue;
             }
 
+            // The export chip of a CAPPED list re-runs a query: never at render. It renders
+            // as a link that posts back; the click executes (see exportRecordedResult()).
+            if ($this->isRecordedResultExport($action, $invocation)) {
+                array_push($elements, ...$this->recordedResultExportChip($message, $invocation, $action, $context, $fingerprint));
+                continue;
+            }
+
             $element = $this->presenter->present(
                 $this->memoizedDispatch($fingerprint, $action, $invocation, $context),
                 $invocation->key,
@@ -328,12 +366,241 @@ class MessageBubbleRenderer
                 $action->mutates(),
             );
 
-            if ($element !== null) {
+            if ($element === null) {
+                continue;
+            }
+            if ($action instanceof AskFollowUpAction) {
+                $followUps[] = $element;
+            } else {
                 $elements[] = $element;
             }
         }
 
-        return $elements;
+        return [$elements, $followUps];
+    }
+
+    /**
+     * The follow-up question chips of an answer as their own block: one suggestion per
+     * line, styled exactly as the welcome-screen example questions (bordered white row,
+     * chat icon, the theme's light hover) — the same thing, a question one click sends —
+     * and so visibly apart from the page-link chips above (compact accent-coloured
+     * buttons). Null when the answer has none.
+     *
+     * @param array<int, mixed> $followUps the chips ({@see persistedInvocationElements()})
+     */
+    public function followUpBlock(array $followUps): mixed
+    {
+        if ($followUps === [] || !function_exists('_Rows')) {
+            return null;
+        }
+
+        $style = 'w-full p-3 text-left rounded-xl border border-gray-200 bg-white '
+            . $this->theme->primaryLightBgHover() . ' transition-all flex items-center gap-3 group text-sm';
+        foreach ($followUps as $chip) {
+            if (is_object($chip) && method_exists($chip, 'class')) {
+                $chip->class($style);
+            }
+        }
+
+        return _Rows(...$followUps)->class('cdge-follow-ups mt-3 pt-2 border-t border-gray-100 space-y-2');
+    }
+
+    // =========================================================================
+    // The export chip of a capped list (export_* mode=rerun) — rendered deferred,
+    // executed on click
+    // =========================================================================
+
+    /**
+     * Panel the click's result (the download, or the failure notice) lands in: one per
+     * message + invocation, so several chips in a thread never collide.
+     */
+    public static function exportPanelId(int|string|null $messageId, string $fingerprint): string
+    {
+        return 'ai-export-result-' . substr(hash('crc32b', $messageId . '|' . $fingerprint), 0, 8);
+    }
+
+    /**
+     * A built-in export invocation in RE-RUN mode ({@see RecordedResultExport}): the chip
+     * ActionAttacher puts on a list whose retrieval was capped. A host action registered
+     * under the same key is not one — it is dispatched like any other.
+     */
+    protected function isRecordedResultExport(AiActionInterface $action, ActionInvocation $invocation): bool
+    {
+        return ($action instanceof ExportExcelAction || $action instanceof ExportPdfAction)
+            && $invocation->entityType === null
+            && RecordedResultExport::requested($invocation->params);
+    }
+
+    /**
+     * The query RECORDED with a message — its text (`cypher_query`) and the `$pii_…`
+     * parameters it bound (`metadata.cypher_parameters`) — or null when the message
+     * recorded none. Server-stored data of the message itself, never client input.
+     *
+     * @return array{cypher: string, parameters: array<string, mixed>, conversation_id: mixed}|null
+     */
+    protected function recordedQuery($message): ?array
+    {
+        $cypher = $message->cypher_query ?? null;
+        if (!is_string($cypher) || trim($cypher) === '') {
+            return null;
+        }
+        $parameters = $message->metadata['cypher_parameters'] ?? null;
+
+        return [
+            'cypher' => $cypher,
+            'parameters' => is_array($parameters) ? $parameters : [],
+            'conversation_id' => $message->conversation_id ?? null,
+        ];
+    }
+
+    /**
+     * RENDER of the re-run export chip: nothing is executed and no file is built. The chip
+     * is a link that posts the message id + the invocation's fingerprint back to the owning
+     * Query (MessagesQuery::exportRecordedResult), with a panel for the answer.
+     *
+     * Shown only when the click can work: the user passes the action's authorize() now (the
+     * same render-time gate every chip has) and the message recorded its query. Otherwise
+     * NOTHING — the message's stored rows are a capped sample, never offered as the list.
+     *
+     * @param array<string, mixed> $context the bubble's render context (user)
+     * @return array<int, mixed>
+     */
+    protected function recordedResultExportChip(
+        $message,
+        ActionInvocation $invocation,
+        AiActionInterface $action,
+        array $context,
+        string $fingerprint
+    ): array {
+        $input = $this->dispatcher->registry()->filterParams($action, $invocation->params);
+        try {
+            $allowed = $action->authorize($context['user'] ?? null, $input);
+        } catch (\Throwable $e) {
+            $allowed = false;
+        }
+        if (!$allowed || $this->recordedQuery($message) === null) {
+            return [];
+        }
+
+        $label = $invocation->text !== '' ? $invocation->text : $action->label();
+        $messageId = $message->id ?? null;
+        $panelId = self::exportPanelId($messageId, $fingerprint);
+
+        if (!function_exists('_Link') || !function_exists('_Panel')) {
+            // No Kompo runtime (unit context): the structured intent.
+            return [['type' => 'recorded_result_export', 'message_id' => $messageId, 'fingerprint' => $fingerprint, 'label' => $label]];
+        }
+
+        return [
+            // Kompo Link labels render through v-html client-side: escaped.
+            _Link(e($label))->icon('export-2')->class('cdge-export-rerun')
+                ->selfPost('exportRecordedResult', ['messageId' => $messageId, 'fingerprint' => $fingerprint])
+                ->inPanel($panelId),
+            _Panel()->id($panelId)->class('cdge-export-rerun-result'),
+        ];
+    }
+
+    /**
+     * CLICK of the re-run export chip: re-run the query recorded with $message as $user —
+     * the person clicking NOW — and answer with the download, or a visible friendly failure.
+     *
+     * - $fingerprint is client input: it only SELECTS one of the invocations stored on the
+     *   message, and only a built-in export in re-run mode. Anything else runs nothing.
+     * - The action is dispatched through the shared ActionDispatcher: params re-filtered,
+     *   authorize() re-run for $user (permissions may have changed since the answer).
+     * - The dispatch context carries the acting user and the message's recorded query —
+     *   and NO stored rows: this path can only export what the re-run returns. The re-run
+     *   itself goes through the scoped executor ({@see RecordedResultExport}).
+     *
+     * @param mixed $message the assistant AiMessage, already resolved inside the user's own conversation
+     */
+    public function exportRecordedResult($message, mixed $fingerprint, mixed $user): mixed
+    {
+        $invocation = is_string($fingerprint) && $fingerprint !== ''
+            ? $this->persistedInvocation($message, $fingerprint)
+            : null;
+        $action = $invocation !== null ? $this->dispatcher->registry()->getGeneric($invocation->key) : null;
+        $recorded = $this->recordedQuery($message);
+
+        if ($invocation === null || $action === null || $recorded === null || !$this->isRecordedResultExport($action, $invocation)) {
+            return $this->exportFailure();
+        }
+
+        $result = $this->dispatcher->dispatch($action, $invocation->params, [
+            'user' => $user,
+            'text' => $invocation->text,
+            'recorded_query' => $recorded,
+        ]);
+        if ($result === null) {
+            return $this->exportFailure();
+        }
+
+        $download = $this->presenter->present($result, $invocation->key);
+
+        // The file link lands in the chip's panel, outside the chip row's `> a` styling:
+        // give it the same bordered-button look so it reads as the thing to click.
+        if (!$result->isError && is_object($download) && method_exists($download, 'class')) {
+            $download->class('inline-flex items-center gap-1.5 mt-2 px-3 py-1.5 rounded-lg text-sm font-semibold bg-white border border-gray-200 shadow-sm');
+        }
+
+        // The document limit cut the list: say so beside the file (it is never silent).
+        if (!$result->isError && is_array($result->payload) && ($result->payload['complete'] ?? true) === false && function_exists('_Rows')) {
+            $note = $this->translated(
+                'ai.export.answer_showing_first',
+                ['shown' => (int) ($result->payload['rows'] ?? 0)],
+                'The document shows the first :shown rows — more may exist.'
+            );
+
+            return _Rows($download, _Html(e($note))->class('cdge-export-partial text-xs text-gray-500 mt-1'));
+        }
+
+        return $download;
+    }
+
+    /** The invocation stored on the message whose fingerprint is $fingerprint, if any. */
+    protected function persistedInvocation($message, string $fingerprint): ?ActionInvocation
+    {
+        $records = $message->metadata['invocations'] ?? null;
+        foreach (is_array($records) ? $records : [] as $record) {
+            $invocation = ActionInvocation::fromArray($record);
+            if ($invocation !== null && hash_equals($invocation->fingerprint(), $fingerprint)) {
+                return $invocation;
+            }
+        }
+
+        return null;
+    }
+
+    /** The visible notice of an export that cannot be prepared — never an internal reason. */
+    public function exportFailure(): mixed
+    {
+        return $this->presenter->present(
+            AiActionResult::error($this->translated('ai.actions.failed', [], 'The action could not be completed.')),
+            'export_excel'
+        );
+    }
+
+    /**
+     * A package line with an explicit fallback: a translator that does not know the key
+     * returns the key itself, which must never be shown to a user.
+     *
+     * @param array<string, scalar> $replace
+     */
+    protected function translated(string $key, array $replace, string $fallback): string
+    {
+        try {
+            $line = __($key, $replace);
+        } catch (\Throwable $e) {
+            $line = $key;
+        }
+        if (is_string($line) && $line !== '' && $line !== $key) {
+            return $line;
+        }
+
+        return strtr($fallback, array_combine(
+            array_map(static fn ($name): string => ':' . $name, array_keys($replace)),
+            array_map('strval', array_values($replace))
+        ));
     }
 
     /**

@@ -13,7 +13,7 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
  * This is the typed, registry-backed evolution of the legacy closure entries in
  * config('ai.entity_actions') / config('ai.generic_actions'). It deliberately stays
  * provider-agnostic: it carries enough metadata to (a) advertise the action to the LLM
- * via a native tool spec / the markdown-link grammar, (b) validate + filter the params parsed
+ * via the markdown-link grammar, (b) validate + filter the params parsed
  * out of an action:// / entity:// link, (c) gate mutating actions behind a server-side
  * authorization re-check, and (d) return typed DATA + INTENT (never a Kompo element) that one
  * presenter turns into a link, table, download, or approval card.
@@ -26,7 +26,7 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 interface AiActionInterface
 {
     /**
-     * Stable machine key used in links and as the native tool name: action://{key} or
+     * Stable machine key used in links: action://{key} or
      * entity://Type/id/{key}. snake_case.
      */
     public function key(): string;

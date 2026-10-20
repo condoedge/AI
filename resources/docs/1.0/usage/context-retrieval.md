@@ -9,7 +9,6 @@ Retrieval-Augmented Generation (RAG) provides rich context to LLMs by combining 
 RAG retrieves context from multiple sources:
 1. **Similar Questions** - Vector search finds semantically related past queries
 2. **Graph Schema** - Neo4j schema provides structural understanding
-3. **Example Entities** - Sample data gives concrete context
 
 ---
 
@@ -22,8 +21,6 @@ $context = AI::retrieveContext("Show teams with most members", [
     'collection' => 'questions',
     'limit' => 5,
     'includeSchema' => true,
-    'includeExamples' => true,
-    'examplesPerLabel' => 2,
     'scoreThreshold' => 0.7
 ]);
 ```
@@ -44,11 +41,6 @@ $context = AI::retrieveContext("Show teams with most members", [
         'relationships' => ['MEMBER_OF'],
         'properties' => ['id', 'name', 'size']
     ],
-    'relevant_entities' => [
-        'Team' => [
-            ['id' => 1, 'name' => 'Alpha', 'size' => 10]
-        ]
-    ],
     'errors' => []
 ]
 ```
@@ -62,8 +54,6 @@ $options = [
     'collection' => 'questions',      // Vector collection name
     'limit' => 5,                     // Max similar queries
     'includeSchema' => true,          // Include graph schema
-    'includeExamples' => true,        // Include sample entities
-    'examplesPerLabel' => 2,          // Examples per label
     'scoreThreshold' => 0.7           // Min similarity (0.0-1.0)
 ];
 ```
@@ -72,26 +62,27 @@ $options = [
 
 ## Vector Similarity Search
 
-Find semantically similar items:
+Find similar past questions among the stored question→Cypher examples (the `questions` collection). `searchSimilar()` is not an `AI` facade method; resolve the context retriever:
 
 ```php
-$similar = AI::searchSimilar("software development", [
-    'collection' => 'teams',
-    'limit' => 5,
-    'scoreThreshold' => 0.7
-]);
+use Condoedge\Ai\Contracts\ContextRetrieverInterface;
+
+$similar = app(ContextRetrieverInterface::class)
+    ->searchSimilar("Show all teams", 'questions', 5);
 ```
 
 **Response:**
 ```php
 [
     [
-        'question' => 'Engineering Team description',
-        'score' => 0.89,
-        'metadata' => ['id' => 1, 'name' => 'Engineering Team']
+        'question' => 'List all teams',
+        'query' => 'MATCH (t:Team) RETURN t',
+        'score' => 0.89
     ]
 ]
 ```
+
+> {info} There is no semantic search over records: records live in the graph only and are queried through it (`AI::answerQuestion()` generates and runs Cypher). See [What Is Stored Where](/docs/{{version}}/usage/data-ingestion#what-is-stored-where).
 
 ---
 
@@ -143,9 +134,8 @@ use Condoedge\Ai\Services\ContextRetriever;
 $retriever = app(ContextRetriever::class);
 
 $context = $retriever->retrieveContext($question, $options);
-$similar = $retriever->searchSimilar($question, 'collection', 5);
+$similar = $retriever->searchSimilar($question, 'questions', 5);
 $schema = $retriever->getGraphSchema();
-$examples = $retriever->getExampleEntities('Team', 3);
 ```
 
 ---

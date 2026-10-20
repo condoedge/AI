@@ -122,7 +122,7 @@ class FileProcessingPluginDispatchTest extends TestCase
     }
 
     /** @test */
-    public function a_non_path_update_enqueues_at_most_one_dispatch()
+    public function a_non_path_update_enqueues_nothing()
     {
         $file = DispatchTestFile::create([
             'name' => 'report.pdf',
@@ -135,14 +135,10 @@ class FileProcessingPluginDispatchTest extends TestCase
         $file->name = 'renamed.pdf';
         $file->save();
 
-        // The single branching 'saved' listener still enqueues one closure; its
-        // internal branch is a no-op when neither wasRecentlyCreated nor the
-        // path is dirty. What must never happen is a second, redundant dispatch.
-        $this->assertLessThanOrEqual(
-            1,
-            $this->pushedClosureCount(),
-            'A non-path update must not fan out into multiple dispatches.'
-        );
+        // What a save did is decided when the model is saved (a queued job gets a
+        // re-fetched model that is neither new nor dirty): a save that changes
+        // neither the stored file nor the record it is filed on queues no job.
+        Queue::assertNothingPushed();
     }
 }
 

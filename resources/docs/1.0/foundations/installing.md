@@ -80,7 +80,7 @@ AI_DOCS_PREFIX=ai-docs
 
 **Important Settings:**
 - `AI_AUTO_DISCOVERY_RUNTIME=false` - Runtime discovery is disabled for performance
-- `AI_AUTO_SYNC_ENABLED=true` - Entities automatically sync to Neo4j + Qdrant on model events
+- `AI_AUTO_SYNC_ENABLED=true` - Entities automatically sync to the graph (Neo4j) on model events
 
 Additional configuration options live in `config/ai.php`. See: [Configuration Reference](/docs/{{version}}/foundations/configuration)
 
@@ -206,8 +206,8 @@ php artisan ai:discover
 
 **What it does:**
 - Analyzes all Nodeable models in your application
-- Generates `config/entities.php` with graph and vector configurations
-- Detects relationships, properties, and sensible embed fields
+- Generates `config/entities.php` with the graph configuration of each entity
+- Detects relationships and properties
 - Creates aliases and descriptions for RAG
 
 **Output:**
@@ -237,15 +237,12 @@ return [
             'relationships' => [
                 ['type' => 'PLACED_ORDER', 'target_label' => 'Order']
             ]
-        ],
-        'vector' => [
-            'collection' => 'customers',
-            'embed_fields' => ['name', 'email', 'company'],
-            'metadata' => ['id', 'name', 'status']
         ]
     ]
 ];
 ```
+
+Records are stored in the graph only; they are not embedded. Qdrant holds the file chunks and the semantic indexes — see [Data ingestion](/docs/{{version}}/usage/data-ingestion).
 
 See: [Configuration Reference](/docs/{{version}}/foundations/configuration#entity-configuration-configentitiesphp)
 
@@ -261,7 +258,7 @@ php artisan ai:setup
 
 This runs (in order):
 1. `ai:validate-config` — checks configuration, connections
-2. `ai:ingest-entities` — loads entities into Neo4j + Qdrant
+2. `ai:ingest` — loads entities into the graph (Neo4j)
 3. `ai:sync-relationships` — creates relationship edges
 4. `ai:index-context` — builds semantic context index
 5. `ai:index-semantic` — indexes entities for detection
@@ -318,7 +315,6 @@ if (!empty($results)) {
 **Expected behavior:**
 - ✅ Customer created in database
 - ✅ Node created in Neo4j automatically
-- ✅ Vector embedded and stored in Qdrant automatically
 - ✅ All relationships created automatically
 
 If you see errors, check:

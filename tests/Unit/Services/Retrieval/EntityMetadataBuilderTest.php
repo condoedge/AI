@@ -53,6 +53,47 @@ class EntityMetadataBuilderTest extends TestCase
         $this->assertSame("type = 'volunteer'", $result['detected_scopes']['volunteers']['cypher_pattern']);
     }
 
+    /**
+     * @test
+     * A derivable spelling (plural, accent-less, snake_case, spaced) of a label or
+     * alias is detected without being listed in the config — AliasNormalizer.
+     * @dataProvider unlistedSpellings
+     */
+    public function from_question_detects_an_entity_by_an_unlisted_spelling(string $question, string $expected): void
+    {
+        $builder = new EntityMetadataBuilder([
+            'App\\Models\\Condo\\Access' => [
+                'graph' => ['label' => 'Access'],
+                'metadata' => ['aliases' => ['accès', 'fobs', 'télécommande']],
+            ],
+            'App\\Models\\Condo\\VisitDetail' => [
+                'graph' => ['label' => 'VisitDetail'],
+                'metadata' => ['aliases' => ['rapport de visite']],
+            ],
+            'App\\Models\\Condo\\Unit' => [
+                'graph' => ['label' => 'Lot'],
+                'metadata' => ['description' => 'A private fraction'],
+            ],
+        ], null);
+
+        $result = $builder->fromQuestion($question);
+
+        $this->assertSame([$expected], $result['detected_entities']);
+    }
+
+    public static function unlistedSpellings(): array
+    {
+        return [
+            'accent-less alias' => ['Liste des acces actifs', 'App\\Models\\Condo\\Access'],
+            'singular of a plural alias' => ['Is this fob active?', 'App\\Models\\Condo\\Access'],
+            'accent-less plural alias' => ['Combien de telecommandes?', 'App\\Models\\Condo\\Access'],
+            'snake_case plural label' => ['show the visit_details of May', 'App\\Models\\Condo\\VisitDetail'],
+            'spaced label' => ['Show every Visit Detail', 'App\\Models\\Condo\\VisitDetail'],
+            'plural words of an alias' => ['les rapports de visites du mois', 'App\\Models\\Condo\\VisitDetail'],
+            'graph label that is not the class name' => ['combien de lots?', 'App\\Models\\Condo\\Unit'],
+        ];
+    }
+
     /** @test */
     public function from_question_skips_entities_without_metadata(): void
     {

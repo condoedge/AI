@@ -1,0 +1,207 @@
+[
+    {
+        "source": "eval-executed",
+        "rows": 1,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nRETURN t.name AS team_name, t.contact_email AS contact_email, t.contact_phone AS contact_phone, t.team_address AS team_address, t.team_type AS team_type, t.created_at AS created_at, t.updated_at AS updated_at \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nMATCH (u:User) \nWHERE u.current_team_id = t.id \nOPTIONAL MATCH (tr:TeamRole) \nWHERE tr.team_id = t.id AND tr.user_id = u.id \nRETURN u.name AS member_name, u.email AS member_email, tr.role AS role \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 3,
+        "cypher": "MATCH (u:Unit) WHERE u.name = \"<unit>\"\nMATCH (u)-[:UNION]->(un:Union) WHERE un.team_id IN $ai_team_ids\nOPTIONAL MATCH (i:Invoice) WHERE i.customer_type = \"unit\" AND i.customer_id = u.id AND toFloat(i.calc_due_amount) > 0\nRETURN u.id AS unit_id, u.name AS unit_name, un.name AS union_name, sum(toFloat(i.calc_due_amount)) AS balance, count(i) AS open_invoices"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (a:Account)-[:BELONGS_TO_UNION]->(u:Union) \nWHERE u.team_id IN $ai_team_ids \nOPTIONAL MATCH (ab:AccountBalance)-[:ACCOUNT]->(a) \nRETURN a.name AS account_name, sum(toFloat(ab.credit_balance)) - sum(toFloat(ab.debit_balance)) AS balance \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 3,
+        "cypher": "MATCH (u:Unit) WHERE u.name = \"<unit>\" \nMATCH (u)-[:UNION]->(un:Union) \nOPTIONAL MATCH (i:Invoice) \nWHERE i.customer_type = \"unit\" AND i.customer_id = u.id AND toFloat(i.calc_due_amount) > 0 \nRETURN u.id AS unit_id, u.name AS unit_name, un.name AS union_name, sum(toFloat(i.calc_due_amount)) AS balance, count(i) AS open_invoices \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 37,
+        "cypher": "MATCH (b:BoardMember)-[:BELONGS_TO_UNION]->(un:Union)\nWHERE un.team_id IN $ai_team_ids AND un.deleted_at IS NULL\nWITH un, max(b.year) AS latest_year\nMATCH (cur:BoardMember)-[:BELONGS_TO_UNION]->(un)\nWHERE cur.year = latest_year\nMATCH (cur)-[:BELONGS_TO_CONTACT]->(c:Contact)\nRETURN un.name AS union_name, c.first_name, c.last_name, cur.bm_role, cur.year\nORDER BY un.name"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 1,
+        "cypher": "MATCH (b:Bill)-[:BELONGS_TO_UNION]->(u:Union) \nWHERE toFloat(b.calc_due_amount) > 0 AND u.team_id IN $ai_team_ids \nOPTIONAL MATCH (b)-[:SUPPLIER]->(s:Supplier) \nRETURN sum(toFloat(b.calc_due_amount)) AS total_payable, count(DISTINCT b) AS open_bills, collect(DISTINCT s.name)[..10] AS suppliers"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) WHERE t.id = $team_id\nMATCH (u:User) WHERE u.current_team_id = t.id\nOPTIONAL MATCH (tr:TeamRole) WHERE tr.user_id = u.id AND tr.team_id = t.id\nRETURN u.name AS member_name, u.email AS member_email, tr.role AS role\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) WHERE t.id = $team_id\nMATCH (u:User) WHERE u.current_team_id = t.id\nOPTIONAL MATCH (tr:TeamRole) WHERE tr.user_id = u.id AND tr.team_id = t.id\nRETURN u.name AS member_name, u.email AS member_email, tr.role AS role, u.last_logged_at AS last_login\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team {id: $team_id})\nOPTIONAL MATCH (u:User) WHERE u.current_team_id = t.id\nRETURN u.name AS user_name, u.email AS user_email, u.last_logged_at AS last_logged_at\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nOPTIONAL MATCH (tr:TeamRole) \nWHERE tr.team_id = t.id \nOPTIONAL MATCH (u:User) \nWHERE u.id = tr.user_id \nRETURN u.name AS membre, tr.role AS rôle \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 1,
+        "cypher": "MATCH (m:Meeting)-[:BELONGS_TO_UNION]->(u:Union)\nWHERE u.team_id IN $ai_team_ids AND m.start_date < toString(date())\nRETURN m.start_date AS date, m.name AS meeting_name\nORDER BY m.start_date DESC\nLIMIT 1"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 1,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nRETURN t.name AS team_name, t.contact_email AS email, t.contact_phone AS phone, t.team_address AS address, t.team_type AS type, t.created_at AS created_at, t.updated_at AS updated_at \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) WHERE t.id = $team_id\nMATCH (u:User) WHERE u.current_team_id = t.id\nOPTIONAL MATCH (tr:TeamRole) WHERE tr.user_id = u.id AND tr.team_id = t.id\nRETURN u.name AS member_name, tr.role AS role\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) WHERE t.id = $team_id\nMATCH (u:User) WHERE u.current_team_id = t.id\nOPTIONAL MATCH (tr:TeamRole) WHERE tr.user_id = u.id AND tr.team_id = t.id\nOPTIONAL MATCH (c:Contact) WHERE c.user_id = u.id\nRETURN u.name AS member_name, u.email AS member_email, tr.role AS role, c.first_name AS contact_first_name, c.last_name AS contact_last_name, c.invitation_email AS contact_email\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 3,
+        "cypher": "MATCH (u:Unit) WHERE u.name = \"<unit>\"\nMATCH (u)-[:UNION]->(un:Union)\nOPTIONAL MATCH (i:Invoice) \nWHERE i.customer_type = \"unit\" AND i.customer_id = u.id AND toFloat(i.calc_due_amount) > 0 \nRETURN u.id AS unit_id, u.name AS unit_name, un.name AS union_name, sum(toFloat(i.calc_due_amount)) AS balance, count(i) AS open_invoices"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (ab:AccountBalance)-[:ACCOUNT]->(a:Account)\nMATCH (a)-[:BELONGS_TO_UNION]->(u:Union)\nWHERE u.team_id IN $ai_team_ids\nRETURN ab.id AS account_balance_id, toFloat(ab.credit_balance) AS credit_balance, toFloat(ab.debit_balance) AS debit_balance, ab.from_date AS from_date\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 3,
+        "cypher": "MATCH (u:Unit)\nWHERE u.name = \"<unit>\"\nMATCH (u)-[:UNION]->(un:Union)\nOPTIONAL MATCH (i:Invoice)\nWHERE i.customer_type = \"unit\" AND i.customer_id = u.id AND toFloat(i.calc_due_amount) > 0\nRETURN u.id AS unit_id, u.name AS unit_name, un.name AS union_name, sum(toFloat(i.calc_due_amount)) AS balance, count(i) AS open_invoices\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nMATCH (u:User) \nWHERE u.current_team_id = t.id \nOPTIONAL MATCH (tr:TeamRole) \nWHERE tr.user_id = u.id AND tr.team_id = t.id \nRETURN u.name AS member_name, tr.role AS role \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nMATCH (u:User) \nWHERE u.current_team_id = t.id \nOPTIONAL MATCH (tr:TeamRole) \nWHERE tr.user_id = u.id AND tr.team_id = t.id \nRETURN u.name AS member_name, tr.role AS role, u.last_logged_at AS last_login \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) WHERE t.id = $team_id\nMATCH (u:User) WHERE u.current_team_id = t.id\nOPTIONAL MATCH (tr:TeamRole) WHERE tr.user_id = u.id AND tr.team_id = t.id\nRETURN u.name AS membre, tr.role AS rôle\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nMATCH (u:User) \nWHERE u.current_team_id = t.id \nOPTIONAL MATCH (tr:TeamRole) \nWHERE tr.team_id = t.id AND tr.user_id = u.id \nRETURN u.name AS member_name, tr.role AS role \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nMATCH (u:User) \nWHERE u.current_team_id = t.id \nOPTIONAL MATCH (tr:TeamRole) \nWHERE tr.team_id = t.id AND tr.user_id = u.id \nOPTIONAL MATCH (c:Contact) \nWHERE c.user_id = u.id \nRETURN u.name AS member_name, tr.role AS role, c.first_name AS contact_first_name, c.last_name AS contact_last_name, c.invitation_email AS contact_email \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 3,
+        "cypher": "MATCH (u:Unit) WHERE u.name = \"<unit>\"\nMATCH (u)-[:UNION]->(un:Union) WHERE un.team_id IN $ai_team_ids\nOPTIONAL MATCH (i:Invoice) WHERE i.customer_type = \"unit\" AND i.customer_id = u.id AND toFloat(i.calc_due_amount) > 0\nRETURN u.id AS unit_id, u.name AS unit_name, un.name AS union_name, sum(toFloat(i.calc_due_amount)) AS balance, count(i) AS open_invoices LIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (a:Account)-[:BELONGS_TO_UNION]->(u:Union) \nWHERE u.team_id IN $ai_team_ids \nOPTIONAL MATCH (ab:AccountBalance)-[:ACCOUNT]->(a) \nRETURN a.name AS account_name, sum(toFloat(ab.credit_balance) - toFloat(ab.debit_balance)) AS balance \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team {id: $team_id})\nOPTIONAL MATCH (u:User) WHERE u.current_team_id = t.id\nOPTIONAL MATCH (c:Contact)-[:USER]->(u)\nRETURN u.name AS user_name, u.email AS user_email, c.first_name AS contact_first_name, c.last_name AS contact_last_name, c.invitation_email AS contact_email\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) WHERE t.id = $team_id\nMATCH (u:User) WHERE u.current_team_id = t.id\nOPTIONAL MATCH (tr:TeamRole) WHERE tr.team_id = t.id AND tr.user_id = u.id\nRETURN u.name AS membre, tr.role AS rôle\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 1,
+        "cypher": "MATCH (m:Meeting)-[:BELONGS_TO_UNION]->(u:Union)\nWHERE u.team_id IN $ai_team_ids AND m.start_date < toString(date())\nRETURN m.start_date AS date\nORDER BY m.start_date DESC\nLIMIT 1"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 83,
+        "cypher": "MATCH (t:Task)\nWHERE t.assigned_to = $user_id AND t.status IN [1, 2, 3] AND t.team_id = $team_id\nRETURN t.id AS task_id, t.title AS task_title, t.status AS task_status, t.urgent AS task_urgent\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 1,
+        "cypher": "MATCH (t:Team) WHERE t.id = $team_idRETURN t.name AS team_name, t.contact_email AS team_email, t.contact_phone AS team_phone, t.team_address AS team_address, t.created_at AS created_at, t.updated_at AS updated_at LIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nOPTIONAL MATCH (u:User) \nWHERE u.current_team_id = t.id \nOPTIONAL MATCH (tr:TeamRole) \nWHERE tr.team_id = t.id AND tr.user_id = u.id \nRETURN u.name AS member_name, tr.role AS role \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nOPTIONAL MATCH (u:User) \nWHERE u.current_team_id = t.id \nOPTIONAL MATCH (tr:TeamRole) \nWHERE tr.team_id = t.id AND tr.user_id = u.id \nOPTIONAL MATCH (c:Contact)-[:USER]->(u) \nRETURN u.name AS member_name, tr.role AS role, c.first_name AS contact_first_name, c.last_name AS contact_last_name, c.invitation_email AS contact_email \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 1,
+        "cypher": "MATCH (c:Contact {user_id: $user_id})<-[:CONTACT]-(cu:ContactUnit)-[:UNIT]->(u:Unit) \nWHERE cu.sold_at IS NULL \nMATCH (n:Invoice) \nWHERE (n.customer_type = \"unit\" AND n.customer_id = u.id) OR (n.customer_type = \"contact\" AND n.customer_id = c.id) \nRETURN sum(toFloat(n.calc_due_amount)) AS balance, count(n) AS open_invoices \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 3,
+        "cypher": "MATCH (u:Unit) WHERE u.name = \"<unit>\"\nMATCH (u)-[:UNION]->(un:Union) WHERE un.team_id IN $ai_team_ids\nOPTIONAL MATCH (i:Invoice) WHERE i.customer_type = \"unit\" AND i.customer_id = u.id AND toFloat(i.calc_due_amount) > 0\nRETURN u.id AS unit_id, u.name AS unit_name, un.name AS union_name, sum(toFloat(i.calc_due_amount)) AS balance, count(i) AS open_invoices\nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nMATCH (u:User) \nWHERE u.current_team_id = t.id \nOPTIONAL MATCH (tr:TeamRole) \nWHERE tr.team_id = t.id AND tr.user_id = u.id \nRETURN u.name AS member_name, tr.role AS role, u.last_logged_at AS last_login \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 100,
+        "cypher": "MATCH (t:Team) \nWHERE t.id = $team_id\nMATCH (u:User) \nWHERE u.current_team_id = t.id \nOPTIONAL MATCH (tr:TeamRole) \nWHERE tr.team_id = t.id AND tr.user_id = u.id \nRETURN u.name AS membre, tr.role AS rôle \nLIMIT 100"
+    },
+    {
+        "source": "eval-executed",
+        "rows": 1,
+        "cypher": "MATCH (m:Meeting)-[:BELONGS_TO_UNION]->(u:Union) \nWHERE u.team_id IN $ai_team_ids AND m.start_date < toString(date()) \nRETURN m.start_date AS date \nORDER BY m.start_date DESC \nLIMIT 1"
+    },
+    {
+        "source": "calculation:team_total_owed",
+        "rows": null,
+        "cypher": "MATCH (i:Invoice) WHERE toFloat(i.calc_due_amount) > 0 RETURN sum(toFloat(i.calc_due_amount)) AS total_owed, count(i) AS open_invoices"
+    },
+    {
+        "source": "calculation:unit_outstanding_balance",
+        "rows": null,
+        "cypher": "MATCH (u:Unit {id: $unitId}) OPTIONAL MATCH (i:Invoice) WHERE i.customer_type = \"unit\" AND i.customer_id = u.id AND toFloat(i.calc_due_amount) > 0 RETURN u.id AS unit_id, u.name AS unit_name, sum(toFloat(i.calc_due_amount)) AS balance, count(i) AS open_invoices"
+    },
+    {
+        "source": "calculation:unit_outstanding_balance",
+        "rows": null,
+        "cypher": "MATCH (u:Unit) WHERE u.name = \"<unit>\" MATCH (u)-[:UNION]->(un:Union) OPTIONAL MATCH (i:Invoice) WHERE i.customer_type = \"unit\" AND i.customer_id = u.id AND toFloat(i.calc_due_amount) > 0 RETURN u.id AS unit_id, u.name AS unit_name, un.name AS union_name, sum(toFloat(i.calc_due_amount)) AS balance, count(i) AS open_invoices"
+    },
+    {
+        "source": "calculation:supplier_payables",
+        "rows": null,
+        "cypher": "MATCH (b:Bill) WHERE toFloat(b.calc_due_amount) > 0 OPTIONAL MATCH (b)-[:SUPPLIER]->(s:Supplier) RETURN sum(toFloat(b.calc_due_amount)) AS total_payable, count(DISTINCT b) AS open_bills, collect(DISTINCT s.name)[..10] AS suppliers"
+    }
+]

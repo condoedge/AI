@@ -15,13 +15,11 @@ use Condoedge\Ai\DTOs\PipelineContext;
  * This service combines multiple context sources:
  * - Similar past questions from vector search
  * - Graph database schema information
- * - Example entities for concrete context
  *
  * Use Case:
  * User: "Show teams with most active members"
  * → Retrieve similar questions from vector store
  * → Get graph schema (labels, relationships, properties)
- * → Get example entities (sample Team, Person records)
  * → Combine into unified context for LLM
  * → LLM generates accurate Cypher query
  *
@@ -35,25 +33,21 @@ interface ContextRetrieverInterface
      * Aggregates context from multiple sources:
      * 1. Vector search for semantically similar past questions/queries
      * 2. Graph database schema (node labels, relationships, properties)
-     * 3. Example entities to provide concrete data samples
      *
      * The retrieved context enables LLMs to generate accurate queries
      * by understanding:
      * - How similar questions were previously answered
      * - What data structures exist in the graph
-     * - What actual data looks like
      *
      * @param string $question Natural language question from user
      * @param array $options Configuration options:
      *                       - collection: Vector collection name (default: 'questions')
      *                       - limit: Max similar questions to retrieve (default: 5)
      *                       - includeSchema: Include graph schema (default: true)
-     *                       - includeExamples: Include sample entities (default: true)
      *
      * @return PipelineContext Typed context object containing:
      *               - similarQueries: Array of similar Q&A pairs with scores
      *               - graphSchema: Graph structure (labels, relationships, properties)
-     *               - relevantEntities: Sample entities by label
      *               - qu: QueryUnderstandingResult from QU analysis
      *               - semanticSelection: SemanticSelectionResult from context selection
      *               - errors: Array of non-fatal error messages (if any)
@@ -124,32 +118,4 @@ interface ContextRetrieverInterface
      * // Use to inform LLM about available node types and relationships
      */
     public function getGraphSchema(): array;
-
-    /**
-     * Get example entities from graph to provide concrete context
-     *
-     * Retrieves sample entities of a specific label to show
-     * the LLM what actual data looks like. This helps generate
-     * more accurate queries by understanding:
-     * - What properties entities actually have
-     * - What values look like (strings, numbers, dates, etc.)
-     * - Data structure patterns
-     *
-     * @param string $label Entity label/type to get examples for
-     * @param int $limit Maximum number of examples (default: 3)
-     *
-     * @return array Sample entities:
-     *               [
-     *                   ['id' => 1, 'name' => 'Alpha Team', 'created_at' => '2024-01-15'],
-     *                   ['id' => 2, 'name' => 'Beta Team', 'created_at' => '2024-02-20'],
-     *               ]
-     *
-     * @throws \RuntimeException If entity retrieval fails
-     * @throws \InvalidArgumentException If label is empty or invalid
-     *
-     * @example
-     * $examples = $retriever->getExampleEntities('Customer', 5);
-     * // Use to show LLM actual customer data structure
-     */
-    public function getExampleEntities(string $label, int $limit = 3): array;
 }

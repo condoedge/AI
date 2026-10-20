@@ -1,14 +1,13 @@
 # Data Ingestion API
 
-Complete guide to ingesting entities into Neo4j and Qdrant, covering auto-sync, bulk ingestion, and manual operations.
+Complete guide to ingesting entities into the graph (Neo4j), covering auto-sync, bulk ingestion, and manual operations.
 
 ---
 
 ## Overview
 
-The AI system synchronizes your entities across two stores:
-- **Neo4j** - Graph database for relationships and pattern matching
-- **Qdrant** - Vector database for semantic search
+The AI system synchronizes your entities to the graph store:
+- **Neo4j** - Graph database holding one node per record plus its relationships
 
 **Two ingestion modes:**
 
@@ -17,9 +16,28 @@ The AI system synchronizes your entities across two stores:
 
 ---
 
+## What Is Stored Where
+
+Records (Eloquent models implementing `Nodeable`) are written to the graph (Neo4j) only: `AI::ingest()`, `AI::sync()`, `AI::remove()`, `AI::ingestBatch()`, auto-sync and `php artisan ai:ingest` write the node and its relationships. Records are not embedded and there is no per-entity vector collection. Qdrant is still required: it holds the files and the semantic indexes, in exactly six collections:
+
+| Collection | Holds | Written by | Read by |
+|---|---|---|---|
+| `file_chunks` | chunks of files users upload | file processing (`ai:process-files`, upload hooks) | file search / file context |
+| `documentation_chunks` | chunks of the host's own documents, each with its document-map gist (`map` payload) | `ai:ingest --docs`, `ai:documents:map` | file search / file context, the document map |
+| `context_index` | entity descriptions, aliases, example questions, relationships, properties, scopes | `ai:index-context` | choosing which entities and context a question needs |
+| `scope_examples` | scope concepts and example phrasings | `ai:index-context` / `ai:index-scopes` | matching a question to a configured scope |
+| `questions` | proven question→Cypher pairs | the pipeline, after a successful answer | few-shot examples for query generation |
+| `semantic_entities` | entity names, aliases, descriptions | `ai:index-semantic` | fallback entity-label matching |
+
+The document map has its own page: [Document Map](/docs/{{version}}/advanced/document-map).
+
+> {info} `php artisan ai:ingest --fresh` clears the **graph** only and re-ingests it. The six Qdrant collections above are not touched: each has its own writer (file processing, `ai:index-context`, `ai:index-semantic`, `ai:index-scopes`).
+
+---
+
 ## Auto-Sync (Built-in)
 
-**The recommended approach.** When you use `HasNodeableConfig` trait, entities automatically sync to Neo4j + Qdrant on model events.
+**The recommended approach.** When you use `HasNodeableConfig` trait, entities automatically sync to the graph (Neo4j) on model events.
 
 ### How It Works
 
@@ -41,19 +59,16 @@ $customer = Customer::create([
     'email' => 'contact@acme.com',
 ]);
 // ✓ Node created in Neo4j
-// ✓ Vector embedded and stored in Qdrant
 // ✓ Relationships created automatically
 
 // Update - automatically synced
 $customer->name = 'Acme Corporation';
 $customer->save();
 // ✓ Node updated in Neo4j
-// ✓ Vector re-embedded and updated in Qdrant
 
 // Delete - automatically removed
 $customer->delete();
 // ✓ Node deleted from Neo4j
-// ✓ Vector deleted from Qdrant
 ```
 
 ### Configuration
@@ -122,7 +137,7 @@ php artisan ai:ingest --dry-run
 **What it does:**
 1. Finds all Nodeable models
 2. Processes existing entities in batches
-3. Creates Qdrant collections automatically if missing
+3. Writes each node and its relationships to Neo4j (no embedding, no Qdrant write)
 4. Shows progress bar with success/failure counts
 
 **Example output:**
@@ -150,7 +165,7 @@ Ingestion complete!
 
 **When to use:**
 - ✅ Initial setup (you have existing data)
-- ✅ Rebuilding stores from scratch
+- ✅ Rebuilding the graph from scratch
 - ✅ Migrating to AI package
 - ❌ NOT for ongoing syncing (use auto-sync instead)
 
@@ -317,9 +332,8 @@ $status = AI::ingest($customer);
 ```php
 [
     'graph_stored' => true,          // Stored in Neo4j
-    'vector_stored' => true,         // Stored in Qdrant
     'relationships_created' => 2,    // Relationships created
-    'errors' => []                   // Any errors
+    'errors' => []                   // Always empty: a failed graph write throws
 ]
 ```
 
@@ -336,11 +350,11 @@ $result = AI::ingestBatch($customers->toArray());
 ```php
 [
     'total' => 100,
-    'succeeded' => 98,
-    'partially_succeeded' => 1,  // One store succeeded
+    'succeeded' => 99,
+    'partially_succeeded' => 0,  // Always 0 (records go to the graph only)
     'failed' => 1,
     'errors' => [
-        45 => ['Vector: Connection timeout']
+        45 => ['Graph: Connection timeout']
     ]
 ]
 ```
@@ -361,14 +375,13 @@ $status = AI::sync($customer);
 [
     'action' => 'updated',  // or 'created'
     'graph_synced' => true,
-    'vector_synced' => true,
     'errors' => []
 ]
 ```
 
 ### Remove Operation
 
-Delete from both stores:
+Delete the node (with its relationships) from the graph:
 
 ```php
 $success = AI::remove($customer);
@@ -382,19 +395,17 @@ if ($success) {
 
 ## Collection Management
 
-Qdrant collections are automatically created on first use with proper vector dimensions.
+Ingesting a record creates no Qdrant collection: records are written to the graph only. The Qdrant collections listed in [What Is Stored Where](#what-is-stored-where) belong to the files and the semantic indexes.
 
 ### Automatic Creation
 
-```php
-// First customer ingestion
-$customer = Customer::create(['name' => 'Acme']);
+Each collection is created automatically, with the embedding dimensions, the first time something is written to it:
 
-// DataIngestionService automatically:
-// 1. Checks if 'customers' collection exists
-// 2. Creates it if missing with vectorSize=1536, distance=Cosine
-// 3. Caches check to avoid redundant API calls
-// 4. Ingests the customer
+```bash
+php artisan ai:index-context     # context_index, scope_examples
+php artisan ai:index-semantic    # semantic_entities
+php artisan ai:process-files     # file_chunks
+php artisan ai:ingest --docs     # documentation_chunks
 ```
 
 ### Manual Collection Creation
@@ -414,7 +425,7 @@ $vectorStore->createCollection(
 ### Check Collection Exists
 
 ```php
-if ($vectorStore->collectionExists('customers')) {
+if ($vectorStore->collectionExists('file_chunks')) {
     echo "Collection exists!";
 }
 ```
@@ -423,7 +434,7 @@ if ($vectorStore->collectionExists('customers')) {
 
 ## Entity Configuration
 
-Entities must define graph and vector configuration:
+Entities must define graph configuration (`security`, `metadata` and `auto_sync` sections are optional; there is no `vector` section):
 
 ### Using config/entities.php
 
@@ -437,11 +448,6 @@ return [
             'relationships' => [
                 ['type' => 'PLACED_ORDER', 'target_label' => 'Order']
             ]
-        ],
-        'vector' => [
-            'collection' => 'customers',
-            'embed_fields' => ['name', 'email', 'company'],
-            'metadata' => ['id', 'name', 'status']
         ]
     ]
 ];
@@ -459,10 +465,7 @@ class Customer extends Model implements Nodeable
         return NodeableConfig::for(static::class)
             ->label('Customer')
             ->properties('id', 'name', 'email', 'status')
-            ->relationship('orders', 'Order', 'PLACED_ORDER')
-            ->collection('customers')
-            ->embedFields('name', 'email', 'company')
-            ->metadata(['id', 'name', 'status']);
+            ->relationship('orders', 'Order', 'PLACED_ORDER');
     }
 }
 ```
@@ -471,23 +474,24 @@ class Customer extends Model implements Nodeable
 
 ## Error Handling
 
-### Partial Failures
+### Graph Failures
 
-If one store fails, the service implements compensating transactions:
+Records are written to one store (the graph), so there is no partial success. If the graph write fails, `ingest()` throws a `DataConsistencyException`:
 
 ```php
 try {
     $status = AI::ingest($customer);
 } catch (\Condoedge\Ai\Exceptions\DataConsistencyException $e) {
-    // One store succeeded, other failed, and rollback completed
+    // The graph write failed; nothing was stored, so nothing is rolled back
     Log::error('Data consistency error', [
         'entity_id' => $e->getContext()['entity_id'],
         'graph_success' => $e->getContext()['graph_success'],
-        'vector_success' => $e->getContext()['vector_success'],
         'rolled_back' => $e->getContext()['rolled_back'],
     ]);
 }
 ```
+
+`remove()` throws the same exception when the delete fails. `sync()` does not throw: it returns `'action' => 'unknown'`, `'graph_synced' => false` and the message in `errors`. Auto-sync catches the exception and logs it unless `ai.auto_sync.fail_silently` is `false`.
 
 ### Batch Error Handling
 
@@ -555,7 +559,7 @@ public function run()
 
 ### Batch Performance
 
-When running `ai:ingest-entities` and `ai:sync-relationships`, the system automatically uses `BatchDataIngestionService` which optimizes Neo4j writes using Cypher `UNWIND` operations.
+When running `ai:ingest` and `ai:sync-relationships`, the system automatically uses `BatchDataIngestionService` which optimizes Neo4j writes using Cypher `UNWIND` operations.
 
 #### How it works
 
@@ -629,7 +633,7 @@ class CustomerTest extends TestCase
             ->once()
             ->andReturn([
                 'graph_stored' => true,
-                'vector_stored' => true,
+                'relationships_created' => 0,
                 'errors' => []
             ]);
 
@@ -749,11 +753,6 @@ Check logs for details: storage/logs/laravel.log
 'file_processing' => [
     'enabled' => env('AI_FILE_PROCESSING_ENABLED', true),
     'collection' => env('AI_FILE_COLLECTION', 'file_chunks'),
-    'supported_types' => ['pdf', 'docx', 'txt', 'md', 'log'],
-
-    // Chunking settings
-    'chunk_size' => env('AI_FILE_CHUNK_SIZE', 1000), // characters
-    'chunk_overlap' => env('AI_FILE_CHUNK_OVERLAP', 200), // characters
 
     // Queue processing for large files
     'queue' => env('AI_FILE_QUEUE', false),
@@ -829,18 +828,17 @@ if ($processor->supportsFileType('pdf')) {
 Once files are processed, search them semantically:
 
 ```php
-use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Facades\FileSearch;
 
-// Search file contents
-$results = AI::searchSimilar("machine learning algorithms", [
-    'collection' => 'file_chunks',  // File chunks collection
+// Search file contents (the file chunk collections in Qdrant)
+$results = FileSearch::searchByContent("machine learning algorithms", [
     'limit' => 10,
-    'scoreThreshold' => 0.7
+    'min_score' => 0.7
 ]);
 
 foreach ($results as $result) {
-    echo "File: {$result['metadata']['file_name']}\n";
-    echo "Chunk: {$result['question']}\n";
+    echo "File ID: {$result['file_id']}\n";
+    echo "Matching chunks: {$result['chunk_count']}\n";
     echo "Score: {$result['score']}\n";
     echo "\n";
 }
@@ -859,14 +857,18 @@ AI_FILE_QUEUE_CONNECTION=redis
 
 **Adjust chunk size for your content:**
 
-```env
-# Larger chunks for technical documents
-AI_FILE_CHUNK_SIZE=1500
-AI_FILE_CHUNK_OVERLAP=300
+Chunk size is not a config/env setting; pass it as a processing option (`chunk_size`, `overlap`) when processing files in code:
 
-# Smaller chunks for conversational content
-AI_FILE_CHUNK_SIZE=500
-AI_FILE_CHUNK_OVERLAP=100
+```php
+use Condoedge\Ai\Contracts\FileProcessorInterface;
+
+$processor = app(FileProcessorInterface::class);
+
+// Larger chunks for technical documents
+$processor->processFile($file, ['chunk_size' => 1500, 'overlap' => 300]);
+
+// Smaller chunks for conversational content
+$processor->processFile($file, ['chunk_size' => 500, 'overlap' => 100]);
 ```
 
 **Disable for specific file types:**

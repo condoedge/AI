@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Tests\Unit\Services\PromptSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
-use Condoedge\Ai\Services\PatternLibrary;
 use Condoedge\Ai\Services\SemanticPromptBuilder;
 use Condoedge\Ai\Tests\TestCase;
 
@@ -18,7 +17,7 @@ class SemanticPromptBuilderRoleNoteTest extends TestCase
 {
     private function builder(): SemanticPromptBuilder
     {
-        return new SemanticPromptBuilder(new PatternLibrary());
+        return new SemanticPromptBuilder();
     }
 
     /** @test */

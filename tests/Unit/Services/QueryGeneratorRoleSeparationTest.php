@@ -7,7 +7,6 @@ namespace Condoedge\Ai\Tests\Unit\Services;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
-use Condoedge\Ai\Services\PatternLibrary;
 use Condoedge\Ai\Services\QueryGenerator;
 use Condoedge\Ai\Services\SemanticPromptBuilder;
 use Condoedge\Ai\Tests\TestCase;
@@ -49,10 +48,16 @@ class QueryGeneratorRoleSeparationTest extends TestCase
         parent::setUp();
 
         $this->llm = Mockery::mock(LlmProviderInterface::class);
-        $this->llm->shouldReceive('complete')
-            ->andReturnUsing(function ($user, $system = null, $options = []) {
-                $this->captured = [$user, $system, $options];
-                return 'MATCH (n:Invoice) WHERE n.status = "overdue" RETURN n LIMIT 100';
+        // The generation call is chatJson (Task 5.6); capture its [user, system, options].
+        $this->llm->shouldReceive('chatJson')
+            ->andReturnUsing(function (array $messages, array $options = []) {
+                $roles = array_column($messages, 'content', 'role');
+                $this->captured = [$roles['user'] ?? null, $roles['system'] ?? null, $options];
+                return (object) [
+                    'needs_query' => true,
+                    'cypher' => 'MATCH (n:Invoice) WHERE n.status = "overdue" RETURN n LIMIT 100',
+                    'reason' => '',
+                ];
             });
 
         $graph = Mockery::mock(GraphStoreInterface::class);
@@ -61,10 +66,9 @@ class QueryGeneratorRoleSeparationTest extends TestCase
             $this->llm,
             $graph,
             [
-                'enable_templates' => false, // force the LLM path
                 'max_retries' => 1,
             ],
-            new SemanticPromptBuilder(new PatternLibrary())
+            new SemanticPromptBuilder()
         );
     }
 
@@ -79,7 +83,6 @@ class QueryGeneratorRoleSeparationTest extends TestCase
         $context = new PipelineContext();
         $context->graphSchema = ['labels' => ['Invoice'], 'relationships' => []];
 
-        // A multi-word question that won't match any of the regex templates.
         $this->generator->generate('Which residents have overdue invoices this month?', $context);
     }
 

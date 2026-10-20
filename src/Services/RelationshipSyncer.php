@@ -7,6 +7,7 @@ namespace Condoedge\Ai\Services;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
+use Condoedge\Ai\Services\Schema\GraphSchemaCache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -23,11 +24,16 @@ class RelationshipSyncer
 {
     private readonly PolymorphicTargetResolver $polymorphicResolver;
 
+    /** Flushes the cached graph schema when a write creates an edge pattern it lacks (I-2). */
+    private readonly GraphSchemaCache $schemaCache;
+
     public function __construct(
         private readonly GraphStoreInterface $graphStore,
         ?PolymorphicTargetResolver $polymorphicResolver = null,
+        ?GraphSchemaCache $schemaCache = null,
     ) {
         $this->polymorphicResolver = $polymorphicResolver ?? new PolymorphicTargetResolver();
+        $this->schemaCache = $schemaCache ?? new GraphSchemaCache();
     }
 
     /**
@@ -149,6 +155,7 @@ class RelationshipSyncer
                     type: $relationshipConfig->type,
                     properties: $relationshipProperties
                 );
+                $this->schemaCache->flushIfUnknownRelationship($config->label, $relationshipConfig->type, $targetLabel);
 
                 $count++;
             } catch (\Exception $e) {
@@ -318,6 +325,7 @@ class RelationshipSyncer
                             type: $relationshipConfig->type,
                             properties: $relationshipProperties
                         );
+                        $this->schemaCache->flushIfUnknownRelationship($graphConfig->label, $relationshipConfig->type, $targetLabel);
 
                         Log::info("Relationship created during sync", [
                             'from_label' => $graphConfig->label,

@@ -165,7 +165,7 @@ class DiscoverEntitiesCommand extends Command
         $this->comment('Next steps:');
         $this->line('  1. Review config/entities.php');
         $this->line('  2. Customize as needed (labels, properties, relationships)');
-        $this->line('  3. Run php artisan ai:ingest to populate stores');
+        $this->line('  3. Run php artisan ai:ingest to populate the graph');
 
         return self::SUCCESS;
     }
@@ -174,10 +174,6 @@ class DiscoverEntitiesCommand extends Command
     {
         if (!empty($config['graph']['label'])) {
             $this->line("    Graph: <fg=green>{$config['graph']['label']}</>");
-        }
-
-        if (!empty($config['vector']['collection'])) {
-            $this->line("    Vector: <fg=green>{$config['vector']['collection']}</>");
         }
 
         if (!empty($config['metadata']['aliases'])) {

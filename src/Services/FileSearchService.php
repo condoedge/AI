@@ -4,6 +4,7 @@ namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\ChunkStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\Support\FileLink;
 use Condoedge\Utils\Facades\FileModel;
 use Illuminate\Database\Eloquent\Model;
 
@@ -85,6 +86,47 @@ class FileSearchService
         if (isset($options['min_score'])) {
             $filters['min_score'] = $options['min_score'];
         }
+        // Exact-article angle (Phase 7.2): a payload filter on the chunk's article
+        // numbers, applied to every collection (a team's declaration has articles too).
+        if (!empty($options['article_numbers']) && is_array($options['article_numbers'])) {
+            $filters['article_numbers'] = array_values(array_map('strval', $options['article_numbers']));
+        }
+
+        // ACL as a PRE-filter (Phase 7.3): the caller's accessible DB file ids
+        // restrict the DB-file (primary) collection inside the vector search, so
+        // foreign files can never fill the top-k and push the user's own file out.
+        // null = no pre-filter (security off / unresolved); [] = no accessible DB
+        // file, so the primary collection is not searched at all. The physical
+        // corpus collections are never ACL-filtered — it is readable by everyone.
+        // The caller still post-filters every result (defense in depth).
+        $aclFileIds = $options['acl_file_ids'] ?? null;
+        $primaryFilters = $filters;
+        if (is_array($aclFileIds)) {
+            $primaryFilters['file_ids'] = array_values($aclFileIds);
+        }
+
+        // UPLOADED files only (the primary collection) — PROJECT files are global
+        // and are searched below with none of this:
+        //  - SCOPE: the record the question is about and the records that own it
+        //    ({focus, ancestors}); the store keeps the documents of that record,
+        //    of its owners and of what it owns, and those of no record. Beside
+        //    the ACL, never instead of it.
+        //  - DISTINCT: the same text filed several times on one record is one
+        //    candidate, grouped inside the vector search — before this limit and
+        //    every one after it (ai.file_context.dedupe, default on). `memo` lets
+        //    one turn's angles agree on the copy that represents a group.
+        if (is_array($options['scope'] ?? null) && is_string($options['scope']['focus'] ?? null) && $options['scope']['focus'] !== '') {
+            $primaryFilters['scope'] = [
+                'focus' => $options['scope']['focus'],
+                'ancestors' => array_values(array_filter((array) ($options['scope']['ancestors'] ?? []), 'is_string')),
+            ];
+        }
+        if (config('ai.file_context.dedupe', true)) {
+            $primaryFilters['distinct'] = true;
+            if (($options['memo'] ?? null) instanceof \ArrayObject) {
+                $primaryFilters['memo'] = $options['memo'];
+            }
+        }
 
         // Search Qdrant for chunks (get more than limit to account for grouping).
         // Primary collection uses the bound collection (no override); any
@@ -103,7 +145,12 @@ class FileSearchService
         // on the same bare numeric id.
         $buckets = [];
 
-        $primary = $this->chunkStore->searchByContent($query, $limit * 3, $filters);
+        $primary = $aclFileIds === []
+            ? []
+            : $this->chunkStore->searchByContent($query, $limit * 3, $primaryFilters);
+        if (!empty($primary) && !empty($primaryFilters['distinct'])) {
+            $primary = $this->onePassagePerText($primary);
+        }
         if (!empty($primary)) {
             $buckets[self::PRIMARY_COLLECTION_KEY] = $this->tagCollection($primary, self::PRIMARY_COLLECTION_KEY);
         }
@@ -115,7 +162,9 @@ class FileSearchService
                     $buckets[$collection] = $this->tagCollection($extra, $collection);
                 }
             } catch (\Throwable $e) {
-                // A failing secondary collection must not break primary results.
+                // A failing secondary collection must not break primary results —
+                // but the turn trace records it (observation only).
+                \Condoedge\Ai\Support\PipelineObserverScope::current()->stageError('file_context', $e);
                 continue;
             }
         }
@@ -135,7 +184,16 @@ class FileSearchService
         $fileGroups = collect($chunks)->groupBy(fn($result) => $this->compositeFileKey($result));
 
         $results = [];
-        foreach ($fileGroups as $compositeKey => $fileChunks) {
+        foreach ($fileGroups as $compositeKey => $groupChunks) {
+            // PREAMBLE (Phase 7.1b): title / table-of-contents / heading-only chunks
+            // (chunk metadata is_preamble) match any query naming the document
+            // ("Quebec Civil Code") and used to win the file's slot with the chunk
+            // that answers nothing. They never set the file's relevance or best
+            // chunk while the file has any content chunk in the results.
+            $contentChunks = collect($groupChunks)->reject(fn ($r) => self::isPreambleChunk($r['chunk']))->values();
+            $preambleOnly = $contentChunks->isEmpty();
+            $fileChunks = $preambleOnly ? collect($groupChunks) : $contentChunks;
+
             // Score each file by its BEST chunk (max RAW similarity), not the
             // average. Averaging dilutes a strong, on-topic chunk with weaker ones
             // and drops files that are genuinely relevant (e.g. chunks
@@ -158,7 +216,41 @@ class FileSearchService
                 'chunk_count' => count($fileChunks),
                 'best_chunk' => $bestChunk['chunk'],
                 'chunks' => array_map(fn($r) => $r['chunk'], $fileChunks->toArray()),
+                'preamble_only' => $preambleOnly && $fileChunks->contains(fn ($r) => self::isPreambleChunk($r['chunk'])),
+                // Each retrieved chunk's own RAW similarity by chunk_index, so a
+                // caller can surface several distinct passages of one file.
+                'chunk_scores' => $fileChunks->reduce(function (array $carry, array $r) {
+                    $index = (int) $r['chunk']->chunkIndex;
+                    $carry[$index] = max($carry[$index] ?? 0.0, (float) ($r['score'] ?? 0.0));
+                    return $carry;
+                }, []),
             ];
+
+            // The record an UPLOADED file is filed on (every chunk of a file carries
+            // the same link), and — per chunk — how many other copies of the same
+            // text under that owner the distinct search folded into it.
+            $link = FileLink::ofChunk($bestChunk['chunk']);
+            if ($link !== null) {
+                $result['owner'] = $link[FileLink::OWNER];
+                $result['ancestors'] = $link[FileLink::ANCESTORS];
+            }
+            $duplicates = [];
+            $coOwners = [];
+            foreach ($fileChunks as $r) {
+                if ((int) ($r['duplicates'] ?? 0) > 0) {
+                    $duplicates[(int) $r['chunk']->chunkIndex] = (int) $r['duplicates'];
+                }
+                if (!empty($r['co_owners'])) {
+                    $coOwners[(int) $r['chunk']->chunkIndex] = $r['co_owners'];
+                }
+            }
+            if ($duplicates !== []) {
+                $result['duplicates'] = $duplicates;
+            }
+            // … and the OTHER records the same text is filed on (onePassagePerText()).
+            if ($coOwners !== []) {
+                $result['co_owners'] = $coOwners;
+            }
 
             // When fusing collections, the cross-collection ordering key is the sum
             // of the group's per-chunk RRF contributions (rank-based, scale-free).
@@ -167,6 +259,13 @@ class FileSearchService
             }
 
             $results[] = $result;
+        }
+
+        // A file that matched ONLY through preamble chunks is kept only when
+        // nothing else matched (better a title page than no grounding at all).
+        $withContent = array_values(array_filter($results, static fn (array $r) => !$r['preamble_only']));
+        if ($withContent !== []) {
+            $results = $withContent;
         }
 
         // Order by the rank-fusion score when collections were merged, otherwise by
@@ -192,6 +291,80 @@ class FileSearchService
         }
 
         return $results;
+    }
+
+    /**
+     * One passage per TEXT among the uploaded candidates.
+     *
+     * The store returns one candidate per (text, owner): the same text filed on
+     * two records is two candidates, and stays two there — whose document it is
+     * differs. For the TURN it is one passage: shown once per owner it took the
+     * slots of the other documents (measured on a declaration filed on two units
+     * of one building: no passage of the law on the questions that needed both).
+     * It is kept ONCE — the copy with the lowest file id, so every angle of a
+     * turn names the same file — at the best score, with the other owners it is
+     * filed on (`co_owners`: each {owner, ancestors}), which the answer's header
+     * states beside its own. Nothing is lost but the repetition.
+     *
+     * @param list<array{chunk: mixed, score?: float, duplicates?: int}> $results
+     * @return list<array>
+     */
+    private function onePassagePerText(array $results): array
+    {
+        $byText = [];
+        foreach ($results as $position => $result) {
+            $chunk = $result['chunk'] ?? null;
+            if (!is_object($chunk) || !isset($chunk->content)) {
+                $byText['#' . $position] = [$result];
+                continue;
+            }
+            $byText[FileLink::dedupeKey((string) $chunk->content, null)][] = $result;
+        }
+
+        $kept = [];
+        foreach ($byText as $copies) {
+            if (count($copies) === 1) {
+                $kept[] = $copies[0];
+                continue;
+            }
+
+            $first = $copies[0];
+            foreach ($copies as $copy) {
+                $byId = is_numeric($copy['chunk']->fileId) && is_numeric($first['chunk']->fileId)
+                    ? $copy['chunk']->fileId <=> $first['chunk']->fileId
+                    : strcmp((string) $copy['chunk']->fileId, (string) $first['chunk']->fileId);
+                if (($byId ?: ($copy['chunk']->chunkIndex <=> $first['chunk']->chunkIndex)) < 0) {
+                    $first = $copy;
+                }
+            }
+
+            $own = FileLink::ofChunk($first['chunk'])[FileLink::OWNER] ?? null;
+            $others = [];
+            foreach ($copies as $copy) {
+                $link = FileLink::ofChunk($copy['chunk']);
+                $owner = $link[FileLink::OWNER] ?? null;
+                if ($copy === $first || $owner === $own) {
+                    continue;
+                }
+                $others[$owner ?? ''] = ['owner' => $owner, 'ancestors' => $link[FileLink::ANCESTORS] ?? []];
+            }
+
+            $first['score'] = max(array_map(static fn (array $copy): float => (float) ($copy['score'] ?? 0.0), $copies));
+            if ($others !== []) {
+                $first['co_owners'] = array_values($others);
+            }
+            $kept[] = $first;
+        }
+
+        return $kept;
+    }
+
+    /**
+     * Whether a chunk is a title / TOC / heading-only chunk (chunker metadata).
+     */
+    private static function isPreambleChunk(mixed $chunk): bool
+    {
+        return is_object($chunk) && is_array($chunk->metadata ?? null) && !empty($chunk->metadata['is_preamble']);
     }
 
     /**
@@ -346,177 +519,6 @@ class FileSearchService
     }
 
     /**
-     * Search files by metadata (Neo4j graph query)
-     *
-     * @param array $criteria Search criteria:
-     *   - extension: File extension
-     *   - mime_type: MIME type
-     *   - user_id: Uploaded by user
-     *   - team_id: Belongs to team
-     *   - uploaded_after: Date filter
-     *   - uploaded_before: Date filter
-     *   - size_min: Minimum file size
-     *   - size_max: Maximum file size
-     * @param int $limit Maximum results
-     * @return array
-     */
-    public function searchByMetadata(array $criteria, int $limit = 10): array
-    {
-        $cypher = $this->buildMetadataQuery($criteria, $limit);
-        $results = $this->graphStore->query($cypher, $criteria);
-
-        $fileIds = array_column($results, 'id');
-
-        if (empty($fileIds)) {
-            return [];
-        }
-
-        $files = FileModel::whereIn('id', $fileIds)->get();
-
-        return $files->map(function ($file) {
-            return [
-                'file' => $file,
-                'relationships' => $this->getFileRelationships($file),
-            ];
-        })->toArray();
-    }
-
-    /**
-     * Hybrid search combining content and metadata
-     *
-     * @param string $contentQuery Content search query
-     * @param array $metadataFilters Metadata filters
-     * @param array $options Search options
-     * @return array
-     */
-    public function hybridSearch(
-        string $contentQuery,
-        array $metadataFilters = [],
-        array $options = []
-    ): array {
-        $limit = $options['limit'] ?? 10;
-
-        // Step 1: Content search
-        $contentResults = $this->searchByContent($contentQuery, array_merge($options, [
-            'limit' => $limit * 2, // Get more for filtering
-            'include_relationships' => false,
-        ]));
-
-        // Step 2: Apply metadata filters
-        if (!empty($metadataFilters)) {
-            $contentResults = $this->filterByMetadata($contentResults, $metadataFilters);
-        }
-
-        // Step 3: Limit results
-        $contentResults = array_slice($contentResults, 0, $limit);
-
-        // Step 4: Enhance with relationships
-        foreach ($contentResults as &$result) {
-            if (isset($result['file'])) {
-                $result['relationships'] = $this->getFileRelationships($result['file']);
-            }
-        }
-
-        return $contentResults;
-    }
-
-    /**
-     * Get related files via graph traversal
-     *
-     * @param Model $file
-     * @param string|null $relationshipType Optional relationship type filter
-     * @param int $limit Maximum results
-     * @return array
-     */
-    public function getRelatedFiles(Model $file, ?string $relationshipType = null, int $limit = 10): array
-    {
-        $relationshipFilter = $relationshipType ? ":{$relationshipType}" : '';
-
-        $cypher = "
-            MATCH (f:File {id: \$file_id})-[r{$relationshipFilter}]-(related:File)
-            RETURN DISTINCT related.id as id, type(r) as relationship_type
-            LIMIT \$limit
-        ";
-
-        $results = $this->graphStore->query($cypher, [
-            'file_id' => $file->id,
-            'limit' => $limit,
-        ]);
-
-        if (empty($results)) {
-            return [];
-        }
-
-        $fileIds = array_column($results, 'id');
-        $files = FileModel::whereIn('id', $fileIds)->get()->keyBy('id');
-
-        return collect($results)->map(function ($result) use ($files) {
-            return [
-                'file' => $files->get($result['id']),
-                'relationship_type' => $result['relationship_type'],
-            ];
-        })->toArray();
-    }
-
-    /**
-     * Get files uploaded by a specific user
-     *
-     * @param int $userId
-     * @param int $limit
-     * @return array
-     */
-    public function getFilesByUser(int $userId, int $limit = 10): array
-    {
-        $cypher = "
-            MATCH (u:User {id: \$user_id})<-[:UPLOADED_BY]-(f:File)
-            RETURN f.id as id
-            ORDER BY f.uploaded_at DESC
-            LIMIT \$limit
-        ";
-
-        $results = $this->graphStore->query($cypher, [
-            'user_id' => $userId,
-            'limit' => $limit,
-        ]);
-
-        $fileIds = array_column($results, 'id');
-
-        return FileModel::whereIn('id', $fileIds)
-            ->orderByDesc('created_at')
-            ->get()
-            ->toArray();
-    }
-
-    /**
-     * Get files belonging to a specific team
-     *
-     * @param int $teamId
-     * @param int $limit
-     * @return array
-     */
-    public function getFilesByTeam(int $teamId, int $limit = 10): array
-    {
-        $cypher = "
-            MATCH (t:Team {id: \$team_id})<-[:BELONGS_TO_TEAM]-(f:File)
-            RETURN f.id as id
-            ORDER BY f.uploaded_at DESC
-            LIMIT \$limit
-        ";
-
-        $results = $this->graphStore->query($cypher, [
-            'team_id' => $teamId,
-            'limit' => $limit,
-        ]);
-
-        $fileIds = array_column($results, 'id');
-
-        return FileModel::whereIn('id', $fileIds)
-            ->orderByDesc('created_at')
-            ->get()
-            ->toArray();
-    }
-
-    /**
      * Get file relationships from Neo4j
      *
      * @param Model $file
@@ -530,76 +532,5 @@ class FileSearchService
         ";
 
         return $this->graphStore->query($cypher, ['file_id' => $file->id]);
-    }
-
-    /**
-     * Build metadata query from criteria
-     *
-     * @param array $criteria
-     * @param int $limit
-     * @return string
-     */
-    protected function buildMetadataQuery(array $criteria, int $limit): string
-    {
-        $conditions = [];
-
-        if (isset($criteria['extension'])) {
-            $conditions[] = "f.extension = \$extension";
-        }
-
-        if (isset($criteria['mime_type'])) {
-            $conditions[] = "f.mime_type = \$mime_type";
-        }
-
-        if (isset($criteria['user_id'])) {
-            $conditions[] = "EXISTS((f)-[:UPLOADED_BY]->(:User {id: \$user_id}))";
-        }
-
-        if (isset($criteria['team_id'])) {
-            $conditions[] = "EXISTS((f)-[:BELONGS_TO_TEAM]->(:Team {id: \$team_id}))";
-        }
-
-        if (isset($criteria['size_min'])) {
-            $conditions[] = "f.size >= \$size_min";
-        }
-
-        if (isset($criteria['size_max'])) {
-            $conditions[] = "f.size <= \$size_max";
-        }
-
-        $whereClause = empty($conditions) ? '' : 'WHERE ' . implode(' AND ', $conditions);
-
-        return "
-            MATCH (f:File)
-            {$whereClause}
-            RETURN f.id as id
-            ORDER BY f.uploaded_at DESC
-            LIMIT {$limit}
-        ";
-    }
-
-    /**
-     * Filter results by metadata criteria
-     *
-     * @param array $results
-     * @param array $filters
-     * @return array
-     */
-    protected function filterByMetadata(array $results, array $filters): array
-    {
-        return array_filter($results, function ($result) use ($filters) {
-            $file = $result['file'] ?? null;
-            if (!$file) {
-                return false;
-            }
-
-            foreach ($filters as $key => $value) {
-                if (property_exists($file, $key) && $file->$key !== $value) {
-                    return false;
-                }
-            }
-
-            return true;
-        });
     }
 }

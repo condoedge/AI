@@ -124,8 +124,9 @@ class PdfExtractor implements FileExtractorInterface
         // Normalize line endings
         $text = str_replace(["\r\n", "\r"], "\n", $text);
 
-        // Remove null bytes and control characters except newlines and tabs
-        $text = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $text);
+        // Remove null bytes and control characters except newlines, tabs and the
+        // form feed the parser puts between pages (page metadata on chunks).
+        $text = preg_replace('/[\x00-\x08\x0B\x0E-\x1F\x7F]/', '', $text);
 
         // Remove excessive whitespace
         $text = preg_replace('/[ \t]+/', ' ', $text);

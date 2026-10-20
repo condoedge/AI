@@ -82,15 +82,18 @@ class ResponseGeneratorSelfReferenceGuardTest extends TestCase
     }
 
     /** @test */
-    public function an_unmarked_own_email_triggers_one_retry_which_can_recover(): void
+    public function an_unmarked_own_email_rides_the_combined_retry_which_can_recover(): void
     {
+        // Phase 8-B M4: a self-reference slip ALONE is patched without a retry; the
+        // retry happens because the draft also invents a figure (needs the LLM), and
+        // the combined instruction then carries the SELF-REFERENCE rule too.
         $calls = [];
         $this->llmMock->shouldReceive('complete')
             ->twice()
             ->andReturnUsing(function ($user) use (&$calls) {
                 $calls[] = $user;
                 return count($calls) === 1
-                    ? 'Your team can be reached at ' . self::EMAIL . '.'
+                    ? 'Your team can be reached at ' . self::EMAIL . ' (dues 9,999.99 $).'
                     : 'The listed email ' . self::EMAIL . " (that's you) is your own.";
             });
 
@@ -98,7 +101,10 @@ class ResponseGeneratorSelfReferenceGuardTest extends TestCase
 
         $this->assertCount(2, $calls, 'Exactly one enforcement retry');
         $this->assertStringContainsString('SELF-REFERENCE', $calls[1]);
-        $this->assertStringContainsString(self::EMAIL, $calls[1]);
+        // Phase 8 batch A: email is an identifying field, so the retry instruction
+        // (and the quoted draft) carry its turn token — never the address itself.
+        $this->assertStringContainsString('[email#1]', $calls[1]);
+        $this->assertStringNotContainsString(self::EMAIL, $calls[1]);
         $this->assertStringContainsString('Your team can be reached at', $calls[1]);
         $this->assertSame('recovered', $result['metadata']['self_reference_guard'] ?? null);
         $this->assertStringContainsString("that's you", $result['answer']);
@@ -108,7 +114,7 @@ class ResponseGeneratorSelfReferenceGuardTest extends TestCase
     public function a_persisting_violation_is_patched_deterministically_after_the_first_unmarked_occurrence(): void
     {
         $this->llmMock->shouldReceive('complete')
-            ->twice()
+            ->once() // Phase 8-B M4: fixable-only — patched, no retry
             ->andReturn(
                 'Reach your team at ' . self::EMAIL . ' any time.',
                 'Contact ' . self::EMAIL . ' for questions.'
@@ -132,7 +138,7 @@ class ResponseGeneratorSelfReferenceGuardTest extends TestCase
             . 'Your team can be reached at ' . self::EMAIL . '.';
 
         $this->llmMock->shouldReceive('complete')
-            ->twice()
+            ->once() // Phase 8-B M4: fixable-only — patched, no retry
             ->andReturn($draft, $draft);
 
         $result = $this->generator->generate($this->dataContext(), $this->guardOptions());
@@ -149,7 +155,7 @@ class ResponseGeneratorSelfReferenceGuardTest extends TestCase
     public function detection_is_case_insensitive_on_the_email(): void
     {
         $this->llmMock->shouldReceive('complete')
-            ->twice()
+            ->once() // Phase 8-B M4: fixable-only — patched, no retry
             ->andReturn(
                 'Contact J.Rousseau@Novogestion.CA for help.',
                 'Contact J.Rousseau@Novogestion.CA for help.'
@@ -165,7 +171,9 @@ class ResponseGeneratorSelfReferenceGuardTest extends TestCase
     {
         $this->llmMock->shouldReceive('complete')
             ->once()
-            ->andReturn('Your team is Novo Gestion with 100 members.');
+            // (No invented figure: a "100 members" over this one-row result is now a
+            // number_unsupported violation of its own — Phase 8-B.)
+            ->andReturn('Your team is Novo Gestion.');
 
         $result = $this->generator->generate($this->dataContext(), $this->guardOptions());
 
@@ -236,7 +244,7 @@ class ResponseGeneratorSelfReferenceGuardTest extends TestCase
         $context->qu = new QueryUnderstandingResult(questionType: 'data_query', language: 'fr');
 
         $this->llmMock->shouldReceive('complete')
-            ->twice()
+            ->once() // Phase 8-B M4: fixable-only — patched, no retry
             ->andReturn(
                 'Vous pouvez joindre votre équipe à ' . self::EMAIL . '.',
                 'Contactez ' . self::EMAIL . '.'

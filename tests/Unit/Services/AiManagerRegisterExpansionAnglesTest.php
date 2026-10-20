@@ -22,11 +22,13 @@ use Condoedge\Ai\Tests\TestCase;
 use Mockery;
 
 /**
- * Lay->domain-register expansion (angle wiring). QU carries the register
- * reformulations on QueryUnderstandingResult::registerExpansions; the file-search
- * fan-out must add each as a SEPARATE angle — exactly like corpus-translation
- * angles — so a casually-worded question also probes the corpus with the
- * documents' own terminology. With no expansions the fan-out is unchanged.
+ * Lay->domain-register expansion (angle wiring). The further probes ride
+ * QueryUnderstandingResult::registerExpansions (probe slot 2; filled by the focused
+ * DocumentProbeWriter call since eval p15, no longer by the QU call — see
+ * AiManagerDocumentProbeTest). This test pins the SLOT plumbing: the file-search
+ * fan-out must add each value as a SEPARATE angle — exactly like the per-language
+ * slot — so a casually-worded question also probes the corpus with the documents'
+ * own terminology. With an empty slot the fan-out is unchanged.
  */
 class AiManagerRegisterExpansionAnglesTest extends TestCase
 {
@@ -92,7 +94,6 @@ class AiManagerRegisterExpansionAnglesTest extends TestCase
         $ctx->qu = $qu;
         $ctx->similarQueries = [];
         $ctx->graphSchema = ['labels' => ['Unit']];
-        $ctx->relevantEntities = [];
 
         return $ctx;
     }

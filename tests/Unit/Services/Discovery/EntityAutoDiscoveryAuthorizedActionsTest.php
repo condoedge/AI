@@ -19,9 +19,10 @@ use Condoedge\Ai\Tests\TestCase;
  *    (ungated actions pass for everyone, incl. a null principal);
  *  - an authorize() that throws is NOT advertisable (fail closed);
  *  - non-mutating entity actions follow the same rule;
- *  - MUTATING entity actions always pass through: they authorize against the
- *    RESOLVED ROW, which does not exist at advertisement time — filtering them on
- *    empty input would hide them from everyone.
+ *  - MUTATING entity actions are advertised ONLY to principals passing their
+ *    row-independent capability (`permission:`) — security A1/A2: they used to pass
+ *    through unfiltered and were offered to every user (a resident saw "approve
+ *    reservation"). Their render + approval-time row gates still run on top.
  */
 class EntityAutoDiscoveryAuthorizedActionsTest extends TestCase
 {
@@ -65,14 +66,15 @@ class EntityAutoDiscoveryAuthorizedActionsTest extends TestCase
                     'action' => fn ($text = 'Open') => 'link',
                     'label' => 'Open thing',
                 ],
-                // Mutating: authorizer needs the resolved row (null at advertisement time,
-                // so it would deny) — advertisement must NOT consult it.
+                // Mutating: the row authorizer needs the resolved row (null at advertisement
+                // time) — advertisement consults the row-independent `permission` instead.
                 'approve' => new ModelMethodMutationAction(
                     key: 'approve',
                     label: 'Approve thing',
                     finder: 'App\\Models\\DoesNotMatterForAdvertisement',
                     mutator: fn ($model, array $input) => $model,
                     authorizer: fn ($user, $model, array $input) => $user !== null && $model !== null,
+                    permission: fn ($user) => $user === 'staff-user',
                 ),
             ],
         ]);
@@ -127,13 +129,19 @@ class EntityAutoDiscoveryAuthorizedActionsTest extends TestCase
     }
 
     /** @test */
-    public function non_mutating_entity_actions_are_filtered_but_mutating_ones_pass_through(): void
+    public function entity_actions_including_mutations_are_filtered_for_a_user_without_the_capability(): void
     {
         $keys = $this->keys($this->discovery->getAuthorizedEntityActions('Thing', 'board-user'));
 
         $this->assertContains('open', $keys, 'ungated non-mutating action stays');
         $this->assertNotContains('view', $keys, 'denied non-mutating action is not advertised');
-        $this->assertContains('approve', $keys, 'mutating actions keep their render+approval-time gates');
+        $this->assertNotContains('approve', $keys, 'a mutation is never offered to a user lacking its capability (A1/A2)');
+    }
+
+    /** @test */
+    public function a_null_principal_is_never_offered_a_mutation(): void
+    {
+        $this->assertNotContains('approve', $this->keys($this->discovery->getAuthorizedEntityActions('Thing', null)));
     }
 
     /** @test */

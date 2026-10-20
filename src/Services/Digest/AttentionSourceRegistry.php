@@ -91,6 +91,41 @@ class AttentionSourceRegistry
     }
 
     /**
+     * The source that speaks for an EMPTY result about $entity outside the digest
+     * (eval p16-A: "When is our next meeting?" → none upcoming → the most recent
+     * ones): the ONLY enabled source declaring that entity, when it carries a
+     * labeled fallback — with its key under 'key'.
+     *
+     * Null when no source declares the entity, when its only source has no
+     * fallback, or when SEVERAL sources declare it: which one an empty query
+     * stands for is then unknown, and guessing would present the wrong rows
+     * under the wrong label. The label is matched as written (graph labels are
+     * case-sensitive).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function fallbackSourceFor(?string $entity): ?array
+    {
+        $entity = trim((string) $entity);
+        if ($entity === '') {
+            return null;
+        }
+
+        $matches = array_filter(
+            $this->enabledSources(),
+            static fn (array $source): bool => $source['entity'] === $entity
+        );
+        if (count($matches) !== 1) {
+            return null;
+        }
+
+        $key = (string) array_key_first($matches);
+        $source = $matches[$key];
+
+        return $source['fallback_cypher'] !== null ? ['key' => $key] + $source : null;
+    }
+
+    /**
      * The sources a digest run actually executes: the first `max_sources`
      * enabled entries, in config order.
      *

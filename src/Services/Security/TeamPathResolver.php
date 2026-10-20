@@ -117,6 +117,30 @@ class TeamPathResolver
     }
 
     /**
+     * The OTHER labels an entity's tenant-scoping rule traverses (e.g. Unit with
+     * team_path 'union.team_id' → ['Union']; Vehicle 'unit.union.team_id' →
+     * ['Unit', 'Union']; a relationship path → its target). Empty for a direct
+     * column (the node scopes itself) and for unscoped entities.
+     *
+     * Parsed from the node patterns of the {@see ruleFor()} clause itself, so the
+     * labels are exactly the ones the rendered TENANT SCOPING instruction MATCHes —
+     * entity selection keeps them in the schema so the model can emit that rule.
+     *
+     * @return string[]
+     */
+    public function scopeLabels(string $entity): array
+    {
+        $rule = $this->ruleFor($entity, 'n');
+        if ($rule === null || $rule['kind'] !== 'match') {
+            return [];
+        }
+
+        preg_match_all('/\(\s*\w+\s*:\s*`?([A-Za-z_][A-Za-z0-9_]*)`?\s*\)/', $rule['filter'], $matches);
+
+        return array_values(array_unique($matches[1] ?? []));
+    }
+
+    /**
      * Coerce team IDs to a clean list of integers (drops non-numeric values).
      *
      * @param array<int> $teamIds

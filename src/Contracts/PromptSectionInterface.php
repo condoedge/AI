@@ -13,9 +13,8 @@ use Condoedge\Ai\DTOs\PipelineContext;
  * Each section is responsible for formatting a specific part of the prompt.
  *
  * Sections are processed in priority order (lower = earlier) and can be:
- * - Added dynamically via SemanticPromptBuilder::addSection()
- * - Extended via SemanticPromptBuilder::extendBuild()
- * - Removed or replaced at runtime
+ * - Registered via config('ai.query_generator_sections')
+ * - Added/removed at runtime via SemanticPromptBuilder::addModule()/removeModule()
  *
  * Example implementation:
  * ```php

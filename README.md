@@ -228,13 +228,10 @@ The `SemanticPromptBuilder` constructs prompts for Cypher query generation using
 |---------|----------|---------|
 | `project_context` | 10 | Project name, description, domain, business rules |
 | `generic_context` | 15 | Current date/time |
-| `schema` | 20 | Graph schema (labels, relationships, properties) |
-| `relationships` | 30 | Entity relationships with exact directions |
-| `example_entities` | 40 | Sample data showing actual types/formats |
+| `schema` | 20 | Schema cards: one per selected label (typed properties, enum legends, live directed edges, fk hints) |
+| `file_context` | 45 | Names of relevant documents |
 | `similar_queries` | 50 | RAG: similar past queries for few-shot learning |
-| `detected_entities` | 60 | Entities detected in user's question |
 | `detected_scopes` | 65 | Business concepts detected in question |
-| `pattern_library` | 70 | Available query patterns |
 | `query_rules` | 75 | Query generation rules |
 | `question` | 80 | User's question |
 | `task_instructions` | 90 | Final task instructions |
@@ -340,7 +337,7 @@ $generator = app(ResponseGenerator::class);
 
 // Add/remove/replace sections
 $generator->addSection(new CustomAnalysisSection());
-$generator->removeSection('statistics');
+$generator->removeSection('entity_actions');
 
 // Convenience methods
 $generator->setProjectContext(['name' => 'My App', 'domain' => 'E-commerce']);
@@ -575,7 +572,6 @@ class Customer extends Model implements Nodeable
     public function nodeableConfig(): NodeableConfig
     {
         return NodeableConfig::discover($this)
-            ->embedFields(['name', 'bio'])        // Override embed fields
             ->addAlias('client')                  // Add custom alias
             ->addRelationship('HAS_ORDER', 'Order', 'customer_id')
             ->disableVectorStore();               // Graph-only entity
@@ -609,7 +605,6 @@ ai/
 │   │   │   └── HasNodeableConfig.php  # Auto-sync + discovery
 │   │   └── ValueObjects/
 │   │       ├── GraphConfig.php
-│   │       ├── VectorConfig.php
 │   │       └── NodeableConfig.php
 │   ├── Services/           # Core services
 │   │   ├── Discovery/
@@ -620,9 +615,7 @@ ai/
 │   │   ├── PromptSections/  # Extensible prompt sections
 │   │   │   ├── BasePromptSection.php
 │   │   │   ├── ProjectContextSection.php
-│   │   │   ├── SchemaSection.php
-│   │   │   ├── RelationshipsSection.php
-│   │   │   ├── ExampleEntitiesSection.php
+│   │   │   ├── SchemaCardsSection.php   # one compact card per selected label
 │   │   │   ├── SimilarQueriesSection.php
 │   │   │   ├── QueryRulesSection.php
 │   │   │   └── ...
@@ -704,7 +697,7 @@ ai/
 **Configuration:**
 - `HasNodeableConfig.php`: Trait providing auto-sync and discovery
 - `NodeableConfig.php`: Fluent builder for entity configuration
-- `GraphConfig.php`, `VectorConfig.php`: Store-specific configurations
+- `GraphConfig.php`, `RelationshipConfig.php`: Graph node / relationship configuration (records are stored in the graph only)
 
 ## Testing
 

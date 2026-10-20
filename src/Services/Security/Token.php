@@ -11,7 +11,7 @@ namespace Condoedge\Ai\Services\Security;
 final class Token
 {
     public function __construct(
-        /** One of CypherLexer::T_WORD | T_LITERAL | T_PUNCT. */
+        /** One of CypherLexer::T_WORD | T_LITERAL | T_PUNCT | T_OPERATOR. */
         public readonly string $type,
         /** Raw value (lower-cased comparisons are the caller's job); '' for literals. */
         public readonly string $value,
@@ -19,7 +19,20 @@ final class Token
         public readonly int $offset,
         public readonly int $parenDepth,
         public readonly int $bracketDepth,
-        public readonly int $braceDepth
+        public readonly int $braceDepth,
+        /**
+         * True for a WORD that is DEFINITELY an identifier — a label / property /
+         * label-expression name (`b:Yield`, `b:!Match`, `n.limit`), a backtick word,
+         * a SKIP/LIMIT/OFFSET used as a variable, an `order` with no following BY.
+         * Set by CypherLexer::markKeywordIdentifiers(); clause scans must skip it.
+         */
+        public readonly bool $keywordAsIdentifier = false,
+        /**
+         * True for a WORD in OPERAND position (after `=`, `,`, `(`, AND, WHERE …):
+         * an expression, not a clause head. Only for fail-safe consumers — see
+         * CypherLexer::markKeywordIdentifiers().
+         */
+        public readonly bool $operandPosition = false
     ) {
     }
 

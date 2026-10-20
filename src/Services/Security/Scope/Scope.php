@@ -37,6 +37,11 @@ final class Scope
      *                          an EARLIER segment can never vouch for a binding re-bound
      *                          AFTER the WITH (that acceptance would leak the later
      *                          match unscoped).
+     * @param bool $anchorClauseRejectsWhere Whether the LAST clause before the anchor
+     *                          cannot carry a WHERE (UNWIND, SET, REMOVE, DELETE, CREATE,
+     *                          MERGE, FOREACH, a CALL subquery / YIELD-less CALL). A bare
+     *                          `WHERE` spliced there is a SyntaxError, so the injector
+     *                          re-opens a row-level `WITH *` before its insertion.
      */
     public function __construct(
         public readonly array $sensitiveBindings,
@@ -45,7 +50,8 @@ final class Scope
         public readonly int $whereEndOffset = -1,
         public readonly bool $whereHasTopLevelOr = false,
         public readonly bool $anchorClauseIsOptionalMatch = false,
-        public readonly int $segmentStartOffset = 0
+        public readonly int $segmentStartOffset = 0,
+        public readonly bool $anchorClauseRejectsWhere = false
     ) {
     }
 }

@@ -10,81 +10,45 @@ use Illuminate\Support\Str;
 /**
  * ConversationContextManager
  *
- * Orchestrates conversation context tracking by combining:
- * - Entity extraction from questions and responses
- * - Reference resolution for follow-up questions
- * - Context snapshot management on AiConversation
+ * Owns the conversation context snapshot on AiConversation: it is written ONCE
+ * per turn, AFTER the pipeline ran (recordResponse), and read back as the
+ * prompt context of the next turn (buildPromptContext).
  *
- * This is the main entry point for conversation context handling.
+ * There is deliberately NO pre-pipeline question analysis here (Phase 2.B):
+ * follow-up detection, entity focus and query type of the CURRENT question are
+ * semantic judgments made by the Query Understanding LLM call
+ * (QueryUnderstandingResult::$followUpReference / $entityTypes / $intent) — never
+ * by regex or word lists. The only entity extraction left is structural: the
+ * labels of the Cypher that actually executed.
  */
 class ConversationContextManager
 {
-    public function __construct(
-        private readonly EntityExtractor $entityExtractor,
-        private readonly ReferenceResolver $referenceResolver
-    ) {
-    }
-
     /**
-     * Process an incoming question and update conversation context
+     * Upper bound of the snapshot's mentioned_entities list (most recent last).
+     * Readers (action gate, entity-action section, conversation prompt section)
+     * want the conversation's RECENT entity types; an uncapped list grew every
+     * turn of a long conversation.
      */
-    public function processQuestion(
-        AiConversation $conversation,
-        string $question,
-        array $schema
-    ): array {
-        // Extract entities from the new question (with alias matching for multilingual)
-        $entityConfigs = config('entities', []);
-        $extraction = $this->entityExtractor->extractFromQuestion($question, $schema, $entityConfigs);
+    public const MAX_MENTIONED_ENTITIES = 10;
 
-        // Check if this is a follow-up
-        $isFollowUp = $this->referenceResolver->isFollowUp($question);
-
-        $result = [
-            'is_follow_up' => $isFollowUp,
-            'focused_entity' => $extraction['focused_entity'],
-            'query_type' => $extraction['query_type'],
-            'mentioned_entities' => $extraction['mentioned_entities'],
-            'enriched_question' => $question,
-            'resolved_entity' => null,
-        ];
-
-        // If follow-up, try to resolve references
-        if ($isFollowUp) {
-            $currentContext = $this->buildPromptContext($conversation);
-            $resolution = $this->referenceResolver->resolve($question, $currentContext);
-
-            if ($resolution['resolved']) {
-                $result['resolved_entity'] = $resolution['resolved_entity'];
-                $result['enriched_question'] = $resolution['enriched_question'];
-
-                // Use resolved entity as focus if extraction didn't find one
-                if ($result['focused_entity'] === null) {
-                    $result['focused_entity'] = $resolution['resolved_entity'];
-                }
-            }
-        }
-
-        // Update conversation context (only if we have new info)
-        if ($result['focused_entity'] !== null) {
-            $conversation->updateContextSnapshot([
-                'focused_entity' => $result['focused_entity'],
-                'last_query_type' => $result['query_type'],
-                'mentioned_entities' => array_unique(array_merge(
-                    $conversation->getMentionedEntities(),
-                    $result['mentioned_entities']
-                )),
-            ]);
-        }
-
-        return $result;
+    public function __construct(
+        private readonly EntityExtractor $entityExtractor
+    ) {
     }
 
     /**
      * Record an AI response and update context with enhanced entity data.
      *
-     * Stores query results, entity filters, and answer summaries to enable
-     * resolution of references like "those", "them", "the same" in follow-up questions.
+     * Stores query results, entity filters, and answer summaries so the next
+     * turn (and its QU call) can resolve references like "those", "them",
+     * "the same" against what the user was last shown.
+     *
+     * Focus: the entity actually QUERIED (first label of the executed cypher)
+     * wins. A turn that executed no cypher (documents answer, export of a
+     * previous result, digest) falls back to THIS turn's QU entity types, which
+     * the pipeline stamps on metadata.entity_types; with neither, the previous
+     * focus is preserved. The QU intent (metadata.intent) becomes
+     * last_query_type.
      */
     public function recordResponse(
         AiConversation $conversation,
@@ -100,19 +64,41 @@ class ConversationContextManager
             $cypherEntities = $this->entityExtractor->extractFromCypher($cypherQuery);
         }
 
-        // Update context with the entities from the executed query
-        $currentEntities = $conversation->getMentionedEntities();
-        $newEntities = array_unique(array_merge($currentEntities, $cypherEntities['entities']));
+        // QU's entity types for THIS turn (post-QU, stamped by the pipeline).
+        $quEntityTypes = array_values(array_filter(
+            (array) ($queryResult['metadata']['entity_types'] ?? []),
+            static fn ($label): bool => is_string($label) && trim($label) !== ''
+        ));
+
+        // Update context with the entities from the executed query (or, without
+        // one, QU's entity types) — most recent last, bounded.
+        $turnEntities = !empty($cypherEntities['entities'])
+            ? array_values($cypherEntities['entities'])
+            : $quEntityTypes;
+        $newEntities = $this->recentEntities($conversation->getMentionedEntities(), $turnEntities);
 
         $focusedEntity = $conversation->getFocusedEntity();
         // Always update focused entity from Cypher when a query was executed.
         // The entity actually queried is the real focus, not the previous turn's entity.
         if (!empty($cypherEntities['entities'])) {
-            $focusedEntity = $cypherEntities['entities'][0];
+            $focusedEntity = array_values($cypherEntities['entities'])[0];
+        } elseif ($quEntityTypes !== []) {
+            // No query ran: QU's first entity type is this turn's focus.
+            $focusedEntity = $quEntityTypes[0];
         }
 
+        // The query the GENERATOR wrote (eval p12-1001-A). A FanOutCollapse turn
+        // executed a per-anchor REWRITE (`WITH u, collect(DISTINCT tr.role) AS
+        // role` — every other pattern variable out of scope) and returns it as the
+        // turn's cypher, with the original on metadata.query.pre_collapse_cypher.
+        // The rewrite stays last_cypher_query (what re-executes for an export of
+        // the rows shown); the generator's own query is what a follow-up EXTENDS
+        // (ConversationContextSection) and what the active filter is read from.
+        $preCollapse = $queryResult['metadata']['query']['pre_collapse_cypher'] ?? null;
+        $generatedCypher = is_string($preCollapse) && trim($preCollapse) !== '' ? $preCollapse : $cypherQuery;
+
         // Extract entity filter from Cypher WHERE clause
-        $entityFilter = $this->extractEntityFilter($cypherQuery);
+        $entityFilter = $this->extractEntityFilter($generatedCypher);
 
         // Store result sample: the first 10 rows for an ordinary query turn (a
         // display sample — the follow-up export path recovers the full set by
@@ -127,12 +113,12 @@ class ConversationContextManager
             : array_slice($queryResult['data'] ?? [], 0, 10);
 
         $referencedFiles = $queryResult['referenced_files'] ?? [];
-        $detectedTemplate = $queryResult['detected_template'] ?? null;
-        $queryType = $queryResult['query_type'] ?? null;
-        $insights = $queryResult['insights'] ?? [];
-        $executionStats = $queryResult['stats'] ?? [];
-        $availableActions = $queryResult['available_actions'] ?? [];
-        $visualizations = $queryResult['visualizations'] ?? [];
+        // QU's intent (count|list|lookup|aggregate|compare), stamped by the pipeline;
+        // an explicit query_type still wins for direct callers.
+        $queryType = $queryResult['query_type'] ?? $queryResult['metadata']['intent'] ?? null;
+        if (!is_string($queryType) || $queryType === '') {
+            $queryType = null;
+        }
 
         // Build snapshot update - only include non-empty values to preserve previous context
         $snapshotUpdate = [
@@ -153,6 +139,19 @@ class ConversationContextManager
         $rowCount = count($queryResult['data'] ?? []);
         if ($rowCount > 0) {
             $snapshotUpdate['last_cypher_query'] = $cypherQuery;
+            // Always written with last_cypher_query, so the pair never mixes turns.
+            $snapshotUpdate['last_generated_cypher'] = $generatedCypher;
+            // The label of the records the rows ARE (the companion count's anchor,
+            // stamped on capped / collapsed results), or null when unknown — it
+            // names the subject a follow-up's requested attributes must belong to.
+            $anchorLabel = $queryResult['metadata']['execution']['anchor_label'] ?? null;
+            $snapshotUpdate['last_anchor_label'] = is_string($anchorLabel) && trim($anchorLabel) !== '' ? trim($anchorLabel) : null;
+            // P-1: `$pii_…` parameters the recorded query binds (PII tokens rebound to
+            // real values). Always written with the query so a stale set never pairs
+            // with a newer query.
+            $snapshotUpdate['last_cypher_parameters'] = is_array($queryResult['cypher_parameters'] ?? null)
+                ? $queryResult['cypher_parameters']
+                : [];
             $snapshotUpdate['last_result_count'] = $rowCount;
             $snapshotUpdate['last_result_sample'] = $resultSample;
             $snapshotUpdate['focused_entity_filter'] = $entityFilter;
@@ -167,11 +166,16 @@ class ConversationContextManager
             }
         }
 
-        // Only update last_subject when THIS turn had one: a subject-less
-        // follow-up ("Ok, give me the excel") must not erase the subject of the
-        // result it operates on — that subject is what titles its export.
+        // last_subject is the subject OF THE RECORDED RESULT (it titles a
+        // follow-up export of those rows and labels the result memory QU sees),
+        // so it moves only together with the rows: written when THIS turn both
+        // recorded rows and had a subject. A subject-less follow-up ("Ok, give
+        // me the excel") must not erase it, and a row-less turn (a documents
+        // answer) must not overwrite it — eval p9-B resilience t3: the docs
+        // turn "Where can I add new members?" re-titled the preserved roster's
+        // export "Add new team members".
         $subject = $queryResult['metadata']['subject'] ?? null;
-        if (is_string($subject) && trim($subject) !== '') {
+        if ($rowCount > 0 && is_string($subject) && trim($subject) !== '') {
             $snapshotUpdate['last_subject'] = trim($subject);
         }
 
@@ -181,39 +185,33 @@ class ConversationContextManager
             $snapshotUpdate['last_referenced_files'] = $referencedFiles;
         }
 
-        // Store template detection info if available
-        // This provides more specific info from QueryGenerator than entity extractor
-        if ($detectedTemplate) {
-            $snapshotUpdate['last_detected_template'] = $detectedTemplate;
-        }
         if ($queryType) {
             $snapshotUpdate['last_query_type'] = $queryType;
         }
 
-        // Only update last_insights if there are new insights
-        // Otherwise preserve the previous insights for follow-up context
-        if (!empty($insights)) {
-            $snapshotUpdate['last_insights'] = $insights;
-        }
-
-        // Store execution stats if available
-        if (!empty($executionStats)) {
-            $snapshotUpdate['last_execution_stats'] = $executionStats;
-        }
-
-        // Only update last_available_actions if there are new actions
-        // Otherwise preserve the previous actions for follow-up context
-        if (!empty($availableActions)) {
-            $snapshotUpdate['last_available_actions'] = $availableActions;
-        }
-
-        // Only update last_visualizations if there are new visualizations
-        // Otherwise preserve the previous visualizations for follow-up context
-        if (!empty($visualizations)) {
-            $snapshotUpdate['last_visualizations'] = $visualizations;
-        }
-
         $conversation->updateContextSnapshot($snapshotUpdate);
+    }
+
+    /**
+     * The conversation's recent entity types: previous list + this turn's, de-duplicated
+     * (a re-mentioned type moves to the end), most recent last, capped.
+     *
+     * @param array<int, mixed> $previous
+     * @param array<int, string> $turn
+     * @return array<int, string>
+     */
+    private function recentEntities(array $previous, array $turn): array
+    {
+        $merged = [];
+        foreach (array_merge($previous, $turn) as $label) {
+            if (!is_string($label) || $label === '') {
+                continue;
+            }
+            unset($merged[$label]);
+            $merged[$label] = true;
+        }
+
+        return array_slice(array_keys($merged), -self::MAX_MENTIONED_ENTITIES);
     }
 
     /**
@@ -227,8 +225,15 @@ class ConversationContextManager
             return null;
         }
 
-        // Extract WHERE clause
-        if (preg_match('/WHERE\s+(.+?)(?:RETURN|ORDER|LIMIT|$)/is', $cypherQuery, $matches)) {
+        // The FIRST WHERE clause's predicate, up to the next clause keyword (Cypher
+        // grammar): ending only at RETURN/ORDER/LIMIT swallowed every following
+        // OPTIONAL MATCH / WITH into the "filter" (eval p12-1001-A). `STARTS WITH`
+        // / `ENDS WITH` are operators, not the WITH clause.
+        if (preg_match(
+            '/\bWHERE\s+(.+?)(?=\s+(?:OPTIONAL\s+MATCH|MATCH|(?<!STARTS\s)(?<!ENDS\s)WITH|UNWIND|CALL|RETURN|ORDER\s+BY|SKIP|LIMIT|UNION)\b|\s*$)/is',
+            $cypherQuery,
+            $matches
+        )) {
             return trim($matches[1]);
         }
 
@@ -243,8 +248,9 @@ class ConversationContextManager
      * - Sample results from last query for reference resolution
      * - Recent conversation exchanges for continuity
      */
-    public function buildPromptContext(AiConversation $conversation, int $maxHistory = 5): array
+    public function buildPromptContext(AiConversation $conversation, ?int $maxHistory = null): array
     {
+        $maxHistory ??= (int) config('ai.chat.max_history_messages', 10);
         $snapshot = $conversation->context_snapshot ?? [];
 
         // Get recent messages for exchange formatting
@@ -256,18 +262,17 @@ class ConversationContextManager
             'last_result_sample' => $snapshot['last_result_sample'] ?? [],
             'last_result_count' => $snapshot['last_result_count'] ?? 0,
             'last_cypher_query' => $snapshot['last_cypher_query'] ?? null,
+            // Older snapshots predate the split: their recorded query is the generated one.
+            'last_generated_cypher' => $snapshot['last_generated_cypher'] ?? $snapshot['last_cypher_query'] ?? null,
+            'last_anchor_label' => $snapshot['last_anchor_label'] ?? null,
+            'last_cypher_parameters' => $snapshot['last_cypher_parameters'] ?? [],
             'last_entity_types' => $snapshot['last_entity_types'] ?? [],
             'last_subject' => $snapshot['last_subject'] ?? null,
             'last_query_type' => $snapshot['last_query_type'] ?? null,
-            'last_detected_template' => $snapshot['last_detected_template'] ?? null,
             'last_relationships' => $snapshot['last_relationships'] ?? [],
             'mentioned_entities' => $snapshot['mentioned_entities'] ?? [],
             'last_answer_summary' => $snapshot['last_answer_summary'] ?? null,
             'last_referenced_files' => $snapshot['last_referenced_files'] ?? [],
-            'last_insights' => $snapshot['last_insights'] ?? [],
-            'last_visualizations' => $snapshot['last_visualizations'] ?? [],
-            'last_execution_stats' => $snapshot['last_execution_stats'] ?? [],
-            'last_available_actions' => $snapshot['last_available_actions'] ?? [],
             'recent_exchanges' => $this->formatRecentExchanges($recentMessages),
         ];
     }
@@ -280,6 +285,8 @@ class ConversationContextManager
      */
     protected function formatRecentExchanges(array $messages): array
     {
+        $answerChars = max(1, (int) config('ai.chat.history_answer_chars', 800));
+
         $exchanges = [];
         foreach ($messages as $message) {
             $role = $message['role'] ?? 'unknown';
@@ -289,7 +296,7 @@ class ConversationContextManager
                 'role' => $role,
                 'question' => $role === 'user' ? $content : null,
                 'answer_summary' => $role === 'assistant'
-                    ? Str::limit($content, 300)
+                    ? Str::limit($content, $answerChars)
                     : null,
             ];
         }

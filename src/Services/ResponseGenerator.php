@@ -7,16 +7,25 @@ namespace Condoedge\Ai\Services;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\ResponseSectionInterface;
-use Condoedge\Ai\Contracts\ToolCallingLlmInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
-use Condoedge\Ai\Services\Actions\ActionToolChannel;
-use Condoedge\Ai\Services\Actions\ActionToolGate;
-use Condoedge\Ai\Services\Actions\ToolLoopRunner;
+use Condoedge\Ai\Services\Actions\Attach\AttachedActions;
+use Condoedge\Ai\Services\Response\AnswerValidator;
+use Condoedge\Ai\Services\Response\DataAnswerPlan;
+use Condoedge\Ai\Services\Response\EntityIdIndex;
+use Condoedge\Ai\Services\Response\HostText;
+use Condoedge\Ai\Services\Response\NarrativeLinkFilter;
+use Condoedge\Ai\Services\Response\PiiMasker;
+use Condoedge\Ai\Services\Response\QueriedKinds;
 use Condoedge\Ai\Services\ResponseSections\SystemPromptSection;
+use Condoedge\Ai\Services\ResponseSections\ResponseCurrentUserContextSection;
 use Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection;
 use Condoedge\Ai\Services\ResponseSections\ResultsDataSection;
 use Condoedge\Ai\Services\ResponseSections\GuidelinesSection;
+use Condoedge\Ai\Contracts\PipelineObserverInterface;
+use Condoedge\Ai\Support\PipelineObserverScope;
+use Condoedge\Ai\Support\ArticleLocator;
 use Condoedge\Ai\Support\StatedNumber;
+use Condoedge\Ai\Support\TokenUsage;
 
 /**
  * ResponseGenerator — turns a PipelineContext into a natural-language answer.
@@ -26,13 +35,12 @@ use Condoedge\Ai\Support\StatedNumber;
  * the system role, the untrusted question + data in the user role) and calls the
  * LLM. Sections are configured under `config('ai.response_generator_sections')`
  * and managed through the HasInternalModules trait (addModule/removeModule/
- * replaceModule/extendAfter). Returns: answer, insights, visualizations, format,
- * metadata.
+ * getModule). Returns: answer, format, metadata.
  *
- * Action channel: when an {@see ActionToolGate} + {@see ToolLoopRunner} are wired,
- * generate() consults the gate ONCE per turn — Native runs the bounded tool loop
- * instead of complete(); Markdown/None (and legacy construction without the
- * collaborators) keep today's single complete() call byte-identical.
+ * Links and actions are attached by CODE (actions plan B1–B5, ActionAttacher via
+ * PipelineContext::$attachedActions): the model only narrates — AttachedActionsSection
+ * gives it one line + the attached chip labels, and it may reference a row inline with
+ * {{record:N}}, which generate() substitutes with that row's record link.
  *
  * @uses HasInternalModules<ResponseSectionInterface>
  * @see ResponseSectionInterface For creating custom sections.
@@ -44,34 +52,26 @@ class ResponseGenerator implements ResponseGeneratorInterface
     protected $defaultModulesConfigKey = 'ai.response_generator_sections';
 
     /**
-     * Literal [N] citation-marker pattern. Checking for the marker's PRESENCE is
-     * a structure check (the prompt's own citation grammar), not semantics.
-     */
-    private const CITATION_MARKER_PATTERN = '/\[\d+\]/';
-
-    /**
-     * Styles whose explicit contract forbids inline [N] markers (mirrors
-     * GuidelinesSection/FileContextSection TERSE_STYLES) — citation enforcement
+     * Styles whose explicit contract forbids inline citation markers (mirrors
+     * GuidelinesSection/FileContextSection TERSE_STYLES) — citation validation
      * must never fight an instruction the prompt itself gave.
      */
     private const CITATION_TERSE_STYLES = ['minimal', 'concise'];
+
+    /** The PII masker of the generation in progress (null outside generate()). */
+    private ?PiiMasker $turnMasker = null;
 
     /**
      * Constructor
      *
      * @param LlmProviderInterface $llm LLM provider for response generation
      * @param array $config Configuration options
-     * @param ActionToolGate|null $toolGate Channel decision point (null = markdown-only legacy behavior)
-     * @param ToolLoopRunner|null $toolLoop Native tool loop (null = markdown-only legacy behavior)
      */
     public function __construct(
         private readonly LlmProviderInterface $llm,
-        private readonly array $config = [],
-        private readonly ?ActionToolGate $toolGate = null,
-        private readonly ?ToolLoopRunner $toolLoop = null
+        private readonly array $config = []
     ) {
         $this->registerDefaultModules();
-        $this->applyGlobalExtensions();
     }
 
     // =========================================================================
@@ -147,7 +147,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
      *
      * @param PipelineContext $context Pipeline context with question, query result, execution data, etc.
      * @param array $options Generation options
-     * @return array Response with answer, insights, visualizations
+     * @return array Response with answer, format, metadata
      * @throws \RuntimeException If response generation fails
      */
     public function generate(
@@ -156,8 +156,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
     ): array {
         $format = $options['format'] ?? $this->config['default_format'] ?? 'text';
         $style = $options['style'] ?? $this->config['default_style'] ?? 'detailed';
-        $includeInsights = $options['include_insights'] ?? true;
-        $includeVisualization = $options['include_visualization'] ?? true;
         $maxLength = $options['max_length'] ?? $this->config['default_max_length'] ?? 500;
         $temperature = $options['temperature'] ?? 0.3;
 
@@ -167,23 +165,37 @@ class ResponseGenerator implements ResponseGeneratorInterface
             'max_length' => $maxLength,
         ];
 
-        // THE channel decision — once per turn, one call. Absent collaborators (legacy
-        // construction) and the default-off kill switch both mean Markdown: the pre-existing
-        // path, byte-identical, with no spec construction paid. The channel rides the section
-        // options so the model is never taught the link grammar while holding real tools.
-        $toolSpecs = [];
-        $channel = ActionToolChannel::Markdown;
-        if ($this->toolGate !== null && $this->toolLoop !== null) {
-            [$channel, $toolSpecs] = $this->toolGate->decide($this->llm, $context, $sectionOptions);
-        }
-        $sectionOptions[ActionToolChannel::OPTION] = $channel;
+        // DETERMINISTIC DATA ANSWERS + PII MASKING (Phase 8 batch A). One fresh
+        // per-turn token map and data plan, shared by every section of this
+        // generation: the LLM sees a compact masked summary + facts/system-computed
+        // totals and writes only the narrative with a {{table}} placeholder; the
+        // table is rendered by code from ALL rows (up to the display cap) after
+        // generation, and the real identifying values are substituted back.
+        // The token map is the TURN's (created before QU by ContextRetriever — P-1):
+        // reused, never reset, so a token means the same value in every prompt of
+        // the turn; PiiMasker::for() widens it with this turn's query labels.
+        $context->dataAnswerPlan = null;
+        $masker = PiiMasker::for($context);
+        $this->turnMasker = $masker;
+        $plan = !empty($context->executionResult->data) ? DataAnswerPlan::for($context) : null;
+        $sectionOptions[DataAnswerPlan::OPTION] = DataAnswerPlan::tableModeFor($sectionOptions);
+        $tableMode = $plan !== null && $sectionOptions[DataAnswerPlan::OPTION] && $plan->hasTable();
 
         // Build prompt using section pipeline, split into a system message
         // (identity + security policy) and a user message (context + data).
         ['system' => $systemPrompt, 'user' => $userPrompt] = $this->buildPrompts($context, $sectionOptions);
 
+        // p20-A roster: the identity values the prompt just GAVE the model (the user's own
+        // name, their team's) are known words when code judges whether a lead only restates.
+        $plan?->knownIdentity($this->promptIdentityValues($context, $sectionOptions));
+
+        // Safety net: any identifying value that received a token this turn is
+        // replaced wherever else it surfaced in the composed prompt (entity-action
+        // listings, the question itself, host-added sections).
+        $userPrompt = $masker->maskText($userPrompt);
+        $systemPrompt = $masker->maskText($systemPrompt);
+
         $data = $context->executionResult->data;
-        $cypherQuery = $context->queryResult->cypher;
 
         $llmOptions = [
             'temperature' => $temperature,
@@ -191,305 +203,599 @@ class ResponseGenerator implements ResponseGeneratorInterface
         ];
 
         try {
-            $loopResult = null;
-            if ($channel === ActionToolChannel::Native && $this->llm instanceof ToolCallingLlmInterface) {
-                // A loop failure with nothing accumulated propagates into this method's
-                // wrap — never a markdown complete() call against a possibly-open breaker.
-                $loopResult = $this->toolLoop->run(
-                    $this->llm,
-                    $this->toolLoopMessages($systemPrompt, $userPrompt),
-                    $toolSpecs,
-                    $this->toolLoopContext($context, $options),
-                    $llmOptions,
-                );
-                $answer = $loopResult->answer;
-            } else {
-                // Generate response — identity/security ride in the real system role,
-                // untrusted context/data stays in the user role.
-                $answer = $this->llm->complete($userPrompt, $systemPrompt !== '' ? $systemPrompt : null, $llmOptions);
-            }
+            // Generate response — identity/security ride in the real system role,
+            // untrusted context/data stays in the user role.
+            $answer = $this->observedComplete(
+                PipelineObserverScope::for($context),
+                $userPrompt,
+                $systemPrompt !== '' ? $systemPrompt : null,
+                $llmOptions
+            );
 
-            // Citation enforcement (structural): a document-grounded turn whose
-            // answer ships ZERO [N] markers gets ONE regeneration with a hard
-            // cite-or-decline instruction. Detection uses the EXISTING QU
-            // question_type signal + the presence of file chunks — never phrase
-            // matching on the answer text.
-            $citationEnforcement = null;
-            if ($this->citationEnforcementApplies($context, $style, $answer)) {
-                if ($loopResult !== null
-                    && (($loopResult->telemetry['tool_calls'] ?? 0) > 0 || $loopResult->invocations !== [])) {
-                    // The draft followed in-loop tool rounds whose results are NOT part
-                    // of the initial prompt pair (see the capture honesty note below) —
-                    // a complete() regeneration from those prompts alone would be blind
-                    // to executed tool results while $metadata['invocations'] still
-                    // records them. Keep the draft; surface the skip in the trace.
-                    $citationEnforcement = 'skipped_tool_results';
-                } else {
-                    // Markdown path, or a native loop that made zero tool calls — the
-                    // initial prompt pair IS the full transcript, so the bounded retry
-                    // regenerates from exactly what produced the draft.
-                    [$answer, $citationEnforcement] = $this->enforceCitationOrDecline(
-                        $answer,
-                        $systemPrompt,
-                        $userPrompt,
-                        $llmOptions
-                    );
-                }
-            }
+            // ONE post-composition validation pass (Phase 8 batch B) on the MASKED
+            // narrative — the retry prompt quotes the draft, so it must never carry a
+            // real value; a real value the model echoed is normalized to its token.
+            $answer = $masker->maskText((string) $answer);
 
-            // Whether a bounded regeneration from the initial prompt pair would be
-            // FAITHFUL: on a native tool loop that executed calls, the pair is not
-            // the full transcript — the guards below then skip their retry and go
-            // straight to their deterministic fallback (which needs no LLM).
-            $retryIsFaithful = $loopResult === null
-                || (($loopResult->telemetry['tool_calls'] ?? 0) === 0 && $loopResult->invocations === []);
             $answerLocale = $this->answerLocale($context, $options);
+            $validator = $this->answerValidator(
+                $context,
+                $options,
+                $style,
+                $plan,
+                $tableMode,
+                $masker,
+                $answerLocale,
+                $systemPrompt . "\n" . $userPrompt
+            );
+            $draft = $answer;
+            [$answer, $validation, $guardFlags] = $this->validateAnswer(
+                $validator,
+                $answer,
+                $systemPrompt,
+                $userPrompt,
+                $llmOptions,
+                PipelineObserverScope::for($context)
+            );
+            $guardFlags += $this->truncationAndSelfReferenceFlags($validator, $validation, $draft, $answer, $tableMode, $plan);
 
-            // Truncation/count honesty (BLOCKING, structural): more rows exist than
-            // were rendered into the prompt sample => the answer must state the
-            // total (or the remainder) as a literal number. One bounded retry; a
-            // still-missing disclosure is APPENDED deterministically, so a
-            // truncated answer can never ship claiming completeness.
-            $truncationHonesty = null;
-            if ($this->truncationHonestyApplies($context)) {
-                [$answer, $truncationHonesty] = $this->enforceTruncationDisclosure(
-                    $answer,
-                    $context,
-                    $systemPrompt,
-                    $userPrompt,
-                    $llmOptions,
-                    $retryIsFaithful,
-                    $answerLocale
-                );
+
+            // What the USER sees: real values back in the narrative, then the
+            // code-rendered table (or single record) in place of {{table}} — the answer
+            // ENDS there: text the model wrote after the placeholder is dropped, and so
+            // is a list / table of the lead that restates the rendered rows (p17 — judged
+            // on the unmasked lead against the real rows; DataAnswerPlan::finalize).
+            // Stray placeholders are stripped on every other path.
+            // B5, enforced in code: every link the MODEL wrote becomes plain text (only an
+            // external URL quoted from a cited passage or a mailto/tel of a row value
+            // survives) — then {{record:N}} becomes the row's code-built, authorized link
+            // (an unknown / unauthorized N is stripped). Both run on the NARRATIVE only,
+            // BEFORE unmasking and the code-rendered table, so record CONTENT (a cell
+            // value, a real identifying value) is never parsed as a link or placeholder.
+            $answer = $this->narrativeLinkFilter($context, $context->executionResult->data, $masker)->apply($answer);
+            $answer = $context->attachedActions !== null
+                ? $context->attachedActions->substitute($answer)
+                : AttachedActions::strip($answer);
+
+            // THE UNGROUNDED CLOSING PARAGRAPH (eval p16–p20: a platitude, "Next steps are
+            // attached below…" after a fully cited answer, against the prompt's own ban). A
+            // document-grounded answer cites every claim, so its last paragraph, when it carries
+            // no marker after two cited blocks AND is grounded in nothing — its words are neither
+            // the passages', nor the cited blocks', nor the question's — is dropped, by position
+            // and structure (AnswerValidator::withoutUncitedClosing). An uncited SUMMARY of the
+            // cited blocks stays: on a yes/no question it is the verdict (p20-A tear-down lost
+            // its only conclusion to the former passage-only test). After the link filter: a
+            // pointer whose model-written link was just turned to plain text is judged as the
+            // prose it now is. Knowledge turns only: on a data turn the narrative is a lead in
+            // front of code-rendered rows, bounded by DataAnswerPlan.
+            $closingDropped = null;
+            if ($plan === null && $validator->requiresCitations()) {
+                [$answer, $closingDropped] = $validator->withoutUncitedClosing($answer, (string) $context->question);
             }
 
-            // Self-identity-as-contact guard (structural): the current user's own
-            // email in the answer must carry a "that's-you" marker on the same
-            // line. One bounded retry; a persisting violation gets the localized
-            // marker INSERTED deterministically after the first unmarked occurrence.
-            $selfReferenceGuard = null;
-            $ownEmail = $this->currentUserEmail($options);
-            if (config('ai.response_generation.self_reference_guard', true)
-                && $ownEmail !== null
-                && mb_stripos($answer, $ownEmail) !== false) {
-                [$answer, $selfReferenceGuard] = $this->enforceSelfReferenceMarker(
-                    $answer,
-                    $ownEmail,
-                    $systemPrompt,
-                    $userPrompt,
-                    $llmOptions,
-                    $retryIsFaithful,
-                    $answerLocale
-                );
+            $answer = $masker->unmask($answer);
+
+            // THE LABEL ECHO (eval p21-B rights t2: "Attached below this answer: Receivables
+            // report." — the narrator instruction's own label, copied into the answer). A
+            // sentence of the MODEL's narrative that is nothing but this turn's button labels
+            // after a colon is dropped: the buttons are right below, and the instruction says
+            // never to list them. Structure only (AttachedActions::withoutLabelEcho), on the
+            // unmasked narrative BEFORE the code-rendered block: a record's own value line of
+            // that block is never read. A data lead may go whole — code's lines and the table
+            // are the answer; any other answer is never left empty.
+            $labelEcho = [];
+            if ($context->attachedActions !== null) {
+                [$answer, $labelEcho] = $context->attachedActions->withoutLabelEcho($answer, $plan !== null);
             }
 
-            // GUARD-COMPOSITION PURITY (deterministic, zero LLM): a later guard's
-            // retry replaces the answer checking only its OWN criterion, so it can
-            // silently drop what an earlier guard enforced. Re-assert the earlier
-            // guarantees on the FINAL answer:
-            //  - truncation disclosure is BLOCKING — if the composition dropped the
-            //    total/remainder, the localized disclosure line is re-appended and
-            //    the flag turns 'patched' (never a stale 'clean'/'recovered').
-            //  - citation 'recovered' must describe the shipped answer — if a later
-            //    retry dropped the [N] markers, the flag is downgraded to 'failed'
-            //    so the eval trace never reads a stale success.
-            if ($truncationHonesty !== null) {
-                [$answer, $truncationHonesty] = $this->reassertTruncationDisclosure(
-                    $answer,
-                    $context,
-                    $truncationHonesty,
-                    $answerLocale
-                );
+            $selfGuardOn = (bool) config('ai.response_generation.self_reference_guard', true);
+            if ($plan !== null) {
+                // F1: the table carries REAL values and is inserted after validation —
+                // it marks the user's own identity values itself.
+                $answer = $plan->finalize($answer, $tableMode, $answerLocale, $selfGuardOn ? $this->currentUser($options) : null);
             }
-            if ($citationEnforcement === 'recovered'
-                && preg_match(self::CITATION_MARKER_PATTERN, $answer) !== 1) {
-                $citationEnforcement = 'failed';
+            // F1: the self-reference guard also judges what SHIPS (after unmask + table),
+            // so nothing inserted after validation can present the user's own email unmarked.
+            if ($selfGuardOn) {
+                [$answer, $guardFlags] = $this->finalSelfReferenceGuard($answer, $guardFlags, $options, $answerLocale, $tableMode, $plan);
             }
-
-            $insights = $includeInsights ? $this->extractInsights($data) : [];
-
-            $visualizations = $includeVisualization
-                ? $this->suggestVisualizations($data, $cypherQuery)
-                : [];
 
             $metadata = [
                 'style' => $style,
                 'result_count' => count($data),
-                // The rows ACTUALLY rendered into the prompt sample, read from the
-                // live ResultsDataSection (hosts may raise setMaxDataItems) — the
-                // eval discloses_total gate reads this instead of assuming 10, so
-                // gate and runtime guard share one trigger.
-                'result_shown' => $this->renderedRowCount($context),
+                // The rows the user was actually shown: the code-rendered table on
+                // the table path, else the rows rendered into the prompt sample
+                // (read from the live ResultsDataSection — hosts may raise
+                // setMaxDataItems). The eval discloses_total gate reads this, so
+                // gate and runtime share one trigger.
+                'result_shown' => $tableMode ? $plan->shown() : $this->renderedRowCount($context),
                 'summarized' => count($data) > 10,
             ];
+            if ($tableMode) {
+                $metadata['table_rendered'] = true;
+                // Trace evidence (D2 / D5): the block is ONE record's fields; text the
+                // model wrote after {{table}} was dropped (code owns the answer's tail).
+                if ($plan->isRecord()) {
+                    $metadata['record_rendered'] = true;
+                }
+                if ($plan->tailDropped()) {
+                    $metadata['narrative_tail_dropped'] = true;
+                }
+                // p17: list / table blocks of the lead that restated the rendered rows were
+                // dropped in front of the block (a count of blocks — never their content).
+                if ($plan->rowEchoDropped() > 0) {
+                    $metadata['row_echo_dropped'] = $plan->rowEchoDropped();
+                }
+                // G3: headers of the columns the rendered block leaves out because no
+                // retrieved row holds a value for them (column names only, never values).
+                if ($plan->hiddenColumns() !== []) {
+                    $metadata['empty_columns_hidden'] = $plan->hiddenColumns();
+                }
+                // p18: which facts CODE printed on the line above the block (count / groups /
+                // homonyms / not_recorded — the part names, never their content).
+                if ($plan->factsStated() !== []) {
+                    $metadata['facts_line'] = $plan->factsStated();
+                }
+                // p19: what code cut from the model's lead beside that line — the text after
+                // its first sentence ('one_sentence'), a lead that only restated the question /
+                // the line ('restatement'). The text is the PII-masked narrative's.
+                if ($plan->leadTrimmed() !== []) {
+                    $metadata['lead_trimmed'] = $plan->leadTrimmed();
+                }
+            }
+            // p19: the uncited closing paragraph dropped from a document-grounded answer (the
+            // masked narrative's own text — what the model wrote, never a passage or a row).
+            if ($closingDropped !== null) {
+                $metadata['closing_dropped'] = $closingDropped;
+            }
+            // p21: the sentences that only listed this turn's button labels (the model's own
+            // text around labels the response already carries in `attached_actions`).
+            if ($labelEcho !== []) {
+                $metadata['label_echo_dropped'] = $labelEcho;
+            }
+            if ($masker->map() !== []) {
+                // Evidence only (a count — never the values themselves).
+                $metadata['pii_masked_values'] = count($masker->map());
+            }
             // The population's TRUE total when the companion count established one
             // beyond the retrieved rows — gate/grader evidence beside result_count.
             if ($this->resultTotal($context) > count($data)) {
                 $metadata['result_total'] = $this->resultTotal($context);
             }
-            if ($truncationHonesty !== null) {
-                // 'clean' = the draft already disclosed the total/remainder;
-                // 'recovered' = the single retry added it; 'patched' = the
-                // deterministic localized disclosure line was appended — on every
-                // path the shipped answer contains the disclosure.
-                $metadata['truncation_honesty'] = $truncationHonesty;
-            }
-            if ($selfReferenceGuard !== null) {
-                // 'clean' = every own-email line already carried a that's-you
-                // marker; 'recovered' = the single retry fixed it; 'patched' = the
-                // localized marker was inserted deterministically.
-                $metadata['self_reference_guard'] = $selfReferenceGuard;
-            }
-            if ($citationEnforcement !== null) {
-                // 'recovered' = the single retry produced markers; 'failed' = the
-                // retry still shipped none (the retry text — possibly an honest
-                // decline — is returned as-is, and the flag makes it visible in
-                // the eval trace); 'skipped_tool_results' = enforcement matched but
-                // the draft came from a tool loop with executed calls, so the blind
-                // regeneration was skipped and the draft kept.
-                $metadata['citation_enforcement'] = $citationEnforcement;
-            }
-            // Prompt-capture seam for the eval harness: the VERBATIM strings sent
-            // to the LLM ride the metadata ONLY when explicitly requested, so
-            // production payloads never balloon.
-            if (($options['capture_prompts'] ?? false) === true) {
-                $metadata['prompts'] = ['system' => $systemPrompt, 'user' => $userPrompt];
-                if ($loopResult !== null) {
-                    // HONESTY: on the native tool-calling path this pair is only the
-                    // INITIAL exchange — the final answer may follow further tool-loop
-                    // rounds (tool results + follow-up completions) that are not
-                    // captured verbatim. Marked so a grader never mistakes the pair
-                    // for the full transcript; round/tool counts + invocations ride
-                    // the tool_calling telemetry below.
-                    $metadata['prompts']['channel'] = 'native_tool_loop';
-                }
-            }
-            if ($loopResult !== null) {
-                // Riding the metadata keeps AiManager untouched: buildFinalResponse already
-                // passes response metadata through, where the chat persistence layer reads
-                // the filtered invocations to store beside response_data/suggestions.
-                $metadata['tool_calling'] = $loopResult->telemetry;
-                $metadata['invocations'] = array_map(
-                    static fn ($invocation) => $invocation->toArray(),
-                    $loopResult->invocations
-                );
+            // The validation outcome (types only — details of unresolved violations
+            // ride `unresolved`), plus the former guards' flags derived from it so the
+            // eval trace keeps reading them: citation_enforcement =
+            // recovered|failed, truncation_honesty =
+            // clean|recovered|patched|table, self_reference_guard = clean|recovered|patched|table
+            // (table = the code-rendered table marked the user's own value itself).
+            $metadata['validation'] = $validation;
+            foreach ($guardFlags as $flag => $value) {
+                $metadata[$flag] = $value;
             }
 
             return [
                 'answer' => trim($answer),
-                'insights' => $insights,
-                'visualizations' => $visualizations,
                 'format' => $format,
                 'metadata' => $metadata,
             ];
 
         } catch (\Exception $e) {
             // Wrap-and-rethrow (same contract as the previous bare RuntimeException —
-            // ResponseGenerationException extends it), but carry the already-built
-            // verbatim prompts when capture was requested so a response-stage failure
-            // is still inspectable in the eval trace.
-            throw (new \Condoedge\Ai\Exceptions\ResponseGenerationException(
+            // ResponseGenerationException extends it). The verbatim prompt already
+            // reached the turn observer (promptBuilt), so a failure stays inspectable.
+            throw new \Condoedge\Ai\Exceptions\ResponseGenerationException(
                 "Response generation failed: " . $e->getMessage(),
                 0,
                 $e
-            ))->setPrompts(
-                ($options['capture_prompts'] ?? false) === true
-                    ? ['system' => $systemPrompt, 'user' => $userPrompt]
-                    : null
             );
+        } finally {
+            $this->turnMasker = null;
         }
     }
 
     /**
-     * Whether the citation-enforcement retry applies to this turn.
+     * ONE validation pass: validate the draft → ONE combined retry listing every
+     * violation (skipped when every violation is deterministically fixable) → keep the better candidate
+     * (fewer violations needing the LLM, then fewer overall; ties go to the retry,
+     * which was told about all of them) → deterministic patches → final validate.
      *
-     * All gates are STRUCTURAL — config flag, style contract, presence of file
-     * chunks (an enumeration listing is names-only, never content grounding),
-     * the EXISTING QU question_type signal, and a literal [N]-marker scan of the
-     * draft. No phrase matching, no semantic word lists.
+     * Returns [answer, validation metadata, guard flags]: validation =
+     * {violations_first, retried, violations_final, patched[, retry_skipped][, unresolved]}.
+     *
+     * @return array{0: string, 1: array<string, mixed>, 2: array<string, mixed>}
      */
-    private function citationEnforcementApplies(PipelineContext $context, string $style, string $answer): bool
-    {
-        if (!config('ai.response_generation.citation_enforcement', true)) {
-            return false;
-        }
-
-        // Terse styles are explicitly told NOT to emit [N] markers — nothing to enforce.
-        if (in_array($style, self::CITATION_TERSE_STYLES, true)) {
-            return false;
-        }
-
-        // Only turns actually grounded on retrieved document chunks qualify.
-        if (empty($context->fileContext['relevant_files'])) {
-            return false;
-        }
-        if (!empty($context->fileContext['enumeration'])) {
-            return false;
-        }
-
-        // Document-grounded per the existing QU classification.
-        if ($context->qu->questionType !== 'knowledge_query') {
-            return false;
-        }
-
-        return preg_match(self::CITATION_MARKER_PATTERN, $answer) !== 1;
-    }
-
-    /**
-     * ONE bounded regeneration with a hard cite-or-decline instruction.
-     *
-     * Returns [answer, flag]: flag 'recovered' when the retry carries markers
-     * (the retry replaces the draft), 'failed' when it still does not — the
-     * retry is returned as-is (it may now be the honest "not in the documents"
-     * decline the instruction demands) and the flag rides response metadata so
-     * the eval trace shows enforcement fired and did not stick. A retry that
-     * errors or returns nothing keeps the original draft, flagged 'failed'.
-     *
-     * @return array{0: string, 1: string}
-     */
-    private function enforceCitationOrDecline(
-        string $answer,
+    private function validateAnswer(
+        AnswerValidator $validator,
+        string $draft,
         string $systemPrompt,
         string $userPrompt,
-        array $llmOptions
+        array $llmOptions,
+        PipelineObserverInterface $observer
     ): array {
-        // Register-neutral wording (mirrors GuidelinesSection's "laws, regulations,
-        // policies, or document contents"): the package must not assume the host's
-        // corpus is legal — the same instruction must fit medical, HR-policy or
-        // technical corpora without mislabelling their claims.
-        $instruction = "\n\nIMPORTANT — CITATION ENFORCEMENT (this is a one-time regeneration):\n"
-            . "Your previous draft asserted document content without citations. "
-            . "Re-answer the question now, citing the provided file content with [N] markers "
-            . "for EVERY claim drawn from the documents (rules, regulations, policies, or any "
-            . "other document contents). If the documents provided do not actually "
-            . "contain the answer, state plainly that the documents provided do not contain "
-            . "the answer — never answer such a question from general knowledge.\n"
-            . "Your previous draft (do NOT restate its uncited claims):\n"
-            . $answer;
+        // "[1, art. 1063]" is a citation: normalize it to the standard marker BEFORE judging,
+        // so a cited answer is never retried as marker-less and its source links resolve.
+        $draft = $validator->normalizeAnnotatedCitations($draft);
+        $first = $validator->validate($draft);
+        [$answer, $current] = [$draft, $first];
+        $retried = false;
+        // M4: when every violation has a deterministic fix, the patch is the answer —
+        // an LLM round trip could only add new violations.
+        $allFixable = $first !== [] && AnswerValidator::severity($first)[0] === 0;
+
+        if ($first !== [] && !$allFixable) {
+            $retried = true;
+            try {
+                $retry = trim((string) $this->observedComplete(
+                    $observer,
+                    $userPrompt . $validator->retryInstruction($first, $draft),
+                    $systemPrompt !== '' ? $systemPrompt : null,
+                    $llmOptions
+                ));
+            } catch (\Throwable $e) {
+                $retry = ''; // the draft stands; the deterministic patches still run
+            }
+
+            if ($retry !== '') {
+                $retry = $validator->normalizeAnnotatedCitations($retry);
+                $retryViolations = $validator->validate($retry);
+                if (AnswerValidator::severity($retryViolations) <= AnswerValidator::severity($first)) {
+                    [$answer, $current] = [$retry, $retryViolations];
+                }
+            }
+        }
+
+        [$answer, $patched] = $current !== [] ? $validator->patch($answer, $current) : [$answer, []];
+        $final = $patched !== [] ? $validator->validate($answer) : $current;
+
+        $validation = [
+            'violations_first' => AnswerValidator::types($first),
+            'retried' => $retried,
+            'violations_final' => AnswerValidator::types($final),
+            'patched' => $patched,
+        ];
+        if ($allFixable) {
+            $validation['retry_skipped'] = 'all_fixable';
+        }
+        if ($final !== []) {
+            $validation['unresolved'] = array_map(
+                static fn (array $v) => ['type' => $v['type'], 'detail' => $v['detail']],
+                $final
+            );
+        }
+
+        $flags = [];
+        if (in_array(AnswerValidator::CITATION_MISSING, $validation['violations_first'], true)) {
+            // 'recovered' = the shipped answer cites; 'failed' = it still does not (the
+            // retry — possibly an honest decline — ships as-is).
+            $flags['citation_enforcement'] = in_array(AnswerValidator::CITATION_MISSING, $validation['violations_final'], true)
+                ? 'failed'
+                : 'recovered';
+        }
+
+        return [$answer, $validation, $flags];
+    }
+
+    /**
+     * The former truncation / self-reference guard flags, derived from the one
+     * validation pass: 'clean' (never violated), 'recovered' (the retry fixed it),
+     * 'patched' (the deterministic fix applied), 'table' (the code-rendered table
+     * carries its own "Showing X of Y" line). The self-reference flag only exists
+     * when the user's own email (token) appears in the draft or the shipped answer.
+     *
+     * @param array<string, mixed> $validation
+     * @return array<string, string>
+     */
+    private function truncationAndSelfReferenceFlags(
+        AnswerValidator $validator,
+        array $validation,
+        string $draft,
+        string $answer,
+        bool $tableMode,
+        ?DataAnswerPlan $plan
+    ): array {
+        $flag = static fn (string $type): string => in_array($type, $validation['patched'], true)
+            ? 'patched'
+            : (in_array($type, $validation['violations_first'], true) ? 'recovered' : 'clean');
+
+        $flags = [];
+        if ($tableMode && $plan !== null && $plan->truncated()) {
+            $flags['truncation_honesty'] = 'table';
+        } elseif ($validator->checksTruncation()) {
+            $flags['truncation_honesty'] = $flag(AnswerValidator::TRUNCATION_UNDISCLOSED);
+        }
+
+        if ($validator->mentionsSelf($draft) || $validator->mentionsSelf($answer)) {
+            $flags['self_reference_guard'] = $flag(AnswerValidator::SELF_REFERENCE_UNMARKED);
+        }
+
+        return $flags;
+    }
+
+    /**
+     * F1 — the self-reference check on the SHIPPED answer (real values, table
+     * included), with the REAL email as needle: any line still presenting the
+     * user's own email without a that's-you marker gets the existing deterministic
+     * patch (AnswerValidator, ai.response.self_reference_patch) — every such line,
+     * not only the first. A line already marked (the narrative patch, the table's
+     * cell marker) is never marked twice. Flags: 'patched' when this pass patched;
+     * else 'table' when only the code-rendered table carried the user's value.
+     *
+     * @param array<string, string> $flags
+     * @return array{0: string, 1: array<string, string>}
+     */
+    private function finalSelfReferenceGuard(
+        string $answer,
+        array $flags,
+        array $options,
+        ?string $locale,
+        bool $tableMode,
+        ?DataAnswerPlan $plan
+    ): array {
+        $ownEmail = $this->currentUserEmail($options);
+        if ($ownEmail !== null) {
+            $guard = new AnswerValidator(selfNeedle: $ownEmail, locale: $locale);
+            $unmarked = static fn (string $text): array => array_values(array_filter(
+                $guard->validate($text),
+                static fn (array $v) => $v['type'] === AnswerValidator::SELF_REFERENCE_UNMARKED
+            ));
+
+            $patchedAny = false;
+            // One patch per unmarked line; bounded by the line count.
+            for ($i = 0, $max = substr_count($answer, "\n") + 1; $i < $max; $i++) {
+                $violations = $unmarked($answer);
+                if ($violations === []) {
+                    break;
+                }
+                [$next, $patched] = $guard->patch($answer, $violations);
+                if ($patched === [] || $next === $answer) {
+                    break;
+                }
+                [$answer, $patchedAny] = [$next, true];
+            }
+
+            if ($patchedAny) {
+                $flags['self_reference_guard'] = 'patched';
+
+                return [$answer, $flags];
+            }
+        }
+
+        if (!isset($flags['self_reference_guard']) && $tableMode && $plan !== null && $plan->selfMarked()) {
+            $flags['self_reference_guard'] = 'table';
+        }
+
+        return [$answer, $flags];
+    }
+
+    /**
+     * The identity values the composition prompt states about the user (their own name, their
+     * current team's name) — read from the SAME section instance that printed them, and only
+     * when it is part of this prompt: a host that removed the section told the model nothing.
+     *
+     * @return list<string>
+     */
+    private function promptIdentityValues(PipelineContext $context, array $options): array
+    {
+        try {
+            $section = $this->getModule('current_user_context');
+
+            return $section instanceof ResponseCurrentUserContextSection && $section->shouldInclude($context, $options)
+                ? $section->identityValues()
+                : [];
+        } catch (\Throwable $e) {
+            return []; // a wording nicety — never breaks a turn
+        }
+    }
+
+    /**
+     * The current user as an object (SelfReferenceNoticeSection::selfValuesIn input):
+     * the threaded $options['user'] first, the auth container next — the same
+     * resolution order as currentUserEmail().
+     */
+    private function currentUser(array $options): ?object
+    {
+        $user = $options['user'] ?? null;
+        if (is_array($user)) {
+            return (object) $user;
+        }
+        if (is_object($user)) {
+            return $user;
+        }
 
         try {
-            $retry = trim((string) $this->llm->complete(
-                $userPrompt . $instruction,
-                $systemPrompt !== '' ? $systemPrompt : null,
-                $llmOptions
-            ));
+            return function_exists('auth') && auth()->check() ? auth()->user() : null;
         } catch (\Throwable $e) {
-            return [$answer, 'failed'];
+            return null; // no auth context (console/queue)
+        }
+    }
+
+    /**
+     * Build the turn's validator from the evidence the composition prompt was
+     * built from: the passages as numbered in RELEVANT FILE CONTENT, the real
+     * rows + DataAnswerPlan figures + counts + every number in the prompt the
+     * model saw, the rows' entity ids per label, the truncation counts (narrative
+     * path only) and the user's own email token.
+     */
+    private function answerValidator(
+        PipelineContext $context,
+        array $options,
+        string $style,
+        ?DataAnswerPlan $plan,
+        bool $tableMode,
+        PiiMasker $masker,
+        ?string $locale,
+        string $prompt
+    ): AnswerValidator {
+        $terse = in_array($style, self::CITATION_TERSE_STYLES, true);
+        $citationsOn = (bool) config('ai.response_generation.citation_enforcement', true) && !$terse;
+
+        $files = (array) ($context->fileContext['relevant_files'] ?? []);
+        $enumeration = !empty($context->fileContext['enumeration']);
+        $passages = [];
+        $passageArticles = [];
+        foreach (array_values($files) as $i => $file) {
+            $passages[$i + 1] = is_array($file)
+                ? (string) ($enumeration ? ($file['filename'] ?? '') : ($file['snippet'] ?? ''))
+                : '';
+            // What each passage DEFINES: line-start numbers, else chunk metadata (M1/M3).
+            $passageArticles[$i + 1] = is_array($file) && !$enumeration ? ArticleLocator::forReference($file) : [];
         }
 
-        if ($retry === '') {
-            return [$answer, 'failed'];
+        $rows = is_array($context->executionResult->data) ? $context->executionResult->data : [];
+        $grounded = $rows !== [] || ($passages !== [] && !$enumeration);
+
+        $evidence = null;
+        $grandTotals = [];
+        $moneyRows = [];
+        $keyFigures = [];
+        if (config('ai.response_generation.validate_numbers', true) && $grounded) {
+            $rowFigures = $this->figuresIn($rows);
+            $total = $this->resultTotal($context);
+            $shown = $tableMode && $plan !== null ? $plan->shown() : $this->renderedRowCount($context);
+            $keyFigures = $plan !== null ? array_values(array_unique($plan->statedFigures(), SORT_REGULAR)) : [];
+            $evidence = [
+                ...$rowFigures,
+                ...$keyFigures,
+                ...$this->figuresIn([$prompt, $context->question]),
+                (float) count($rows), (float) $total, (float) $shown, (float) ($total - $shown),
+            ];
+            $grandTotals = $plan !== null ? $plan->grandTotals() : [];
+            $moneyRows = $plan !== null ? $plan->moneyRowFigures() : [];
         }
 
-        if (preg_match(self::CITATION_MARKER_PATTERN, $retry) === 1) {
-            return [$retry, 'recovered'];
+        $selfNeedle = null;
+        $ownEmail = config('ai.response_generation.self_reference_guard', true) ? $this->currentUserEmail($options) : null;
+        if ($ownEmail !== null) {
+            $selfNeedle = $masker->tokenForValue($ownEmail) ?? $ownEmail;
         }
 
-        return [$retry, 'failed'];
+        return new AnswerValidator(
+            passages: $passages,
+            citationsRequired: $citationsOn && $passages !== [] && !$enumeration
+                && $context->qu->questionType === 'knowledge_query',
+            citationChecks: $citationsOn,
+            evidence: $evidence,
+            grandTotals: $grandTotals,
+            moneyRowFigures: $moneyRows,
+            keyFigures: $keyFigures,
+            entityIds: config('ai.response_generation.validate_links', true)
+                ? EntityIdIndex::forContext($context)->withIdentity($this->currentUserId($options), $this->currentTeamIds($options))
+                : null,
+            truncation: !$tableMode && $this->truncationHonestyApplies($context)
+                ? ['total' => $this->resultTotal($context), 'shown' => $this->renderedRowCount($context)]
+                : null,
+            selfNeedle: $selfNeedle,
+            locale: $locale,
+            passageArticles: $passageArticles,
+        );
+    }
+
+    /**
+     * The turn's link filter: cited passages (external URLs the documents themselves carry),
+     * the rows (contact values) and the PII tokens minted this turn.
+     *
+     * @param array<int, mixed> $rows
+     */
+    private function narrativeLinkFilter(PipelineContext $context, array $rows, PiiMasker $masker): NarrativeLinkFilter
+    {
+        $passages = [];
+        foreach ((array) ($context->fileContext['relevant_files'] ?? []) as $file) {
+            if (is_array($file)) {
+                $passages[] = (string) ($file['snippet'] ?? '');
+                $passages[] = (string) ($file['content'] ?? '');
+            }
+        }
+
+        return new NarrativeLinkFilter(
+            passages: array_values(array_filter($passages, static fn (string $p) => $p !== '')),
+            rows: $rows,
+            tokens: array_keys($masker->map()),
+        );
+    }
+
+    /** The current user's id: the threaded $options['user'] first, the auth container next. */
+    private function currentUserId(array $options): ?string
+    {
+        $user = $options['user'] ?? null;
+        $id = is_object($user) ? ($user->id ?? null) : (is_array($user) ? ($user['id'] ?? null) : null);
+        if ($id === null) {
+            try {
+                $id = function_exists('auth') && auth()->check() ? auth()->id() : null;
+            } catch (\Throwable $e) {
+                $id = null; // no auth context (console/queue)
+            }
+        }
+
+        return is_scalar($id) && (string) $id !== '' ? (string) $id : null;
+    }
+
+    /**
+     * The user's team ids — the active team (host currentTeamId() helper, else the
+     * user's current_team_id) plus the host's getTeamIds() when it exposes one.
+     * Action links legitimately carry these (team_settings → currentTeamId) even
+     * when no result row does (Phase 8-B I3).
+     *
+     * @return list<string>
+     */
+    private function currentTeamIds(array $options): array
+    {
+        $ids = [];
+        try {
+            if (function_exists('currentTeamId')) {
+                $ids[] = currentTeamId();
+            }
+            $user = $options['user'] ?? (function_exists('auth') && auth()->check() ? auth()->user() : null);
+            if (is_object($user)) {
+                $ids[] = $user->current_team_id ?? null;
+                if (method_exists($user, 'getTeamIds')) {
+                    $ids = [...$ids, ...array_values((array) $user->getTeamIds())];
+                }
+            }
+        } catch (\Throwable $e) {
+            // no team context — nothing seeded
+        }
+
+        return array_values(array_unique(array_map('strval', array_filter($ids, static fn ($id) => is_scalar($id) && (string) $id !== ''))));
+    }
+
+    /**
+     * Every figure in a nested value: numbers, numeric strings, the quantities
+     * stated inside strings ("Unit 310", "11 493,17 $") and — evidence is a
+     * superset — every bare digit run, so a line-start article number ("1069. A
+     * co-owner…") or a date part the answer restates is never "unsupported".
+     *
+     * @return list<float>
+     */
+    private function figuresIn(mixed $value, int $depth = 0): array
+    {
+        if (is_int($value) || is_float($value)) {
+            return [(float) $value];
+        }
+        if (is_string($value)) {
+            $figures = is_numeric(trim($value)) ? [(float) trim($value)] : [];
+            foreach (StatedNumber::quantities($value) as $quantity) {
+                array_push($figures, ...$quantity['values']);
+            }
+            if (preg_match_all('/\d+/', $value, $runs)) {
+                array_push($figures, ...array_map('floatval', $runs[0]));
+            }
+
+            return $figures;
+        }
+        if (!is_array($value) || $depth > 8) {
+            return [];
+        }
+
+        $figures = [];
+        foreach ($value as $item) {
+            array_push($figures, ...$this->figuresIn($item, $depth + 1));
+        }
+
+        return $figures;
     }
 
     // =========================================================================
-    // TRUNCATION/COUNT HONESTY GUARD (blocking, structural)
+    // TURN COUNTS + IDENTITY (validator inputs)
     // =========================================================================
 
     /**
@@ -543,101 +849,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
     }
 
     /**
-     * BLOCKING enforcement: [answer, 'clean'|'recovered'|'patched'].
-     *
-     * 'clean' — the draft already contains the EXACT total as a literal number
-     * AND additionally the shown count or the exact remainder (shared
-     * StatedNumber::disclosesTruncation rule — a bare total like "more than
-     * 523 results" is NOT clean). Otherwise ONE regeneration with a hard
-     * instruction (only when the initial prompt pair is the full transcript);
-     * if the disclosure is STILL missing (or the retry errored/was skipped),
-     * the localized disclosure line is APPENDED deterministically — the shipped
-     * answer can NEVER claim completeness silently. The original draft is kept
-     * on the patch path: a retry that failed to add the numbers is not trusted
-     * to replace the draft.
-     *
-     * @return array{0: string, 1: string}
-     */
-    private function enforceTruncationDisclosure(
-        string $answer,
-        PipelineContext $context,
-        string $systemPrompt,
-        string $userPrompt,
-        array $llmOptions,
-        bool $retryIsFaithful,
-        ?string $locale
-    ): array {
-        $total = $this->resultTotal($context);
-        $shown = $this->renderedRowCount($context);
-        $remainder = $total - $shown;
-
-        if (StatedNumber::disclosesTruncation($answer, $total, $shown)) {
-            return [$answer, 'clean'];
-        }
-
-        if ($retryIsFaithful) {
-            $instruction = "\n\nIMPORTANT — RESULT COMPLETENESS (this is a one-time regeneration):\n"
-                . "The data shown to you contains only the first {$shown} of {$total} matching rows. "
-                . "Your previous draft presented them without disclosing this properly. Re-answer the "
-                . "question now and state the numbers EXACTLY: the total is {$total} — write that exact "
-                . "number, never an approximation like 'more than {$total}' or 'over {$total}' — followed "
-                . "by the noun for what the rows in the data actually are (their entity), not the word "
-                . "'results'. ALSO state either that {$shown} of them are shown or that {$remainder} more "
-                . "exist. Never present the visible rows as the complete list.\n"
-                . "Your previous draft:\n"
-                . $answer;
-
-            try {
-                $retry = trim((string) $this->llm->complete(
-                    $userPrompt . $instruction,
-                    $systemPrompt !== '' ? $systemPrompt : null,
-                    $llmOptions
-                ));
-
-                if ($retry !== '' && StatedNumber::disclosesTruncation($retry, $total, $shown)) {
-                    return [$retry, 'recovered'];
-                }
-            } catch (\Throwable $e) {
-                // Fall through to the deterministic patch — the guarantee holds without an LLM.
-            }
-        }
-
-        $disclosure = trans('ai.response.truncation_disclosure', ['shown' => $shown, 'total' => $total], $locale);
-
-        return [rtrim($answer) . "\n\n" . $disclosure, 'patched'];
-    }
-
-    /**
-     * Deterministic post-composition re-check of the BLOCKING truncation
-     * guarantee: if a later guard's retry dropped the disclosed total/remainder,
-     * the localized disclosure line is appended again and the flag becomes
-     * 'patched'. Zero LLM — the guarantee holds without one.
-     *
-     * @return array{0: string, 1: string}
-     */
-    private function reassertTruncationDisclosure(
-        string $answer,
-        PipelineContext $context,
-        string $flag,
-        ?string $locale
-    ): array {
-        $total = $this->resultTotal($context);
-        $shown = $this->renderedRowCount($context);
-
-        if (StatedNumber::disclosesTruncation($answer, $total, $shown)) {
-            return [$answer, $flag];
-        }
-
-        $disclosure = trans('ai.response.truncation_disclosure', ['shown' => $shown, 'total' => $total], $locale);
-
-        return [rtrim($answer) . "\n\n" . $disclosure, 'patched'];
-    }
-
-    // =========================================================================
-    // SELF-IDENTITY-AS-CONTACT GUARD (structural)
-    // =========================================================================
-
-    /**
      * The authenticated user's email, THE pipeline way: the threaded
      * $options['user'] first (what production passes end-to-end), the auth
      * container as fallback (mirrors SelfReferenceNoticeSection::authUser()).
@@ -666,140 +877,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
     }
 
     /**
-     * [answer, 'clean'|'recovered'|'patched'].
-     *
-     * Adjacency = SAME LINE: every line carrying the user's own email must also
-     * carry a "that's-you" marker (wordings from
-     * SelfReferenceNoticeSection::markerPhrases() — the same source the prompt
-     * section instructs the model with, plus the localized lang wordings; never a
-     * parallel list). A marker elsewhere in the answer does NOT excuse an
-     * unmarked contact-style line — that was the exact observed live failure.
-     *
-     * @return array{0: string, 1: string}
-     */
-    private function enforceSelfReferenceMarker(
-        string $answer,
-        string $email,
-        string $systemPrompt,
-        string $userPrompt,
-        array $llmOptions,
-        bool $retryIsFaithful,
-        ?string $locale
-    ): array {
-        $markers = \Condoedge\Ai\Services\ResponseSections\SelfReferenceNoticeSection::markerPhrases($locale);
-
-        if (!$this->hasUnmarkedEmailLine($answer, $email, $markers)) {
-            return [$answer, 'clean'];
-        }
-
-        if ($retryIsFaithful) {
-            $exampleMarker = \Condoedge\Ai\Services\ResponseSections\SelfReferenceNoticeSection::THATS_YOU_MARKERS[0];
-            $instruction = "\n\nIMPORTANT — SELF-REFERENCE (this is a one-time regeneration):\n"
-                . "The email '{$email}' IS the current user's own email address — it belongs to the very "
-                . "person you are answering. Your previous draft presented it without acknowledging that. "
-                . "Re-answer the question now: every time you mention '{$email}', acknowledge on the same "
-                . "line that it is the user's own (e.g. \"{$exampleMarker}\"), and NEVER present it as "
-                . "contact information, as \"how to reach\" anyone, or as belonging to someone else.\n"
-                . "Your previous draft:\n"
-                . $answer;
-
-            try {
-                $retry = trim((string) $this->llm->complete(
-                    $userPrompt . $instruction,
-                    $systemPrompt !== '' ? $systemPrompt : null,
-                    $llmOptions
-                ));
-
-                if ($retry !== '') {
-                    if (mb_stripos($retry, $email) === false
-                        || !$this->hasUnmarkedEmailLine($retry, $email, $markers)) {
-                        return [$retry, 'recovered'];
-                    }
-                    // The retry still violates: patch the retry (the freshest text).
-                    $answer = $retry;
-                }
-            } catch (\Throwable $e) {
-                // Fall through to the deterministic patch.
-            }
-        }
-
-        return [$this->insertSelfReferenceMarker($answer, $email, $locale), 'patched'];
-    }
-
-    /**
-     * Whether any line contains the email (case-insensitive literal) with no
-     * marker phrase on that same line. Comparison runs on the typographically
-     * normalized line (SelfReferenceNoticeSection::normalizeMarkerText), so a
-     * compliant U+2019 "that’s you" / "c’est vous" counts as marked.
-     *
-     * @param list<string> $markers normalized marker phrases
-     */
-    private function hasUnmarkedEmailLine(string $answer, string $email, array $markers): bool
-    {
-        foreach (preg_split('/\R/', $answer) ?: [] as $line) {
-            if (mb_stripos($line, $email) === false) {
-                continue;
-            }
-
-            $lineLower = \Condoedge\Ai\Services\ResponseSections\SelfReferenceNoticeSection::normalizeMarkerText($line);
-            $marked = false;
-            foreach ($markers as $marker) {
-                if ($marker !== '' && mb_strpos($lineLower, $marker) !== false) {
-                    $marked = true;
-                    break;
-                }
-            }
-
-            if (!$marked) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Deterministic patch: insert the localized "(that's you — ...)" marker
-     * immediately after the FIRST unmarked occurrence of the email. Preserves
-     * the answer byte-for-byte otherwise.
-     */
-    private function insertSelfReferenceMarker(string $answer, string $email, ?string $locale): string
-    {
-        $patch = ' (' . trans('ai.response.self_reference_patch', [], $locale) . ')';
-        $markers = \Condoedge\Ai\Services\ResponseSections\SelfReferenceNoticeSection::markerPhrases($locale);
-
-        $parts = preg_split('/(\R)/', $answer, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [$answer];
-        foreach ($parts as $i => $line) {
-            if ($i % 2 === 1) {
-                continue; // newline separators
-            }
-            $pos = mb_stripos($line, $email);
-            if ($pos === false) {
-                continue;
-            }
-
-            $lineLower = \Condoedge\Ai\Services\ResponseSections\SelfReferenceNoticeSection::normalizeMarkerText($line);
-            $marked = false;
-            foreach ($markers as $marker) {
-                if ($marker !== '' && mb_strpos($lineLower, $marker) !== false) {
-                    $marked = true;
-                    break;
-                }
-            }
-            if ($marked) {
-                continue;
-            }
-
-            $end = $pos + mb_strlen($email);
-            $parts[$i] = mb_substr($line, 0, $end) . $patch . mb_substr($line, $end);
-
-            return implode('', $parts);
-        }
-
-        return $answer;
-    }
-
-    /**
      * Locale for guard patch copy: the QU-detected question language first (the
      * answer is written in it), the threaded question_language option next, null
      * (app locale) last.
@@ -814,37 +891,28 @@ class ResponseGenerator implements ResponseGeneratorInterface
     }
 
     /**
-     * The native loop starts from the SAME role-split section prompt as the markdown
-     * path, expressed as chat messages.
-     *
-     * @return array<int, array{role: string, content: string}>
+     * complete() with observation: the verbatim messages and the call's token
+     * usage are reported to the turn's observer under 'composition'. Same
+     * arguments reach the provider as a bare complete() call.
      */
-    private function toolLoopMessages(string $systemPrompt, string $userPrompt): array
-    {
-        $messages = [];
-        if ($systemPrompt !== '') {
-            $messages[] = ['role' => 'system', 'content' => $systemPrompt];
+    private function observedComplete(
+        PipelineObserverInterface $observer,
+        string $userPrompt,
+        ?string $systemPrompt,
+        array $llmOptions
+    ): string {
+        $observer->promptBuilt('composition', TokenUsage::completeMessages($userPrompt, $systemPrompt));
+
+        try {
+            $out = $this->llm->complete($userPrompt, $systemPrompt, $llmOptions);
+
+            // Inside generate(): every draft AND guard retry is normalized to the
+            // masked form, so guard checks and later retry prompts never carry a
+            // real identifying value (unmasking happens once, at the very end).
+            return $this->turnMasker !== null && is_string($out) ? $this->turnMasker->maskText($out) : $out;
+        } finally {
+            TokenUsage::report($observer, 'composition', $this->llm);
         }
-        $messages[] = ['role' => 'user', 'content' => $userPrompt];
-
-        return $messages;
-    }
-
-    /**
-     * Dispatch context for in-loop action execution — the same keys the render-time link
-     * path passes (user, result_set). The runner adds entity_type/entity_id per call.
-     *
-     * @param array<string, mixed> $options
-     * @return array<string, mixed>
-     */
-    private function toolLoopContext(PipelineContext $context, array $options): array
-    {
-        $dispatch = ['result_set' => $context->executionResult->data];
-        if (isset($options['user'])) {
-            $dispatch['user'] = $options['user'];
-        }
-
-        return $dispatch;
     }
 
     /**
@@ -853,8 +921,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
      * Each section declares role() => 'system' | 'user'. System sections (identity,
      * security policy) are concatenated into the system message; everything else into
      * the user message. Section ORDER is preserved within each role (the pipeline is
-     * still processed in priority order). Before/after callbacks are appended to the
-     * user message to preserve their historical placement.
+     * still processed in priority order).
      *
      * @param PipelineContext $context Pipeline context with question, data, etc.
      * @param array $options Options for sections
@@ -866,10 +933,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $user = '';
 
         $this->processModules(
-            beforeCallbackProcess: function($callback) use (&$user, $context, $options) {
-                $user .= $callback($context, $options);
-            },
-            moduleProcess: function(ResponseSectionInterface $section) use (&$system, &$user, $context, $options) {
+            function (ResponseSectionInterface $section) use (&$system, &$user, $context, $options) {
                 if (!$section->shouldInclude($context, $options)) {
                     return;
                 }
@@ -881,11 +945,17 @@ class ResponseGenerator implements ResponseGeneratorInterface
                 } else {
                     $user .= $content;
                 }
-            },
-            afterCallbackProcess: function($callback) use (&$user, $context, $options) {
-                $user .= $callback($context, $options);
             }
         );
+
+        // Recency anchor for the reply language: the guideline names it in the system
+        // prompt, but a long block of French rows right above the question still pulled
+        // gpt-4o-mini into French for an English question (eval p12-B digest t1).
+        $language = trim((string) ($context->qu->language ?? ''));
+        if ($user !== '' && $language !== '') {
+            $user = rtrim($user) . "\n\nWrite the answer in the question's language ('{$language}'), "
+                . "not in the language of the data or documents above.\n";
+        }
 
         return ['system' => $system, 'user' => $user];
     }
@@ -918,35 +988,135 @@ class ResponseGenerator implements ResponseGeneratorInterface
         // the model into the app locale even when the question was asked in another language. The
         // reply language is driven by the question itself plus the system-prompt language policy.
         $prompt = "The user asked: \"{$originalQuestion}\"\n\n";
-        $prompt .= "No matching records were found for this question. Briefly and helpfully tell the "
-            . "user that no results were found, then offer the most relevant next step: the closest "
-            . "matching action link when one is offered below, or ONE more specific question that is "
-            . "likely to succeed. Do NOT end with a bare invitation like \"feel free to ask\".\n\n";
+
+        // B3/B5: the next steps (the entity's list page, its create form, identity links)
+        // are attached by CODE — the model is told which, and writes no link itself.
+        $attached = $options['attached_actions'] ?? null;
+        $attached = $attached instanceof AttachedActions ? $attached : AttachedActions::none();
+
+        // A navigation ask — QU's navigation_target (own profile / team page) — with an
+        // attached page is not an abstention: "the link to my profile" is answered by the
+        // attached chip, never by "no records were found" (live 2026-10-01), even when a
+        // query ran and matched nothing. Only QU's judgment makes a turn a navigation ask: a
+        // query-less DATA turn that merely carries chips (an empty result's list/create) is
+        // an honest abstention (eval p14 review).
+        $navigation = !$attached->isEmpty() && is_string($options['navigation_target'] ?? null);
+
+        $prompt .= $navigation
+            ? "This request needs no data lookup: it asks to open or reach a page of the app. The matching "
+                . "page(s) are attached as buttons below your answer. In one or two sentences, tell the user it "
+                . "is attached below, naming it. Do NOT say that nothing was found, and do not end with an offer.\n\n"
+            : "No matching records were found for this question. Briefly and helpfully tell the "
+                . "user that no results were found. Do NOT end with a bare invitation like \"feel free to ask\" "
+                . "or an offer (\"let me know\", \"would you like…\").\n\n";
+
+        // WHAT WAS CHECKED (Task 1.27 c, live rights t2): a bare "no results were
+        // found" tells the user nothing. The subject is QU's STRUCTURED field threaded by
+        // AiManager — no word lists — and the model names the record kinds in plain words.
+        //
+        // The KINDS are the EXECUTED query's (eval p18-B rights t2: "I checked … in invoices,
+        // union records, and fund records" — QU's Invoice / Union / Fund — while the query
+        // summed the invoices of the user's units): the entities its projections read
+        // (QueriedKinds), by the host's own word for them. QU's kinds stand only when no
+        // query ran or nothing can be read from it.
+        //
+        // The SCOPE is the EXECUTED query's (eval p16-A meetings), never QU's possessive
+        // flag: "When is our next meeting?" ran a team-wide query and was answered "no
+        // meetings linked to you". checked_scope = 'own' (the query is anchored on the
+        // user), 'team' (tenant-scoped, not anchored on the user) or absent (unknown —
+        // no scope is claimed). checked_own_data=true is the former spelling of 'own'.
+        $subject = trim((string) ($options['checked_subject'] ?? ''));
+        $scope = is_string($options['checked_scope'] ?? null)
+            ? $options['checked_scope']
+            : (($options['checked_own_data'] ?? false) === true ? 'own' : null);
+        $ownData = $scope === 'own';
+        $teamWide = $scope === 'team';
+        $ownership = is_array($options['ownership_check'] ?? null) ? $options['ownership_check'] : null;
+
+        // …AND THE LINE THAT SAYS IT IS CODE'S (eval p20-B rights t2: the model left out what
+        // was checked; p19 wrote "invoices and other related records"). The kinds the executed
+        // query read, the scope it covered and that nothing matched are FACTS — printed on a
+        // line of their own right below the model's answer ({@see checkedLine()}), in the
+        // host's plurals and the answer's language. The model is told, so it does not restate
+        // them. Null wherever a fact or a word is missing: the model's instruction stands.
+        $checkedLine = $navigation ? null : $this->checkedLine($cypherQuery, $scope, $ownership, $this->questionLocale($options));
+        $printed = $checkedLine === null
+            ? ''
+            : 'The system itself prints, on a line right below your answer, what was checked: "' . str_replace('"', "'", $checkedLine)
+                . '" — do NOT restate it: do not list the record kinds and do not say again that they were checked.';
+
+        $checkedKinds = [];
+        if ($subject !== '' && !$navigation) {
+            $types = QueriedKinds::names($cypherQuery);
+            if ($types === []) {
+                $types = array_values(array_filter((array) ($options['checked_entity_types'] ?? []), 'is_string'));
+            }
+            $checkedKinds = $types;
+            $prompt .= "WHAT WAS CHECKED: {$subject}"
+                . ($types !== [] ? ' (record kinds: ' . implode(', ', $types) . ')' : '')
+                . ($ownData ? " — within the user's OWN linked records" : '')
+                . ($teamWide ? " — across the records of the user's whole team / organization that they may access "
+                    . '(not only records linked to them personally)' : '')
+                . ".\n" . ($printed !== '' ? $printed . ' Your answer says plainly that nothing matched' : 'State plainly what was checked and that nothing matched')
+                // Possessive framing only for the user's own data (Task 1.28 M5).
+                . ($ownData ? ' (e.g. that no such records are linked to them)' : '')
+                . ($teamWide ? ' for the team as a whole — never say that nothing is "linked to" the user' : '')
+                . " — never a bare \"no results were found\". Keep the question's own qualifiers (a period, a "
+                . 'status, a name): say that none matched THAT, never that no such records exist at all.'
+                . ($printed !== '' ? '' : ' Describe the record kinds in everyday words, never as raw type names.')
+                . "\n\n";
+        } elseif ($printed !== '') {
+            $prompt .= $printed . "\n\n";
+        }
+
+        // WHY an own-data result is empty (eval p16-B rights t2): AiManager counted, through
+        // the scoped executor, the records of the entity the question hangs on (the host's
+        // ownership path — e.g. the user's units). A FACT, stated as the reason; the display
+        // name is the host's. Only for a query that was anchored on the user.
+        $kind = trim((string) ($ownership['display_name'] ?? ''));
+        if ($ownData && !$navigation && $kind !== '' && is_int($ownership['count'] ?? null)) {
+            $prompt .= $ownership['count'] === 0
+                ? "VERIFIED BY THE SYSTEM: this user has NO {$kind} linked to their account. That is the reason "
+                    . "nothing matched — lead with it, in plain words: they have no {$kind} of their own, so there "
+                    . "is nothing of their own to show for this question. It is NOT a result of zero (never present it "
+                    . "as an amount of 0 or as nothing being due), and it says nothing about the records of the team / "
+                    . "organization: never state or imply that the team has none or owes nothing.\n\n"
+                : "VERIFIED BY THE SYSTEM: this user DOES have {$kind} records linked to their account "
+                    . "({$ownership['count']} found), so those are not missing: what matched nothing is the specific "
+                    . "thing asked about them. Say that — never that they have no {$kind}.\n\n";
+        }
 
         // Follow-up awareness: "make a PDF of that" / "export it" style requests reference the
         // PREVIOUS turn, not new data. Without the previous turn's information this path can
         // only say "no results" to a request the user just watched succeed — worse than wrong.
         $conversation = $options['conversation_context'] ?? [];
         $lastSample = is_array($conversation['last_result_sample'] ?? null) ? $conversation['last_result_sample'] : [];
+        // Identifying fields never reach the LLM (Phase 8 batch A); the answer is unmasked below.
+        // Labels of the previous turn + this turn's checked types, so entity-config
+        // sensible_columns apply (review minor); seeded from the conversation.
+        $masker = PiiMasker::forConversation(is_array($conversation) ? $conversation : [])
+            ->addLabels(array_values(array_unique(array_merge(
+                array_values(array_filter((array) ($options['checked_entity_types'] ?? []), 'is_string')),
+                QueriedKinds::labels($cypherQuery)
+            ))));
         if (!empty($lastSample)) {
-            $sampleJson = json_encode(array_slice($lastSample, 0, 10), JSON_UNESCAPED_UNICODE);
+            $sampleJson = json_encode($masker->maskRows(array_slice($lastSample, 0, 10)), JSON_UNESCAPED_UNICODE);
             $prompt .= "EXCEPTION — information from the previous turn (most recently shown to the user): {$sampleJson}\n";
             $prompt .= "If the question is actually a request ABOUT that previous information — format it, "
-                . "summarize it, turn it into a document, export it as a PDF or Excel — do NOT say no results "
-                . "were found. Fulfill it instead: summarize what will be included and provide the matching "
-                . "export action link. Keep the visible answer concise; document-mode exports should use the "
-                . "clean export document payload supplied by the pipeline when available.\n\n";
+                . "summarize it, turn it into a document — do NOT say no results were found: answer about "
+                . "that previous information instead, concisely.\n\n";
         }
-        // If the question is really a request to DO something the app supports (book/reserve/contact
-        // support/...), offer that action as a link instead of a dead-end "no results".
-        $actionsHint = $this->emptyResponseActionsHint();
-        if ($actionsHint !== '') {
-            $prompt .= $actionsHint . "\n\n";
-        }
-        $prompt .= "Respond in the SAME language as the user's question above.";
+        $prompt .= $attached->narratorInstruction()
+            . ($navigation || $attached->isEmpty() ? '' : ' When one of the attached actions is the natural next step, say so in one short sentence.')
+            . "\n\n";
+        // The QU-detected language, when known (live 2026-10-01: an English navigation ask
+        // was answered in the app's French without it).
+        $language = $this->questionLocale($options);
+        $prompt .= "Respond in the SAME language as the user's question above"
+            . ($language !== null ? " (the question's language: '{$language}')." : '.');
 
         try {
-            $answer = $this->llm->complete($prompt, $systemPrompt !== '' ? $systemPrompt : null, [
+            $answer = $this->observedComplete(PipelineObserverScope::current(), $prompt, $systemPrompt !== '' ? $systemPrompt : null, [
                 'temperature' => $temperature,
                 'max_tokens' => 200,
             ]);
@@ -955,22 +1125,41 @@ class ResponseGenerator implements ResponseGeneratorInterface
                 'empty_result' => true,
                 'result_count' => 0,
             ];
-            // Same capture seam as generate(): the abstention path is a real LLM
-            // call, so an eval trace must carry its verbatim prompts too.
-            if (($options['capture_prompts'] ?? false) === true) {
-                $metadata['prompts'] = ['system' => $systemPrompt, 'user' => $prompt];
+            // Trace evidence: the record kinds the answer was told were checked.
+            if ($checkedKinds !== []) {
+                $metadata['checked_kinds'] = $checkedKinds;
             }
 
-            // LANGUAGE POLICY (same as generateErrorResponse): canned strings on
-            // the abstention path must follow the QUESTION's language, not the
-            // app locale — an fr-locale host answering an English question must
-            // not mix French canned insights into an English answer.
-            $locale = $this->questionLocale($options);
+            $answer = trim($masker->unmask(AttachedActions::strip(
+                (new NarrativeLinkFilter(rows: $lastSample, tokens: array_keys($masker->map())))->apply($answer)
+            )));
+            // p21-B rights t2: "Attached below this answer: Receivables report." — the prompt's
+            // own label, copied. A sentence that only lists this turn's buttons after a colon
+            // is dropped (AttachedActions::withoutLabelEcho; never the whole answer). Not on a
+            // navigation ask: there the model is ASKED to name the attached page.
+            if (!$navigation) {
+                [$answer, $labelEcho] = $attached->withoutLabelEcho($answer);
+                if ($labelEcho !== []) {
+                    $metadata['label_echo_dropped'] = $labelEcho;
+                }
+            }
+            // p20-B rights t2: what was checked, written by code below the model's answer
+            // (host nouns and package lang only — never a value of a row).
+            // p23-B rights t2: the model copied that line from the prompt (which quotes it so the
+            // model does not restate it) and it stood twice. The model's copy goes — recognised
+            // by its words in order, never by its bytes ({@see withoutLineEcho()}) — before
+            // code prints its own; an answer that was only the copy is the line itself.
+            if ($checkedLine !== null && $answer !== '') {
+                [$answer, $lineEcho] = $this->withoutLineEcho($answer, $checkedLine);
+                if ($lineEcho !== []) {
+                    $metadata['checked_line_echo'] = $lineEcho;
+                }
+                $answer = $answer !== '' ? $answer . "\n\n" . $checkedLine : $checkedLine;
+                $metadata['checked_line'] = $checkedLine;
+            }
 
             return [
-                'answer' => trim($answer),
-                'insights' => [trans('ai.insight.no_results', [], $locale)],
-                'visualizations' => [],
+                'answer' => $answer,
                 'format' => $format,
                 'metadata' => $metadata,
             ];
@@ -980,8 +1169,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
 
             return [
                 'answer' => trans('ai.response.no_results_fallback', ['question' => $originalQuestion], $locale),
-                'insights' => [trans('ai.insight.no_results', [], $locale)],
-                'visualizations' => [],
                 'format' => $format,
                 'metadata' => [
                     'empty_result' => true,
@@ -993,48 +1180,51 @@ class ResponseGenerator implements ResponseGeneratorInterface
     }
 
     /**
-     * A hint listing the available generic actions, so an action request that returns no data
-     * (e.g. "book a reservation") is answered with the matching action link instead of a dead-end
-     * "no results". The registry is the single source of truth (the same actions the response
-     * sections and the action link handler use). Returns '' when none are configured/resolvable.
+     * The answer without the model's copies of a line CODE prints itself.
+     *
+     * The prompt quotes that line so the model does not restate it; a model that copies the
+     * quote instead leaves the line twice in the answer (eval p23-B rights t2). A copy is the
+     * line's own WORDS, all of them, in order, on one line — whatever stands between and around
+     * them: another dash, no final period, other casing, the prompt's quotes or an emphasis, a
+     * list bullet, or the model's own sentence in front of it. Structure only: the words are the
+     * line's, read off it; a sentence of the model's own that says the same in other words is
+     * prose and stays. A line of fewer than three words is never searched for.
+     *
+     * @return array{0: string, 1: list<string>} the answer, and each copy as the model wrote it
      */
-    private function emptyResponseActionsHint(): string
+    private function withoutLineEcho(string $answer, string $line): array
     {
         try {
-            // 90c W6: only actions THIS user survives authorize() on are offered — the
-            // renderer strips the rest, which would read as a dead offer. Same principal
-            // resolution as the dispatcher's render-time gate (auth user, null if no context).
-            $user = null;
-            try {
-                $user = function_exists('auth') ? auth()->user() : null;
-            } catch (\Throwable $e) {
-                // no auth context (console/queue) — gated actions fail closed
+            $words = preg_match_all('/[\p{L}\p{N}]+/u', $line, $m) > 0 ? $m[0] : [];
+            if (count($words) < 3) {
+                return [$answer, []];
             }
 
-            $actions = app(\Condoedge\Ai\Services\Discovery\EntityAutoDiscovery::class)->getAuthorizedGenericActions($user);
+            $between = '[^\p{L}\p{N}\r\n]+';
+            $pattern = '/(?:^[ \t]*(?:[-*+•]|\d+[.)])[ \t]+)?'      // a list bullet in front of it
+                . '[^\p{L}\p{N}\s.,;:!?]*'                           // quotes / emphasis opening it
+                . '(?<![\p{L}\p{N}])'
+                . implode($between, array_map(static fn (string $word): string => preg_quote($word, '/'), $words))
+                . '(?![\p{L}\p{N}])'
+                . '[^\p{L}\p{N}\s]*/imu';                            // its period, quotes / emphasis closing it
+
+            $echo = [];
+            $stripped = preg_replace_callback($pattern, static function (array $match) use (&$echo): string {
+                $echo[] = trim($match[0]);
+
+                return '';
+            }, $answer);
+            if (!is_string($stripped) || $echo === []) {
+                return [$answer, []];
+            }
+
+            $stripped = (string) preg_replace('/[ \t]+$/mu', '', $stripped);
+            $stripped = (string) preg_replace('/\n{3,}/u', "\n\n", str_replace("\r\n", "\n", $stripped));
+
+            return [trim($stripped), $echo];
         } catch (\Throwable $e) {
-            return '';
+            return [$answer, []];
         }
-
-        $lines = [];
-        foreach ($actions as $action) {
-            $key = $action['action_key'] ?? null;
-            if (!$key) {
-                continue;
-            }
-            $label = $action['label'] ?? $key;
-            $aliases = !empty($action['aliases']) ? ' (e.g. ' . implode(', ', $action['aliases']) . ')' : '';
-            $lines[] = "- [{$label}](action://{$key}){$aliases}";
-        }
-
-        if (empty($lines)) {
-            return '';
-        }
-
-        return "If the user's request actually asks to DO one of these, offer it as a clickable "
-            . "markdown link instead of saying no results were found. Otherwise, when one of these is "
-            . "clearly the most relevant next step for the question, offer it as a helpful follow-up:\n"
-            . implode("\n", $lines);
     }
 
     /**
@@ -1083,11 +1273,90 @@ class ResponseGenerator implements ResponseGeneratorInterface
 
         return [
             'answer' => $answer,
-            'insights' => [trans('ai.insight.error_occurred', [], $locale)],
-            'visualizations' => [],
             'format' => $format,
             'metadata' => $metadata,
         ];
+    }
+
+    /**
+     * WHAT WAS CHECKED, as a line code prints below an empty answer (eval p20-B rights t2) —
+     * "Checked: invoices, unions for your units — nothing matched your question." Built ONLY from
+     * what is established, and null as soon as one piece is missing:
+     *
+     *   - the KINDS: the entities the EXECUTED query's projections read ({@see QueriedKinds::labels()}
+     *     — never Query Understanding's guess, never a node the query only walks through), each by
+     *     the plural its host declares (`metadata.display_name_plural`), said in the answer's
+     *     language ({@see HostText::inLanguage()}). A structural entity (`askable => false`) is
+     *     not named; a kind without a sayable plural leaves NO line (a partial list would
+     *     misstate what was checked);
+     *   - the SCOPE, by the executed query (EmptyResultInspector::scope()): 'own' — the query is
+     *     anchored on the user; with the ownership check's entity (the path its emptiness hangs
+     *     on, counted by AiManager) it reads "… for your <owned>", unless that entity is itself
+     *     what was looked for; 'team' — tenant-scoped, not anchored on the user; else no scope
+     *     is claimed;
+     *   - "nothing matched your question": the query ran and returned no row. Never "none
+     *     exist" — the question's qualifiers (a period, a status) are the model's to keep.
+     *
+     * Wording is the package's lang templates (ai.response.checked*); nothing is inflected.
+     *
+     * @param array<string, mixed>|null $ownership EmptyResultInspector::ownershipCheck()
+     */
+    private function checkedLine(?string $cypher, ?string $scope, ?array $ownership, ?string $locale): ?string
+    {
+        try {
+            $plural = static function (string $label) use ($locale): ?string {
+                $config = \Condoedge\Ai\Services\Discovery\EntityLabelIndex::shared()->configForLabel($label) ?? [];
+
+                return HostText::inLanguage($config['metadata']['display_name_plural'] ?? $config['display_name_plural'] ?? null, $locale);
+            };
+
+            $kinds = [];
+            foreach (QueriedKinds::labels($cypher) as $label) {
+                $config = \Condoedge\Ai\Services\Discovery\EntityLabelIndex::shared()->configForLabel($label) ?? [];
+                if (($config['metadata']['askable'] ?? true) === false) {
+                    continue;
+                }
+                $noun = $plural($label);
+                if ($noun === null) {
+                    return null;
+                }
+                if (!in_array($noun, $kinds, true)) {
+                    $kinds[] = $noun;
+                }
+            }
+            if ($kinds === []) {
+                return null;
+            }
+
+            $replace = ['kinds' => implode(', ', $kinds)];
+            $key = 'ai.response.checked';
+            if ($scope === 'own') {
+                $entity = is_string($ownership['entity'] ?? null) && is_int($ownership['count'] ?? null) ? trim($ownership['entity']) : '';
+                $owned = $entity !== '' ? $plural($entity) : null;
+                if ($owned !== null && !in_array($owned, $kinds, true)) {
+                    [$key, $replace['owned']] = ['ai.response.checked_own_path', $owned];
+                } else {
+                    $key = 'ai.response.checked_own';
+                }
+            } elseif ($scope === 'team') {
+                $key = 'ai.response.checked_team';
+            }
+
+            $candidates = [$locale];
+            if ($locale !== null && preg_match('/^([A-Za-z]+)[-_]/', $locale, $m) === 1) {
+                $candidates[] = strtolower($m[1]);
+            }
+            foreach ($candidates as $candidate) {
+                $line = trans($key, $replace, $candidate);
+                if (is_string($line) && trim($line) !== '' && $line !== $key) {
+                    return trim($line);
+                }
+            }
+        } catch (\Throwable $e) {
+            // a wording nicety — never breaks a turn
+        }
+
+        return null;
     }
 
     /**
@@ -1100,185 +1369,6 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $language = $options['question_language'] ?? null;
 
         return is_string($language) && trim($language) !== '' ? trim($language) : null;
-    }
-
-    /**
-     * Extract insights from data
-     *
-     * @param array $queryResult Query results to analyze
-     * @return array Array of insights (patterns, outliers, trends)
-     */
-    public function extractInsights(array $queryResult): array
-    {
-        $insights = [];
-
-        // Basic count insight
-        $count = count($queryResult);
-        $insights[] = trans_choice('ai.insight.found_results', $count, ['count' => $count]);
-
-        // Detect if numeric data
-        if ($this->isNumericData($queryResult)) {
-            $stats = $this->calculateStatistics($queryResult);
-
-            if ($stats) {
-                $insights[] = __('ai.insight.average_value', ['value' => round($stats['avg'], 2)]);
-
-                if ($stats['max'] > $stats['avg'] * 2) {
-                    $insights[] = __('ai.insight.high_values');
-                }
-
-                if ($stats['min'] < $stats['avg'] * 0.5 && $stats['min'] > 0) {
-                    $insights[] = __('ai.insight.low_values');
-                }
-            }
-        }
-
-        // Raw property/column names are schema details that must not leak into
-        // user-facing insights, so no "properties: id, name, ..." insight is emitted.
-        // The result count already conveys shape.
-
-        return $insights;
-    }
-
-    /**
-     * Suggest appropriate visualizations
-     *
-     * @param array $queryResult Query results
-     * @param string $cypherQuery Original query
-     * @return array Suggested visualization types with rationale
-     */
-    public function suggestVisualizations(array $queryResult, ?string $cypherQuery): array
-    {
-        $suggestions = [];
-
-        if (empty($queryResult)) {
-            return $suggestions;
-        }
-
-        $count = count($queryResult);
-        $firstItem = $queryResult[0];
-
-        // Detect count queries
-        if (isset($firstItem['count']) || stripos($cypherQuery, 'count(') !== false) {
-            $suggestions[] = [
-                'type' => 'number',
-                'rationale' => 'Query returns a count value, best displayed as a number or KPI card',
-            ];
-        }
-
-        // Detect relationship queries
-        if (stripos($cypherQuery, 'MATCH') !== false && stripos($cypherQuery, '-[') !== false) {
-            $suggestions[] = [
-                'type' => 'graph',
-                'rationale' => 'Query involves relationships, suitable for graph visualization',
-            ];
-        }
-
-        // Detect list/table data
-        if ($count > 1 && count(array_keys($firstItem)) > 2) {
-            $suggestions[] = [
-                'type' => 'table',
-                'rationale' => 'Multiple results with several properties, suitable for table display',
-            ];
-        }
-
-        // Detect grouping/aggregation
-        if (stripos($cypherQuery, 'GROUP BY') !== false ||
-            stripos($cypherQuery, 'count(') !== false && $count > 1) {
-            $suggestions[] = [
-                'type' => 'bar-chart',
-                'rationale' => 'Aggregated data, suitable for bar or column chart',
-            ];
-        }
-
-        // Detect time series
-        if ($this->hasTimeComponent($queryResult)) {
-            $suggestions[] = [
-                'type' => 'line-chart',
-                'rationale' => 'Data contains time component, suitable for line chart',
-            ];
-        }
-
-        // Default fallback
-        if (empty($suggestions)) {
-            $suggestions[] = [
-                'type' => 'table',
-                'rationale' => 'General purpose table display for structured data',
-            ];
-        }
-
-        return $suggestions;
-    }
-
-    // =========================================================================
-    // PRIVATE HELPER METHODS
-    // =========================================================================
-
-    /**
-     * Check if data contains numeric values
-     */
-    private function isNumericData(array $data): bool
-    {
-        if (empty($data)) {
-            return false;
-        }
-
-        foreach ($data[0] as $value) {
-            if (is_numeric($value)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Calculate statistics for numeric data
-     */
-    private function calculateStatistics(array $data): ?array
-    {
-        $numericValues = [];
-
-        foreach ($data as $row) {
-            foreach ($row as $value) {
-                if (is_numeric($value)) {
-                    $numericValues[] = (float) $value;
-                }
-            }
-        }
-
-        if (empty($numericValues)) {
-            return null;
-        }
-
-        return [
-            'count' => count($numericValues),
-            'sum' => array_sum($numericValues),
-            'avg' => array_sum($numericValues) / count($numericValues),
-            'min' => min($numericValues),
-            'max' => max($numericValues),
-        ];
-    }
-
-    /**
-     * Check if data has time component
-     */
-    private function hasTimeComponent(array $data): bool
-    {
-        if (empty($data)) {
-            return false;
-        }
-
-        $firstItem = $data[0];
-
-        foreach (array_keys($firstItem) as $key) {
-            $keyLower = strtolower($key);
-            if (in_array($keyLower, ['date', 'time', 'timestamp', 'created_at', 'updated_at', 'datetime'])) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**

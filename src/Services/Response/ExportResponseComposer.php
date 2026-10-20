@@ -5,54 +5,29 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Response;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\Actions\Attach\RecordResolver;
 use Condoedge\Ai\Services\Chat\Exporter\ResultSetExporter;
+use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
 
 /**
  * Export Response Composer
  *
- * Owns export/document response composition for the chat pipeline: export-intent
- * detection, identity-field projection, markdown-table rendering, FR/EN copy, and
- * the deterministic action:// download link. AiManager delegates to it so the
- * orchestrator stays free of export presentation.
+ * Owns export/document response composition for the chat pipeline: identity-field
+ * projection, markdown-table rendering, localized copy, and the deterministic
+ * action:// download link. AiManager delegates to it so the orchestrator stays
+ * free of export presentation.
+ *
+ * Semantics are NOT decided here (Phase 2.B): whether the user asked for a file
+ * (and which format) is QueryUnderstandingResult::$exportFormat, and the language
+ * of every string is QueryUnderstandingResult::$language, threaded in by
+ * AiManager. Copy lives in the package lang JSON (ai.export.*); with no QU
+ * language the app locale applies (same policy as the error responses) — there
+ * is no word-list language guess.
  *
  * @package Condoedge\Ai\Services\Response
  */
 class ExportResponseComposer
 {
-    /**
-     * Detect explicit document/export requests before the no-source fallback gets a chance to
-     * turn them into "no results" prose. This is intentionally small and deterministic: the
-     * action layer is hardcoded/sensitive by design, so export/document intent should not depend
-     * on the LLM obeying a hint in the abstention prompt.
-     *
-     * @return array{format: string}|null
-     */
-    public function detectExportIntent(string $question): ?array
-    {
-        $q = $this->foldedLower($question);
-
-        $mentionsPdf = preg_match('/\bpdf\b|document\s+pdf|fichier\s+pdf/u', $q) === 1;
-        $mentionsExcel = preg_match('/\b(excel|xlsx|spreadsheet)\b|feuille\s+de\s+calcul|tableur/u', $q) === 1;
-
-        if (!$mentionsPdf && !$mentionsExcel) {
-            return null;
-        }
-
-        $hasActionVerb = preg_match(
-            '/\b(create|make|generate|export|download|prepare|convert|turn|build|give)\b'
-            . '|creer|generer|exporter|telecharger|preparer|convertir|faire/u',
-            $q
-        ) === 1;
-
-        $hasDocumentShape = preg_match('/\b(as|to|in|into|of)\s+(a\s+)?(pdf|excel|xlsx)\b|en\s+(pdf|excel)|de\s+(mes?|mon|ma|votre|notre)/u', $q) === 1;
-
-        if (!$hasActionVerb && !$hasDocumentShape) {
-            return null;
-        }
-
-        return ['format' => $mentionsExcel ? 'excel' : 'pdf'];
-    }
-
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -116,7 +91,8 @@ class ExportResponseComposer
 
     private function canUseIdentityExportSource(PipelineContext $ctx): bool
     {
-        if (!$ctx->qu->isPossessive) {
+        // Personal possession only: "export OUR roster" is the team's data, not the user's identity.
+        if (!$ctx->qu->isPersonalPossessive()) {
             return false;
         }
 
@@ -373,9 +349,25 @@ class ExportResponseComposer
         return null;
     }
 
-    private function exportDocumentRowLimit(): int
+    /**
+     * Rows a generated document may carry (and an export re-execution fetches):
+     * ai.export.document_row_limit; a PDF document is further capped by
+     * ai.export.pdf_document_row_limit (unset = the document limit). The PDF
+     * renderer (dompdf) lays the whole table out in memory and grows faster than
+     * linearly — measured on CondoEdge (3 columns): 523 rows ~10.6 s / 104 MB peak,
+     * 1000 rows ~28 s / 194 MB — while the .xlsx writer handles 2000 rows in
+     * ~1 s / ~24 MB. A host can thus cover a full roster in Excel without
+     * exposing the PDF path to the same row count.
+     */
+    public static function documentRowLimit(?string $format = null): int
     {
-        return max(1, (int) config('ai.export.document_row_limit', 250));
+        $limit = max(1, (int) config('ai.export.document_row_limit', 250));
+        $pdfLimit = config('ai.export.pdf_document_row_limit');
+        if ($format === 'pdf' && is_numeric($pdfLimit) && (int) $pdfLimit > 0) {
+            return min($limit, (int) $pdfLimit);
+        }
+
+        return $limit;
     }
 
     /**
@@ -397,9 +389,7 @@ class ExportResponseComposer
         array $sourceMeta = []
     ): array {
         $format = $intent['format'];
-        $language = is_string($sourceMeta['language'] ?? null) && ($sourceMeta['language'] ?? '') !== ''
-            ? strtolower($sourceMeta['language'])
-            : $this->questionLanguage($question);
+        $language = $this->normalizeLanguage($sourceMeta['language'] ?? null);
         $entity = is_string($sourceMeta['entity'] ?? null) && trim((string) $sourceMeta['entity']) !== ''
             ? (string) $sourceMeta['entity']
             : null;
@@ -409,15 +399,20 @@ class ExportResponseComposer
         // For previous-result exports the question is BANNED as a fallback —
         // a subject-less follow-up ("Ok, give me the excel") must fall through
         // to the entity label / generic title, never echo itself.
+        // A distilled subject is the WHOLE title: the entity prefix (a raw schema
+        // label, in the code's language) only qualifies the question-echo / entity
+        // fallbacks — before a localized subject it made a mixed-language heading
+        // ("User — Rôles des membres de l'équipe", eval p12-B).
         if (is_string($sourceMeta['subject'] ?? null) && trim((string) $sourceMeta['subject']) !== '') {
-            $subjectSource = ucfirst(trim((string) $sourceMeta['subject']));
+            $subjectSource = trim((string) $sourceMeta['subject']);
+            $entity = null;
         } elseif ($source === 'previous_result') {
             $subjectSource = '';
         } else {
             $subjectSource = $question;
         }
         $title = $source === 'current_identity'
-            ? ($language === 'fr' ? 'Informations utilisateur' : 'User Information')
+            ? $this->t('ai.export.identity_title', [], $language)
             : $this->exportDocumentTitle($subjectSource, $language, $entity);
 
         $redactedRows = (new ResultSetExporter())->redact(
@@ -427,9 +422,7 @@ class ExportResponseComposer
         $redactedRows = array_values(array_filter($redactedRows, fn ($row) => is_array($row) && !empty($row)));
 
         if (empty($redactedRows)) {
-            // Thread the already-resolved language (QU-first) — the clarification
-            // must not fall back to the hardcoded word-list detector when the
-            // pipeline already knows the question's language.
+            // Thread the already-resolved (QU) language to the clarification.
             return $this->generateExportClarificationResponse($question, $intent, $language);
         }
 
@@ -437,70 +430,152 @@ class ExportResponseComposer
         // The total the user's underlying result actually holds: >= $rowCount when
         // the rows passed in are a sample fallback (complete === false).
         $totalRows = max((int) ($sourceMeta['total_rows'] ?? $rowCount), $rowCount);
-        $documentRows = array_slice($redactedRows, 0, $this->exportDocumentRowLimit());
+        $documentRows = array_slice($redactedRows, 0, self::documentRowLimit($format));
+        // THE FILE SHOWS WHAT THE SCREEN SHOWED (eval p17: A roster-excel, B resilience t3,
+        // B french t1 — the chat table read "Union manager" / "Gestionnaire", the .xlsx held
+        // `manager` / `contact`): coded values the host declares a legend for are written as
+        // their LABEL, in the answer's language — the same mapping, over the same source
+        // query, as the chat table (DataAnswerPlan::build), a fan-out-collapsed "a; b" cell
+        // included. The rows of a previous-result export were re-executed from the RECORDED
+        // query, which is the cypher threaded here. Row keys and columns never change; an
+        // identity export has no query, so nothing is mapped.
+        $cypher = is_string($sourceMeta['cypher'] ?? null) ? $sourceMeta['cypher'] : null;
+        if ($cypher !== null && $source !== 'current_identity') {
+            try {
+                $documentRows = CodedColumns::labelled($documentRows, $cypher, $language);
+            } catch (\Throwable $e) {
+                // display nicety only: the raw values stand
+            }
+        }
+        // …MONEY INCLUDED (eval p18-A "Create a PDF of this" after the unit-310 table: the chat
+        // table read "$0.00", the PDF a raw `0`). A column the source query projects from a
+        // DECLARED money property (MoneyColumns — the chat table's own rule) is written as
+        // money, in the answer's locale. Only in a PDF: it is rendered from the document as
+        // text. An EXCEL file keeps its numbers — the .xlsx writer types a numeric cell as a
+        // number and carries no number format (ResultSetExporter::writeTypedCell), so a
+        // "$1,211.48" string would land as text and no longer add up in a spreadsheet.
+        if ($format === 'pdf' && $cypher !== null && $source !== 'current_identity') {
+            try {
+                $documentRows = $this->withMoneyFormatted($documentRows, MoneyColumns::fromCypher($cypher), $language);
+            } catch (\Throwable $e) {
+                // display nicety only: the raw values stand
+            }
+        }
+        // …AND A PERSON'S NAME IN ONE COLUMN (eval p19-A board: "First Name | Last Name"). The
+        // chat table merges the columns of an entity's declared name (metadata.name_properties,
+        // all projected from one node variable — TableRenderer::nameMerges, the chat table's own
+        // rule over the same source query); the file's rows follow the SAME merge, key included,
+        // so its header row, its document table and "Fields included" match the screen.
+        $nameMerges = [];
+        if ($cypher !== null && $source !== 'current_identity') {
+            try {
+                $nameMerges = TableRenderer::nameMerges($cypher, $documentRows);
+                $documentRows = (new TableRenderer())->mergeColumns($documentRows, $nameMerges);
+            } catch (\Throwable $e) {
+                $nameMerges = []; // display nicety only: the query's own columns stand
+            }
+        }
+        // A column empty in EVERY row of the file carries no information, yet it
+        // would be promised under "Fields included" and written into the header
+        // (eval p9 cold-roster: "Contact Reduced Mobility", never populated).
+        [$documentRows, $emptyColumns] = $this->withoutEmptyColumns($documentRows);
         $shownRows = count($documentRows);
 
-        $table = $this->markdownTable($documentRows);
-        $asOfLine = ($language === 'fr' ? 'En date du : ' : 'As of: ') . $this->asOfDate();
+        // What each column is CALLED in the file (eval p17-B cold-roster-excel: 523 emails
+        // under "Contact Info"): the source query's plain property projections head a
+        // column by the property it holds when its alias says something else — the same
+        // rule, and the same collision handling, as the chat table (TableRenderer::headers).
+        // The row keys are untouched; the headers ride beside them for the .xlsx writer.
+        // IN THE ANSWER'S LANGUAGE (eval p18-B french t1: "Champs inclus : Name, Email, Role." and
+        // English headers in a French file, the generator having aliased in English): each
+        // humanized header goes through the HOST's translator for the answer's locale — the
+        // chat table's rule again — and stays as it is when the host ships no line for it.
+        $projections = TableRenderer::headerProjections($cypher, $language);
+        $headerLocale = $this->headerLocale($language);
+        $renderer = new TableRenderer();
+        $columns = $renderer->columns($documentRows);
+        $headers = $columns === []
+            ? []
+            : array_combine($columns, $renderer->headers($columns, [], TableRenderer::variableLabels($cypher), $projections, $headerLocale));
+
+        $table = $this->markdownTable($documentRows, $headers);
+        $asOfLine = $this->t('ai.export.as_of', ['date' => $this->asOfDate()], $language);
         $documentMarkdown = '# ' . $title . "\n\n" . $asOfLine . "\n\n" . $table;
         // Honest disclosure IN THE PAYLOAD too, whenever the document shows fewer
         // rows than the underlying result holds (trimmed or sample fallback) —
         // or when the source hit the executor's row cap, where the true total is
         // unknown (complete=false with total==shown): say "more may exist".
         $capped = ($sourceMeta['complete'] ?? true) === false && $totalRows <= $shownRows;
+        $counts = ['shown' => $shownRows, 'total' => $totalRows];
         if ($totalRows > $shownRows) {
-            $documentMarkdown .= "\n\n" . ($language === 'fr'
-                ? sprintf('Affiche %d lignes sur %d.', $shownRows, $totalRows)
-                : sprintf('Showing %d of %d rows.', $shownRows, $totalRows));
+            $documentMarkdown .= "\n\n" . $this->t('ai.export.document_showing_of', $counts, $language);
         } elseif ($capped) {
-            $documentMarkdown .= "\n\n" . ($language === 'fr'
-                ? sprintf('Affiche les %d premieres lignes — il peut en exister davantage.', $shownRows)
-                : sprintf('Showing the first %d rows — more may exist.', $shownRows));
+            $documentMarkdown .= "\n\n" . $this->t('ai.export.document_showing_first', $counts, $language);
         }
-        $fieldSummary = $this->exportFieldSummary(array_keys($documentRows[0] ?? []), $language);
+        $fieldSummary = $this->exportFieldSummary(
+            array_map(static fn ($key): string => $headers[(string) $key] ?? (string) $key, array_keys($documentRows[0] ?? [])),
+            $language
+        );
+        if ($emptyColumns !== []) {
+            $emptySummary = $this->t('ai.export.empty_fields_omitted', [
+                'fields' => implode(', ', array_map(
+                    fn (string $c): string => $renderer->translateHeader($renderer->label($c, [], $projections), $headerLocale),
+                    $emptyColumns
+                )),
+            ], $language);
+            $fieldSummary = $fieldSummary === '' ? $emptySummary : $fieldSummary . "\n\n" . $emptySummary;
+        }
+        // Columns left out for having no values are already disclosed above —
+        // they are not "requested fields not included".
+        $emptyKeys = array_map(static fn (string $c): string => strtolower(trim($c)), $emptyColumns);
+        $missingSummary = $this->missingRequestedFieldsSummary(
+            array_values(array_filter(
+                is_array($sourceMeta['requested_fields'] ?? null) ? $sourceMeta['requested_fields'] : [],
+                static fn ($f): bool => !is_string($f) || !in_array(strtolower(trim($f)), $emptyKeys, true)
+            )),
+            // (A name part merged into the file's name column IS in the file.)
+            [...$documentRows, ...$this->mergedNameParts($nameMerges, $sourceMeta)],
+            $language,
+            // The requested fields are the FRESH query's columns: named through its projections.
+            is_string($sourceMeta['requested_cypher'] ?? null)
+                ? TableRenderer::headerProjections($sourceMeta['requested_cypher'], $language)
+                : $projections,
+            $headerLocale
+        );
+        if ($missingSummary !== '') {
+            $fieldSummary = $fieldSummary === '' ? $missingSummary : $fieldSummary . "\n\n" . $missingSummary;
+        }
 
-        $label = $format === 'excel'
-            ? ($language === 'fr' ? 'Telecharger Excel' : 'Download Excel')
-            : ($language === 'fr' ? 'Telecharger le PDF' : 'Download PDF');
+        $label = $this->t($format === 'excel' ? 'ai.export.download_excel' : 'ai.export.download_pdf', [], $language);
         $action = $format === 'excel' ? 'export_excel' : 'export_pdf';
         $link = '[' . $label . '](action://' . $action . '?mode=document&title=' . rawurlencode($title) . ')';
 
-        if ($language === 'fr') {
-            $answer = $format === 'excel'
-                ? "J'ai prepare le fichier Excel avec les informations disponibles."
-                : "J'ai prepare le PDF avec les informations disponibles.";
-            if ($fieldSummary !== '') {
-                $answer .= "\n\n" . $fieldSummary;
-            }
-
-            if ($totalRows > $shownRows) {
-                $answer .= "\n\n" . sprintf('Le document affiche %d lignes sur %d.', $shownRows, $totalRows);
-            } elseif ($capped) {
-                $answer .= "\n\n" . sprintf('Le document affiche les %d premieres lignes — il peut en exister davantage.', $shownRows);
-            }
-
-            $answer .= "\n\n" . $link;
-        } else {
-            $answer = $format === 'excel'
-                ? 'I prepared the Excel file with the available information.'
-                : 'I prepared the PDF with the available information.';
-            if ($fieldSummary !== '') {
-                $answer .= "\n\n" . $fieldSummary;
-            }
-
-            if ($totalRows > $shownRows) {
-                $answer .= "\n\n" . sprintf('The document shows %d of %d rows.', $shownRows, $totalRows);
-            } elseif ($capped) {
-                $answer .= "\n\n" . sprintf('The document shows the first %d rows — more may exist.', $shownRows);
-            }
-
-            $answer .= "\n\n" . $link;
+        // THE SENTENCE STATES WHAT THE FILE HOLDS (eval p20: "I prepared the Excel file with the
+        // available information." above a complete 523-row file — a hedge, and no row count —
+        // on A roster-excel / unit-310 PDF and B resilience t3 / cold-roster / french t1).
+        // One code-written sentence, by the three cases the counts establish: the WHOLE result
+        // ("with all 523 members" — the host's noun when the rows are proven to be that many
+        // records of one kind, else "rows"); a file CUT at the document limit or built from a
+        // sample ("the first 250 of 523 rows"); a source that hit the executor's cap with no
+        // known total ("the first 100 rows — more may exist"). A one-row file is no list: no count.
+        $answer = $this->preparedSentence(
+            $format,
+            $shownRows,
+            $totalRows,
+            $capped,
+            $totalRows > $shownRows || $capped || $source === 'current_identity'
+                ? null
+                : $this->countedKind($rows, $cypher, $sourceMeta, $language, $shownRows),
+            $language
+        );
+        if ($fieldSummary !== '') {
+            $answer .= "\n\n" . $fieldSummary;
         }
+
+        $answer .= "\n\n" . $link;
 
         return [
             'answer' => $answer,
-            'insights' => [],
-            'visualizations' => [],
             'format' => 'markdown',
             'referenced_files' => [],
             'metadata' => [
@@ -509,10 +584,222 @@ class ExportResponseComposer
                 'export_source' => $source,
                 'export_source_complete' => (bool) ($sourceMeta['complete'] ?? true),
                 'export_document_markdown' => $documentMarkdown,
+                // The SAME rows as structured data: the Excel document export writes
+                // them directly (typed cells) instead of re-parsing the markdown.
+                'export_document_rows' => $documentRows,
+                // Column key => the header the file gives it (the document table's own
+                // header row): the .xlsx writer heads the rows with it.
+                'export_document_headers' => $headers,
                 'result_count' => $rowCount,
                 'result_total' => $totalRows,
             ],
         ];
+    }
+
+    /**
+     * The export answer's opening sentence (package lang, ai.export.prepared_<format>[_…]):
+     *
+     *   - `_partial` — the file holds fewer rows than the result: "the first :shown of :total rows";
+     *   - `_first`   — the source hit the executor's row cap, total unknown: "the first :shown
+     *                  rows — more may exist";
+     *   - `_kind` / `_rows` — the WHOLE result, two rows or more: "all :count :kind" in the
+     *                  host's noun ({@see countedKind()}), else "all :count rows";
+     *   - the bare line — one row (a record, the user's own profile).
+     *
+     * Never a hedge: each line says exactly what the counts establish. A host lang override
+     * that predates a variant falls back to the bare line.
+     */
+    private function preparedSentence(string $format, int $shown, int $total, bool $capped, ?string $kind, ?string $language): string
+    {
+        $base = $format === 'excel' ? 'ai.export.prepared_excel' : 'ai.export.prepared_pdf';
+        [$variant, $replace] = match (true) {
+            $total > $shown => ['_partial', ['shown' => $shown, 'total' => $total]],
+            $capped => ['_first', ['shown' => $shown]],
+            $shown < 2 => ['', []],
+            $kind !== null => ['_kind', ['count' => $shown, 'kind' => $kind]],
+            default => ['_rows', ['count' => $shown]],
+        };
+
+        if ($variant !== '') {
+            $line = $this->t($base . $variant, $replace, $language);
+            if ($line !== $base . $variant) {
+                return $line;
+            }
+        }
+
+        return $this->t($base, [], $language);
+    }
+
+    /**
+     * The plural the HOST gives the records a complete file's rows ARE, in the answer's language
+     * — only when that is PROVEN, never guessed (the chat table's own rule,
+     * DataAnswerPlan::recordKindOf()):
+     *
+     *   - the source's companion count counted DISTINCT records of its anchor (sourceMeta
+     *     anchor_total / anchor_label) and that count IS the row count; a fan-out (fewer
+     *     records than rows) is counted in rows;
+     *   - else every row carries ONE record of the SAME entity, all different (RecordResolver
+     *     over the ids the source query projects — the chips' source of truth).
+     *
+     * Null when the kind is unknown, the host declares no plural for it
+     * (metadata.display_name_plural) or cannot say it in that language: the sentence then
+     * counts "rows". Never breaks an export.
+     *
+     * @param array<int, mixed> $rows the rows as received (ids included)
+     * @param array<string, mixed> $sourceMeta
+     */
+    private function countedKind(array $rows, ?string $cypher, array $sourceMeta, ?string $language, int $count): ?string
+    {
+        if ($count < 2) {
+            return null;
+        }
+
+        try {
+            $anchorTotal = $sourceMeta['anchor_total'] ?? null;
+            if (is_numeric($anchorTotal)) {
+                $label = (int) $anchorTotal === $count && is_string($sourceMeta['anchor_label'] ?? null) ? trim($sourceMeta['anchor_label']) : '';
+            } else {
+                $rows = array_values(array_filter($rows, 'is_array'));
+                $labels = array_values(array_unique(TableRenderer::variableLabels($cypher)));
+                if ($cypher === null || $labels === [] || count($rows) !== $count) {
+                    return null;
+                }
+                $preferred = is_string($sourceMeta['entity'] ?? null) ? [$sourceMeta['entity']] : [];
+                $records = (new RecordResolver($labels, $cypher, $preferred))->resolve($rows);
+                if (count($records) !== $count) {
+                    return null;
+                }
+                $identities = [];
+                foreach ($records as $record) {
+                    $identities[(string) ($record['label'] ?? '')][(string) ($record['id'] ?? '')] = true;
+                }
+                $label = (string) array_key_first($identities);
+                if (count($identities) !== 1 || count($identities[$label]) !== $count) {
+                    return null;
+                }
+            }
+            if ($label === '') {
+                return null;
+            }
+
+            $config = EntityLabelIndex::shared()->configForLabel($label) ?? [];
+
+            return HostText::inLanguage($config['metadata']['display_name_plural'] ?? $config['display_name_plural'] ?? null, $language);
+        } catch (\Throwable $e) {
+            return null; // a wording nicety — the file is counted in rows
+        }
+    }
+
+    /**
+     * Drop every column that is empty (null, or a blank string) in ALL rows —
+     * purely data-driven, no column names involved. 0 / false / "0" are values.
+     * A row missing the key counts as empty for it. When every column is empty
+     * the rows are returned untouched (nothing meaningful to drop down to).
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @return array{0: array<int, array<string, mixed>>, 1: array<int, string>} [rows, dropped column keys in first-seen order]
+     */
+    private function withoutEmptyColumns(array $rows): array
+    {
+        $hasValue = [];
+        foreach ($rows as $row) {
+            foreach ($row as $key => $value) {
+                $hasValue[$key] = ($hasValue[$key] ?? false)
+                    || !($value === null || (is_string($value) && trim($value) === '') || $value === []);
+            }
+        }
+
+        $empty = array_keys(array_filter($hasValue, static fn (bool $v): bool => !$v));
+        if ($empty === [] || count($empty) === count($hasValue)) {
+            return [$rows, []];
+        }
+
+        $drop = array_fill_keys($empty, true);
+        $rows = array_map(static fn (array $row): array => array_diff_key($row, $drop), $rows);
+
+        return [$rows, array_map('strval', $empty)];
+    }
+
+    /**
+     * The requested-field names a merged name column of the file covers, as one pseudo-row
+     * (keys only) for {@see missingRequestedFieldsSummary()}: the parts' columns in the file's
+     * own query, and — the requested fields being the FRESH query's columns — the columns that
+     * query projects from the same properties of the same entity.
+     *
+     * @param list<array{key: string, columns: list<string>, label: string, properties: list<string>}> $nameMerges
+     * @param array<string, mixed> $sourceMeta
+     * @return list<array<string, true>> [] or one row
+     */
+    private function mergedNameParts(array $nameMerges, array $sourceMeta): array
+    {
+        if ($nameMerges === []) {
+            return [];
+        }
+
+        $requested = is_string($sourceMeta['requested_cypher'] ?? null)
+            ? TableRenderer::columnProjections($sourceMeta['requested_cypher'])
+            : [];
+        $parts = [];
+        foreach ($nameMerges as $merge) {
+            foreach ($merge['columns'] as $column) {
+                $parts[$column] = true;
+            }
+            foreach ($requested as $column => [, $property, $label]) {
+                if ($label === $merge['label'] && in_array($property, $merge['properties'], true)) {
+                    $parts[(string) $column] = true;
+                }
+            }
+        }
+
+        return [$parts];
+    }
+
+    /**
+     * $rows with the DECLARED money columns written as money ({@see TableRenderer::formatMoney()}:
+     * the configured currency symbol, two decimals, $locale's grouping) — the cell a chat table
+     * shows for the same value. Only a numeric value is formatted (null, a flag and text stay);
+     * keys and every other column are untouched.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<int, string> $moneyColumns result columns holding a declared money property
+     * @return array<int, array<string, mixed>>
+     */
+    private function withMoneyFormatted(array $rows, array $moneyColumns, ?string $locale): array
+    {
+        if ($moneyColumns === [] || $rows === []) {
+            return $rows;
+        }
+
+        $renderer = new TableRenderer();
+        foreach ($rows as $i => $row) {
+            foreach ($moneyColumns as $column) {
+                $value = $row[$column] ?? null;
+                if ($value !== null && !is_bool($value) && $renderer->isNumericValue($value)) {
+                    $rows[$i][$column] = $renderer->formatMoney($value, $locale);
+                }
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * The language the file's headers are said in: the QU language, else the app locale (the
+     * package's language policy) — always a locale, so a host line for a header applies.
+     */
+    private function headerLocale(?string $language): ?string
+    {
+        if ($language !== null && trim($language) !== '') {
+            return $language;
+        }
+
+        try {
+            $locale = function_exists('app') ? (string) app()->getLocale() : '';
+        } catch (\Throwable $e) {
+            $locale = '';
+        }
+
+        return $locale !== '' ? $locale : null;
     }
 
     /** ISO-8601 date for the document's "as of" line. */
@@ -530,12 +817,12 @@ class ExportResponseComposer
     }
 
     /**
-     * @param string[] $fields
+     * @param string[] $fields the file's column HEADERS (as its table shows them)
      */
-    private function exportFieldSummary(array $fields, string $language): string
+    private function exportFieldSummary(array $fields, ?string $language): string
     {
         $fields = array_values(array_filter(
-            array_map(fn ($field) => $this->humanizeHeader((string) $field), $fields),
+            array_map(static fn ($field): string => (string) $field, $fields),
             fn ($field) => trim($field) !== ''
         ));
         if (empty($fields)) {
@@ -543,42 +830,78 @@ class ExportResponseComposer
         }
 
         $visible = array_slice($fields, 0, 8);
-        $suffix = count($fields) > count($visible)
-            ? ($language === 'fr'
-                ? ' et ' . (count($fields) - count($visible)) . ' autres champs'
-                : ' and ' . (count($fields) - count($visible)) . ' more fields')
-            : '';
+        $hidden = count($fields) - count($visible);
 
-        return $language === 'fr'
-            ? 'Champs inclus : ' . implode(', ', $visible) . $suffix . '.'
-            : 'Fields included: ' . implode(', ', $visible) . $suffix . '.';
+        return $hidden > 0
+            ? $this->t('ai.export.fields_included_more', ['fields' => implode(', ', $visible), 'count' => $hidden], $language)
+            : $this->t('ai.export.fields_included', ['fields' => implode(', ', $visible)], $language);
+    }
+
+    /**
+     * Honesty line for requested fields absent from the file. "Requested" is
+     * structural — the columns THIS turn's fresh query produced for the ask
+     * (threaded by AiManager as sourceMeta.requested_fields) — never a word list.
+     * Internal id-ish columns are ignored (they are never exported); a requested
+     * column dropped by the export deny-list or absent from the exported source
+     * is named, so "Fields included" never reads as the complete ask.
+     *
+     * @param array<int, mixed> $requested
+     * @param array<int, array<string, mixed>> $documentRows
+     * @param array<string, array{0: string, 1: string}> $projections the requesting query's plain
+     *        property projections (TableRenderer::headerProjections): a missing field is named by
+     *        the property it would have held when its alias says something else
+     * @param string|null $headerLocale the language field names are said in (the file's headers')
+     */
+    private function missingRequestedFieldsSummary(array $requested, array $documentRows, ?string $language, array $projections = [], ?string $headerLocale = null): string
+    {
+        // Requested fields arrive lower-cased (AiManager::resultColumns); aliases keep their case.
+        $projections += array_change_key_case($projections, CASE_LOWER);
+        $renderer = new TableRenderer();
+
+        $requested = array_values(array_filter($requested, fn ($f) => is_string($f) && trim($f) !== ''));
+        if ($requested === []) {
+            return '';
+        }
+
+        // Internal-only filter (no PII deny-list): a PII-redacted requested field
+        // IS missing from the file and must be disclosed.
+        $exportable = array_keys((new ResultSetExporter())->redact([array_fill_keys($requested, 1)], [])[0] ?? []);
+
+        $exported = [];
+        foreach ($documentRows as $row) {
+            foreach (array_keys($row) as $key) {
+                $exported[strtolower(trim((string) $key))] = true;
+            }
+        }
+
+        $missing = [];
+        foreach ($exportable as $field) {
+            if (!isset($exported[strtolower(trim((string) $field))])) {
+                $missing[] = $renderer->translateHeader($renderer->label((string) $field, [], $projections), $headerLocale);
+            }
+        }
+
+        if ($missing === []) {
+            return '';
+        }
+
+        return $this->t('ai.export.requested_fields_missing', ['fields' => implode(', ', $missing)], $language);
     }
 
     /**
      * @param array{format: string} $intent
-     * @param string|null $language QU-detected question language (ISO 639-1) —
-     *        wins over the legacy word-list fallback when provided, so the
-     *        clarification follows the language policy like the document path.
+     * @param string|null $language QU-detected question language (ISO 639-1);
+     *        null/'' = the app locale (no word-list language guess).
      */
     public function generateExportClarificationResponse(string $question, array $intent, ?string $language = null): array
     {
         $format = strtoupper($intent['format']);
-        $language = is_string($language) && trim($language) !== ''
-            ? strtolower(trim($language))
-            : $this->questionLanguage($question);
+        $language = $this->normalizeLanguage($language);
 
-        $answer = $language === 'fr'
-            ? "Je peux creer un {$format}, mais j'ai besoin de savoir quelles informations y inclure. "
-                . "Demandez d'abord les donnees precises (par exemple les membres de votre equipe, vos contacts ou votre releve), "
-                . "ou dites quels champs inclure, puis je pourrai preparer l'export."
-            : "I can create a {$format}, but I need to know which information to include. "
-                . "Ask for the specific data first, such as your team members, contacts, or statement, "
-                . "or tell me which fields to include, then I can prepare the export.";
+        $answer = $this->t('ai.export.clarification', ['format' => $format], $language);
 
         return [
             'answer' => $answer,
-            'insights' => [],
-            'visualizations' => [],
             'format' => 'text',
             'referenced_files' => [],
             'metadata' => [
@@ -597,7 +920,7 @@ class ExportResponseComposer
      * keyword lists — so it stays correct for any host domain; a bare generic
      * fallback only remains for an empty question.
      */
-    private function exportDocumentTitle(string $question, string $language, ?string $entity = null): string
+    private function exportDocumentTitle(string $question, ?string $language, ?string $entity = null): string
     {
         $subject = $this->questionAsTitle($question);
         $entityLabel = $entity !== null ? $this->humanizeHeader($entity) : '';
@@ -619,7 +942,7 @@ class ExportResponseComposer
             return $entityLabel;
         }
 
-        return $language === 'fr' ? 'Informations demandees' : 'Requested Information';
+        return $this->t('ai.export.default_title', [], $language);
     }
 
     /** The question cleaned into a heading: collapsed whitespace, no trailing punctuation, bounded length. */
@@ -647,94 +970,46 @@ class ExportResponseComposer
     }
 
     /**
+     * The document table — THE TableRenderer (Phase 8 batch A; the former private
+     * markdownTable/stringValue/escapeMarkdownCell copies are gone). Rows arrive
+     * already redacted and sliced to the document row limit.
+     *
      * @param array<int, array<string, mixed>> $rows
+     * @param array<string, string> $headers column key => header (already told apart)
      */
-    private function markdownTable(array $rows): string
+    private function markdownTable(array $rows, array $headers = []): string
     {
-        $headers = [];
-        foreach ($rows as $row) {
-            foreach (array_keys($row) as $key) {
-                if (!in_array((string) $key, $headers, true)) {
-                    $headers[] = (string) $key;
-                }
-            }
-        }
-
-        if (empty($headers)) {
-            return '';
-        }
-
-        $labels = array_map(fn ($header) => $this->humanizeHeader($header), $headers);
-        $out = '| ' . implode(' | ', array_map([$this, 'escapeMarkdownCell'], $labels)) . " |\n";
-        $out .= '| ' . implode(' | ', array_fill(0, count($headers), '---')) . " |\n";
-
-        foreach ($rows as $row) {
-            $cells = [];
-            foreach ($headers as $header) {
-                $cells[] = $this->escapeMarkdownCell($this->stringValue($row[$header] ?? ''));
-            }
-            $out .= '| ' . implode(' | ', $cells) . " |\n";
-        }
-
-        return rtrim($out);
+        return (new TableRenderer())->render($rows, ['max_rows' => 0, 'redact' => false, 'labels' => $headers])['markdown'];
     }
 
     private function humanizeHeader(string $header): string
     {
-        $header = preg_replace('/(?<!^)([A-Z])/', ' $1', $header) ?? $header;
-        $header = str_replace(['_', '-'], ' ', $header);
-        $header = trim(preg_replace('/\s+/', ' ', $header) ?? $header);
-
-        return $header === '' ? 'Value' : ucwords($header);
+        return (new TableRenderer())->label($header);
     }
 
-    private function stringValue(mixed $value): string
+    /**
+     * The QU language code as a translator locale ('fr', 'en', ...), or null to
+     * use the app locale. Structural normalization only — no language guess.
+     */
+    private function normalizeLanguage(mixed $language): ?string
     {
-        if ($value === null) {
-            return '';
-        }
-        if (is_bool($value)) {
-            return $value ? 'Yes' : 'No';
-        }
-        if (is_scalar($value)) {
-            return (string) $value;
+        if (!is_string($language) || trim($language) === '') {
+            return null;
         }
 
-        return (string) json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        return strtolower(trim($language));
     }
 
-    private function escapeMarkdownCell(string $value): string
+    /**
+     * Localized export copy (package lang JSON, ai.export.*). An unknown locale
+     * falls back through the translator's fallback locale.
+     *
+     * @param array<string, scalar> $replace
+     */
+    private function t(string $key, array $replace, ?string $language): string
     {
-        $value = trim(preg_replace('/\s+/', ' ', $value) ?? $value);
-        return str_replace('|', '\|', $value);
-    }
+        $line = trans($key, $replace, $language);
 
-    private function questionLanguage(string $question): string
-    {
-        $q = $this->foldedLower($question);
-
-        return preg_match(
-            '/\b(peux|pouvez|creer|generer|telecharger|mon|ma|mes|votre|'
-            . 'equipe|informations|releve|fichier|feuille|tableur)\b/u',
-            $q
-        ) === 1 ? 'fr' : 'en';
-    }
-
-    private function lower(string $value): string
-    {
-        return function_exists('mb_strtolower') ? mb_strtolower($value, 'UTF-8') : strtolower($value);
-    }
-
-    private function foldedLower(string $value): string
-    {
-        $lower = $this->lower($value);
-        if (function_exists('iconv')) {
-            $folded = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $lower);
-            if (is_string($folded) && $folded !== '') {
-                return $folded;
-            }
-        }
-
-        return $lower;
+        return is_string($line) ? $line : $key;
     }
 }

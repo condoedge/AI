@@ -19,7 +19,7 @@ use Symfony\Component\Finder\Finder;
  * to provide complete auto-discovery functionality. Introspects models to
  * discover configuration automatically, using SchemaInspector for database
  * hints, CypherScopeAdapter for scope discovery, and other specialized
- * discoverers for properties, relationships, aliases, and embed fields.
+ * discoverers for properties, relationships and aliases.
  *
  * Usage:
  *   $discovery = new EntityAutoDiscovery(...);
@@ -38,7 +38,6 @@ class EntityAutoDiscovery
      * @param RelationshipDiscoverer $relationships Relationship discoverer
      * @param PropertyDiscoverer $properties Property discoverer
      * @param AliasGenerator $aliases Alias generator
-     * @param EmbedFieldDetector $embedFields Embed field detector
      * @param TraversalScopeGenerator|null $traversalGenerator Traversal scope generator
      * @param InheritanceResolver|null $inheritanceResolver Inheritance resolver
      */
@@ -48,7 +47,6 @@ class EntityAutoDiscovery
         private RelationshipDiscoverer $relationships,
         private PropertyDiscoverer $properties,
         private AliasGenerator $aliases,
-        private EmbedFieldDetector $embedFields,
         private ?TraversalScopeGenerator $traversalGenerator = null,
         private ?InheritanceResolver $inheritanceResolver = null,
     ) {
@@ -77,13 +75,11 @@ class EntityAutoDiscovery
 
             // Discover all parts
             $graph = $this->discoverGraph($model);
-            $vector = $this->discoverVector($model);
             $security = $this->discoverSecurityConfig($model);
             $metadata = $this->discoverMetadata($model);
 
             return [
                 'graph' => $graph,
-                'vector' => $vector,
                 'security' => $security,
                 'metadata' => $metadata,
             ];
@@ -150,8 +146,8 @@ class EntityAutoDiscovery
                     );
                 }
 
-                // Only include if has graph, vector, or security config
-                if (!empty($config['graph']) || !empty($config['vector']) || !empty($config['security'])) {
+                // Only include if has graph or security config
+                if (!empty($config['graph']) || !empty($config['security'])) {
                     $configurations[$modelClass] = $config;
                     $stats['configurations_generated']++;
                 }
@@ -259,39 +255,6 @@ class EntityAutoDiscovery
             'label' => $label,
             'properties' => $graphProperties,
             'relationships' => $graphRelationships,
-        ];
-    }
-
-    /**
-     * Discover only vector configuration
-     *
-     * Discovers Qdrant collection name, embed fields, and metadata fields.
-     *
-     * @param string|Model $model Model class name or instance
-     * @return array Vector configuration
-     */
-    public function discoverVector(string|Model $model): array
-    {
-        $modelInstance = $this->resolveModel($model);
-
-        // Get collection name
-        $collection = $this->aliases->generateCollectionName($model);
-
-        // Get embed fields
-        $embedFields = $this->embedFields->detect($model);
-
-        // Exclude sensible columns from embed fields (they shouldn't be in vector content)
-        $sensibleColumns = $this->getSensibleColumns($modelInstance);
-        $embedFields = array_values(array_diff($embedFields, $sensibleColumns));
-
-        // Get metadata fields (all properties except embed fields)
-        $allProperties = $this->properties->discover($model);
-        $metadata = array_values(array_diff($allProperties, $embedFields));
-
-        return [
-            'collection' => $collection,
-            'embed_fields' => $embedFields,
-            'metadata' => $metadata,
         ];
     }
 
@@ -769,26 +732,6 @@ class EntityAutoDiscovery
     }
 
     /**
-     * Get all available actions for an entity type (config + registered), including metadata
-     * advertised to the LLM. Sourced from the registry so it stays consistent with rendering.
-     *
-     * @return array Array of ['action_key','aliases','label'].
-     */
-    public function getEntityActions(string $entityLabel): array
-    {
-        $result = [];
-        foreach ($this->actionRegistry()->entityActions($entityLabel) as $action) {
-            $result[] = [
-                'action_key' => $action->key(),
-                'aliases' => $action->aliases(),
-                'label' => $action->label(),
-            ];
-        }
-
-        return $result;
-    }
-
-    /**
      * Get a generic action resolver (legacy closure shape: fn($text)).
      *
      * @return \Closure|null
@@ -852,11 +795,12 @@ class EntityAutoDiscovery
     /**
      * Entity actions advertisable to the given principal.
      *
-     * Mutating actions authorize against the RESOLVED ROW; no row exists at
-     * advertisement time, so an empty-input check would always fail closed and hide
-     * them — they pass through unfiltered and keep their render + approval-time gates.
-     * Non-mutating actions are role-gated (input-independent closures), so the same
-     * authorize($user, []) the renderer applies decides advertisement.
+     * Every action — mutating ones included (security A1/A2: they used to pass through
+     * unfiltered and were offered to every user) — goes through the single
+     * {@see \Condoedge\Ai\Services\Actions\ActionAdvertisement} rule: a mutation answers
+     * through its row-independent capability (ModelMethodMutationAction's `permission`),
+     * any other action through the same authorize($user, []) the renderer applies. The
+     * render + approval-time row gates still run on top.
      *
      * @return array Array of ['action_key','aliases','label'].
      */
@@ -864,7 +808,7 @@ class EntityAutoDiscovery
     {
         $result = [];
         foreach ($this->actionRegistry()->entityActions($entityLabel) as $action) {
-            if (!$action->mutates() && !$this->authorizesForAdvertisement($action, $user)) {
+            if (!$this->authorizesForAdvertisement($action, $user)) {
                 continue;
             }
 
@@ -883,11 +827,7 @@ class EntityAutoDiscovery
      */
     private function authorizesForAdvertisement(\Condoedge\Ai\Contracts\AiActionInterface $action, mixed $user): bool
     {
-        try {
-            return (bool) $action->authorize($user, []);
-        } catch (\Throwable $e) {
-            return false;
-        }
+        return \Condoedge\Ai\Services\Actions\ActionAdvertisement::allows($action, $user);
     }
 
     /**

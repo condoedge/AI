@@ -27,6 +27,21 @@ final class ActionContext
      * @param string|null $answer  The FULL composed answer the link was embedded in
      *                             (markdown) — lets document-style actions render what the
      *                             LLM wrote, not just the tabular result set.
+     * @param array<int, array<string, mixed>> $documentRows  The composed export document's
+     *                             rows as data (Excel document mode writes them directly).
+     * @param array<string, string> $documentHeaders  Column key => header of those rows, as
+     *                             the composed document's table heads them (empty for
+     *                             messages persisted before headers were recorded).
+     * @param array{cypher: string, parameters: array<string, mixed>, conversation_id: int|string|null}|null $recordedQuery
+     *                             The query RECORDED with the message the action was clicked on
+     *                             (its text and its bound parameters), for an export that
+     *                             re-runs it as the acting user (export_* `mode=rerun`). Set
+     *                             only by a click-time entry point that read it from the stored
+     *                             message — never from link params, never at render.
+     * @param string|null $resultCypher  The TEXT of the query $resultSet came from (the message's
+     *                             own recorded query), for DISPLAY shaping of those stored rows
+     *                             only — which columns are one entity's name. Never executed:
+     *                             a re-run needs $recordedQuery, which a render never carries.
      */
     public function __construct(
         public readonly mixed $user = null,
@@ -38,6 +53,10 @@ final class ActionContext
         public readonly array $resultSet = [],
         public readonly ?string $answer = null,
         public readonly ?string $documentMarkdown = null,
+        public readonly array $documentRows = [],
+        public readonly array $documentHeaders = [],
+        public readonly ?array $recordedQuery = null,
+        public readonly ?string $resultCypher = null,
     ) {
     }
 
@@ -63,6 +82,38 @@ final class ActionContext
             documentMarkdown: isset($context['document_markdown'])
                 ? (string) $context['document_markdown']
                 : (isset($context['documentMarkdown']) ? (string) $context['documentMarkdown'] : null),
+            documentRows: is_array($context['document_rows'] ?? null) ? array_values($context['document_rows']) : [],
+            // Stored data: only string column keys with a non-blank string header are kept.
+            documentHeaders: array_filter(
+                is_array($context['document_headers'] ?? null) ? $context['document_headers'] : [],
+                static fn ($header, $column): bool => is_string($column) && is_string($header) && trim($header) !== '',
+                ARRAY_FILTER_USE_BOTH
+            ),
+            recordedQuery: self::recordedQuery($context['recorded_query'] ?? null),
+            resultCypher: is_string($context['result_cypher'] ?? null) && trim($context['result_cypher']) !== ''
+                ? $context['result_cypher']
+                : null,
         );
+    }
+
+    /**
+     * A recorded query is usable only as a non-blank query text; its parameters are the
+     * stored bag as-is (the re-run keeps the bindings it trusts) and the conversation id is
+     * provenance. Anything else = none recorded.
+     *
+     * @return array{cypher: string, parameters: array<string, mixed>, conversation_id: int|string|null}|null
+     */
+    private static function recordedQuery(mixed $recorded): ?array
+    {
+        if (!is_array($recorded) || !is_string($recorded['cypher'] ?? null) || trim($recorded['cypher']) === '') {
+            return null;
+        }
+        $conversationId = $recorded['conversation_id'] ?? null;
+
+        return [
+            'cypher' => $recorded['cypher'],
+            'parameters' => is_array($recorded['parameters'] ?? null) ? $recorded['parameters'] : [],
+            'conversation_id' => is_int($conversationId) || is_string($conversationId) ? $conversationId : null,
+        ];
     }
 }

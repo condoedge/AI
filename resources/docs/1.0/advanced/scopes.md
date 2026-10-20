@@ -278,7 +278,6 @@ The system detects scopes from natural language using semantic matching.
 ### Detection Threshold
 
 ```env
-AI_SEMANTIC_THRESHOLD_SCOPE=0.70
 ```
 
 ### Example Queries and Matches
@@ -421,4 +420,3 @@ When multiple scopes could match:
 - [Semantic Matching](/docs/{{version}}/advanced/semantic-matching) - How matching works
 - [Auto-Discovery](/docs/{{version}}/advanced/auto-discovery) - Automatic scope detection
 - [Entity Configuration](/docs/{{version}}/configuration/entities) - Entity setup
-- [Query Patterns](/docs/{{version}}/advanced/patterns) - Query templates

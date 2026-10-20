@@ -75,9 +75,6 @@ Configure the file context system in `config/ai.php` under the `file_context` ke
     // Minimum relevance score for file inclusion (0.0 - 1.0)
     'min_relevance_score' => 0.4,
 
-    // Include file snippets in response metadata
-    'include_snippets' => true,
-
     // Maximum snippet length (characters)
     'snippet_length' => 200,
 
@@ -96,6 +93,10 @@ Configure the file context system in `config/ai.php` under the `file_context` ke
     // Alternative: closure-based resolver (takes precedence over scope)
     'access_resolver' => null,
 
+    // SECURITY opt-in (default false = fail closed): when no file access rule is
+    // defined, allow every file of the user's team instead of denying all files
+    'team_grain_unsafe' => false,
+
     // Log file access attempts for security auditing
     'log_access' => env('AI_FILE_ACCESS_LOG', true),
 ],
@@ -113,11 +114,11 @@ Configure the file context system in `config/ai.php` under the `file_context` ke
 | `physical_collection` | string | `'documentation_chunks'` | Qdrant collection for physical files |
 | `max_references` | int | `5` | Maximum files to include in context |
 | `min_relevance_score` | float | `0.4` | Minimum similarity score (0.0-1.0) |
-| `include_snippets` | bool | `true` | Include content snippets in metadata |
 | `snippet_length` | int | `200` | Maximum characters per snippet |
 | `file_model` | string | `'App\\Models\\File'` | Eloquent model for database files |
 | `access_scope` | string | `'accessibleBy'` | Scope method name on file model |
 | `access_resolver` | Closure | `null` | Custom access resolver function |
+| `team_grain_unsafe` | bool | `false` | Security opt-in: with no file access rule defined, expose every file of the user's team (ignores per-file visibility) instead of denying all files |
 | `fallback_filters.use_user_filter` | bool | `true` | Filter by user_id when scope fails |
 | `fallback_filters.use_team_filter` | bool | `true` | Filter by team_id when scope fails |
 | `log_access` | bool | `true` | Log file access attempts for auditing |

@@ -10,7 +10,6 @@ Semantic matching uses vector embeddings to understand the meaning of text rathe
 
 - **Entity detection**: "clients" matches `Customer` entity
 - **Scope detection**: "active users" matches `active` scope
-- **Template matching**: "display all" matches `list_all` template
 - **Label inference**: "show orders" infers `Order` label
 
 ---
@@ -40,8 +39,6 @@ Match: "USA" → n.country = 'USA' (0.88 similarity)
 ### Enable Semantic Matching
 
 ```env
-AI_SEMANTIC_MATCHING=true
-AI_FALLBACK_EXACT_MATCH=true
 ```
 
 ### Similarity Thresholds
@@ -50,16 +47,10 @@ Fine-tune thresholds for different matching types:
 
 ```env
 # Entity detection (e.g., "clients" → Customer)
-AI_SEMANTIC_THRESHOLD_ENTITY=0.75
 
 # Scope detection (e.g., "active" → active scope)
-AI_SEMANTIC_THRESHOLD_SCOPE=0.70
-
-# Template detection (e.g., "show all" → list_all)
-AI_SEMANTIC_THRESHOLD_TEMPLATE=0.65
 
 # Label inference from query
-AI_SEMANTIC_THRESHOLD_LABEL=0.70
 ```
 
 **Threshold guidelines:**
@@ -73,7 +64,6 @@ AI_SEMANTIC_THRESHOLD_LABEL=0.70
 Cache embeddings to reduce API calls:
 
 ```env
-AI_SEMANTIC_CACHE_EMBEDDINGS=true
 ```
 
 ---
@@ -89,30 +79,32 @@ php artisan ai:index-semantic
 # Rebuild from scratch
 php artisan ai:index-semantic --rebuild
 
-# Index specific entity
-php artisan ai:index-semantic --entity="App\Models\Customer"
+# Check index status
+php artisan ai:index-semantic --check
 ```
+
+The command always indexes every configured entity. The `--entities` option is kept for compatibility; entities are the only thing it indexes.
 
 ### What Gets Indexed
 
 For each entity:
 - Entity name (e.g., "Customer")
 - All aliases (e.g., "client", "buyer", "account")
-- Scope names and descriptions
-- Property names and descriptions
+- The entity description
+
+Scopes are not part of this index. Scope concepts and example phrasings are indexed into `scope_examples` by `php artisan ai:index-context` / `php artisan ai:index-scopes`.
 
 ### Index Storage
 
-Indexes are stored in Qdrant collections:
+The index is stored in one Qdrant collection, `semantic_entities`. The name is fixed; there is no config key for it. See [Data ingestion](/docs/{{version}}/usage/data-ingestion) for everything Qdrant holds.
+
+The `semantic_matching` section of `config/ai.php` holds the scope-matching settings:
 
 ```php
 // config/ai.php
 'semantic_matching' => [
-    'collections' => [
-        'entities' => 'semantic_entities',
-        'scopes' => 'semantic_scopes',
-        'templates' => 'semantic_templates',
-    ],
+    'scope_threshold' => 0.7,  // Minimum similarity for a scope match
+    'max_scopes' => 5,         // Maximum scopes returned
 ],
 ```
 
@@ -209,38 +201,11 @@ Scopes are automatically indexed from:
 
 ---
 
-## Template Matching
-
-Match queries to predefined query templates.
-
-### Example
-
-```php
-// Query: "Display all customers"
-// Matches template: "list_all" (0.87 similarity)
-
-// Query: "How many orders exist?"
-// Matches template: "count_all" (0.91 similarity)
-```
-
-### Default Templates
-
-| Pattern | Description | Example Query |
-|---------|-------------|---------------|
-| `list_all` | List all entities | "Show all customers" |
-| `count_all` | Count entities | "How many orders?" |
-| `find_by` | Find by attribute | "Find customer by email" |
-| `top_n` | Get top N | "Top 10 customers" |
-| `recent` | Recent entries | "Recent orders" |
-
----
-
 ## Fallback Behavior
 
 When semantic matching fails or is disabled:
 
 ```env
-AI_FALLBACK_EXACT_MATCH=true
 ```
 
 The system falls back to exact string matching:
@@ -268,7 +233,7 @@ Index multiple entities efficiently:
 
 ```bash
 # Index all at once (batched API calls)
-php artisan ai:index-semantic --all
+php artisan ai:index-semantic
 ```
 
 ### Index Size
@@ -310,11 +275,8 @@ $scopes = $scopeMatcher->findMatchingScopes('active premium customers', $entityC
 ### View Index Contents
 
 ```bash
-# List indexed entities
-php artisan ai:index-semantic --list
-
-# Show index statistics
-php artisan ai:index-semantic --stats
+# Check index status
+php artisan ai:index-semantic --check
 ```
 
 ---

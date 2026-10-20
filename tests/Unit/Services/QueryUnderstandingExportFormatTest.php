@@ -108,6 +108,19 @@ class QueryUnderstandingExportFormatTest extends TestCase
     }
 
     /** @test */
+    public function spreadsheet_file_extensions_normalize_to_excel(): void
+    {
+        // Task 1.22 review: the model sometimes answers with the file
+        // extension instead of the enum value — a format-code alias, not a
+        // semantic word list.
+        foreach (['xlsx', 'XLS'] as $raw) {
+            $service = $this->serviceReturning(['search_query' => 'x', 'export_format' => $raw]);
+
+            $this->assertSame('excel', $service->analyze('some question', [])->exportFormat, $raw);
+        }
+    }
+
+    /** @test */
     public function language_degrades_to_empty_and_locale_values_reduce_to_the_primary_subtag(): void
     {
         foreach ([
@@ -146,6 +159,17 @@ class QueryUnderstandingExportFormatTest extends TestCase
     }
 
     /** @test */
+    public function the_empty_result_never_guesses_possessiveness_from_the_question_text(): void
+    {
+        // Phase 2.B: the English-only looksLikePossessive() word list is gone —
+        // on QU failure every semantic signal is neutral, in any language.
+        foreach (['my units', 'What do I owe on my unit?', 'mes unités', 'belongs to me'] as $question) {
+            $this->assertFalse(QueryUnderstandingResult::empty($question)->isPossessive, $question);
+        }
+        $this->assertFalse(method_exists(QueryUnderstandingResult::class, 'looksLikePossessive'));
+    }
+
+    /** @test */
     public function a_failed_qu_call_yields_a_result_with_no_export_format(): void
     {
         $llm = Mockery::mock(LlmProviderInterface::class);
@@ -154,7 +178,10 @@ class QueryUnderstandingExportFormatTest extends TestCase
         $service = new QueryUnderstandingService($llm, $this->logger(), []);
         $result = $service->analyze('Can I get an excel of the roster?', []);
 
-        // Downstream, AiManager falls back to the deterministic regex.
+        // No regex fallback downstream (Phase 2.B): the failure is FLAGGED so
+        // AiManager can report export_intent_unavailable='qu_failed'.
         $this->assertNull($result->exportFormat);
+        $this->assertTrue($result->failed);
+        $this->assertFalse(QueryUnderstandingResult::empty()->failed, 'empty() is neutral, not failed');
     }
 }

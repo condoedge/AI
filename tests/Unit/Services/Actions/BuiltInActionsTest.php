@@ -57,8 +57,8 @@ class BuiltInActionsTest extends TestCase
         $action = new RenderTableAction();
 
         $rows = [
-            ['name' => 'Alice', 'amount' => 100],
-            ['name' => 'Bob', 'amount' => 250],
+            ['id' => 7, 'name' => 'Alice', 'amount' => 100, 'action_links' => ['[View](entity://P/7/view)']],
+            ['id' => 8, 'name' => 'Bob', 'amount' => 250],
         ];
 
         $result = $action->handle(['limit' => 10], ActionContext::fromArray(['result_set' => $rows]));
@@ -66,7 +66,9 @@ class BuiltInActionsTest extends TestCase
         $this->assertFalse($result->isError);
         $this->assertSame(ActionKind::Table, $result->kind);
         $this->assertSame('table', $result->renderable['type']);
-        $this->assertSame(['name', 'amount'], $result->renderable['headers']);
+        // Phase 8 batch A: THE TableRenderer — humanized headers, internal ids and
+        // UI decorations redacted like every other table/export.
+        $this->assertSame(['Name', 'Amount'], $result->renderable['headers']);
         $this->assertCount(2, $result->renderable['rows']);
         $this->assertSame(['Alice', '100'], $result->renderable['rows'][0]);
     }

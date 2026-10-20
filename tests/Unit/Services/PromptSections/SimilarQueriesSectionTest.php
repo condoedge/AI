@@ -66,4 +66,14 @@ class SimilarQueriesSectionTest extends TestCase
         $this->assertStringContainsString('OVERRIDE these examples', $output);
         $this->assertStringContainsString('NEVER copy an example verbatim', $output);
     }
+
+    /** @test Actions plan B1: stored examples predating the id rule must not suppress it. */
+    public function examples_never_override_the_record_id_projection_rule(): void
+    {
+        $output = (new SimilarQueriesSection())->format('q', $this->contextWith([
+            ['question' => 'q1', 'query' => 'MATCH (u:Unit) RETURN u.name AS unit', 'score' => 0.95],
+        ]));
+
+        $this->assertStringContainsString("each record's id", $output);
+    }
 }

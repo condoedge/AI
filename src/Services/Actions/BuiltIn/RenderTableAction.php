@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Services\Actions\BuiltIn;
 
 use Condoedge\Ai\Services\Actions\ActionContext;
 use Condoedge\Ai\Services\Actions\Results\AiActionResult;
+use Condoedge\Ai\Services\Response\TableRenderer;
 
 /**
  * render_table — generative-UI built-in.
@@ -57,59 +58,21 @@ class RenderTableAction extends AbstractBuiltInAction
         }
         $limit = min($limit, self::MAX_ROWS);
 
-        $payload = $this->normalize($rows, $limit);
+        // THE one renderer (Phase 8 batch A): same redaction as exports (internal
+        // id columns, UI decorations) — the former private normalize() did none —
+        // and the same humanized headers / cells as the chat table.
+        [$headers, $matrix] = (new TableRenderer())->matrix(
+            array_slice(array_values($rows), 0, $limit),
+            ['humanize_values' => true]
+        );
+
+        if ($matrix === []) {
+            return AiActionResult::error('No displayable data to render as a table.');
+        }
 
         return AiActionResult::table(
-            ['headers' => $payload['headers'], 'rows' => $payload['rows']],
-            'Rendered ' . count($payload['rows']) . ' row(s) as a table.'
+            ['headers' => $headers, 'rows' => $matrix],
+            'Rendered ' . count($matrix) . ' row(s) as a table.'
         );
-    }
-
-    /**
-     * Normalize an array of associative rows into {headers, rows} for table rendering.
-     *
-     * @param array<int, array<string, mixed>> $rows
-     * @return array{headers: string[], rows: array<int, array<int, string>>}
-     */
-    private function normalize(array $rows, int $limit): array
-    {
-        $rows = array_slice(array_values($rows), 0, $limit);
-
-        // Derive headers from the union of keys across the (capped) rows, preserving order.
-        $headers = [];
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            foreach (array_keys($row) as $key) {
-                if (!in_array($key, $headers, true)) {
-                    $headers[] = $key;
-                }
-            }
-        }
-
-        $tableRows = [];
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                $tableRows[] = [$this->stringify($row)];
-                continue;
-            }
-            $cells = [];
-            foreach ($headers as $h) {
-                $cells[] = $this->stringify($row[$h] ?? '');
-            }
-            $tableRows[] = $cells;
-        }
-
-        return ['headers' => $headers, 'rows' => $tableRows];
-    }
-
-    private function stringify(mixed $value): string
-    {
-        if (is_scalar($value) || $value === null) {
-            return (string) $value;
-        }
-
-        return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '';
     }
 }

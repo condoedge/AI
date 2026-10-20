@@ -58,7 +58,7 @@ php artisan ai:setup [options]
 **Steps executed (in order):**
 
 1. `ai:validate-config` — checks configuration and connections
-2. `ai:ingest-entities` — loads entities into Neo4j + Qdrant
+2. `ai:ingest` — loads entities into the graph (Neo4j)
 3. `ai:sync-relationships` — creates relationship edges
 4. `ai:index-context` — builds semantic context index
 5. `ai:index-semantic` — indexes entities for detection
@@ -148,9 +148,10 @@ php artisan ai:config:validate
 This command has no options. It validates:
 
 - Required `graph` configuration with label
-- Required `vector` configuration with collection name
-- Properties and embed fields
+- Properties
 - Class existence
+
+There is no `vector` section to validate: an entity config has `graph`, `security`, `metadata` and optional `auto_sync`.
 
 **Example:**
 
@@ -164,7 +165,7 @@ php artisan ai:config:validate
 
 ### ai:ingest
 
-Bulk ingest all Nodeable entities into Neo4j and Qdrant.
+Bulk ingest all Nodeable entities into the graph (Neo4j): each node and its relationships. Records are not embedded and get no Qdrant collection; only `--docs` writes to Qdrant (`documentation_chunks`). See [What Is Stored Where](/docs/{{version}}/usage/data-ingestion#what-is-stored-where).
 
 > **Note:** This command automatically uses `BatchDataIngestionService` which groups entities by label and writes them via Cypher `UNWIND` operations, reducing thousands of individual queries to a handful of batched writes.
 
@@ -175,10 +176,12 @@ php artisan ai:ingest [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--model=` | Specific model class to ingest (e.g., `App\Models\Customer`) | All models |
-| `--fresh` | Clear all data from stores before ingesting | false |
+| `--fresh` | Clear the graph before ingesting (vector collections are not touched) | false |
 | `--chunk=` | Batch size for processing | 100 |
 | `--dry-run` | Show what would be ingested without actually ingesting | false |
 | `--docs` | Index physical documentation files from configured paths | false |
+
+> {info} `--fresh` clears the **graph** only. The Qdrant collections (file chunks and their document maps, context / scope / question indexes) are not touched; each has its own writer.
 
 **Examples:**
 
@@ -201,6 +204,41 @@ php artisan ai:ingest --fresh
 # Index physical documentation files
 php artisan ai:ingest --docs
 ```
+
+---
+
+### ai:documents:map
+
+Build or complete the [document map](/docs/{{version}}/advanced/document-map) of ingested documents: a verified plain-language gist per chunk and, for a document divided into parallel parts, which parts govern this application's users. It writes only the `map` key of the chunks' vector payload.
+
+```bash
+php artisan ai:documents:map [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--backfill` | Every file with something left to do |
+| `--file=` | One file id |
+| `--collection=` | Chunk collection (default: the physical docs collection; the uploads collection too when `ai.file_context.document_map.uploads` is on) |
+| `--retry-failed` | Attempt again the chunks recorded as failed |
+| `--rescope` | Judge the parts of divided documents again (no gist is rebuilt) |
+| `--force` | Rebuild fresh entries too |
+| `--dry-run` | List files and their state, no model call |
+
+**Examples:**
+
+```bash
+# List what a backfill would build
+php artisan ai:documents:map --backfill --dry-run
+
+# Build what is missing (a chunk is attempted once per text)
+php artisan ai:documents:map --backfill
+
+# Rebuild one document
+php artisan ai:documents:map --file=physical:docs/guide.md --force
+```
+
+With a non-`sync` queue the map is also built after each ingest of a physical document (`BuildDocumentMapJob`, in 40-second slices).
 
 ---
 
@@ -282,7 +320,7 @@ php artisan ai:process-files --chunk=25
 
 ### ai:index-semantic
 
-Build vector store indexes for semantic matching. Creates collections for entities, scopes, and templates with embeddings to enable fuzzy/semantic search.
+Build the vector store index for semantic entity matching. Embeds entity names, aliases and descriptions into the `semantic_entities` collection to enable fuzzy/semantic matching of entity labels.
 
 ```bash
 php artisan ai:index-semantic [options]
@@ -290,36 +328,31 @@ php artisan ai:index-semantic [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--rebuild` | Rebuild all indexes (deletes existing) | false |
-| `--entities` | Index entities only | false |
-| `--scopes` | Index scopes only | false |
-| `--templates` | Index templates only | false |
+| `--rebuild` | Rebuild the index (deletes existing) | false |
+| `--entities` | Index entities (the only index; kept for compatibility) | false |
 | `--check` | Check index status | false |
 
 **Examples:**
 
 ```bash
-# Index all (entities, scopes, templates)
+# Index entities
 php artisan ai:index-semantic
 
-# Rebuild all indexes from scratch
+# Rebuild the index from scratch
 php artisan ai:index-semantic --rebuild
 
-# Index entities only
+# Same as the default (entities are the only index)
 php artisan ai:index-semantic --entities
-
-# Index scopes only
-php artisan ai:index-semantic --scopes
 
 # Check index status
 php artisan ai:index-semantic --check
 ```
 
-**Collections created:**
+**Collection created:**
 
 - `semantic_entities`: Entity names, aliases, descriptions
-- `semantic_scopes`: Scope names, descriptions, concepts
-- `semantic_templates`: Query template descriptions
+
+Scopes are indexed by `ai:index-context` / `ai:index-scopes` (`scope_examples`), not by this command.
 
 ---
 

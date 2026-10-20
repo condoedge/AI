@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Tests\Unit\Services\Security;
 
 use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\Services\QueryExecutor;
 use Condoedge\Ai\Services\Security\AiSecurityService;
 use Condoedge\Ai\Tests\TestCase;
@@ -130,17 +131,29 @@ class TenantScopingLeakTest extends TestCase
         config()->set('ai.security.on_permission_unexistent', 'bypass');
 
         // The store must NEVER be queried for an unprovable sensitive shape.
-        $this->mockGraphStore->shouldNotReceive('query');
+        // Mockery's never() only fails at Mockery::close() (a mocked `array` return
+        // silently yields []), so also record every call and assert on it in-body.
+        $storeCalls = [];
+        $this->mockGraphStore->shouldReceive('query')->never()
+            ->andReturnUsing(function (string $query) use (&$storeCalls) {
+                $storeCalls[] = $query;
+                return [];
+            });
 
         $user = (object) ['id' => 7];
         $this->bindSecurityService($this->permissiveSecurity());
 
+        // execute() returns a QueryExecutionResult DTO (readonly public properties),
+        // not an array.
         $result = $this->executor->execute($cypher, [], ['user' => $user]);
 
-        $this->assertTrue($result['success']);
-        $this->assertSame([], $result['data'], "Unprovable sensitive query must return no rows: {$cypher}");
-        $this->assertTrue($result['metadata']['safe_stop'] ?? false, "execute() metadata must mark safe_stop: {$cypher}");
-        $this->assertFalse($result['metadata']['security_filter_applied'], "filter must not be marked applied: {$cypher}");
+        $this->assertSame([], $storeCalls, "Leak shape reached the graph store: {$cypher}");
+        $this->assertInstanceOf(QueryExecutionResult::class, $result);
+        $this->assertTrue($result->success);
+        $this->assertSame([], $result->data, "Unprovable sensitive query must return no rows: {$cypher}");
+        $this->assertSame([], $result->errors, "Safe-stop is a clean result, not an error: {$cypher}");
+        $this->assertTrue($result->metadata['safe_stop'] ?? false, "execute() metadata must mark safe_stop: {$cypher}");
+        $this->assertFalse($result->metadata['security_filter_applied'], "filter must not be marked applied: {$cypher}");
     }
 
     /**

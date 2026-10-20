@@ -46,6 +46,12 @@ class DigestSourceResult
         public readonly ?string $error = null,
         /** FALLBACK failure — honest-empty + note, never a failed section (§3 step 4). */
         public readonly ?string $fallbackError = null,
+        /**
+         * The cypher that produced $rows (the FALLBACK cypher when $usedFallback): the
+         * composer maps its projections to entity properties — declared money columns
+         * (MoneyColumns) and enum legends (CodedColumns), p12 H2/H3.
+         */
+        public readonly ?string $cypher = null,
     ) {
     }
 
@@ -71,6 +77,7 @@ class DigestSourceResult
             emptyText: $this->emptyText,
             error: $this->error,
             fallbackError: $this->fallbackError,
+            cypher: $this->cypher,
         );
     }
 

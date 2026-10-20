@@ -43,11 +43,11 @@ class QueryContractDtoTest extends TestCase
 
     public function test_generator_generate_returns_the_generation_result_dto(): void
     {
-        $this->mockLlm->shouldReceive('complete')
+        $this->mockLlm->shouldReceive('chatJson')
             ->once()
-            ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
+            ->andReturn((object) ['needs_query' => true, 'cypher' => 'MATCH (n:Customer) RETURN n LIMIT 100', 'reason' => '']);
 
-        $generator = new QueryGenerator($this->mockLlm, $this->mockGraph, ['enable_templates' => false]);
+        $generator = new QueryGenerator($this->mockLlm, $this->mockGraph);
 
         $context = new PipelineContext();
         $context->graphSchema = ['labels' => ['Customer'], 'relationships' => []];

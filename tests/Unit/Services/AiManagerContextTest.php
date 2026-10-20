@@ -89,7 +89,6 @@ class AiManagerContextTest extends TestCase
         $ctx->question = $question;
         $ctx->similarQueries = [];
         $ctx->graphSchema = ['labels' => $labels];
-        $ctx->relevantEntities = [];
 
         return $ctx;
     }

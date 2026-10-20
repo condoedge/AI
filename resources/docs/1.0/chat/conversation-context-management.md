@@ -1,1282 +1,256 @@
 # Conversation Context Management
 
-Track conversation context across multiple messages to enable natural follow-up questions and reference resolution.
+Track conversation context across turns so users can ask natural follow-up questions ("how many of those…", "export that", "et celles-là ?").
 
 ---
 
 ## Overview
 
-The Conversation Context Management system allows users to have natural multi-turn conversations with the AI. It tracks what entities are being discussed, resolves references like "those" and "them", detects file references, and maintains context across multiple questions.
+A conversation's state lives in the `context_snapshot` JSON column of `AiConversation`. It is **written once per turn, after the pipeline ran**, and handed to the next turn as its `conversation_context`.
 
-### Key Benefits
+The **semantic** judgments about the *current* question are made by the Query Understanding (QU) LLM call, which receives that conversation context:
 
-- **Natural Conversations** - Users can ask follow-up questions without repeating context
-- **Reference Resolution** - Pronouns like "those", "them", "it" are automatically resolved
-- **Entity Tracking** - The system tracks which entities are being discussed
-- **File Detection** - Recognizes file references like "report.pdf" or "the file"
-- **Context-Aware Prompts** - The LLM receives relevant conversation history and result samples
+- whether the question refers back to the result just shown (`followUpReference`);
+- which entity types it is about (`entityTypes`);
+- its intent (`count | list | lookup | aggregate | compare | other`), language and export format.
 
-### Example Conversation
+There is no pre-pipeline regex/word-list analysis of the question. The question reaches the pipeline **verbatim**; it is never rewritten.
 
 ```
-User: "Show me all customers in California"
-AI: [Returns list of California customers]
+User: "Show me the members of my team"         → QU: entity_types [User], follow_up false
+AI:   [roster, 523 rows]                        → snapshot: last_cypher_query, sample, last_entity_types [Team, User]
 
-User: "How many of those placed orders last month?"
-AI: [Understands "those" = California customers, returns count]
+User: "Ok, could you add their last login?"     → QU: follow_up_reference true, entity_types []
+AI:   [same roster + last login]                → retrieval re-seeded from last_entity_types (anchor)
 
-User: "Show me the top 5 by revenue"
-AI: [Continues with California customers context]
-
-User: "Show me their orders"
-AI: [Resolves "their" to the top 5 California customers, returns their orders]
+User: "Parfait — exporte-la en Excel"           → QU: follow_up_reference true, export_format excel, language fr
+AI:   [Excel of the previous result, French copy]
 ```
 
 ---
 
-## Architecture
-
-The system consists of five main components:
+## The Turn Flow
 
 ```
-                    ┌─────────────────────────┐
-                    │     AiChatService       │
-                    │  askWithConversation()  │
-                    └───────────┬─────────────┘
-                                │
-                    ┌───────────▼─────────────┐
-                    │ ConversationContextMgr  │
-                    │  - processQuestion()    │
-                    │  - recordResponse()     │
-                    │  - buildPromptContext() │
-                    └───────────┬─────────────┘
-                       ┌────────┼────────┐
-           ┌───────────▼───┐    │    ┌───▼───────────┐
-           │EntityExtractor│    │    │ReferenceResolver│
-           │ - Questions   │    │    │ - Follow-ups    │
-           │ - Cypher      │    │    │ - Pronouns      │
-           └───────────────┘    │    └─────────────────┘
-                          ┌─────▼─────────┐
-                          │FilenameExtract│
-                          │ - File refs   │
-                          └───────────────┘
-                                │
-        ┌───────────────────────┴───────────────────────┐
-        │                                               │
-┌───────▼───────────────────┐       ┌───────────────────▼───────┐
-│ ConversationContextSection│       │ResponseConversationContext│
-│  (Query prompt context)   │       │  (Response prompt context)│
-└───────────────────────────┘       └───────────────────────────┘
+AskQuestionUseCase::execute()
+  │
+  ├─ 0. Security gate (ChatSecurityGuard) — before anything else
+  │
+  ├─ 1. conversation_context = ConversationContextManager::buildPromptContext($conversation)
+  │     (the snapshot recorded after the PREVIOUS turn + recent exchanges)
+  │     user message persisted (context_used = that exact context)
+  │
+  ├─ 2. AI::answerQuestion($question, ['conversation_context' => …, 'user' => …, …])
+  │       ├─ QU (QueryUnderstandingService::analyze) sees the conversation block
+  │       ├─ entity selection: QU entity types (+ anchor / conversation focus, see below)
+  │       ├─ file context, query generation, execution, composition
+  │       └─ response metadata stamps QU's subject, entity_types, intent
+  │
+  └─ 3. ConversationContextManager::recordResponse() — snapshot write-back,
+        committed together with the assistant message
 ```
+
+### How the focus is decided
+
+| Where | Rule |
+|-------|------|
+| This turn's selection | QU `entityTypes` are merged into semantic selection (`ai.semantic_context.qu_entity_score`, 0.8). |
+| Conversation focus carry | The snapshot's `focused_entity` (recorded after the previous turn) is soft-included (`conversation_focus_score`, 0.55) **only when QU named no entity type**. |
+| Augmentation anchor | When QU says `followUpReference` **and** a data result is recorded (`last_cypher_query`), the previous turn's `last_entity_types` (fallback `focused_entity`) are re-seeded at `anchor_entity_score` (0.8), in addition to whatever QU produced. |
+| Snapshot after the turn | `focused_entity` = first label of the **executed** Cypher; if no Cypher ran, QU `entityTypes[0]` (from response `metadata.entity_types`); with neither, the previous focus is kept. |
+
+### What `followUpReference` drives downstream
+
+- **Export of the previous result:** an export ask that refers back uses the recorded result (`last_cypher_query` is re-executed through the scoped executor to recover the full set; digest turns keep their rows in full).
+- **Augmentation anchor:** see the table above.
+- **File-search follow-up angle:** the verbatim-question angle is searched as `"{focused_entity}: {question}"`.
+- **Few-shot hygiene:** a follow-up turn is never stored as a question→Cypher example.
 
 ---
 
 ## Components
 
-### EntityExtractor
+### ConversationContextManager
 
-Extracts entity types and query patterns from questions and Cypher queries.
+**Location:** `src/Services/Context/ConversationContextManager.php` (container singleton)
+
+```php
+$manager = app(\Condoedge\Ai\Services\Context\ConversationContextManager::class);
+
+// After a turn (AskQuestionUseCase does this for you)
+$manager->recordResponse($conversation, $answerText, $cypherOrEmpty, [
+    'data' => $rows,
+    'referenced_files' => $files,
+    'metadata' => $aiResponse['metadata'], // subject, entity_types, intent, response.digest
+]);
+
+// Before a turn: the context the pipeline (and QU) receives
+$context = $manager->buildPromptContext($conversation);            // ai.chat.max_history_messages
+$context = $manager->buildPromptContext($conversation, maxHistory: 5);
+```
+
+**`recordResponse()` rules**
+
+| Snapshot key | Written |
+|--------------|---------|
+| `focused_entity` | Every turn (see focus rules above) |
+| `mentioned_entities` | Every turn; previous + this turn's entity types, de-duplicated, **most recent 10** (`MAX_MENTIONED_ENTITIES`) |
+| `last_relationships`, `last_answer_summary` (500 chars), `updated_at` | Every turn |
+| `last_cypher_query`, `last_cypher_parameters`, `last_result_count`, `last_result_sample`, `focused_entity_filter`, `last_entity_types` | **Only when the turn produced rows** (preserve-on-empty) |
+| `last_subject` | Only when `metadata.subject` is non-empty |
+| `last_referenced_files` | Only when the turn referenced files |
+| `last_query_type` | From `query_type`, else `metadata.intent` (QU intent) |
+
+**Preserve-on-empty.** A turn that showed no rows (a documents answer, a 0-row query, a caught error) must not erase what the user was last *shown*: "export that" after a documents turn still exports the previous roster. `last_result_sample` is the first 10 rows of an ordinary turn (export recovers the full set by re-executing `last_cypher_query`); a **digest** turn records no Cypher and keeps its display-capped rows in full.
+
+**PII in the snapshot (data retention).** `last_result_sample` holds real row values, and `last_cypher_parameters` holds **raw PII values**: the `$pii_…` query parameters (name → real email, phone and so on) that replaced the PII tokens the model copied into its query. That is the same class of data as `last_result_sample`. Both live in the conversation's `context_snapshot` and are never sent to an LLM: prompts only ever see tokens such as `[email#1]` and parameter names. They are retained exactly as long as the conversation, and deleting the conversation deletes them. On read, only keys matching `^pii_[a-f0-9]{12}$` are honoured. Hosts with a stricter retention policy for personal data should prune conversations accordingly.
+
+**`buildPromptContext()`** returns `focused_entity`, `focused_entity_filter`, `last_result_sample`, `last_result_count`, `last_cypher_query`, `last_cypher_parameters`, `last_entity_types`, `last_subject`, `last_query_type`, `last_relationships`, `mentioned_entities`, `last_answer_summary`, `last_referenced_files` and `recent_exchanges` (assistant answers truncated to `ai.chat.history_answer_chars`, default 800).
+
+### EntityExtractor
 
 **Location:** `src/Services/Context/EntityExtractor.php`
 
-```php
-use Condoedge\Ai\Services\Context\EntityExtractor;
-
-$extractor = new EntityExtractor();
-
-// Extract from a natural language question
-$result = $extractor->extractFromQuestion(
-    'How many customers placed orders last month?',
-    ['labels' => ['Customer', 'Order', 'Product']]
-);
-
-// Returns:
-// [
-//     'focused_entity' => 'Customer',
-//     'query_type' => 'count',
-//     'mentioned_entities' => ['Customer', 'Order']
-// ]
-
-// Extract from a Cypher query
-$cypherResult = $extractor->extractFromCypher(
-    'MATCH (c:Customer)-[:PLACED]->(o:Order) RETURN c'
-);
-
-// Returns:
-// [
-//     'entities' => ['Customer', 'Order'],
-//     'relationships' => ['PLACED']
-// ]
-```
-
-**Query Types Detected:**
-
-| Type | Trigger Words |
-|------|---------------|
-| `aggregate` | sum, total, average, avg, max, min, revenue |
-| `count` | how many, count, number of |
-| `list` | show, list, display, get, find, all |
-| `detail` | detail, specific, particular, information about |
-| `compare` | compare, versus, vs, difference, between |
-
-**How Entity Detection Works:**
-
-1. The question is converted to lowercase for case-insensitive matching
-2. Each schema label is checked for presence (singular and plural forms)
-3. The first mentioned entity becomes the "focused entity"
-4. Query type is detected using regex patterns against the question
-
----
-
-### ReferenceResolver
-
-Resolves conversational references like "those", "them", "the same" by using conversation context.
-
-**Location:** `src/Services/Context/ReferenceResolver.php`
+Structural only: labels and relationship types of an **executed** Cypher query. It does not analyse natural-language questions.
 
 ```php
-use Condoedge\Ai\Services\Context\ReferenceResolver;
-
-$resolver = new ReferenceResolver();
-
-// Check if a question is a follow-up
-$isFollowUp = $resolver->isFollowUp('and those in California?');
-// Returns: true
-
-// Detect reference type
-$type = $resolver->detectReferenceType('Show me those');
-// Returns: 'demonstrative'
-
-// Resolve references using context
-$context = [
-    'focused_entity' => 'Customer',
-    'last_cypher_query' => 'MATCH (c:Customer) RETURN c',
-];
-
-$resolution = $resolver->resolve('filter those by state', $context);
-
-// Returns:
-// [
-//     'resolved' => true,
-//     'resolved_entity' => 'Customer',
-//     'operation' => 'filter',
-//     'enriched_question' => 'filter customers by state',
-//     'base_query' => null,
-//     'reference_type' => 'demonstrative'
-// ]
+$result = app(\Condoedge\Ai\Services\Context\EntityExtractor::class)
+    ->extractFromCypher('MATCH (c:Customer)-[:PLACED]->(o:Order) RETURN c');
+// ['entities' => ['Customer', 'Order'], 'relationships' => ['PLACED']]
 ```
-
-**Follow-up Patterns Detected:**
-
-- Conjunctions: "and...", "but...", "also..."
-- Questions: "what about..."
-- Pronouns: "those", "them", "these", "it"
-- Continuations: "show me the...", "the same...", "top 5..."
-
-**Reference Types:**
-
-| Type | Examples |
-|------|----------|
-| `pronoun` | them, they, it |
-| `demonstrative` | those, these, that, this |
-| `definite` | the same, the top, the first |
-| `implicit` | "top 5 by revenue" (no entity mentioned) |
-
-**How Reference Resolution Works:**
-
-1. Check if question starts with conjunctions or contains pronouns
-2. Detect the reference type (pronoun, demonstrative, definite, implicit)
-3. Look up the focused entity from conversation context
-4. Determine the operation (filter, modify, extend)
-5. Build an enriched question by replacing pronouns with the resolved entity
-
-**Operation Types:**
-
-| Operation | Trigger Words | Description |
-|-----------|---------------|-------------|
-| `modify` | sort, order, group | Reorders or reorganizes results |
-| `extend` | same, also, include | Adds to existing results |
-| `filter` | filter, where, in, with, by | Narrows down results |
-
----
 
 ### FilenameExtractor
 
-Extracts filenames from natural language queries to enable filename-based search alongside semantic search.
-
 **Location:** `src/Services/Context/FilenameExtractor.php`
 
-```php
-use Condoedge\Ai\Services\Context\FilenameExtractor;
-
-$extractor = new FilenameExtractor();
-
-// Extract filenames from a query
-$filenames = $extractor->extract('Show me the report.pdf file');
-// Returns: ['report.pdf']
-
-// Works with quoted filenames (can contain spaces)
-$filenames = $extractor->extract('Find "my document.pdf"');
-// Returns: ['my document.pdf']
-
-// Extracts from paths
-$filenames = $extractor->extract('Look at docs/readme.md');
-// Returns: ['readme.md']
-```
-
-**Supported File Extensions:**
-
-- Documents: txt, pdf, doc, docx, md, rtf, odt
-- Spreadsheets: xls, xlsx, csv
-- Data: json, xml, html, htm
-- Presentations: ppt, pptx
-- Images: png, jpg, jpeg, gif, svg
-
-**Detection Patterns:**
-
-1. **Quoted filenames** - Matches `"my document.pdf"` or `'report.xlsx'`
-2. **Unquoted filenames** - Matches `report.pdf`, `budget_2024.xlsx`
-3. **Path extraction** - Extracts filename from paths like `docs/readme.md`
-
----
-
-### ConversationContextManager
-
-Orchestrates context tracking by combining entity extraction and reference resolution.
-
-**Location:** `src/Services/Context/ConversationContextManager.php`
+Extracts explicit filenames (`report.pdf`, `"my document.pdf"`, `docs/readme.md`) so file search can match by filename alongside semantic search.
 
 ```php
-use Condoedge\Ai\Services\Context\ConversationContextManager;
-use Condoedge\Ai\Services\Context\EntityExtractor;
-use Condoedge\Ai\Services\Context\ReferenceResolver;
-
-$manager = new ConversationContextManager(
-    new EntityExtractor(),
-    new ReferenceResolver()
-);
+$filenames = (new \Condoedge\Ai\Services\Context\FilenameExtractor())->extract('Show me the report.pdf file');
+// ['report.pdf']
 ```
 
-**Key Methods:**
+### ConversationContextSection (query generation prompt)
 
-#### processQuestion()
+**Location:** `src/Services/PromptSections/ConversationContextSection.php` — priority 55.
 
-Process an incoming question and update conversation context.
+Included when the context has a `focused_entity`, `recent_exchanges`, `last_cypher_query`, `last_result_sample` or `last_referenced_files`. It renders the current focus (and active filter), the previous query and its result count, a result sample, recent exchanges, the entities discussed and previously referenced files.
 
-```php
-$result = $manager->processQuestion(
-    $conversation,
-    'Show me customers in California',
-    ['labels' => ['Customer', 'Order', 'Product']]
-);
+### ResponseConversationContextSection (response prompt)
 
-// Returns:
-// [
-//     'is_follow_up' => false,
-//     'focused_entity' => 'Customer',
-//     'query_type' => 'list',
-//     'mentioned_entities' => ['Customer'],
-//     'enriched_question' => 'Show me customers in California',
-//     'resolved_entity' => null
-// ]
-```
+**Location:** `src/Services/ResponseSections/ResponseConversationContextSection.php` — priority 45.
 
-#### recordResponse()
-
-Record an AI response and update context with query information. This method extracts comprehensive data from the response to enable reference resolution in follow-up questions.
-
-```php
-$manager->recordResponse(
-    $conversation,
-    'Here are 150 customers in California...',
-    'MATCH (c:Customer {state: "CA"}) RETURN c',
-    [
-        'data' => [...],                    // Query results
-        'referenced_files' => [...],        // Files mentioned in response
-        'detected_template' => 'list',      // Query template type
-        'query_type' => 'list',             // Type of query
-        'insights' => [...],                // Analysis insights
-        'stats' => [...],                   // Execution statistics
-        'available_actions' => [...],       // Actions for entity types
-        'visualizations' => [...],          // Visualization metadata
-    ]
-);
-```
-
-**Data Stored by recordResponse():**
-
-| Field | Description |
-|-------|-------------|
-| `focused_entity` | Primary entity type from the query |
-| `mentioned_entities` | All entities mentioned in conversation |
-| `last_relationships` | Relationships from Cypher query |
-| `last_cypher_query` | The executed Cypher query |
-| `last_result_count` | Number of results returned |
-| `last_result_sample` | First 10 results for context |
-| `focused_entity_filter` | WHERE clause conditions |
-| `last_answer_summary` | Truncated response (500 chars) |
-| `last_referenced_files` | Files mentioned in response |
-| `last_detected_template` | Query template type |
-| `last_insights` | Analysis insights |
-| `last_execution_stats` | Query execution statistics |
-| `last_available_actions` | Available entity actions |
-| `last_visualizations` | Visualization metadata |
-
-#### buildPromptContext()
-
-Build comprehensive context data for the prompt builder.
-
-```php
-$promptContext = $manager->buildPromptContext($conversation, maxHistory: 5);
-
-// Returns:
-// [
-//     'focused_entity' => 'Customer',
-//     'focused_entity_filter' => 'c.state = "CA"',
-//     'last_result_sample' => [...],
-//     'last_result_count' => 150,
-//     'last_cypher_query' => 'MATCH (c:Customer {state: "CA"}) RETURN c',
-//     'last_query_type' => 'list',
-//     'last_detected_template' => 'list',
-//     'last_relationships' => ['PLACED'],
-//     'mentioned_entities' => ['Customer', 'Order'],
-//     'last_answer_summary' => 'Here are 150 customers...',
-//     'last_referenced_files' => [...],
-//     'last_insights' => [...],
-//     'last_visualizations' => [...],
-//     'last_execution_stats' => [...],
-//     'last_available_actions' => [...],
-//     'recent_exchanges' => [
-//         [
-//             'role' => 'user',
-//             'question' => 'Show me all customers',
-//             'answer_summary' => null,
-//         ],
-//         [
-//             'role' => 'assistant',
-//             'question' => null,
-//             'answer_summary' => 'Here are all customers...',
-//         ],
-//     ],
-// ]
-```
-
----
-
-### ConversationContextSection
-
-Adds conversation context to LLM prompts for query generation.
-
-**Location:** `src/Services/PromptSections/ConversationContextSection.php`
-
-**Priority:** 55 (after similar_queries at 50, before detected_entities at 60)
-
-**Inclusion Conditions:**
-
-The section is included when any of the following exist in context:
-- `focused_entity` - A currently focused entity type
-- `recent_exchanges` - Recent conversation history
-- `last_cypher_query` - A previous Cypher query
-- `last_result_sample` - Sample of previous results
-- `last_referenced_files` - Files from previous response
-
-**Formatted Output Example:**
-
-```
-## Conversation Context
-
-**Current Focus:** Customer (list query)
-**Active Filter:** `c.state = "CA"`
-
-**Previous Query:**
-```cypher
-MATCH (c:Customer {state: "CA"}) RETURN c
-```
-Returned 150 results.
-
-**Sample of Previous Results:**
-```json
-[
-  {"name": "Acme Corp", "state": "CA"},
-  {"name": "Tech Inc", "state": "CA"}
-]
-```
-
-**Recent Conversation:**
-- User: Show me all customers
-  Assistant: Here are all customers...
-
-**Entities discussed:** Customer, Order
-
-**Files Referenced in Previous Response:**
-- [report.pdf] (ID: 123): Summary of quarterly sales...
-
-**Previous Insights:**
-- Most customers are in California
-- Average order value is $500
-
-**Note:** Previous results were truncated (showing 100 of 500 available).
-
-**Available Actions from Previous Response:**
-- **Customer:**
-  - `view_details`: View customer details
-  - `export`: Export to CSV
-
-**Instructions:** Use the above context to understand follow-up questions. If user references 'those', 'them', 'the same', etc., use the previous results/filter. If user asks about 'the file', 'that file', etc., refer to the files referenced above.
-```
-
----
-
-### ResponseConversationContextSection
-
-Adds conversation context to response generation prompts, enabling the AI to answer follow-up questions about files and previous results.
-
-**Location:** `src/Services/ResponseSections/ResponseConversationContextSection.php`
-
-**Priority:** 45 (after FileContextSection at 40, before ResultsData at 50)
-
-**Inclusion Conditions:**
-
-The section is included when any of the following exist:
-- `last_referenced_files` - Files from previous response
-- `last_result_sample` - Sample of previous results
-- `focused_entity` - A currently focused entity type
-
-**Formatted Output Example:**
-
-```
-=== Conversation Context ===
-
-**Files Referenced in Previous Response:**
-
-**[1] report.pdf** (ID: 123)
-Download: /api/files/123/download
-Content:
-```
-Quarterly sales summary showing growth of 15%...
-```
-
-**Instructions:** If user asks about 'the file', 'that file', 'raw content', or similar references, use the file content above to answer.
-
-**Previous Query Results Sample:**
-```json
-[
-  {"name": "Acme Corp", "revenue": 50000}
-]
-```
-
-**Current Focus:** Customer
-**Active Filter:** `c.state = "CA"`
-```
+Included when the context has `last_referenced_files`, `last_result_sample` or `focused_entity`; lets the answer refer to "the file" / the previous results.
 
 ---
 
 ## Data Storage
 
-### AiConversation Model
+### AiConversation
 
-The `AiConversation` model stores conversation state and context in the `context_snapshot` JSON field.
-
-**Location:** `src/Models/AiConversation.php`
-
-**Key Fields:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `uuid` | string | Unique identifier |
-| `user_id` | integer | Owner user ID |
-| `team_id` | integer | Team ID (optional) |
-| `title` | string | Auto-generated from first message |
-| `status` | string | active, archived |
-| `metadata` | json | Additional metadata |
-| `context_snapshot` | json | Conversation context data |
-| `last_message_at` | datetime | Timestamp of last message |
-
-**Context Accessor Methods:**
+`context_snapshot` (JSON) holds the keys listed under `recordResponse()`. Accessors:
 
 ```php
-// Get the currently focused entity
-$entity = $conversation->getFocusedEntity();
-// Returns: 'Customer' or null
+$conversation->getFocusedEntity();      // ?string
+$conversation->getMentionedEntities();  // string[] (most recent 10)
+$conversation->getLastResultSample();   // array
+$conversation->context_snapshot['last_cypher_query'] ?? null;
 
-// Get all mentioned entities
-$entities = $conversation->getMentionedEntities();
-// Returns: ['Customer', 'Order']
-
-// Get the last query type
-$queryType = $conversation->getLastQueryType();
-// Returns: 'list', 'count', 'aggregate', etc.
-
-// Get the last Cypher query (from messages)
-$cypher = $conversation->getLastCypherQuery();
-// Returns: 'MATCH (c:Customer) RETURN c'
-
-// Get the focused entity's filter condition
-$filter = $conversation->getFocusedEntityFilter();
-// Returns: 'c.state = "CA"'
-
-// Get a sample of last results
-$sample = $conversation->getLastResultSample();
-// Returns: [['name' => 'Acme Corp'], ...]
-
-// Get the previous Cypher query (from context)
-$previousQuery = $conversation->getPreviousCypherQuery();
-// Returns: 'MATCH (c:Customer) RETURN c'
-
-// Get the count of last results
-$count = $conversation->getLastResultCount();
-// Returns: 150
+$conversation->updateContextSnapshot(['last_subject' => 'team members']); // merges
 ```
 
-**Context Update Methods:**
+### AiMessage
 
-```php
-// Update context snapshot (merges with existing)
-$conversation->updateContextSnapshot([
-    'focused_entity' => 'Customer',
-    'mentioned_entities' => ['Customer', 'Order'],
-    'last_query_type' => 'list',
-]);
+| Field | Description |
+|-------|-------------|
+| `role` / `content` | `user` or `assistant`, message text |
+| `context_used` | (user messages) the exact `conversation_context` the turn received |
+| `cypher_query`, `response_data` | (assistant messages) the executed query and its rows |
+| `metadata` | `referenced_files`, `suggestions`, `error`, `regenerated`, `invocations`, `export_document_markdown`, `trace` |
 
-// Update entity context with query result data
-$conversation->updateEntityContext([
-    'ids' => [1, 2, 3],
-    'names' => ['Acme', 'Tech Inc', 'Global Corp'],
-]);
-```
-
-### AiMessage Model
-
-The `AiMessage` model stores individual messages within a conversation.
-
-**Location:** `src/Models/AiMessage.php`
-
-**Key Fields:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `conversation_id` | integer | Parent conversation |
-| `role` | string | 'user' or 'assistant' |
-| `content` | text | Message content |
-| `response_data` | json | Structured response data |
-| `context_used` | json | Context at time of message |
-| `cypher_query` | text | Generated Cypher query |
-| `execution_time_ms` | integer | Query execution time |
-| `confidence_score` | float | AI confidence score |
-| `metadata` | json | Additional metadata |
-
-**File Reference Methods:**
-
-```php
-// Get referenced files from metadata
-$files = $message->getReferencedFiles();
-// Returns: [['id' => 123, 'name' => 'report.pdf', 'snippet' => '...']]
-
-// Check if message has file references
-if ($message->hasFileReferences()) {
-    // Process file references
-}
-```
-
-**Metadata Structure:**
-
-The message metadata can contain:
-- `sources` or `referenced_files` - File references
-- `suggestions` - Follow-up question suggestions
-- `is_follow_up` - Whether this was a follow-up question
-- `resolved_entity` - Entity resolved from reference
-- `error` - Error information if query failed
-- `regenerated` - Whether response was regenerated
+`AiConversation::addMessage($role, $content, $data)` accepts `metadata`, `referenced_files`, `suggestions`, `error`, `regenerated`, `response_data`, `context_used`, `cypher_query`, `execution_time_ms`, `confidence_score`.
 
 ---
 
 ## Usage
 
-### Basic Usage with askWithConversation()
-
-The simplest way to use conversation context is through `AiChatService::askWithConversation()`:
+The single way to run a chat turn programmatically is `AskQuestionUseCase`. Pass the **same** conversation for follow-ups; nothing else is needed:
 
 ```php
 use Condoedge\Ai\Models\AiConversation;
-use Condoedge\Ai\Services\Chat\AiChatService;
+use Condoedge\Ai\Services\Chat\Inputs\AskQuestionInput;
+use Condoedge\Ai\Services\Chat\UseCases\AskQuestionUseCase;
 
-// Create or retrieve a conversation
-$conversation = AiConversation::create([
-    'user_id' => auth()->id(),
-]);
+$conversation = AiConversation::create(['user_id' => auth()->id()]);
+$useCase = app(AskQuestionUseCase::class);
 
-$chatService = app(AiChatService::class);
-
-// First question
-$response1 = $chatService->askWithConversation(
-    'Show me all customers in California',
-    $conversation
-);
-
-// Follow-up question - "those" is automatically resolved
-$response2 = $chatService->askWithConversation(
-    'How many of those placed orders last month?',
-    $conversation
-);
-
-// Another follow-up
-$response3 = $chatService->askWithConversation(
-    'Show me the top 5 by revenue',
-    $conversation
-);
-```
-
-### Preview Question Processing
-
-Use `prepareQuestionWithContext()` to preview how a question will be enriched:
-
-```php
-$schema = ['labels' => ['Customer', 'Order', 'Product']];
-
-$preview = $chatService->prepareQuestionWithContext(
-    'and those in the sales team?',
-    $conversation,
-    $schema
-);
-
-// Returns:
-// [
-//     'is_follow_up' => true,
-//     'enriched_question' => 'Show Customers and customers in the sales team?',
-//     'focused_entity' => 'Customer',
-//     'query_type' => null,
-//     'mentioned_entities' => [],
-//     'resolved_entity' => 'Customer',
-//     'context' => [...]
-// ]
-```
-
-### Direct Context Manager Usage
-
-For advanced use cases, use the ConversationContextManager directly:
-
-```php
-use Condoedge\Ai\Services\Context\ConversationContextManager;
-use Condoedge\Ai\Services\Context\EntityExtractor;
-use Condoedge\Ai\Services\Context\ReferenceResolver;
-
-$manager = new ConversationContextManager(
-    new EntityExtractor(),
-    new ReferenceResolver()
-);
-
-// Process a question
-$result = $manager->processQuestion($conversation, $question, $schema);
-
-if ($result['is_follow_up']) {
-    // Use enriched question for AI
-    $questionToAsk = $result['enriched_question'];
+foreach (['Show me all customers in California', 'How many of those placed orders last month?'] as $question) {
+    $result = $useCase->execute(new AskQuestionInput(
+        question: $question,
+        conversation: $conversation,
+        style: 'friendly',
+        user: auth()->user(),
+    ));
 }
 
-// After getting AI response
-$manager->recordResponse(
-    $conversation,
-    $response,
-    $cypherQuery,
-    $queryResults
-);
-
-// Build context for custom prompt
-$promptContext = $manager->buildPromptContext($conversation);
+echo $result->answer; // also ->data, ->suggestions, ->sources, ->cypher, ->metadata, ->failed()
 ```
 
----
+**AskQuestionInput:** `question`, `conversation`, `style`, `user` (required unless `allowAnonymous: true`), `allowAnonymous`, `pageContext` (optional `PageContext`), `observer` (optional `PipelineObserverInterface`, observation only), `pipelineOptions` (allowlisted: `store_examples`).
 
-## How It Works
-
-### Question Processing Flow
-
-```
-1. User asks: "Show me customers in California"
-   │
-   ├─► EntityExtractor identifies:
-   │   - focused_entity: Customer
-   │   - query_type: list
-   │
-   ├─► ReferenceResolver checks:
-   │   - isFollowUp: false (no pronouns/conjunctions)
-   │
-   └─► Context updated on AiConversation:
-       - focused_entity: Customer
-       - mentioned_entities: [Customer]
-
-2. AI responds with Cypher query
-   │
-   └─► recordResponse() updates:
-       - last_cypher_query: MATCH (c:Customer)...
-       - last_result_count: 150
-       - last_result_sample: [first 10 results]
-       - focused_entity_filter: c.state = "CA"
-       - last_answer_summary: "Here are 150 customers..."
-
-3. User asks: "How many of those placed orders?"
-   │
-   ├─► EntityExtractor identifies:
-   │   - focused_entity: Order (from "orders")
-   │   - query_type: count
-   │
-   ├─► ReferenceResolver detects:
-   │   - isFollowUp: true ("those" detected)
-   │   - Resolves "those" → Customer (from context)
-   │   - operation: filter
-   │
-   └─► Returns enriched question:
-       "How many of customers placed orders?"
-```
-
-### Multi-Turn Example: Resolving "their orders"
-
-This example shows how the system resolves complex references across multiple turns:
-
-```
-Turn 1: User: "Show me all customers in California"
-
-        Processing:
-        - EntityExtractor: focused_entity = Customer, query_type = list
-        - ReferenceResolver: is_follow_up = false
-
-        Context after response:
-        - focused_entity: Customer
-        - focused_entity_filter: c.state = "CA"
-        - last_result_count: 150
-        - last_result_sample: [{name: "Acme Corp", id: 1}, ...]
-
-Turn 2: User: "Show me the top 5 by revenue"
-
-        Processing:
-        - EntityExtractor: focused_entity = null, query_type = aggregate
-        - ReferenceResolver: is_follow_up = true (implicit reference)
-        - Resolved entity: Customer (from context)
-
-        Context after response:
-        - focused_entity: Customer
-        - last_result_sample: [{name: "Acme Corp", revenue: 500000}, ...]
-
-Turn 3: User: "Show me their orders"
-
-        Processing:
-        - EntityExtractor: focused_entity = Order, query_type = list
-        - ReferenceResolver:
-          - is_follow_up = true
-          - reference_type = pronoun ("their")
-          - Resolved: "their" → top 5 California customers
-        - enriched_question: "Show me orders for customers"
-
-        The AI generates a query that:
-        1. Uses the previous result sample to identify the top 5 customers
-        2. Queries orders for those specific customers
-```
-
-### Context Snapshot Structure
-
-The `AiConversation` model stores context in the `context_snapshot` JSON field:
-
-```php
-[
-    // Entity tracking
-    'focused_entity' => 'Customer',           // Currently discussed entity
-    'mentioned_entities' => ['Customer', 'Order'],  // All entities mentioned
-    'focused_entity_filter' => 'c.state = "CA"',    // WHERE clause filter
-
-    // Query information
-    'last_query_type' => 'list',              // Type of last query
-    'last_detected_template' => 'list',       // Template used
-    'last_relationships' => ['PLACED'],       // Relationships from Cypher
-    'last_cypher_query' => 'MATCH...',        // Full Cypher query
-
-    // Results
-    'last_result_count' => 150,               // Number of results
-    'last_result_sample' => [...],            // First 10 results
-    'last_answer_summary' => 'Here are...',   // Truncated response
-
-    // Files
-    'last_referenced_files' => [              // Files from response
-        ['id' => 123, 'name' => 'report.pdf', 'snippet' => '...']
-    ],
-    'referenced_files' => [123, 456],         // All file IDs in conversation
-
-    // Metadata
-    'last_insights' => ['Most customers...'], // Analysis insights
-    'last_execution_stats' => [...],          // Query stats
-    'last_available_actions' => [...],        // Entity actions
-    'last_visualizations' => [...],           // Chart metadata
-    'updated_at' => '2024-01-15T10:30:00Z',   // Last update time
-]
-```
-
----
-
-## API Reference
-
-### AiChatService
-
-#### askWithConversation()
-
-```php
-/**
- * @return array{
- *   answer: string,
- *   data: array,
- *   suggestions: array<string>,
- *   sources: array,
- *   cypher_query: ?string
- * }
- */
-public function askWithConversation(
-    string $question,
-    AiConversation $conversation,
-    array $options = []
-): array
-```
-
-Process a question within a persistent conversation context.
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `$question` | string | The user's question |
-| `$conversation` | AiConversation | The conversation model |
-| `$options` | array | Optional settings (schema, style, etc.) |
-
-**Options:**
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `schema` | array | Auto-fetched | Entity schema for extraction |
-| `style` | string | 'friendly' | Response style |
-
-#### prepareQuestionWithContext()
-
-```php
-public function prepareQuestionWithContext(
-    string $question,
-    AiConversation $conversation,
-    array $schema
-): array
-```
-
-Prepare a question with context without executing.
-
-**Returns:**
-
-```php
-[
-    'is_follow_up' => bool,
-    'enriched_question' => string,
-    'focused_entity' => ?string,
-    'query_type' => ?string,
-    'mentioned_entities' => array,
-    'resolved_entity' => ?string,
-    'context' => array,
-]
-```
-
----
-
-### ConversationContextManager
-
-#### processQuestion()
-
-```php
-public function processQuestion(
-    AiConversation $conversation,
-    string $question,
-    array $schema
-): array
-```
-
-Process an incoming question and update conversation context.
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `$conversation` | AiConversation | The conversation model |
-| `$question` | string | The user's question |
-| `$schema` | array | Schema with 'labels' key |
-
-**Returns:**
-
-```php
-[
-    'is_follow_up' => bool,
-    'focused_entity' => ?string,
-    'query_type' => ?string,
-    'mentioned_entities' => array,
-    'enriched_question' => string,
-    'resolved_entity' => ?string,
-]
-```
-
-#### recordResponse()
-
-```php
-public function recordResponse(
-    AiConversation $conversation,
-    string $response,
-    ?string $cypherQuery,
-    array $queryResult
-): void
-```
-
-Record an AI response and update context with query information.
-
-**Query Result Keys:**
-
-| Key | Type | Description |
-|-----|------|-------------|
-| `data` | array | Query result rows |
-| `referenced_files` | array | Files mentioned in response |
-| `detected_template` | string | Query template type |
-| `query_type` | string | Type of query |
-| `insights` | array | Analysis insights |
-| `stats` | array | Execution statistics |
-| `available_actions` | array | Actions for entity types |
-| `visualizations` | array | Visualization metadata |
-
-#### buildPromptContext()
-
-```php
-public function buildPromptContext(
-    AiConversation $conversation,
-    int $maxHistory = 5
-): array
-```
-
-Build context data for the prompt builder.
-
-**Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `$conversation` | AiConversation | - | The conversation model |
-| `$maxHistory` | int | 5 | Maximum exchanges to include |
-
----
-
-### AiConversation Model
-
-#### Context Methods
-
-```php
-// Get focused entity
-$entity = $conversation->getFocusedEntity();
-
-// Get mentioned entities
-$entities = $conversation->getMentionedEntities();
-
-// Get last query type
-$queryType = $conversation->getLastQueryType();
-
-// Get last Cypher query (from messages)
-$cypher = $conversation->getLastCypherQuery();
-
-// Get focused entity filter
-$filter = $conversation->getFocusedEntityFilter();
-
-// Get last result sample
-$sample = $conversation->getLastResultSample();
-
-// Get previous Cypher query (from context)
-$previousQuery = $conversation->getPreviousCypherQuery();
-
-// Get last result count
-$count = $conversation->getLastResultCount();
-
-// Update context snapshot (merges with existing)
-$conversation->updateContextSnapshot([
-    'focused_entity' => 'Customer',
-    'mentioned_entities' => ['Customer', 'Order'],
-]);
-
-// Update entity context
-$conversation->updateEntityContext([
-    'ids' => [1, 2, 3],
-    'names' => ['Acme', 'Tech', 'Global'],
-]);
-```
-
-#### Message Methods
-
-```php
-// Get recent messages
-$messages = $conversation->getRecentMessages(limit: 10);
-
-// Add a new message
-$message = $conversation->addMessage('user', 'Show me customers', [
-    'metadata' => ['source' => 'web'],
-    'referenced_files' => [...],
-    'suggestions' => [...],
-    'is_follow_up' => true,
-    'resolved_entity' => 'Customer',
-]);
-```
+**ChatTurnResult:** `answer`, `data`, `suggestions`, `sources`, `cypher`, `assistantMessage`, `error`, `degraded`, `metadata`.
 
 ---
 
 ## Configuration
 
-### Enabling the ConversationContextSection
-
-The section is registered in `config/ai.php`:
-
-```php
-'query_generator_sections' => [
-    // ... other sections
-    \Condoedge\Ai\Services\PromptSections\ConversationContextSection::class,
-],
-```
-
-### Enabling the ResponseConversationContextSection
-
-```php
-'response_generator_sections' => [
-    // ... other sections
-    \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class,
-],
-```
-
-### History Limits
-
-Configure maximum history messages:
-
 ```php
 // config/ai.php
 'chat' => [
-    'max_history_messages' => 10,
+    'max_history_messages' => 10,   // recent exchanges in the conversation context
+    'history_answer_chars' => 800,  // assistant answer truncation in recent_exchanges
+],
+'semantic_context' => [
+    'qu_entity_score' => 0.8,
+    'conversation_focus_score' => 0.55,
+    'anchor_entity_score' => 0.8,
 ],
 ```
 
-### Section Priority
-
-The ConversationContextSection has priority 55. To change it, extend the class:
-
-```php
-class CustomContextSection extends ConversationContextSection
-{
-    protected int $priority = 45; // Custom priority
-}
-```
+Both prompt sections are registered by default in `ai.query_generator_sections` / `ai.response_generator_sections`; to change a priority, extend the section and override `$priority`.
 
 ---
 
 ## Testing
 
-### Running Tests
-
-```bash
-# Run all conversation context tests
-./vendor/bin/phpunit --filter ConversationContext
-
-# Run specific test files
-./vendor/bin/phpunit tests/Unit/Services/Context/ConversationContextManagerTest.php
-./vendor/bin/phpunit tests/Unit/Services/Context/EntityExtractorTest.php
-./vendor/bin/phpunit tests/Unit/Services/Context/ReferenceResolverTest.php
-./vendor/bin/phpunit tests/Unit/Services/Context/FilenameExtractorTest.php
-./vendor/bin/phpunit tests/Unit/Services/PromptSections/ConversationContextSectionTest.php
-./vendor/bin/phpunit tests/Unit/Services/ResponseSections/ResponseConversationContextSectionTest.php
-
-# Run integration tests
-./vendor/bin/phpunit tests/Integration/ConversationContextIntegrationTest.php
-
-# Run chat service context tests
-./vendor/bin/phpunit tests/Unit/Services/Chat/AiChatServiceContextTest.php
-```
-
-### Test Coverage
-
-| Component | Test File |
-|-----------|-----------|
+| Component | Tests |
+|-----------|-------|
+| ConversationContextManager (focus, preserve-on-empty, cap) | `tests/Unit/Services/Context/ConversationContextManagerTest.php`, `AugmentationAnchorSnapshotTest.php` |
 | EntityExtractor | `tests/Unit/Services/Context/EntityExtractorTest.php` |
-| ReferenceResolver | `tests/Unit/Services/Context/ReferenceResolverTest.php` |
 | FilenameExtractor | `tests/Unit/Services/Context/FilenameExtractorTest.php` |
-| ConversationContextManager | `tests/Unit/Services/Context/ConversationContextManagerTest.php` |
-| ConversationContextSection | `tests/Unit/Services/PromptSections/ConversationContextSectionTest.php` |
-| ResponseConversationContextSection | `tests/Unit/Services/ResponseSections/ResponseConversationContextSectionTest.php` |
-| AiChatService (context) | `tests/Unit/Services/Chat/AiChatServiceContextTest.php` |
-| Integration | `tests/Integration/ConversationContextIntegrationTest.php` |
-
----
-
-## Best Practices
-
-### 1. Always Use Conversations for Multi-Turn Chats
-
-```php
-// Good - context is preserved
-$conversation = AiConversation::firstOrCreate([
-    'user_id' => auth()->id(),
-    'status' => 'active',
-]);
-$response = $chatService->askWithConversation($question, $conversation);
-
-// Avoid - creating a fresh, throwaway conversation per turn loses all context
-$response = $chatService->askWithConversation($question, AiConversation::create([
-    'user_id' => auth()->id(),
-    'status' => 'active',
-]));
-```
-
-### 2. Provide Complete Schema
-
-```php
-// Good - full schema for accurate entity extraction
-$schema = [
-    'labels' => ['Customer', 'Order', 'Product', 'Category'],
-    'relationships' => ['PLACED', 'CONTAINS', 'BELONGS_TO'],
-];
-
-// Avoid - missing entities may not be tracked
-$schema = ['labels' => ['Customer']];
-```
-
-### 3. Let the System Handle References
-
-Don't try to manually resolve references before sending to the AI:
-
-```php
-// Good - let the system resolve "those"
-$response = $chatService->askWithConversation(
-    'Show me those who ordered last month',
-    $conversation
-);
-
-// Avoid - manual resolution may miss context
-$response = $chatService->askWithConversation(
-    'Show me customers who ordered last month', // "those" already replaced
-    $conversation
-);
-```
-
-### 4. Clear Context When Starting New Topics
-
-```php
-// Start a new conversation for unrelated topics
-if ($isNewTopic) {
-    $conversation = AiConversation::create([
-        'user_id' => auth()->id(),
-    ]);
-}
-```
-
-### 5. Use Context Preview for Debugging
-
-```php
-// Debug how a question will be processed
-$preview = $chatService->prepareQuestionWithContext(
-    $question,
-    $conversation,
-    $schema
-);
-
-Log::debug('Question processing', [
-    'original' => $question,
-    'enriched' => $preview['enriched_question'],
-    'is_follow_up' => $preview['is_follow_up'],
-    'resolved_entity' => $preview['resolved_entity'],
-]);
-```
+| Focus / anchor in selection | `tests/Unit/Services/ContextRetrieverAnchorSeedTest.php` |
+| QU conversation block | `tests/Unit/Services/QueryUnderstandingConversationBlockTest.php` |
+| Prompt sections | `tests/Unit/Services/PromptSections/ConversationContextSectionTest.php`, `tests/Unit/Services/ResponseSections/ResponseConversationContextSectionTest.php` |
+| Chat turn | `tests/Unit/Services/Chat/UseCases/AskQuestionUseCaseTest.php`, `AskQuestionUseCaseTraceTest.php` |
+| Integration (sqlite) | `tests/Integration/ConversationContextIntegrationTest.php` |
 
 ---
 
 ## Troubleshooting
 
-### References Not Being Resolved
+### A follow-up is not treated as one
 
-**Symptom:** Follow-up questions with "those" or "them" are not being resolved.
+1. Check the snapshot actually holds the previous result: `$conversation->context_snapshot['last_cypher_query']` / `last_result_sample`. A turn that returned no rows does not overwrite them, but a turn that never recorded any leaves nothing to refer to.
+2. Check what QU judged: the turn trace (assistant message `metadata.trace`, `understanding` stage) records `follow_up_reference`, `entity_types` and `export_format`. The follow-up judgment is QU's alone.
+3. If QU failed (provider error), its judgments are neutral; the response metadata then carries `export_intent_unavailable: 'qu_failed'`.
 
-**Solutions:**
+### Context lost between requests
 
-1. Verify the conversation has context:
-   ```php
-   $context = $conversation->context_snapshot;
-   // Should have 'focused_entity' set
-   ```
+Make sure the same `AiConversation` is passed on every turn and the migrations ran. `updateContextSnapshot()` merges keys; it never replaces the snapshot.
 
-2. Check that the schema includes the relevant entities
+### Prompt does not include the context
 
-3. Ensure `recordResponse()` was called after the previous response
-
-4. Verify the question matches follow-up patterns:
-   ```php
-   $resolver = new ReferenceResolver();
-   $isFollowUp = $resolver->isFollowUp($question);
-   // Should return true for questions with pronouns
-   ```
-
-### Context Not Persisting
-
-**Symptom:** Context is lost between requests.
-
-**Solutions:**
-
-1. Verify the conversation model is being saved:
-   ```php
-   $conversation->refresh();
-   dd($conversation->context_snapshot);
-   ```
-
-2. Check database migrations have run:
-   ```bash
-   php artisan migrate
-   ```
-
-3. Ensure `updateContextSnapshot()` merges rather than overwrites:
-   ```php
-   // The method merges by default
-   $conversation->updateContextSnapshot(['new_key' => 'value']);
-   // Existing keys are preserved
-   ```
-
-### Prompt Not Including Context
-
-**Symptom:** The LLM prompt does not contain conversation context.
-
-**Solutions:**
-
-1. Verify ConversationContextSection is registered:
-   ```php
-   $sections = config('ai.query_generator_sections');
-   // Should include ConversationContextSection::class
-   ```
-
-2. Check that `conversation_context` is being passed to the prompt builder
-
-3. Verify the section's `shouldInclude()` condition is met:
-   ```php
-   // Needs at least one of: focused_entity, recent_exchanges,
-   // last_cypher_query, last_result_sample, last_referenced_files
-   ```
-
-### File References Not Working
-
-**Symptom:** Follow-up questions about "the file" are not resolved.
-
-**Solutions:**
-
-1. Verify files are stored in context:
-   ```php
-   $files = $conversation->context_snapshot['last_referenced_files'] ?? [];
-   // Should contain file data from previous response
-   ```
-
-2. Check ResponseConversationContextSection is registered for response generation
-
-3. Ensure `recordResponse()` receives `referenced_files` in query result:
-   ```php
-   $manager->recordResponse($conversation, $response, $cypher, [
-       'data' => [...],
-       'referenced_files' => [
-           ['id' => 123, 'name' => 'report.pdf', 'snippet' => '...']
-       ],
-   ]);
-   ```
+Verify `ConversationContextSection` is in `ai.query_generator_sections` and that the context has at least one of `focused_entity`, `recent_exchanges`, `last_cypher_query`, `last_result_sample`, `last_referenced_files`.
 
 ---
 

@@ -52,6 +52,9 @@ class MutationActionLinkFlowTest extends TestCase
         config()->set('ai.entity_actions', ['Reservation' => ['approve_reservation' => $action]]);
         config()->set('ai.generic_actions', []);
 
+        // A1/A2: a mutation never authorizes for a null principal — act as a real user.
+        $this->actingAs(new \Illuminate\Auth\GenericUser(['id' => 7]));
+
         $registry = new AiActionRegistry();
         $dispatcher = new ActionDispatcher($registry);
         $handler = new ActionLinkHandler(Mockery::mock(EntityAutoDiscovery::class), $dispatcher);

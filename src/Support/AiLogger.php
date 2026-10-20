@@ -70,6 +70,14 @@ class AiLogger
     public function fallback(string $service, string $from, string $to, string $reason): void
     {
         $this->warning($service, "fallback: {$from} → {$to}", ['reason' => $reason]);
+
+        // Observation only: the running turn's trace reports its silent fallbacks.
+        PipelineObserverScope::recordFallback([
+            'service' => $service,
+            'from' => $from,
+            'to' => $to,
+            'reason' => $reason,
+        ]);
     }
 
     private function log(string $level, string $service, string $message, array $context): void

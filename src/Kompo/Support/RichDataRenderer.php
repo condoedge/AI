@@ -10,16 +10,15 @@ use Condoedge\Utils\Facades\FileModel;
 
 /**
  * Renders the structured "rich data" that hangs off an assistant message: response_data tables /
- * metrics / lists, follow-up suggestion chips, execution metrics, and referenced-file cards.
+ * metrics / lists, execution metrics, and referenced-file cards.
  *
- * These were previously eight render* helpers on MessagesQuery. They are pure view builders over
+ * These were previously render* helpers on MessagesQuery. They are pure view builders over
  * (theme + settings + data) and carry no Kompo round-trip state, so they live here as a plain
- * collaborator. Suggestion chips fill the composer input and click the real send button
- * (SuggestionSubmit::fillAndSendJs) so a click reuses the exact typed-send chain — optimistic
- * user bubble + typing indicator first, then the answer via the panel refresh.
+ * collaborator. (The per-message follow-up suggestion chips were removed 2026-10-01 — nothing
+ * produced them; next steps are code-attached action chips, actions plan B3.)
  *
- * Behavior-preserving: every class string, slice limit (rows→10, list items→5, suggestions via
- * settings()->maxSuggestions()) and markup is copied verbatim from MessagesQuery.
+ * Behavior-preserving: every class string, slice limit (rows→10, list items→5) and markup is
+ * copied verbatim from MessagesQuery.
  */
 class RichDataRenderer
 {
@@ -108,30 +107,6 @@ class RichDataRenderer
         return _Rows(...$listItems)->class('mt-4 space-y-2');
     }
 
-    /**
-     * Follow-up suggestion chips. Each chip re-asks by filling the composer input and clicking
-     * the real send button (typed-send parity: optimistic bubble + typing indicator, then the
-     * answer) instead of a bare selfPost that waits for the whole LLM turn with no echo.
-     */
-    public function renderSuggestions(array $suggestions)
-    {
-        // e($s): Kompo Link labels render through v-html client-side, and $s comes from
-        // persisted LLM output (message metadata), NOT host config — escape it like every
-        // other LLM-sourced string in this class (table cells, list items). The raw $s
-        // still goes to fillAndSendJs, which JSON_HEX_*-encodes it for the JS context.
-        $chips = array_map(fn($s) =>
-            _Link(e($s))
-                ->class('inline-flex items-center px-3 py-1.5 text-sm rounded-full bg-gray-100 text-gray-700 ' . $this->theme->primaryLightBgHover() . ' transition-all cursor-pointer')
-                ->onClick(fn($e) => $e->run(SuggestionSubmit::fillAndSendJs($s))),
-            array_slice($suggestions, 0, $this->settings->maxSuggestions())
-        );
-
-        return _Rows(
-            _Html(__('ai.messages.follow-up'))->class('text-xs font-medium text-gray-400 mb-2'),
-            _Flex(...$chips)->class('flex-wrap gap-2'),
-        )->class('mt-4 pt-3 border-t border-gray-100');
-    }
-
     public function renderMetrics($message)
     {
         return _Flex(
@@ -154,23 +129,46 @@ class RichDataRenderer
         )->class('mt-4 pt-3 border-t border-gray-100');
     }
 
+    /**
+     * One "referenced file" card. A PROJECT file has a string id ("physical:…") and is shown
+     * by name; an UPLOADED file has an integer id and gets its preview card. The reference
+     * was stored when the answer was written: the file may be gone when the conversation is
+     * opened again, and a file name is tenant-supplied text — so the card never assumes the
+     * id's type or the row's existence (live 2026-10-08: an integer id here was an Error 500
+     * for the whole conversation), and the name is always escaped.
+     */
     protected function fileReferenceCard(array $file)
     {
-        if (str_starts_with($file['id'], 'physical:')) {
-            return _Html(__('ai.internal-file', ['name' => $file['name']]))->class('text-sm text-gray-700 font-medium');
+        $id = $file['id'] ?? null;
+        $name = e((string) ($file['name'] ?? ''));
+        $plain = fn () => _Html($name)->class('text-sm text-gray-700 font-medium');
+
+        if (is_string($id) && str_starts_with($id, 'physical:')) {
+            return _Html(__('ai.internal-file', ['name' => $name]))->class('text-sm text-gray-700 font-medium');
         }
 
-        $file = FileModel::find($file['id']);
-        $type = $file->file_type_enum;
-        $icon = $type->icon();
-        $isPreviewable = $type->isPreviewable();
+        $model = is_int($id) || (is_string($id) && $id !== '') ? $this->findFile($id) : null;
+        $type = $model?->file_type_enum;
+        if ($model === null || $type === null) {
+            return $plain();
+        }
 
         return _Flex(
-            _Sax($icon, 16)->class($this->theme->primaryText()),
-            _Html($file['name'])->class('text-sm text-gray-700 font-medium'),
+            _Sax($type->icon(), 16)->class($this->theme->primaryText()),
+            _Html(e((string) ($model->name ?? $file['name'] ?? '')))->class('text-sm text-gray-700 font-medium'),
         )->class('inline-flex items-center gap-2 px-3 py-2 rounded-lg ' . $this->theme->primaryLightBg() . ' ' . $this->theme->primaryLightBgHover() . ' cursor-pointer transition-all')
          ->balloon(__('ai.messages.click-to-view'), 'up')
-         ->when($isPreviewable, fn($link) => $type->getPreviewButton($link, $file)
+         ->when($type->isPreviewable(), fn($link) => $type->getPreviewButton($link, $model)
          );
+    }
+
+    /** The uploaded file's row, or null when it no longer exists. */
+    protected function findFile(int|string $id): mixed
+    {
+        try {
+            return FileModel::find($id);
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 }

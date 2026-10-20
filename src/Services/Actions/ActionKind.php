@@ -16,6 +16,8 @@ namespace Condoedge\Ai\Services\Actions;
  *  - Table   : render the payload {headers, rows} as a table.
  *  - Export  : offer the payload {content, mime, filename} as a download.
  *  - Pending : a deferred mutating action — render an approval card from the payload token.
+ *  - FollowUp: a suggested next question — render a chip whose click sends the payload
+ *               {question} as the user's next message (label = payload {label}).
  *  - Error   : a graceful failure; the summary is shown, nothing actionable rendered.
  */
 enum ActionKind
@@ -24,5 +26,6 @@ enum ActionKind
     case Table;
     case Export;
     case Pending;
+    case FollowUp;
     case Error;
 }

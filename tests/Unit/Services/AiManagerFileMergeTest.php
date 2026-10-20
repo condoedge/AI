@@ -159,7 +159,6 @@ class AiManagerFileMergeTest extends TestCase
         $ctx->qu = $qu;
         $ctx->similarQueries = [];
         $ctx->graphSchema = ['labels' => ['Unit']];
-        $ctx->relevantEntities = [];
 
         // Map each fan-out angle text to the file result it returns.
         $this->perAngle = [
@@ -198,7 +197,6 @@ class AiManagerFileMergeTest extends TestCase
         $ctx->qu = $qu;
         $ctx->similarQueries = [];
         $ctx->graphSchema = ['labels' => ['Unit']];
-        $ctx->relevantEntities = [];
 
         $this->perAngle = [
             'strong probe' => $this->fileRef(7, 0.80, 1, $strong),

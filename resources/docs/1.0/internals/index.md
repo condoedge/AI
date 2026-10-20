@@ -5,7 +5,7 @@ Welcome to the deep-dive track. Here we document how the system is wired, why ce
 ## Why This Matters
 
 - **Future maintainers** need a mental model before touching production code.
-- **New teammates** can ramp up on RAG systems/dual storage even if they are new to AI.
+- **New teammates** can ramp up on RAG systems and the graph/vector split (records in Neo4j, search indexes in Qdrant) even if they are new to AI.
 - **Contributors** gain confidence to refactor services, add providers, or debug complex flows.
 
 ## Contents

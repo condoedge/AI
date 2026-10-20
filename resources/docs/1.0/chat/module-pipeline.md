@@ -8,9 +8,7 @@ Both `SemanticPromptBuilder` and `ResponseGenerator` use the `HasInternalModules
 
 - **Modular Architecture**: Compose outputs from reusable, configurable sections
 - **Priority-based Processing**: Modules execute in priority order (lower = first)
-- **Extension Points**: Add callbacks before/after any module
-- **Global Extensions**: Apply modifications to all instances
-- **Configuration-driven**: Load default modules from config files
+- **Configuration-driven**: Load default modules from the `ai.query_generator_sections` / `ai.response_generator_sections` config lists
 
 ## Core Components
 
@@ -22,19 +20,12 @@ The trait provides the following capabilities:
 // Module Management
 $builder->addModule(new CustomSection());      // Add a module
 $builder->removeModule('section_name');        // Remove by name
-$builder->replaceModule('name', new NewSection()); // Replace a module
 $builder->getModule('name');                   // Get a module
 $builder->hasModule('name');                   // Check existence
-$builder->getModules();                        // Get all modules
-
-// Callback Extensions
-$builder->extendBefore('section', $callback);  // Run before a section
-$builder->extendAfter('section', $callback);   // Run after a section
-
-// Global Extensions (static)
-MyBuilder::extendBuild($callback);             // Apply to all new instances
-MyBuilder::clearGlobalExtensions();            // Clear global extensions
+$builder->getModules();                        // Get all modules (keyed by name)
 ```
+
+To replace a module, remove it and add the new one (or swap the class in the config list). Pipelines are customized application-wide through the config lists `ai.query_generator_sections` and `ai.response_generator_sections` (class-strings; closures receiving the builder are also supported).
 
 ### SectionModuleInterface
 
@@ -61,15 +52,11 @@ Builds LLM prompts for Neo4j Cypher query generation.
 | 10 | project_context | Project name, description, business rules |
 | 15 | generic_context | Current date/time |
 | 17 | current_user | Current user and team context |
-| 20 | schema | Database schema and node types |
-| 30 | relationships | Relationship types between nodes |
-| 40 | example_entities | Sample data for reference |
-| 45 | file_context | Relevant file content |
+| 20 | schema | Schema cards: one compact card per selected label (typed properties, enum legends, live directed edges, fk hints) |
+| 45 | file_context | Names of relevant documents (no document text) |
 | 50 | similar_queries | Previously successful similar queries |
 | 55 | conversation_context | Conversation history |
-| 60 | detected_entities | Entities detected in the question |
 | 65 | detected_scopes | Scopes/filters detected in the question |
-| 70 | pattern_library | Query patterns from the pattern library |
 | 75 | query_rules | Rules for query generation |
 | 80 | question | The user's actual question |
 | 90 | task_instructions | Final instructions for the LLM |
@@ -81,8 +68,7 @@ Builds LLM prompts for Neo4j Cypher query generation.
 return [
     'query_generator_sections' => [
         \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
-        \Condoedge\Ai\Services\PromptSections\SchemaSection::class,
-        \Condoedge\Ai\Services\PromptSections\RelationshipsSection::class,
+        \Condoedge\Ai\Services\PromptSections\SchemaCardsSection::class,
         // ... add or remove sections as needed
     ],
 ];
@@ -91,7 +77,7 @@ return [
 ### Usage Example
 
 ```php
-$builder = new SemanticPromptBuilder($patternLibrary);
+$builder = new SemanticPromptBuilder();
 
 // Customize project context
 $builder->setProjectContext([
@@ -120,16 +106,6 @@ $prompt = $builder->buildPrompt(
     ],
     allowWrite: false
 );
-```
-
-### Factory Methods
-
-```php
-// Minimal builder (only essential sections)
-$builder = SemanticPromptBuilder::minimal($patternLibrary);
-
-// Simple builder (no advanced features like similar queries)
-$builder = SemanticPromptBuilder::simple($patternLibrary);
 ```
 
 ## ResponseGenerator
@@ -190,16 +166,12 @@ $response = $generator->generate(
     options: [
         'format' => 'text',
         'style' => 'detailed',
-        'include_insights' => true,
-        'include_visualization' => true,
     ]
 );
 
 // Response structure
 // $response = [
 //     'answer' => 'You have 1,500 customers in your database.',
-//     'insights' => ['Found 1 result', 'Results contain 1 properties: count'],
-//     'visualizations' => [['type' => 'number', 'rationale' => '...']],
 //     'format' => 'text',
 //     'metadata' => ['style' => 'detailed', 'result_count' => 1, ...],
 // ];
@@ -247,56 +219,31 @@ SECTION;
 }
 ```
 
-### Adding Callbacks
+### Registering Sections Application-Wide
+
+To add, remove, or reorder sections for every builder instance, edit the config lists in your published `config/ai.php`:
 
 ```php
-// Add content after the schema section
-$builder->extendAfter('schema', function($question, $context, $options) {
-    $customInfo = getCustomSchemaInfo();
-    return "\n=== CUSTOM SCHEMA INFO ===\n\n{$customInfo}\n\n";
-});
+// config/ai.php
+'query_generator_sections' => [
+    // ... default sections ...
+    \App\Ai\PromptSections\CustomAnalyticsSection::class,
+    \App\Ai\PromptSections\CompanyContextSection::class,
+],
 
-// Add content before the question section
-$builder->extendBefore('question', function($question, $context, $options) {
-    return "\n=== HINTS ===\n\nConsider recent user activity patterns.\n\n";
-});
+'response_generator_sections' => [
+    // ... default sections ...
+],
 ```
 
-### Global Extensions
+Entries are class-strings (resolved through the container) or closures that receive the builder and return a section instance. Remove an entry from the list to drop that section.
 
-Apply modifications to all instances (useful in service providers):
-
-```php
-// In AppServiceProvider::boot()
-SemanticPromptBuilder::extendBuild(function($builder) {
-    // Add company-specific section
-    $builder->addModule(new CompanyContextSection());
-
-    // Remove unused section
-    $builder->removeModule('pattern_library');
-
-    // Add custom rules
-    $builder->addBusinessRule('Our fiscal year starts in April');
-});
-
-ResponseGenerator::extendBuild(function($generator) {
-    $generator->addGuideline('Format currency in USD');
-    $generator->setMaxDataItems(50);
-});
-```
-
-### Testing Considerations
+For a single instance, use the instance API:
 
 ```php
-// In test setUp() or tearDown()
-protected function tearDown(): void
-{
-    // Clear global extensions to prevent test pollution
-    SemanticPromptBuilder::clearGlobalExtensions();
-    ResponseGenerator::clearGlobalExtensions();
-
-    parent::tearDown();
-}
+$builder->addModule(new CompanyContextSection());
+$builder->removeModule('similar_queries');
+$builder->addBusinessRule('Our fiscal year starts in April');
 ```
 
 ## Architecture Diagram
@@ -306,18 +253,15 @@ protected function tearDown(): void
 │                    HasInternalModules Trait                     │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  ┌─────────────┐   ┌─────────────┐   ┌─────────────────────┐   │
-│  │  Sections   │   │  Callbacks  │   │  Global Extensions  │   │
-│  │  (modules)  │   │  (before/   │   │  (static, shared)   │   │
-│  │             │   │   after)    │   │                     │   │
-│  └─────────────┘   └─────────────┘   └─────────────────────┘   │
+│  ┌─────────────┐   ┌─────────────────────────────────────┐     │
+│  │  Sections   │   │  Default module list (config:       │     │
+│  │  (modules)  │   │  *_generator_sections)              │     │
+│  └─────────────┘   └─────────────────────────────────────┘     │
 │                                                                 │
 │  Pipeline Processing:                                           │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │ for each section (sorted by priority):                   │  │
-│  │   1. Run beforeCallbacks[section]                        │  │
-│  │   2. if section.shouldInclude(): section.format()        │  │
-│  │   3. Run afterCallbacks[section]                         │  │
+│  │   if section.shouldInclude(): section.format()           │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -356,15 +300,11 @@ flowchart TD
         S10["10: project_context<br/>Project name, description, rules"]
         S15["15: generic_context<br/>Current date/time"]
         S17["17: current_user<br/>User and team context"]
-        S20["20: schema<br/>Database schema, node types"]
-        S30["30: relationships<br/>Relationship types"]
-        S40["40: example_entities<br/>Sample data"]
-        S45["45: file_context<br/>Relevant file content"]
+        S20["20: schema<br/>Schema cards per selected label"]
+        S45["45: file_context<br/>Relevant document names"]
         S50["50: similar_queries<br/>Past successful queries"]
         S55["55: conversation_context<br/>Chat history"]
-        S60["60: detected_entities<br/>Entities in question"]
         S65["65: detected_scopes<br/>Filters detected"]
-        S70["70: pattern_library<br/>Query patterns"]
         S75["75: query_rules<br/>Generation rules"]
         S80["80: question<br/>The actual question"]
         S90["90: task_instructions<br/>Final instructions"]
@@ -373,7 +313,6 @@ flowchart TD
     subgraph Processing["Processing Logic"]
         CHECK{shouldInclude?}
         FORMAT[section.format]
-        CALLBACK[Run callbacks]
     end
 
     Q --> Pipeline
@@ -383,12 +322,11 @@ flowchart TD
     S10 --> CHECK
     CHECK -->|Yes| FORMAT
     CHECK -->|No| SKIP[Skip section]
-    FORMAT --> CALLBACK
-    CALLBACK --> S15
+    FORMAT --> S15
     SKIP --> S15
 
-    S15 -.-> S17 -.-> S20 -.-> S30 -.-> S40 -.-> S45 -.-> S50
-    S50 -.-> S55 -.-> S60 -.-> S65 -.-> S70 -.-> S75 -.-> S80 -.-> S90
+    S15 -.-> S17 -.-> S20 -.-> S45 -.-> S50
+    S50 -.-> S55 -.-> S65 -.-> S75 -.-> S80 -.-> S90
 
     S90 --> OUTPUT[Complete Prompt]
 ```
@@ -417,18 +355,12 @@ flowchart TD
     subgraph Extensions["Extension Mechanisms"]
         EXT1["addModule(section)<br/>Add new section"]
         EXT2["removeModule(name)<br/>Remove section"]
-        EXT3["replaceModule(name, section)<br/>Swap implementation"]
-        EXT4["extendBefore(name, callback)<br/>Run before section"]
-        EXT5["extendAfter(name, callback)<br/>Run after section"]
-        EXT6["extendBuild(callback)<br/>Global: all instances"]
+        EXT3["query_generator_sections / response_generator_sections<br/>Config: all instances"]
     end
 
     BUILDER[SemanticPromptBuilder] --> EXT1
     BUILDER --> EXT2
-    BUILDER --> EXT3
-    BUILDER --> EXT4
-    BUILDER --> EXT5
-    STATIC[Static Method] --> EXT6
+    CONFIG[config/ai.php] --> EXT3
 ```
 
 ---
@@ -495,12 +427,10 @@ sequenceDiagram
     User->>QueryGen: question + context
     QueryGen->>PromptBuilder: buildPrompt(question, context)
 
-    Note over PromptBuilder: Process 15 sections<br/>in priority order
+    Note over PromptBuilder: Process sections<br/>in priority order
 
     loop For each section (10-90)
-        PromptBuilder->>PromptBuilder: Run beforeCallbacks
         PromptBuilder->>PromptBuilder: if shouldInclude() then format()
-        PromptBuilder->>PromptBuilder: Run afterCallbacks
     end
 
     PromptBuilder-->>QueryGen: Complete Cypher generation prompt
@@ -515,14 +445,12 @@ sequenceDiagram
     Note over ResponseGen: Process 10 sections<br/>in priority order
 
     loop For each section (10-80)
-        ResponseGen->>ResponseGen: Run beforeCallbacks
         ResponseGen->>ResponseGen: if shouldInclude() then format()
-        ResponseGen->>ResponseGen: Run afterCallbacks
     end
 
     ResponseGen->>LLM: Generate natural language response
     LLM-->>ResponseGen: Answer text
-    ResponseGen-->>User: {answer, insights, visualizations}
+    ResponseGen-->>User: {answer, format, metadata}
 ```
 
 ## Best Practices
@@ -533,8 +461,6 @@ sequenceDiagram
 
 3. **Use appropriate priorities**: Leave gaps between priorities (10, 20, 30...) to allow insertion of custom sections.
 
-4. **Clear global extensions in tests**: Always clean up global state between tests.
+4. **Use `shouldInclude` wisely**: Conditional inclusion keeps prompts concise and relevant.
 
-5. **Use `shouldInclude` wisely**: Conditional inclusion keeps prompts concise and relevant.
-
-6. **Document custom sections**: Include clear PHPDoc explaining what the section adds and when it's included.
+5. **Document custom sections**: Include clear PHPDoc explaining what the section adds and when it's included.

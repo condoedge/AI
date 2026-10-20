@@ -59,8 +59,36 @@ class ContextRetrieverTest extends TestCase
         );
     }
 
+    /** Every graph query() issued during retrieval (Task 5.2 type probes only). */
+    private array $graphQueries = [];
+
+    /**
+     * Task 1.7: retrieval must never sample example nodes (cross-tenant rows sent to
+     * the LLM). Since Task 5.2 the ONLY graph read beyond the schema is the cached
+     * per-label property-type probe, whose RETURN carries type names and boolean
+     * format flags only — never node values. Record every query and assert that.
+     */
+    private function allowOnlyValueFreeTypeProbes(): void
+    {
+        $this->mockGraphStore->shouldReceive('query')->andReturnUsing(function (string $cypher) {
+            $this->graphQueries[] = $cypher;
+
+            return [];
+        });
+    }
+
+    private function assertOnlyValueFreeTypeProbes(): void
+    {
+        foreach ($this->graphQueries as $cypher) {
+            $this->assertMatchesRegularExpression('/^MATCH \(n:`(\w+)`\)/', $cypher);
+            preg_match('/^MATCH \(n:(`\w+`)\)/', $cypher, $m);
+            $this->assertSame(\Condoedge\Ai\Services\Schema\PropertyTypeSampler::probeCypher($m[1]), $cypher);
+        }
+    }
+
     public function tearDown(): void
     {
+        $this->assertOnlyValueFreeTypeProbes();
         Mockery::close();
         parent::tearDown();
     }
@@ -164,14 +192,9 @@ class ContextRetrieverTest extends TestCase
                 'propertyKeys' => ['id', 'name'],
             ]);
 
-        // Mock example entity retrieval
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->times(2) // Once for Team, once for Person
-            ->andReturn(
-                [['n' => ['id' => 1, 'name' => 'Alpha Team']]],
-                [['n' => ['id' => 1, 'name' => 'John Doe']]]
-            );
+        // Task 1.7: no example-node sampling (was: query() twice, Team + Person,
+        // unscoped). Retrieval must not touch the graph beyond the schema.
+        $this->allowOnlyValueFreeTypeProbes();
 
         // Act
         $context = $this->service->retrieveContext($question);
@@ -185,7 +208,6 @@ class ContextRetrieverTest extends TestCase
 
         $this->assertNotEmpty($context->similarQueries);
         $this->assertNotEmpty($context->graphSchema);
-        $this->assertNotEmpty($context->relevantEntities);
         $this->assertEmpty($context->errors);
     }
 
@@ -307,36 +329,6 @@ class ContextRetrieverTest extends TestCase
         $context = $this->service->retrieveContext($question, ['includeSchema' => false]);
 
         $this->assertEmpty($context->graphSchema);
-        $this->assertEmpty($context->relevantEntities);
-    }
-
-    /**
-     * Test that retrieveContext skips examples when includeExamples is false
-     */
-    public function test_retrieve_context_skips_examples_when_include_examples_false()
-    {
-        $question = 'Test question';
-
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->andReturn([0.1]);
-
-        $this->mockVectorStore
-            ->shouldReceive('search')
-            ->andReturn([]);
-
-        $this->mockGraphStore
-            ->shouldReceive('getSchema')
-            ->once()
-            ->andReturn(['labels' => ['Team'], 'relationshipTypes' => [], 'propertyKeys' => []]);
-
-        // query() should NOT be called for examples
-        $this->mockGraphStore
-            ->shouldNotReceive('query');
-
-        $context = $this->service->retrieveContext($question, ['includeExamples' => false]);
-
-        $this->assertEmpty($context->relevantEntities);
     }
 
     /**
@@ -396,7 +388,7 @@ class ContextRetrieverTest extends TestCase
                 'propertyKeys' => ['id', 'total', 'email', 'current_team_id', 'team_name'],
             ]);
 
-        $context = $service->retrieveContext($question, ['includeExamples' => false]);
+        $context = $service->retrieveContext($question);
 
         $this->assertContains('Invoice', $context->graphSchema['labels']);
         $this->assertContains('User', $context->graphSchema['labels']);
@@ -405,39 +397,6 @@ class ContextRetrieverTest extends TestCase
         $this->assertArrayHasKey('User', $context->graphSchema['properties']);
         $this->assertArrayHasKey('Team', $context->graphSchema['properties']);
         $this->assertSame(['User', 'Team'], $context->selectionInfo['identity_entities']);
-    }
-
-    /**
-     * Test that retrieveContext respects examplesPerLabel option
-     */
-    public function test_retrieve_context_respects_examples_per_label_option()
-    {
-        $question = 'Test question';
-        $examplesPerLabel = 5;
-
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->andReturn([0.1]);
-
-        $this->mockVectorStore
-            ->shouldReceive('search')
-            ->andReturn([]);
-
-        $this->mockGraphStore
-            ->shouldReceive('getSchema')
-            ->once()
-            ->andReturn(['labels' => ['Team'], 'relationshipTypes' => [], 'propertyKeys' => []]);
-
-        // Verify limit parameter is used
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->once()
-            ->with(Mockery::any(), ['limit' => $examplesPerLabel])
-            ->andReturn([]);
-
-        $this->service->retrieveContext($question, ['examplesPerLabel' => $examplesPerLabel]);
-
-        $this->assertTrue(true);
     }
 
     /**
@@ -476,6 +435,82 @@ class ContextRetrieverTest extends TestCase
     }
 
     /**
+     * Task 1.9: without an explicit scoreThreshold option, few-shot retrieval uses
+     * the config-driven ai.query_generation.example_min_similarity (default 0.80)
+     * instead of 0.0 (where ANY similarity counted as a usable example).
+     *
+     * @dataProvider exampleMinSimilarityProvider
+     */
+    public function test_similar_query_threshold_defaults_to_the_configured_example_min_similarity(?float $configured, float $expected)
+    {
+        if ($configured === null) {
+            // A host config that predates the key (shallow-merged query_generation).
+            config()->set('ai.query_generation', ['default_limit' => 100]);
+        } else {
+            config()->set('ai.query_generation.example_min_similarity', $configured);
+        }
+
+        $this->mockEmbeddingProvider->shouldReceive('embed')->andReturn([0.1]);
+
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->once()
+            ->with('questions', Mockery::any(), Mockery::any(), Mockery::any(), $expected)
+            ->andReturn([]);
+        $this->mockVectorStore
+            ->shouldReceive('search')
+            ->with('semantic_entities', Mockery::any(), Mockery::any())
+            ->andReturn([]);
+
+        $this->mockGraphStore
+            ->shouldReceive('getSchema')
+            ->once()
+            ->andReturn(['labels' => [], 'relationshipTypes' => [], 'propertyKeys' => []]);
+
+        $this->service->retrieveContext('Test question');
+
+        $this->assertTrue(true);
+    }
+
+    public static function exampleMinSimilarityProvider(): array
+    {
+        return [
+            'unset falls back to 0.80' => [null, 0.80],
+            'configured value wins' => [0.65, 0.65],
+        ];
+    }
+
+    /** Review M-5: an empty env value (AI_EXAMPLE_MIN_SIMILARITY="") must not become 0.0. */
+    public function test_a_non_numeric_configured_similarity_falls_back_to_the_default()
+    {
+        config()->set('ai.query_generation.example_min_similarity', '');
+
+        $this->mockEmbeddingProvider->shouldReceive('embed')->andReturn([0.1]);
+        $this->mockVectorStore->shouldReceive('search')->once()
+            ->with('questions', Mockery::any(), Mockery::any(), Mockery::any(), 0.80)
+            ->andReturn([]);
+
+        $this->service->searchSimilar('Test question');
+
+        $this->assertTrue(true);
+    }
+
+    /** Review M-4: the public searchSimilar() honours the configured threshold too. */
+    public function test_search_similar_uses_the_configured_example_min_similarity()
+    {
+        config()->set('ai.query_generation.example_min_similarity', 0.7);
+
+        $this->mockEmbeddingProvider->shouldReceive('embed')->andReturn([0.1]);
+        $this->mockVectorStore->shouldReceive('search')->once()
+            ->with('questions', Mockery::any(), 5, Mockery::any(), 0.7)
+            ->andReturn([]);
+
+        $this->service->searchSimilar('Test question');
+
+        $this->assertTrue(true);
+    }
+
+    /**
      * Test graceful degradation when vector search fails
      */
     public function test_retrieve_context_handles_vector_store_failure_gracefully()
@@ -494,17 +529,14 @@ class ContextRetrieverTest extends TestCase
             ->once()
             ->andReturn(['labels' => ['Team'], 'relationshipTypes' => [], 'propertyKeys' => []]);
 
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->once()
-            ->andReturn([['n' => ['id' => 1, 'name' => 'Alpha']]]);
+        // Task 1.7: no example sampling.
+        $this->allowOnlyValueFreeTypeProbes();
 
         $context = $this->service->retrieveContext($question);
 
         // Vector search failed but graph data succeeded
         $this->assertEmpty($context->similarQueries);
         $this->assertNotEmpty($context->graphSchema);
-        $this->assertNotEmpty($context->relevantEntities);
         $this->assertNotEmpty($context->errors);
         $this->assertStringContainsString('Vector search failed', $context->errors[0]);
     }
@@ -543,7 +575,6 @@ class ContextRetrieverTest extends TestCase
         // Vector search succeeded but graph failed
         $this->assertNotEmpty($context->similarQueries);
         $this->assertEmpty($context->graphSchema);
-        $this->assertEmpty($context->relevantEntities);
         $this->assertNotEmpty($context->errors);
         $this->assertStringContainsString('Schema retrieval failed', $context->errors[0]);
     }
@@ -599,7 +630,6 @@ class ContextRetrieverTest extends TestCase
 
         $this->assertIsArray($context->similarQueries);
         $this->assertIsArray($context->graphSchema);
-        $this->assertIsArray($context->relevantEntities);
         $this->assertIsArray($context->errors);
     }
 
@@ -676,7 +706,8 @@ class ContextRetrieverTest extends TestCase
         $this->mockVectorStore
             ->shouldReceive('search')
             ->once()
-            ->with($collection, $embedding, $limit, [], 0.0)
+            // Review M-4: the configured example_min_similarity (0.80 default), not 0.0.
+            ->with($collection, $embedding, $limit, [], 0.80)
             ->andReturn([]);
 
         $this->service->searchSimilar($question, $collection, $limit);
@@ -709,7 +740,8 @@ class ContextRetrieverTest extends TestCase
                     ],
                 ],
                 [
-                    'score' => 0.75,
+                    // Above the 0.80 example_min_similarity floor (review M-4).
+                    'score' => 0.82,
                     'payload' => [
                         'question' => 'Show customer details',
                         'query' => 'MATCH (c:Customer) RETURN c.name, c.email',
@@ -729,7 +761,7 @@ class ContextRetrieverTest extends TestCase
         // Second result (uses 'query' fallback)
         $this->assertEquals('Show customer details', $results[1]['question']);
         $this->assertEquals('MATCH (c:Customer) RETURN c.name, c.email', $results[1]['query']);
-        $this->assertEquals(0.75, $results[1]['score']);
+        $this->assertEquals(0.82, $results[1]['score']);
     }
 
     /**
@@ -826,11 +858,12 @@ class ContextRetrieverTest extends TestCase
             ->once()
             ->andReturn([0.1]);
 
-        // Should use default collection='questions' and limit=5
+        // Should use default collection='questions', limit=5 and the configured
+        // example_min_similarity (0.80 default — review M-4)
         $this->mockVectorStore
             ->shouldReceive('search')
             ->once()
-            ->with('questions', Mockery::any(), 5, [], 0.0)
+            ->with('questions', Mockery::any(), 5, [], 0.80)
             ->andReturn([]);
 
         $this->service->searchSimilar($question);
@@ -862,6 +895,31 @@ class ContextRetrieverTest extends TestCase
         $this->assertArrayHasKey('labels', $schema);
         $this->assertArrayHasKey('relationships', $schema);
         $this->assertArrayHasKey('properties', $schema);
+    }
+
+    /**
+     * Plan 9.0-p: graph.computed properties are real node properties, so the per-label
+     * property list the schema cards/projector read must include them.
+     */
+    public function test_get_graph_schema_lists_computed_properties_per_label()
+    {
+        $this->mockGraphStore->shouldReceive('getSchema')->andReturn(['labels' => ['Invoice']]);
+
+        $service = new ContextRetriever(
+            $this->mockVectorStore,
+            $this->mockGraphStore,
+            $this->mockEmbeddingProvider,
+            $this->logger,
+            ['Invoice' => ['graph' => [
+                'label' => 'Invoice',
+                'properties' => ['id', 'status'],
+                'computed' => ['due_amount' => 'real_due_amount', 'status' => 'status_label'],
+            ]]]
+        );
+
+        $schema = $service->getGraphSchema();
+
+        $this->assertSame(['id', 'status', 'due_amount'], $schema['properties']['Invoice']);
     }
 
     /**
@@ -969,242 +1027,63 @@ class ContextRetrieverTest extends TestCase
     }
 
     // =========================================================================
-    // getExampleEntities() Method Tests
-    // =========================================================================
-
-    /**
-     * Test that getExampleEntities retrieves examples for a label
-     */
-    public function test_get_example_entities_retrieves_examples_for_label()
-    {
-        $label = 'Team';
-        $limit = 3;
-
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->once()
-            ->with(
-                "MATCH (n:`{$label}`) WITH n, size(keys(n)) AS keyCount ORDER BY keyCount DESC RETURN n LIMIT \$limit",
-                ['limit' => $limit]
-            )
-            ->andReturn([
-                ['n' => ['id' => 1, 'name' => 'Alpha Team']],
-                ['n' => ['id' => 2, 'name' => 'Beta Team']],
-            ]);
-
-        $entities = $this->service->getExampleEntities($label, $limit);
-
-        $this->assertCount(2, $entities);
-        $this->assertEquals(['id' => 1, 'name' => 'Alpha Team'], $entities[0]);
-        $this->assertEquals(['id' => 2, 'name' => 'Beta Team'], $entities[1]);
-    }
-
-    /**
-     * Test that getExampleEntities respects limit parameter
-     */
-    public function test_get_example_entities_respects_limit_parameter()
-    {
-        $label = 'Person';
-        $limit = 5;
-
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->once()
-            ->with(Mockery::any(), ['limit' => $limit])
-            ->andReturn([]);
-
-        $this->service->getExampleEntities($label, $limit);
-
-        $this->assertTrue(true);
-    }
-
-    /**
-     * Test that getExampleEntities uses default limit
-     */
-    public function test_get_example_entities_uses_default_limit()
-    {
-        $label = 'Customer';
-
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->once()
-            ->with(Mockery::any(), ['limit' => 3])
-            ->andReturn([]);
-
-        $this->service->getExampleEntities($label);
-
-        $this->assertTrue(true);
-    }
-
-    /**
-     * Test that getExampleEntities validates label name
-     */
-    public function test_get_example_entities_validates_label_name()
-    {
-        $invalidLabel = 'Team"; DROP TABLE users; --';
-
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('Invalid label name');
-
-        $this->service->getExampleEntities($invalidLabel);
-    }
-
-    /**
-     * Test that getExampleEntities throws exception for empty label
-     */
-    public function test_get_example_entities_throws_exception_for_empty_label()
-    {
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('Label cannot be empty');
-
-        $this->service->getExampleEntities('');
-    }
-
-    /**
-     * Test that getExampleEntities accepts valid label with underscores
-     */
-    public function test_get_example_entities_accepts_valid_label_with_underscores()
-    {
-        $label = 'User_Account';
-
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->once()
-            ->andReturn([]);
-
-        $this->service->getExampleEntities($label);
-
-        $this->assertTrue(true);
-    }
-
-    /**
-     * Test that getExampleEntities accepts valid label with hyphens
-     */
-    public function test_get_example_entities_accepts_valid_label_with_hyphens()
-    {
-        $label = 'Customer-Account';
-
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->once()
-            ->andReturn([]);
-
-        $this->service->getExampleEntities($label);
-
-        $this->assertTrue(true);
-    }
-
-    /**
-     * Test that getExampleEntities rejects label starting with number
-     */
-    public function test_get_example_entities_rejects_label_starting_with_number()
-    {
-        $invalidLabel = '123Team';
-
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('Invalid label name');
-
-        $this->service->getExampleEntities($invalidLabel);
-    }
-
-    /**
-     * Test that getExampleEntities rejects label with special characters
-     */
-    public function test_get_example_entities_rejects_label_with_special_characters()
-    {
-        $invalidLabel = 'Team@Organization';
-
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('Invalid label name');
-
-        $this->service->getExampleEntities($invalidLabel);
-    }
-
-    /**
-     * Test that getExampleEntities handles query failures gracefully
-     */
-    public function test_get_example_entities_handles_query_failures()
-    {
-        $label = 'Team';
-
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->once()
-            ->andThrow(new Exception('Query execution failed'));
-
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage("Failed to retrieve example entities for label 'Team'");
-
-        $this->service->getExampleEntities($label);
-    }
-
-    /**
-     * Test that getExampleEntities returns empty array for no results
-     */
-    public function test_get_example_entities_returns_empty_array_for_no_results()
-    {
-        $label = 'NonExistentLabel';
-
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->once()
-            ->andReturn([]);
-
-        $entities = $this->service->getExampleEntities($label);
-
-        $this->assertIsArray($entities);
-        $this->assertEmpty($entities);
-    }
-
-    /**
-     * Test that getExampleEntities extracts node properties correctly
-     */
-    public function test_get_example_entities_extracts_node_properties_correctly()
-    {
-        $label = 'Person';
-
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->once()
-            ->andReturn([
-                ['n' => ['id' => 1, 'name' => 'John Doe', 'email' => 'john@example.com']],
-                ['n' => ['id' => 2, 'name' => 'Jane Smith', 'email' => 'jane@example.com']],
-            ]);
-
-        $entities = $this->service->getExampleEntities($label);
-
-        $this->assertCount(2, $entities);
-        $this->assertEquals('John Doe', $entities[0]['name']);
-        $this->assertEquals('jane@example.com', $entities[1]['email']);
-    }
-
-    /**
-     * Test that getExampleEntities handles missing node data gracefully
-     */
-    public function test_get_example_entities_handles_missing_node_data()
-    {
-        $label = 'Team';
-
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->once()
-            ->andReturn([
-                ['n' => ['id' => 1, 'name' => 'Team A']],
-                ['other_key' => ['id' => 2]], // Missing 'n' key
-                ['n' => ['id' => 3, 'name' => 'Team C']],
-            ]);
-
-        $entities = $this->service->getExampleEntities($label);
-
-        $this->assertCount(3, $entities);
-        $this->assertEquals(['id' => 1, 'name' => 'Team A'], $entities[0]);
-        $this->assertEquals([], $entities[1]); // Empty for missing 'n' key
-        $this->assertEquals(['id' => 3, 'name' => 'Team C'], $entities[2]);
-    }
-
-    // =========================================================================
     // Integration Tests (Multiple Methods)
     // =========================================================================
+
+    /**
+     * Task 1.7: example-node sampling ran `MATCH (n:Label) … ORDER BY size(keys(n))`
+     * WITHOUT any tenant filter and shipped the rows into the query-generation
+     * prompt — other tenants' data sent to the LLM provider. Retrieval must never
+     * sample example nodes, even when labels exist.
+     */
+    /**
+     * Review I-1: a failed pattern scan (null) must reach the prompt as "unknown",
+     * never be coerced to [] ("no edges exist").
+     */
+    public function test_unknown_relationship_patterns_stay_null_in_the_context()
+    {
+        $this->mockEmbeddingProvider->shouldReceive('embed')->andReturn([0.1]);
+        $this->mockVectorStore->shouldReceive('search')->andReturn([]);
+        $this->mockGraphStore->shouldReceive('getSchema')
+            ->andReturn(['labels' => ['Team'], 'relationshipTypes' => ['MEMBER_OF'], 'relationshipPatterns' => null, 'propertyKeys' => []]);
+        $this->allowOnlyValueFreeTypeProbes();
+
+        $context = $this->service->retrieveContext('Show me the teams');
+
+        $this->assertArrayHasKey('all_relationship_patterns', $context->graphSchema);
+        $this->assertNull($context->graphSchema['all_relationship_patterns']);
+    }
+
+    /** Review I-3: only the labels that will get a schema card are type-probed. */
+    public function test_only_the_carded_labels_are_type_probed()
+    {
+        $labels = array_map(fn ($i) => 'L' . $i, range(1, \Condoedge\Ai\Services\Schema\SchemaCardBuilder::MAX_CARDS + 5));
+        $this->mockEmbeddingProvider->shouldReceive('embed')->andReturn([0.1]);
+        $this->mockVectorStore->shouldReceive('search')->andReturn([]);
+        $this->mockGraphStore->shouldReceive('getSchema')
+            ->andReturn(['labels' => $labels, 'relationshipTypes' => [], 'relationshipPatterns' => [], 'propertyKeys' => []]);
+        $this->allowOnlyValueFreeTypeProbes();
+
+        $this->service->retrieveContext('Show me everything');
+
+        $probed = array_map(fn ($c) => preg_match('/^MATCH \(n:`(\w+)`\)/', $c, $m) ? $m[1] : null, $this->graphQueries);
+        $this->assertSame(array_slice($labels, 0, \Condoedge\Ai\Services\Schema\SchemaCardBuilder::MAX_CARDS), $probed);
+    }
+
+    public function test_retrieve_context_never_samples_example_nodes()
+    {
+        $this->mockEmbeddingProvider->shouldReceive('embed')->andReturn([0.1]);
+        $this->mockVectorStore->shouldReceive('search')->andReturn([]);
+        $this->mockGraphStore->shouldReceive('getSchema')->once()
+            ->andReturn(['labels' => ['Team', 'Person'], 'relationshipTypes' => [], 'propertyKeys' => []]);
+
+        // No Neo4j sampling query may be issued at all.
+        $this->allowOnlyValueFreeTypeProbes();
+
+        $context = $this->service->retrieveContext('Show me the teams');
+
+        $this->assertInstanceOf(\Condoedge\Ai\DTOs\PipelineContext::class, $context);
+    }
 
     /**
      * Test that retrieveContext skips example retrieval when no labels exist
@@ -1233,47 +1112,7 @@ class ContextRetrieverTest extends TestCase
 
         $context = $this->service->retrieveContext($question);
 
-        $this->assertEmpty($context->relevantEntities);
-    }
-
-    /**
-     * Test that retrieveContext handles individual example retrieval failures
-     */
-    public function test_retrieve_context_handles_individual_example_failures()
-    {
-        $question = 'Test query';
-
-        $this->mockEmbeddingProvider
-            ->shouldReceive('embed')
-            ->andReturn([0.1]);
-
-        $this->mockVectorStore
-            ->shouldReceive('search')
-            ->andReturn([]);
-
-        $this->mockGraphStore
-            ->shouldReceive('getSchema')
-            ->once()
-            ->andReturn(['labels' => ['Team', 'Person'], 'relationshipTypes' => [], 'propertyKeys' => []]);
-
-        // First label succeeds, second fails
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->twice()
-            ->andReturnUsing(function ($cypher, $params) {
-                if (strpos($cypher, 'Team') !== false) {
-                    return [['n' => ['id' => 1, 'name' => 'Alpha']]];
-                }
-                throw new Exception('Query failed for Person');
-            });
-
-        $context = $this->service->retrieveContext($question);
-
-        // Team examples retrieved, Person failed
-        $this->assertArrayHasKey('Team', $context->relevantEntities);
-        $this->assertArrayNotHasKey('Person', $context->relevantEntities);
-        $this->assertNotEmpty($context->errors);
-        $this->assertStringContainsString("Example retrieval for label 'Person' failed", $context->errors[0]);
+        $this->assertInstanceOf(\Condoedge\Ai\DTOs\PipelineContext::class, $context);
     }
 
     /**
@@ -1319,14 +1158,8 @@ class ContextRetrieverTest extends TestCase
                 'propertyKeys' => ['id', 'name', 'active'],
             ]);
 
-        // Mock example entities
-        $this->mockGraphStore
-            ->shouldReceive('query')
-            ->twice()
-            ->andReturn(
-                [['n' => ['id' => 1, 'name' => 'Alpha Team', 'active' => true]]],
-                [['n' => ['id' => 1, 'name' => 'John Doe']]]
-            );
+        // Task 1.7: example entities are no longer sampled.
+        $this->allowOnlyValueFreeTypeProbes();
 
         $context = $this->service->retrieveContext($question);
 
@@ -1336,9 +1169,6 @@ class ContextRetrieverTest extends TestCase
 
         $this->assertCount(2, $context->graphSchema['labels']);
         $this->assertContains('Team', $context->graphSchema['labels']);
-
-        $this->assertArrayHasKey('Team', $context->relevantEntities);
-        $this->assertArrayHasKey('Person', $context->relevantEntities);
 
         $this->assertEmpty($context->errors);
     }

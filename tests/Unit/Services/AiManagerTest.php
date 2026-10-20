@@ -23,10 +23,6 @@ use Mockery;
 
 /**
  * Tests for AiManager facade pass-through methods.
- *
- * Covers:
- * - P0-1: syncRelationships() delegates to the ingestion service (the observer
- *   calls AI::syncRelationships([...]) so the method must exist).
  */
 class AiManagerTest extends TestCase
 {
@@ -72,37 +68,6 @@ class AiManagerTest extends TestCase
     {
         Mockery::close();
         parent::tearDown();
-    }
-
-    // =========================================================================
-    // P0-1: syncRelationships pass-through
-    // =========================================================================
-
-    /** @test */
-    public function sync_relationships_delegates_to_ingestion_service(): void
-    {
-        $entities = [
-            Mockery::mock(\Condoedge\Ai\Domain\Contracts\Nodeable::class),
-            Mockery::mock(\Condoedge\Ai\Domain\Contracts\Nodeable::class),
-        ];
-
-        $summary = [
-            'total_entities' => 2,
-            'total_relationships_checked' => 4,
-            'relationships_created' => 1,
-            'relationships_skipped' => 3,
-            'relationships_failed' => 0,
-            'errors' => [],
-        ];
-
-        $this->mockIngestion->shouldReceive('syncRelationships')
-            ->once()
-            ->with($entities)
-            ->andReturn($summary);
-
-        $result = $this->manager->syncRelationships($entities);
-
-        $this->assertSame($summary, $result);
     }
 
     // =========================================================================
@@ -252,6 +217,8 @@ class AiManagerTest extends TestCase
         config()->set('ai.file_context.enabled', false);
 
         $ctx = new PipelineContext();
+        // QU's export judgment (the only export signal since Phase 2.B).
+        $ctx->qu = new QueryUnderstandingResult(exportFormat: 'pdf', language: 'en');
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
             ->andReturn($ctx);
@@ -313,7 +280,7 @@ class AiManagerTest extends TestCase
         ]);
 
         $ctx = new PipelineContext();
-        $ctx->qu = new QueryUnderstandingResult(isPossessive: true);
+        $ctx->qu = new QueryUnderstandingResult(isPossessive: true, exportFormat: 'pdf', language: 'en');
 
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
@@ -377,6 +344,8 @@ class AiManagerTest extends TestCase
         app()->setLocale('fr');
 
         $ctx = new PipelineContext();
+        // QU judged: a PDF ask, written in English — its language beats the app locale.
+        $ctx->qu = new QueryUnderstandingResult(exportFormat: 'pdf', language: 'en');
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
             ->andReturn($ctx);
@@ -457,7 +426,7 @@ class AiManagerTest extends TestCase
     }
 
     // =========================================================================
-    // Export intent: QU-first, regex fallback (the cold-roster-excel MUST-FLIP)
+    // Export intent: QU only (the cold-roster-excel MUST-FLIP)
     // =========================================================================
 
     /** @test */
@@ -465,7 +434,7 @@ class AiManagerTest extends TestCase
     {
         // The live user failure: "Can i get an excel..." — no verb from the
         // deterministic list, no document-shape match. QU's semantic judgment
-        // must drive the export; the composer regex is only a fallback.
+        // drives the export (it is the only export signal).
         config()->set('ai.file_context.enabled', false);
 
         $rows = [];
@@ -513,11 +482,109 @@ class AiManagerTest extends TestCase
         $this->assertStringContainsString('Member 100', $document);
     }
 
-    /** @test */
-    public function composer_regex_remains_the_fallback_when_qu_produced_no_export_format(): void
+    /**
+     * @test Eval p12-B french t1: a French export was titled "Team members roles" — the
+     * title came from search_query (English-normalized for semantic search). The
+     * user-visible title is QU's subject_label (the question's language), and the turn's
+     * metadata.subject (recorded as last_subject) is that same label.
+     */
+    public function a_french_current_result_export_is_titled_by_the_localized_subject_label(): void
     {
-        // qu->exportFormat null (e.g. QU call failed) + a phrase the deterministic
-        // regex DOES catch → the export path still fires.
+        config()->set('ai.file_context.enabled', false);
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(
+            entityTypes: ['User'],
+            searchQuery: 'team members roles',
+            questionType: 'data_query',
+            exportFormat: 'excel',
+            language: 'fr',
+            subjectLabel: "Rôles des membres de l'équipe",
+        );
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: 'MATCH (u:User) RETURN u.name AS member_name, u.role AS role', explanation: '', confidence: 0.9, warnings: [], metadata: []));
+        $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
+        $this->mockEmbedding->shouldReceive('embed')->andReturn([0.1]);
+        $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturn(new QueryExecutionResult(success: true, data: [['member_name' => 'Julie Rousseau', 'role' => 'lead']], stats: [], metadata: [], errors: []));
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+
+        $result = $this->manager->answerQuestion("Peux-tu me donner un Excel des membres de l'équipe avec leurs rôles ?");
+
+        $this->assertSame('current_result', $result['metadata']['response']['export_source']);
+        $document = $result['metadata']['response']['export_document_markdown'];
+        $this->assertStringContainsString("# Rôles des membres de l'équipe", $document);
+        $this->assertStringNotContainsString('Team members roles', $document);
+        $this->assertStringNotContainsString('Team members roles', $result['answer']);
+        // Recorded as last_subject: a later previous-result export keeps this title.
+        $this->assertSame("Rôles des membres de l'équipe", $result['metadata']['subject']);
+    }
+
+    /** @test Without a label (older QU reply), the subject falls back to search_query. */
+    public function without_a_subject_label_the_recorded_subject_falls_back_to_search_query(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(searchQuery: 'team members roles', questionType: 'data_query', exportFormat: 'excel', language: 'en');
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: 'MATCH (u:User) RETURN u.name AS member_name', explanation: '', confidence: 0.9, warnings: [], metadata: []));
+        $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
+        $this->mockEmbedding->shouldReceive('embed')->andReturn([0.1]);
+        $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturn(new QueryExecutionResult(success: true, data: [['member_name' => 'Julie Rousseau']], stats: [], metadata: [], errors: []));
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        $result = $this->manager->answerQuestion('Excel of the team members with their roles');
+
+        $this->assertStringContainsString('# Team members roles', $result['metadata']['response']['export_document_markdown']);
+        $this->assertSame('team members roles', $result['metadata']['subject']);
+    }
+
+    /**
+     * @test A previous-result export is titled by the RECORDED label (last_subject) — the
+     * language of the turn that produced the rows — never by this turn's own subject.
+     */
+    public function a_previous_result_export_is_titled_by_the_recorded_subject_label(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(searchQuery: 'excel', exportFormat: 'excel', language: 'fr', followUpReference: true, subjectLabel: 'Fichier Excel');
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: null, explanation: '', confidence: 0.0, warnings: [], metadata: []));
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        $result = $this->manager->answerQuestion("Parfait, donne-moi l'excel.", [
+            'conversation_context' => [
+                'last_subject' => "Rôles des membres de l'équipe",
+                'focused_entity' => 'User',
+                'last_result_count' => 1,
+                'last_result_sample' => [['member_name' => 'Julie Rousseau', 'role' => 'lead']],
+            ],
+        ]);
+
+        $this->assertSame('previous_result', $result['metadata']['response']['export_source']);
+        $document = $result['metadata']['response']['export_document_markdown'];
+        $this->assertStringContainsString("# Rôles des membres de l'équipe", $document);
+        $this->assertStringNotContainsString('Fichier Excel', $document);
+    }
+
+    /** @test */
+    public function without_a_qu_export_format_no_word_list_turns_the_turn_into_an_export(): void
+    {
+        // Phase 2.B: QU exportFormat is the ONLY export signal. With it null (e.g.
+        // the QU call failed), "export that to Excel" is answered through the
+        // normal path — the former EN/FR verb+format regex fallback is gone.
         config()->set('ai.file_context.enabled', false);
 
         $ctx = new PipelineContext(); // default QU result: exportFormat null
@@ -527,11 +594,11 @@ class AiManagerTest extends TestCase
             ->andReturn(new QueryGenerationResult(cypher: null, explanation: '', confidence: 0.0, warnings: [], metadata: []));
 
         $this->mockQueryExecutor->shouldReceive('execute')
-            ->once()
             ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
 
-        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
-        $this->mockResponseGenerator->shouldReceive('generate')->never();
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
+            ->once()
+            ->andReturn(['answer' => 'No results.', 'metadata' => []]);
 
         $result = $this->manager->answerQuestion('export that to Excel', [
             'conversation_context' => [
@@ -539,9 +606,36 @@ class AiManagerTest extends TestCase
             ],
         ]);
 
-        $this->assertTrue($result['metadata']['response']['export_intent']);
-        $this->assertSame('excel', $result['metadata']['response']['export_format']);
-        $this->assertSame('previous_result', $result['metadata']['response']['export_source']);
+        $this->assertArrayNotHasKey('export_intent', $result['metadata']['response']);
+        // A default (not failed) QU result: nothing flagged as unavailable.
+        $this->assertArrayNotHasKey('export_intent_unavailable', $result['metadata']);
+    }
+
+    /** @test */
+    public function a_failed_qu_call_is_stamped_export_intent_unavailable_in_metadata_and_composition(): void
+    {
+        // With the regex fallback gone, "no export ask" after a QU FAILURE means
+        // "unknown" — stamped so the eval can distinguish it from a judged "no".
+        config()->set('ai.file_context.enabled', false);
+
+        $ctx = new PipelineContext();
+        $ctx->qu = QueryUnderstandingResult::failed();
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: null, explanation: '', confidence: 0.0, warnings: [], metadata: []));
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
+        // Eval p11 D3: a failed understanding with nothing retrieved is a temporary
+        // problem — never the "no results" abstention.
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+
+        $observer = new \Condoedge\Ai\Support\RecordingPipelineObserver();
+        $result = $this->manager->answerQuestion('export that to Excel', ['observer' => $observer]);
+
+        $this->assertSame('qu_failed', $result['metadata']['export_intent_unavailable'] ?? null);
+        $this->assertSame('qu_failed', $observer->stageData('composition')['export_intent_unavailable'] ?? null);
+        $this->assertSame('understanding_failed', $result['metadata']['response']['status'] ?? null);
     }
 
     // =========================================================================
@@ -552,6 +646,9 @@ class AiManagerTest extends TestCase
     public function follow_up_export_re_executes_the_recorded_cypher_through_the_scoped_executor(): void
     {
         config()->set('ai.file_context.enabled', false);
+        // Document limit == display cap: the recorded query runs as recorded (the
+        // re-run past the display LIMIT is AiManagerExportFanOutTest's subject).
+        config()->set('ai.export.document_row_limit', 100);
 
         $recordedCypher = 'MATCH (u:User) RETURN u.name AS name, u.email AS email LIMIT 100';
         $fullRows = [];
@@ -561,6 +658,8 @@ class AiManagerTest extends TestCase
         $user = (object) ['id' => 13];
 
         $ctx = new PipelineContext();
+        // QU's export judgment (the only export signal since Phase 2.B).
+        $ctx->qu = new QueryUnderstandingResult(exportFormat: 'excel', language: 'en');
         $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
 
         $this->mockQueryGenerator->shouldReceive('generate')
@@ -612,6 +711,237 @@ class AiManagerTest extends TestCase
         $this->assertStringContainsString('more may exist', $document, 'a cap-hit export must disclose that more rows may exist');
     }
 
+    /**
+     * Task 1.27 (g): wire a QU follow-up export turn where the recorded
+     * previous result has $previousRows and THIS turn's fresh query returns
+     * $currentRows.
+     */
+    private function followUpExportTurn(array $previousRows, array $currentRows): array
+    {
+        config()->set('ai.file_context.enabled', false);
+
+        $recordedCypher = 'MATCH (u:User) RETURN u.name AS member_name, u.role AS role';
+        $currentCypher = 'MATCH (u:User) OPTIONAL MATCH (c:Contact) WHERE c.user_id = u.id RETURN u.name AS member_name, u.role AS role, c.invitation_email AS contact_email';
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(
+            entityTypes: ['User'],
+            searchQuery: 'team members contact information',
+            questionType: 'data_query',
+            exportFormat: 'excel',
+            language: 'en',
+            followUpReference: true,
+        );
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: $currentCypher, explanation: '', confidence: 0.9, warnings: [], metadata: []));
+
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturnUsing(function ($cypher) use ($recordedCypher, $previousRows, $currentRows) {
+                return new QueryExecutionResult(
+                    success: true,
+                    // The recorded query is re-run with an explicit document LIMIT (review I1).
+                    data: str_starts_with((string) $cypher, $recordedCypher) ? $previousRows : $currentRows,
+                    stats: [], metadata: [], errors: [],
+                );
+            });
+
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        return $this->manager->answerQuestion('Can you give me an excel with those members and their contact info?', [
+            'user' => (object) ['id' => 13],
+            'conversation_context' => [
+                'last_cypher_query' => $recordedCypher,
+                'last_result_count' => count($previousRows),
+                'last_result_sample' => $previousRows,
+            ],
+        ]);
+    }
+
+    /**
+     * @test Eval p17-B cold-roster-excel#0, replayed end to end: the generator returned
+     * `u.email AS contact_info`; the file was right (every email) but headed "Contact Info",
+     * so the user's Excel had no "Email" column. The turn's own cypher now reaches the export
+     * composer: the header names the property the column holds, the row keys stay.
+     */
+    public function a_cold_export_heads_a_column_aliased_after_the_users_word_by_its_property(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(
+            entityTypes: ['User'],
+            searchQuery: 'current team members contact info',
+            questionType: 'data_query',
+            exportFormat: 'excel',
+            language: 'en',
+        );
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')->andReturn(new QueryGenerationResult(
+            cypher: 'MATCH (u:User) WHERE u.current_team_id = 3 RETURN u.name AS name, u.email AS contact_info, u.id AS user_id LIMIT 100',
+            explanation: '', confidence: 0.9, warnings: [], metadata: [],
+        ));
+        $this->mockQueryExecutor->shouldReceive('execute')->andReturn(new QueryExecutionResult(
+            success: true,
+            data: [
+                ['name' => 'Julie Rousseau', 'contact_info' => 'j.rousseau@novogestion.ca', 'user_id' => 13],
+                ['name' => 'Service Comptable', 'contact_info' => 'service_comptable@novogestion.ca', 'user_id' => 14],
+            ],
+            stats: [], metadata: [], errors: [],
+        ));
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        $result = $this->manager->answerQuestion(
+            'Can I get an excel with all the members from my current team? With contact info',
+            ['user' => (object) ['id' => 13]]
+        );
+
+        $response = $result['metadata']['response'];
+        $this->assertSame('current_result', $response['export_source']);
+        $this->assertStringContainsString('| Name | Email |', $response['export_document_markdown']);
+        $this->assertStringContainsString('Fields included: Name, Email.', $result['answer']);
+        $this->assertSame(['name' => 'Name', 'contact_info' => 'Email'], $response['export_document_headers']);
+        $this->assertSame(['name', 'contact_info'], array_keys($response['export_document_rows'][0]));
+    }
+
+    /**
+     * @test "Give me that as an Excel" exports the PREVIOUS result: its columns are headed
+     * through the RECORDED cypher (the query the rows came from), never this turn's.
+     */
+    public function a_previous_result_export_is_headed_through_the_recorded_cypher(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+
+        $recorded = 'MATCH (u:User) WHERE u.current_team_id = 3 RETURN u.name AS name, u.email AS contact LIMIT 100';
+        $rows = [['name' => 'Julie Rousseau', 'contact' => 'j.rousseau@novogestion.ca']];
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(
+            entityTypes: ['User'], questionType: 'data_query', exportFormat: 'excel', language: 'en', followUpReference: true,
+        );
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: null, explanation: '', confidence: 0.0, warnings: [], metadata: []));
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturn(new QueryExecutionResult(success: true, data: $rows, stats: [], metadata: [], errors: []));
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->never();
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+
+        $result = $this->manager->answerQuestion('Ok, give me that as an excel', [
+            'user' => (object) ['id' => 13],
+            'conversation_context' => [
+                'last_cypher_query' => $recorded,
+                'last_result_count' => 1,
+                'last_result_sample' => $rows,
+            ],
+        ]);
+
+        $response = $result['metadata']['response'];
+        $this->assertSame('previous_result', $response['export_source']);
+        $this->assertStringContainsString('| Name | Email |', $response['export_document_markdown']);
+        $this->assertSame(['name' => 'Name', 'contact' => 'Email'], $response['export_document_headers']);
+    }
+
+    /** @test */
+    public function a_follow_up_export_whose_fresh_query_adds_requested_columns_exports_the_current_result(): void
+    {
+        // Live roster-excel t1: the fresh query succeeded WITH contact_email but the
+        // follow-up policy exported the previous (name + role) rows — the file lacked
+        // exactly what was asked for.
+        $result = $this->followUpExportTurn(
+            [['member_name' => 'Julie Rousseau', 'role' => 'lead'], ['member_name' => 'Karen Douglas', 'role' => 'contact']],
+            [
+                ['member_name' => 'Julie Rousseau', 'role' => 'lead', 'contact_email' => 'julie@x.test'],
+                ['member_name' => 'Karen Douglas', 'role' => 'contact', 'contact_email' => 'karen@x.test'],
+            ],
+        );
+
+        $response = $result['metadata']['response'];
+        $this->assertSame('current_result', $response['export_source']);
+        $this->assertStringContainsString('| Member Name | Role | Contact Email |', $response['export_document_markdown']);
+        $this->assertStringContainsString('karen@x.test', $response['export_document_markdown']);
+        $this->assertStringContainsString('Fields included: Member Name, Role, Contact Email.', $result['answer']);
+        $this->assertStringNotContainsString('not included', $result['answer']);
+    }
+
+    /** @test */
+    public function a_follow_up_export_whose_fresh_query_is_not_a_superset_keeps_the_previous_result_and_discloses_the_missing_field(): void
+    {
+        // Same grain (shares member_name) but drops role: the previous result stays
+        // authoritative — and the answer must say the requested contact_email is
+        // NOT in the file instead of listing "Fields included" as if complete.
+        $result = $this->followUpExportTurn(
+            [['member_name' => 'Julie Rousseau', 'role' => 'lead']],
+            [['member_name' => 'Julie Rousseau', 'contact_email' => 'julie@x.test']],
+        );
+
+        $response = $result['metadata']['response'];
+        $this->assertSame('previous_result', $response['export_source']);
+        $this->assertStringContainsString('Fields included: Member Name, Role.', $result['answer']);
+        $this->assertStringContainsString('Requested fields not included: Contact Email.', $result['answer']);
+    }
+
+    /** @test */
+    public function a_re_anchored_superset_with_generic_aliases_but_different_values_keeps_the_previous_result(): void
+    {
+        // Task 1.28 I1: aliases are LLM-chosen and generic. A re-anchored TEAM query
+        // [name, email, phone] is a column-name superset of a members list
+        // [name, email] — but its VALUES are a different entity. Name-only
+        // comparison exported Team rows under the members title.
+        $result = $this->followUpExportTurn(
+            [
+                ['name' => 'Julie Rousseau', 'email' => 'julie@x.test'],
+                ['name' => 'Karen Douglas', 'email' => 'karen@x.test'],
+            ],
+            [['name' => 'Gestion Centrale', 'email' => 'info@gc.test', 'phone' => '514-555-0100']],
+        );
+
+        $this->assertSame('previous_result', $result['metadata']['response']['export_source']);
+        $this->assertStringContainsString('Julie Rousseau', $result['metadata']['response']['export_document_markdown']);
+        $this->assertStringNotContainsString('not included', $result['answer'], 'a re-anchored query never yields a false missing-field line');
+    }
+
+    /** @test */
+    public function the_label_marker_is_not_a_column_in_the_superset_comparison(): void
+    {
+        // Task 1.28 M2: `_label` is a decoration (DECORATION_KEYS), not data.
+        $result = $this->followUpExportTurn(
+            [['name' => 'Julie Rousseau', 'email' => 'julie@x.test', '_label' => 'User']],
+            [['name' => 'Julie Rousseau', 'email' => 'julie@x.test', 'phone' => '514-555-0100']],
+        );
+
+        $this->assertSame('current_result', $result['metadata']['response']['export_source']);
+    }
+
+    /** @test */
+    public function a_superset_matches_values_case_and_whitespace_insensitively(): void
+    {
+        $result = $this->followUpExportTurn(
+            [['name' => 'Julie Rousseau', 'email' => 'JULIE@x.test ']],
+            [['name' => ' julie rousseau', 'email' => 'julie@x.test', 'phone' => '514-555-0100']],
+        );
+
+        $this->assertSame('current_result', $result['metadata']['response']['export_source']);
+    }
+
+    /** @test */
+    public function a_re_anchored_fresh_query_with_no_shared_columns_keeps_the_previous_result_without_disclosure(): void
+    {
+        // The anaphora-suspect case (live: "excel of it" exported the TEAM row):
+        // an unrelated fresh query is neither exported nor treated as "requested".
+        $result = $this->followUpExportTurn(
+            [['member_name' => 'Julie Rousseau', 'role' => 'lead']],
+            [['team_name' => 'Gestion Centrale', 'team_type' => 2, 'website' => 'x.test']],
+        );
+
+        $this->assertSame('previous_result', $result['metadata']['response']['export_source']);
+        $this->assertStringNotContainsString('not included', $result['answer']);
+    }
+
     /** @test */
     public function follow_up_export_falls_back_to_the_sample_with_disclosure_when_re_execution_fails(): void
     {
@@ -624,6 +954,8 @@ class AiManagerTest extends TestCase
         }
 
         $ctx = new PipelineContext();
+        // QU's export judgment (the only export signal since Phase 2.B).
+        $ctx->qu = new QueryUnderstandingResult(exportFormat: 'excel', language: 'en');
         $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
 
         $this->mockQueryGenerator->shouldReceive('generate')
@@ -665,6 +997,8 @@ class AiManagerTest extends TestCase
         config()->set('ai.file_context.enabled', false);
 
         $ctx = new PipelineContext();
+        // QU's export judgment (the only export signal since Phase 2.B).
+        $ctx->qu = new QueryUnderstandingResult(exportFormat: 'excel', language: 'en');
         $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
 
         $this->mockQueryGenerator->shouldReceive('generate')
@@ -701,6 +1035,8 @@ class AiManagerTest extends TestCase
         }
 
         $ctx = new PipelineContext();
+        // QU's export judgment (the only export signal since Phase 2.B).
+        $ctx->qu = new QueryUnderstandingResult(exportFormat: 'excel', language: 'en');
         $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
 
         $this->mockQueryGenerator->shouldReceive('generate')
@@ -1096,5 +1432,51 @@ class AiManagerTest extends TestCase
 
         $this->assertSame('No results were found.', $result['answer']);
         $this->assertTrue($result['metadata']['response']['empty_result']);
+    }
+
+    /**
+     * @test "Where can I add new members?" comes back intent=page_explanation on part of the runs
+     * (eval p17–p23 resilience t2: 4 of 8; under the strict reply schema: every measured run)
+     * together with navigation_target=own_team. An ask QU judged to be about ANOTHER page — the
+     * user's own team or profile — is not a request to describe the page the chat was opened
+     * from: the described page must not answer it. Structured QU signals only.
+     */
+    public function a_navigation_ask_is_never_answered_by_narrating_the_current_page(): void
+    {
+        config()->set('ai.file_context.enabled', false);
+        config()->set('ai.chat.page_explanation_intents', ['page_explanation']);
+        config()->set('ai.chat.page_descriptions', [
+            'Unit' => 'This page shows a single unit: its owners, balance and payment history.',
+        ]);
+
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(intent: 'page_explanation', questionType: 'knowledge_query', navigationTarget: 'own_team');
+
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: null, explanation: '', confidence: 0.0, warnings: [], metadata: []));
+        $this->mockQueryExecutor->shouldReceive('execute')
+            ->andReturn(new QueryExecutionResult(success: true, data: [], stats: [], metadata: [], errors: []));
+
+        // The turn takes the ordinary path (here: nothing retrieved → the empty answer, which
+        // points at the navigation target) — never the narration of the unit page.
+        $this->mockResponseGenerator->shouldReceive('generate')->never();
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
+            ->once()
+            ->andReturn([
+                'answer' => 'You can add members from your team settings.',
+                'insights' => [],
+                'visualizations' => [],
+                'format' => 'text',
+                'metadata' => ['empty_result' => true, 'result_count' => 0],
+            ]);
+
+        $result = $this->manager->answerQuestion('Where can I add new members?', [
+            'page_context' => ['route' => 'units.show', 'entity_type' => 'Unit', 'entity_id' => 402, 'label' => 'Unit 402'],
+        ]);
+
+        $this->assertSame('You can add members from your team settings.', $result['answer']);
+        $this->assertNotSame('page_explanation', $result['metadata']['response']['intent'] ?? null);
+        $this->assertNotSame('page_description', $result['metadata']['query']['source'] ?? null);
     }
 }

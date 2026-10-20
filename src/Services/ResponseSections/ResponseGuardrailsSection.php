@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\ResponseSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
-use Condoedge\Ai\Services\Actions\ActionToolChannel;
 use Condoedge\Ai\Services\AssistantIdentity;
 
 /**
@@ -24,11 +23,6 @@ use Condoedge\Ai\Services\AssistantIdentity;
  *  2. OUT-OF-DOMAIN SCOPING: an off-topic question with no relevant data or files is
  *     declined as outside what the assistant can help with for {project}, keeping the
  *     persona — never framed as a database "no results, try rephrasing" miss.
- *
- *  3. NO LINK GRAMMAR (native tool channel only): with real tool definitions in hand the
- *     model must never write action:// / entity:// links — the backup behind the render-side
- *     fingerprint dedupe against a history-imitating model. Emitted ONLY when the channel
- *     option says Native, so legacy/markdown/abstention prompts stay byte-identical.
  *
  * Priority: 1100 (immediately after PrivacyAndSecurityGuidelinesSection at 1000).
  */
@@ -57,10 +51,6 @@ class ResponseGuardrailsSection extends BaseResponseSection
         $scope = trim((string) config('ai.guardrails.domain_scope', ''));
         if ($scope !== '') {
             $lines[] = "   The domain of {$project} is: {$scope} Anything outside it is out-of-scope per rule 2.";
-        }
-
-        if (($options[ActionToolChannel::OPTION] ?? null) === ActionToolChannel::Native) {
-            $lines[] = "3. Never write action:// or entity:// links in your response — your tools are the only way to propose actions.";
         }
 
         return implode("\n", $lines) . "\n\n";

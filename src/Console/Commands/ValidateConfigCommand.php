@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Console\Commands;
 
+use Condoedge\Ai\Services\GraphPropertyMapper;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Support\Str;
 
 /**
  * ValidateConfigCommand
@@ -61,20 +64,87 @@ class ValidateConfigCommand extends Command
             }
         }
 
-        if (empty($config['vector'])) {
-            $this->warnings[] = "{$shortName}: missing 'vector' configuration (entity won't be searchable)";
-        } else {
-            if (empty($config['vector']['collection'])) {
-                $this->errors[] = "{$shortName}: missing vector collection name";
-            }
-            if (empty($config['vector']['embed_fields'])) {
-                $this->warnings[] = "{$shortName}: no embed fields (entity won't be searchable by content)";
+        if (!class_exists($entityClass)) {
+            $this->errors[] = "{$shortName}: class does not exist ({$entityClass})";
+        } elseif (is_array($config['graph'] ?? null)) {
+            $this->validateComputedGraphConfig($entityClass, $shortName, $config['graph']);
+        }
+    }
+
+    /**
+     * graph.computed / graph.with / graph.casts: the accessor, method or relation must
+     * exist on the model class, and cast types must be known. Warnings only — ingest
+     * skips a failing computed value per node instead of failing.
+     */
+    private function validateComputedGraphConfig(string $entityClass, string $shortName, array $graph): void
+    {
+        foreach ((array) ($graph['computed'] ?? []) as $property => $source) {
+            if (is_string($source)) {
+                if (!$this->hasAccessorOrMethod($entityClass, $source)) {
+                    $this->warnings[] = "{$shortName}: computed '{$property}' => '{$source}': no method or accessor "
+                        . "named '{$source}' on {$entityClass} (a plain column belongs in graph.properties)";
+                }
+            } elseif (!is_callable($source)) {
+                $this->warnings[] = "{$shortName}: computed '{$property}' must be an accessor/method name or a callable";
             }
         }
 
-        if (!class_exists($entityClass)) {
-            $this->errors[] = "{$shortName}: class does not exist ({$entityClass})";
+        foreach ((array) ($graph['with'] ?? []) as $relation) {
+            if (!is_string($relation) || ($problem = $this->relationPathProblem($entityClass, $relation)) === null) {
+                continue;
+            }
+            $this->warnings[] = "{$shortName}: graph.with '{$relation}': {$problem}";
         }
+
+        $knownCasts = array_merge(GraphPropertyMapper::CAST_TYPES, array_keys(GraphPropertyMapper::CAST_ALIASES));
+        foreach ((array) ($graph['casts'] ?? []) as $property => $type) {
+            if (!is_string($type) || !in_array(strtolower($type), $knownCasts, true)) {
+                $this->warnings[] = "{$shortName}: graph.casts '{$property}' has unknown type '"
+                    . (is_string($type) ? $type : get_debug_type($type)) . "' (expected: "
+                    . implode('|', GraphPropertyMapper::CAST_TYPES) . ')';
+            }
+        }
+    }
+
+    /**
+     * A computed source is valid when the class has a method of that name, a legacy
+     * accessor (getFooBarAttribute) or a new-style Attribute accessor (fooBar()).
+     */
+    private function hasAccessorOrMethod(string $class, string $name): bool
+    {
+        return method_exists($class, $name)
+            || method_exists($class, 'get' . Str::studly($name) . 'Attribute')
+            || method_exists($class, Str::camel($name));
+    }
+
+    /**
+     * Walk a dotted eager-load path (e.g. 'invoiceDetails.taxDetails'). Returns a
+     * problem description, or null when every segment is a relation (or cannot be
+     * verified without a database).
+     */
+    private function relationPathProblem(string $class, string $path): ?string
+    {
+        foreach (explode('.', $path) as $segment) {
+            $segment = explode(':', $segment, 2)[0]; // 'relation:col1,col2' column constraint
+
+            if (!method_exists($class, $segment)) {
+                return "no relation method '{$segment}' on {$class}";
+            }
+
+            try {
+                $relation = (new $class)->{$segment}();
+            } catch (\Throwable $e) {
+                return null; // cannot verify deeper without a working model/DB
+            }
+
+            if (!$relation instanceof Relation) {
+                return "'{$segment}' on {$class} is not an Eloquent relation";
+            }
+
+            $class = get_class($relation->getRelated());
+        }
+
+        return null;
     }
 
     private function displayResults(): void

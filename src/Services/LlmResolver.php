@@ -49,6 +49,46 @@ class LlmResolver
         return $this->cache[$role];
     }
 
+    /**
+     * The role's model under a circuit breaker OF ITS OWN — for background work
+     * that makes many calls in a row (the document-map build: one call per stored
+     * passage). Every provider of forRole() fails under the one breaker the live
+     * chat goes through; a backfill that runs into the provider's rate limit would
+     * open it for the users. An isolated provider is a second instance of the same
+     * model whose failures are counted under $breaker instead.
+     *
+     * Built from configuration (ai.llm.<provider> merged with the role's own). A
+     * provider this resolver cannot rebuild — a class the host bound itself — is
+     * returned as forRole() gives it: shared, rather than lost.
+     */
+    public function isolated(string $role, string $breaker): LlmProviderInterface
+    {
+        $key = $role . '|' . $breaker;
+        if (isset($this->cache[$key])) {
+            return $this->cache[$key];
+        }
+
+        $config = is_array($this->roleConfig[$role] ?? null) ? $this->roleConfig[$role] : [];
+        $provider = $config['provider'] ?? config('ai.llm.default', 'openai');
+        $merged = array_merge(
+            (array) config("ai.llm.{$provider}", []),
+            array_filter($config, fn ($v) => $v !== null),
+            ['circuit_breaker' => $breaker]
+        );
+
+        try {
+            $isolated = match ($provider) {
+                'openai' => new \Condoedge\Ai\LlmProviders\OpenAiLlmProvider($merged),
+                'anthropic' => new \Condoedge\Ai\LlmProviders\AnthropicLlmProvider($merged),
+                default => null,
+            };
+        } catch (\Throwable) {
+            $isolated = null; // no usable configuration (a missing key): share
+        }
+
+        return $this->cache[$key] = $isolated ?? $this->forRole($role);
+    }
+
     public function default(): LlmProviderInterface
     {
         return $this->defaultProvider;

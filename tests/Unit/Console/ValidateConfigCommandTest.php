@@ -36,10 +36,6 @@ class ValidateConfigCommandTest extends TestCase
                     'label' => 'Customer',
                     'properties' => ['id', 'name', 'email'],
                 ],
-                'vector' => [
-                    'collection' => 'customers',
-                    'embed_fields' => ['name', 'description'],
-                ],
                 'metadata' => [
                     'aliases' => ['customer', 'client'],
                     'scopes' => [],
@@ -85,36 +81,12 @@ class ValidateConfigCommandTest extends TestCase
                     // Missing 'label'
                     'properties' => ['id', 'name'],
                 ],
-                'vector' => [
-                    'collection' => 'customers',
-                ],
             ],
         ]]);
 
         $this->artisan('ai:validate-config')
             ->assertFailed()
             ->expectsOutputToContain('missing graph label');
-    }
-
-    /** @test */
-    public function it_detects_missing_vector_collection(): void
-    {
-        config(['entities' => [
-            'App\\Models\\Customer' => [
-                'graph' => [
-                    'label' => 'Customer',
-                    'properties' => ['id', 'name'],
-                ],
-                'vector' => [
-                    // Missing 'collection'
-                    'embed_fields' => ['name'],
-                ],
-            ],
-        ]]);
-
-        $this->artisan('ai:validate-config')
-            ->assertFailed()
-            ->expectsOutputToContain('missing vector collection');
     }
 
     /** @test */
@@ -126,10 +98,6 @@ class ValidateConfigCommandTest extends TestCase
                     'label' => 'Customer',
                     // Missing 'properties'
                 ],
-                'vector' => [
-                    'collection' => 'customers',
-                    'embed_fields' => ['name'],
-                ],
             ],
         ]]);
 
@@ -139,42 +107,69 @@ class ValidateConfigCommandTest extends TestCase
     }
 
     /** @test */
-    public function it_warns_about_missing_vector_config(): void
+    public function it_does_not_ask_for_a_vector_block(): void
     {
+        // Records are written to the graph only: an entity without a 'vector' block is complete.
         config(['entities' => [
             TestCustomer::class => [
                 'graph' => [
                     'label' => 'Customer',
                     'properties' => ['id', 'name'],
                 ],
-                // Missing 'vector'
             ],
         ]]);
 
         $this->artisan('ai:validate-config')
-            ->assertSuccessful() // Warnings don't cause failure
-            ->expectsOutputToContain("won't be searchable");
+            ->assertSuccessful()
+            ->expectsOutputToContain('All configurations are valid!')
+            ->doesntExpectOutputToContain('vector');
     }
 
     /** @test */
-    public function it_warns_about_missing_embed_fields(): void
+    public function it_accepts_valid_computed_with_and_casts(): void
     {
         config(['entities' => [
             TestCustomer::class => [
                 'graph' => [
                     'label' => 'Customer',
                     'properties' => ['id', 'name'],
-                ],
-                'vector' => [
-                    'collection' => 'customers',
-                    // Missing 'embed_fields'
+                    'computed' => [
+                        'summary' => 'getEmbeddingText',      // method
+                        'shout' => fn ($m) => $m->name,       // callable: not checkable, accepted
+                    ],
+                    'with' => ['orders'],
+                    'casts' => ['status' => 'string', 'lifetime_value' => 'decimal'],
                 ],
             ],
         ]]);
 
         $this->artisan('ai:validate-config')
-            ->assertSuccessful() // Warnings don't cause failure
-            ->expectsOutputToContain('no embed fields');
+            ->assertSuccessful()
+            ->doesntExpectOutputToContain('computed')
+            ->doesntExpectOutputToContain('graph.with')
+            ->doesntExpectOutputToContain('graph.casts');
+    }
+
+    /** @test */
+    public function it_warns_about_missing_computed_accessor_relation_and_unknown_cast(): void
+    {
+        config(['entities' => [
+            TestCustomer::class => [
+                'graph' => [
+                    'label' => 'Customer',
+                    'properties' => ['id', 'name'],
+                    'computed' => ['due_amount' => 'real_due_amount'],
+                    'with' => ['orders', 'invoiceDetails.taxDetails'],
+                    'casts' => ['status' => 'uuid'],
+                ],
+            ],
+        ]]);
+
+        $this->artisan('ai:validate-config')
+            ->assertSuccessful() // warnings, not errors
+            ->expectsOutputToContain("computed 'due_amount'")
+            ->expectsOutputToContain("graph.with 'invoiceDetails.taxDetails'")
+            ->expectsOutputToContain("graph.casts 'status'");
     }
 
     /** @test */
@@ -185,9 +180,6 @@ class ValidateConfigCommandTest extends TestCase
                 'graph' => [
                     'label' => 'NonExistent',
                     'properties' => ['id'],
-                ],
-                'vector' => [
-                    'collection' => 'nonexistent',
                 ],
             ],
         ]]);

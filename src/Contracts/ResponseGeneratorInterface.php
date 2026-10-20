@@ -21,14 +21,10 @@ interface ResponseGeneratorInterface
      * @param array $options Generation options:
      *                       - format: 'text', 'markdown', 'json' (default: 'text')
      *                       - style: 'concise', 'detailed', 'technical' (default: 'detailed')
-     *                       - include_insights: Include data insights (default: true)
-     *                       - include_visualization: Suggest visualizations (default: true)
      *                       - max_length: Max response length in words (default: 200)
      *                       - temperature: LLM temperature (default: 0.3)
      * @return array Response with keys:
      *               - answer: Natural language answer
-     *               - insights: Array of insights discovered in data
-     *               - visualizations: Suggested visualization types
      *               - format: Response format used
      *               - metadata: Additional metadata
      * @throws \RuntimeException If response generation fails
@@ -65,21 +61,4 @@ interface ResponseGeneratorInterface
         \Throwable $error,
         array $options = []
     ): array;
-
-    /**
-     * Extract insights from data
-     *
-     * @param array $queryResult Query results to analyze
-     * @return array Array of insights (patterns, outliers, trends)
-     */
-    public function extractInsights(array $queryResult): array;
-
-    /**
-     * Suggest appropriate visualizations
-     *
-     * @param array $queryResult Query results
-     * @param string|null $cypherQuery Original query (null when no Cypher was generated)
-     * @return array Suggested visualization types with rationale
-     */
-    public function suggestVisualizations(array $queryResult, ?string $cypherQuery): array;
 }

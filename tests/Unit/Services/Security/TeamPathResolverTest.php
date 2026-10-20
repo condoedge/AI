@@ -166,6 +166,38 @@ class TeamPathResolverTest extends TestCase
     }
 
     /** @test */
+    public function scope_labels_are_the_labels_the_scoping_rule_traverses(): void
+    {
+        config(['entities.Unit.security.team_path' => 'union.team_id']);
+        config(['entities.Unit.graph.relationships' => [['type' => 'UNION', 'target_label' => 'Union']]]);
+        config(['entities.Vehicle.security.team_path' => 'unit.union.team_id']);
+        config(['entities.Vehicle.graph.relationships' => [['type' => 'UNIT', 'target_label' => 'Unit']]]);
+        config(['entities.Person.security.team_path' => ['rel' => 'MEMBER_OF', 'target' => 'Team']]);
+        config(['entities.Note.security.team_path' => 'team_id']);
+
+        // Parent path: the hop labels (the same labels the rendered rule MATCHes).
+        $this->assertSame(['Union'], $this->resolver->scopeLabels('Unit'));
+        $this->assertSame(['Unit', 'Union'], $this->resolver->scopeLabels('Vehicle'));
+        // Relationship path: its target.
+        $this->assertSame(['Team'], $this->resolver->scopeLabels('Person'));
+        // Direct column: the node scopes itself.
+        $this->assertSame([], $this->resolver->scopeLabels('Note'));
+    }
+
+    /** @test */
+    public function scope_labels_are_empty_when_the_rule_cannot_be_built(): void
+    {
+        // Parent path whose hop relationship is not configured → no rule → no labels.
+        config(['entities.Orphan.security.team_path' => 'union.team_id']);
+        config(['entities.Orphan.graph.relationships' => []]);
+        config(['entities.Loose.security.team_path' => null]);
+        config(['ai.security.default_team_path' => null]);
+
+        $this->assertSame([], $this->resolver->scopeLabels('Orphan'));
+        $this->assertSame([], $this->resolver->scopeLabels('Loose'));
+    }
+
+    /** @test */
     public function resolve_and_rule_for_emit_the_same_filter_text(): void
     {
         config(['entities.Invoice.security.team_path' => 'team_id']);

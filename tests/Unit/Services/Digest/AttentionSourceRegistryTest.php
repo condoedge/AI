@@ -133,6 +133,52 @@ class AttentionSourceRegistryTest extends TestCase
     }
 
     /** @test */
+    public function the_fallback_source_of_an_entity_is_its_only_source_when_that_one_declares_a_fallback(): void
+    {
+        // Eval p16-A meetings: an empty "next meeting" result is answered from the
+        // source the host declared for that entity — when exactly ONE source speaks for it.
+        $registry = new AttentionSourceRegistry([
+            'open_tasks' => ['label' => 'Open tasks', 'cypher' => 'MATCH (t:Task) RETURN t.id AS id', 'entity' => 'Task'],
+            'upcoming_meetings' => [
+                'label' => 'Upcoming meetings',
+                'cypher' => 'MATCH (m:Meeting) RETURN m.id AS id',
+                'fallback_cypher' => 'MATCH (m:Meeting) RETURN m.id AS id ORDER BY m.start_date DESC',
+                'fallback_label' => 'Most recent meetings — none scheduled',
+                'entity' => 'Meeting',
+                'limit' => 3,
+            ],
+        ]);
+
+        $source = $registry->fallbackSourceFor('Meeting');
+
+        $this->assertNotNull($source);
+        $this->assertSame('upcoming_meetings', $source['key']);
+        $this->assertSame('Most recent meetings — none scheduled', $source['fallback_label']);
+        $this->assertSame(3, $source['limit']);
+        $this->assertNull($registry->fallbackSourceFor('Task'), 'its only source declares no fallback');
+        $this->assertNull($registry->fallbackSourceFor('Invoice'), 'no source for the entity');
+        $this->assertNull($registry->fallbackSourceFor(''));
+        $this->assertNull($registry->fallbackSourceFor(null));
+    }
+
+    /** @test */
+    public function several_sources_for_one_entity_are_ambiguous_and_give_no_fallback_source(): void
+    {
+        $fallback = [
+            'fallback_cypher' => 'MATCH (b:Bill) RETURN b.id AS id ORDER BY b.due_at DESC',
+            'fallback_label' => 'Most recently approved bills',
+        ];
+        $registry = new AttentionSourceRegistry([
+            'bills_pending_approval' => ['label' => 'Awaiting approval', 'cypher' => 'MATCH (b:Bill) RETURN b.id AS id', 'entity' => 'Bill'] + $fallback,
+            'bills_approved_unpaid' => ['label' => 'Approved, unpaid', 'cypher' => 'MATCH (b:Bill) RETURN b.id AS id', 'entity' => 'Bill'],
+            'held' => ['label' => 'Held', 'cypher' => 'MATCH (m:Meeting) RETURN m.id AS id', 'entity' => 'Meeting', 'enabled' => false] + $fallback,
+        ]);
+
+        $this->assertNull($registry->fallbackSourceFor('Bill'), 'which of the two the empty query stands for is unknown');
+        $this->assertNull($registry->fallbackSourceFor('Meeting'), 'a disabled source is not a source');
+    }
+
+    /** @test */
     public function no_overflow_means_no_skipped_keys_and_disabled_entries_never_count_as_skipped(): void
     {
         $registry = new AttentionSourceRegistry([

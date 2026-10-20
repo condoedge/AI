@@ -2,6 +2,8 @@
 
 namespace Condoedge\Ai\VectorStore;
 
+use Condoedge\Ai\Contracts\GroupedSearchInterface;
+use Condoedge\Ai\Contracts\UpdatesPayloadInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 
 /**
@@ -10,7 +12,7 @@ use Condoedge\Ai\Contracts\VectorStoreInterface;
  * Connects to Qdrant via REST API for vector storage and similarity search.
  * Qdrant documentation: https://qdrant.tech/documentation/
  */
-class QdrantStore implements VectorStoreInterface
+class QdrantStore implements VectorStoreInterface, UpdatesPayloadInterface, GroupedSearchInterface
 {
     protected string $host;
     protected int $port;
@@ -216,6 +218,86 @@ class QdrantStore implements VectorStoreInterface
         }
     }
 
+    public function searchGroups(
+        string $collection,
+        array $vector,
+        string $groupBy,
+        int $limit = 10,
+        array $filter = [],
+        float $scoreThreshold = 0.0,
+        int $groupSize = 1
+    ): array {
+        try {
+            $payload = [
+                'vector' => $vector,
+                'group_by' => $groupBy,
+                'limit' => $limit,
+                'group_size' => max(1, $groupSize),
+                'with_payload' => true,
+                'with_vector' => false,
+            ];
+
+            if ($scoreThreshold > 0) {
+                $payload['score_threshold'] = $scoreThreshold;
+            }
+
+            if (!empty($filter)) {
+                $payload['filter'] = $this->buildFilter($filter);
+            }
+
+            $response = $this->request('POST', "/collections/{$collection}/points/search/groups", $payload);
+
+            $groups = [];
+            foreach ((array) ($response['result']['groups'] ?? []) as $group) {
+                if (is_array($group) && isset($group['id'])) {
+                    $groups[] = ['key' => $group['id'], 'hits' => array_values((array) ($group['hits'] ?? []))];
+                }
+            }
+
+            return $groups;
+        } catch (\Exception $e) {
+            throw new \RuntimeException("Failed to search groups in collection '{$collection}': " . $e->getMessage());
+        }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function scrollPage(
+        string $collection,
+        array $filter = [],
+        int $limit = 100,
+        bool|array $withPayload = true,
+        mixed $offset = null
+    ): array {
+        try {
+            $payload = [
+                'limit' => $limit,
+                'with_payload' => $withPayload,
+                'with_vector' => false,
+            ];
+
+            if (!empty($filter)) {
+                $payload['filter'] = $this->buildFilter($filter);
+            }
+            if ($offset !== null) {
+                $payload['offset'] = $offset;
+            }
+
+            $response = $this->request('POST', "/collections/{$collection}/points/scroll", $payload);
+
+            return [
+                'points' => array_values((array) ($response['result']['points'] ?? [])),
+                'next' => $response['result']['next_page_offset'] ?? null,
+            ];
+        } catch (\Exception $e) {
+            throw new \RuntimeException("Failed to scroll points in collection '{$collection}': " . $e->getMessage());
+        }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     public function getPoint(string $collection, string|int $id): ?array
     {
         try {
@@ -240,6 +322,45 @@ class QdrantStore implements VectorStoreInterface
             return in_array($status, ['acknowledged', 'completed', 'ok']);
         } catch (\Exception $e) {
             throw new \RuntimeException("Failed to delete points in '{$collection}': " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Merge payload keys into existing points (Qdrant "set payload").
+     *
+     * POST /points/payload only writes the given top-level keys: the points'
+     * vectors and their other payload keys are left as they are, which is what
+     * lets data be attached after ingest without re-embedding. (PUT on the same
+     * endpoint would REPLACE the whole payload — never use it here.)
+     *
+     * @param string $collection Collection name
+     * @param array $payload Top-level payload keys to set
+     * @param array $pointIds Ids of the points to update
+     * @return bool True when Qdrant confirmed the write
+     */
+    public function setPayload(string $collection, array $payload, array $pointIds): bool
+    {
+        // No points selected means nothing to write: succeed without a
+        // round-trip so batch callers need no empty-batch guard of their own.
+        if ($pointIds === []) {
+            return true;
+        }
+
+        try {
+            // wait=true makes the write synchronous so a read that follows
+            // immediately sees the new keys (mirrors the upsert behavior).
+            // array_values: a keyed id array would encode as a JSON object,
+            // which Qdrant does not accept for "points".
+            $response = $this->request('POST', "/collections/{$collection}/points/payload?wait=true", [
+                'payload' => $payload,
+                'points' => array_values($pointIds),
+            ]);
+
+            // Qdrant returns 'acknowledged' for async operations, 'completed' for sync
+            $status = $response['result']['status'] ?? $response['status'] ?? null;
+            return in_array($status, ['acknowledged', 'completed', 'ok']);
+        } catch (\Exception $e) {
+            throw new \RuntimeException("Failed to set payload in '{$collection}': " . $e->getMessage());
         }
     }
 

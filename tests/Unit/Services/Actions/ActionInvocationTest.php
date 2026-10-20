@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Services\Actions;
 
-use Condoedge\Ai\DTOs\LlmToolCall;
 use Condoedge\Ai\Services\Actions\ActionInvocation;
 use Condoedge\Ai\Services\Actions\AiActionRegistry;
 use Condoedge\Ai\Services\Response\ActionLinkHandler;
@@ -12,56 +11,16 @@ use Condoedge\Ai\Tests\Unit\Services\Actions\Stubs\CapturingAction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * ActionInvocation (P1-C1 / T2): the canonical value object BOTH transports converge on —
- * native tool calls via fromToolCall(), markdown link regex captures via fromLinkMatch() —
- * before anything reaches the shared dispatch pipeline.
+ * ActionInvocation: the canonical value object markdown link regex captures (fromLinkMatch())
+ * and persisted message-metadata records (fromArray()) converge on before anything reaches
+ * the shared dispatch pipeline.
  *
  * The link fixtures are the SAME strings ActionLinkHandlerParamsTest uses, matched against
- * the handler's OWN regex constants (read via reflection), so cross-channel parity is pinned
- * at the source patterns, not a copy of them.
+ * the handler's OWN regex constants (read via reflection), so parity is pinned at the source
+ * patterns, not a copy of them.
  */
 class ActionInvocationTest extends TestCase
 {
-    /** @test */
-    public function from_tool_call_parses_a_generic_call(): void
-    {
-        $invocation = ActionInvocation::fromToolCall(
-            new LlmToolCall('call_1', 'charge', ['unit_id' => 123, 'amount' => 450.0])
-        );
-
-        $this->assertSame('charge', $invocation->key);
-        $this->assertNull($invocation->entityType);
-        $this->assertNull($invocation->entityId);
-        $this->assertSame(['unit_id' => 123, 'amount' => 450.0], $invocation->params);
-        $this->assertSame('', $invocation->text);
-    }
-
-    /** @test */
-    public function from_tool_call_parses_an_entity_call_and_routes_the_id_out_of_params(): void
-    {
-        $invocation = ActionInvocation::fromToolCall(
-            new LlmToolCall('call_2', 'Person__profile', ['entity_id' => '152463', 'field' => 'email'])
-        );
-
-        $this->assertSame('profile', $invocation->key);
-        $this->assertSame('Person', $invocation->entityType);
-        $this->assertSame('152463', $invocation->entityId);
-        // The id is context-routed like the entity:// path segment — never left among params.
-        $this->assertSame(['field' => 'email'], $invocation->params);
-    }
-
-    /** @test */
-    public function from_tool_call_tolerates_a_missing_or_blank_entity_id(): void
-    {
-        $missing = ActionInvocation::fromToolCall(new LlmToolCall('c', 'Person__profile', ['field' => 'email']));
-        $this->assertNull($missing->entityId);
-        $this->assertSame(['field' => 'email'], $missing->params);
-
-        $blank = ActionInvocation::fromToolCall(new LlmToolCall('c', 'Person__profile', ['entity_id' => '']));
-        $this->assertNull($blank->entityId);
-        $this->assertSame([], $blank->params);
-    }
-
     /** @test */
     public function from_link_match_parses_a_generic_action_link(): void
     {
@@ -114,16 +73,14 @@ class ActionInvocationTest extends TestCase
     }
 
     /** @test */
-    public function to_array_from_array_round_trips_both_transports(): void
+    public function to_array_from_array_round_trips_constructed_and_link_invocations(): void
     {
-        $fromTool = ActionInvocation::fromToolCall(
-            new LlmToolCall('c', 'Person__profile', ['entity_id' => '152463', 'field' => 'email'])
-        );
+        $constructed = new ActionInvocation('profile', 'Person', '152463', ['field' => 'email'], '');
         $fromLink = ActionInvocation::fromLinkMatch(
             $this->matchLink('ACTION_PATTERN', '[Charge](action://charge?unit_id=123)')
         );
 
-        foreach ([$fromTool, $fromLink] as $original) {
+        foreach ([$constructed, $fromLink] as $original) {
             $revived = ActionInvocation::fromArray($original->toArray());
 
             $this->assertNotNull($revived);
@@ -198,42 +155,38 @@ class ActionInvocationTest extends TestCase
             'limit' => ['type' => 'int', 'default' => 10],
         ]);
 
-        $filtered = ActionInvocation::fromToolCall(new LlmToolCall('c', 'table', []))
+        $filtered = (new ActionInvocation('table', null, null, [], ''))
             ->filtered($action, $registry);
 
         $this->assertSame(['limit' => 10], $filtered->params);
     }
 
     /** @test */
-    public function fingerprints_match_across_transports_for_the_same_logical_action(): void
+    public function fingerprints_match_between_a_typed_record_and_a_link_for_the_same_logical_action(): void
     {
-        // Generic: typed tool args vs string link params, different order, different text.
-        $tool = ActionInvocation::fromToolCall(
-            new LlmToolCall('c', 'charge', ['amount' => 450, 'unit_id' => 123])
-        );
+        // Generic: typed params vs string link params, different order, different text.
+        $typed = new ActionInvocation('charge', null, null, ['amount' => 450, 'unit_id' => 123], '');
         $link = ActionInvocation::fromLinkMatch(
             $this->matchLink('ACTION_PATTERN', '[Pay now](action://charge?unit_id=123&amount=450)')
         );
-        $this->assertSame($tool->fingerprint(), $link->fingerprint());
+        $this->assertSame($typed->fingerprint(), $link->fingerprint());
 
-        // Entity: id via argument vs id via path segment.
-        $toolEntity = ActionInvocation::fromToolCall(
-            new LlmToolCall('c', 'Person__profile', ['entity_id' => 152463, 'field' => 'email'])
-        );
+        // Entity: typed int id vs id via path segment.
+        $typedEntity = new ActionInvocation('profile', 'Person', 152463, ['field' => 'email'], '');
         $linkEntity = ActionInvocation::fromLinkMatch(
             $this->matchLink('ENTITY_PATTERN', '[John](entity://Person/152463/profile?field=email)')
         );
-        $this->assertSame($toolEntity->fingerprint(), $linkEntity->fingerprint());
+        $this->assertSame($typedEntity->fingerprint(), $linkEntity->fingerprint());
     }
 
     /** @test */
     public function fingerprints_differ_for_distinct_logical_actions(): void
     {
-        $base = ActionInvocation::fromToolCall(new LlmToolCall('c', 'charge', ['unit_id' => 123]));
+        $base = new ActionInvocation('charge', null, null, ['unit_id' => 123], '');
 
-        $otherKey = ActionInvocation::fromToolCall(new LlmToolCall('c', 'refund', ['unit_id' => 123]));
-        $otherArgs = ActionInvocation::fromToolCall(new LlmToolCall('c', 'charge', ['unit_id' => 999]));
-        $otherEntity = ActionInvocation::fromToolCall(new LlmToolCall('c', 'Person__charge', ['entity_id' => 1, 'unit_id' => 123]));
+        $otherKey = new ActionInvocation('refund', null, null, ['unit_id' => 123], '');
+        $otherArgs = new ActionInvocation('charge', null, null, ['unit_id' => 999], '');
+        $otherEntity = new ActionInvocation('charge', 'Person', 1, ['unit_id' => 123], '');
 
         $this->assertNotSame($base->fingerprint(), $otherKey->fingerprint());
         $this->assertNotSame($base->fingerprint(), $otherArgs->fingerprint());

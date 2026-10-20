@@ -32,24 +32,13 @@ AI_FILE_COLLECTION=file_chunks
     'enabled' => true,
     'collection' => 'file_chunks',
 
-    // Supported file types
-    'supported_types' => ['pdf', 'docx', 'txt', 'md'],
-
-    // Chunking settings
-    'chunk_size' => 1000,        // Characters per chunk
-    'chunk_overlap' => 200,      // Overlap between chunks
-    'preserve_sentences' => true,
-    'preserve_paragraphs' => true,
-
     // Queue settings
     'queue' => false,
     'queue_threshold_bytes' => 5 * 1024 * 1024, // 5MB
-
-    // Search defaults
-    'default_search_limit' => 10,
-    'min_search_score' => 0.0,
 ],
 ```
+
+Supported file types come from the registered file extractors, and chunking options are passed in code (see [Chunking Strategies](#chunking-strategies)).
 
 ---
 
@@ -215,10 +204,10 @@ $response = AI::chat("What did the audit report say about compliance?");
 Preserves sentence boundaries:
 
 ```php
-'file_processing' => [
+$chunks = app(\Condoedge\Ai\Services\SemanticChunker::class)->chunk($text, [
     'preserve_sentences' => true,
     'chunk_size' => 1000,
-],
+]);
 ```
 
 ### Paragraph-Based
@@ -226,10 +215,10 @@ Preserves sentence boundaries:
 Preserves paragraph boundaries:
 
 ```php
-'file_processing' => [
+$chunks = app(\Condoedge\Ai\Services\SemanticChunker::class)->chunk($text, [
     'preserve_paragraphs' => true,
     'chunk_size' => 2000,
-],
+]);
 ```
 
 ### Fixed Size
@@ -237,12 +226,12 @@ Preserves paragraph boundaries:
 Simple character-based chunking:
 
 ```php
-'file_processing' => [
+$chunks = app(\Condoedge\Ai\Services\SemanticChunker::class)->chunk($text, [
     'preserve_sentences' => false,
     'preserve_paragraphs' => false,
     'chunk_size' => 1000,
-    'chunk_overlap' => 200,
-],
+    'overlap' => 200,
+]);
 ```
 
 ### Page-Based (PDFs)

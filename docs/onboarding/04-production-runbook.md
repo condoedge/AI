@@ -86,7 +86,6 @@ Conventions: **(secret)** = store in the secret manager, never in plaintext conf
 | `AI_EMBEDDING_PROVIDER` | Embedding provider; **leave `openai`** — `anthropic` is a placeholder that always throws on use (`config/ai.php:457`; `AnthropicEmbeddingProvider.php:11-21`) | `openai` | No (do not change) |
 | `AI_GRAPH_STORE` | Only `neo4j` is supported; else RuntimeException (`config/ai.php:336`; `AiServiceProvider.php:131-137`) | `neo4j` | No |
 | `AI_VECTOR_STORE` | Only `qdrant` is supported; else RuntimeException (`config/ai.php:355`; `AiServiceProvider.php:121-127`) | `qdrant` | No |
-| `NEO4J_ENABLED` / `QDRANT_ENABLED` | **Dead flags — read by no code** (`config/ai.php:339,358`) | `true` | Ignore |
 
 ### Models & token budgets
 
@@ -135,7 +134,7 @@ Conventions: **(secret)** = store in the secret manager, never in plaintext conf
 
 | Variable | Purpose | Default | Prod |
 |---|---|---|---|
-| `AI_AUTO_SYNC_ENABLED` | Sync Nodeable models to Neo4j/Qdrant on create/update/delete. `true` = every model save touches Neo4j + Qdrant + the embedding API **inline** unless queued (`config/ai.php:191`) | `true` | Decide deliberately |
+| `AI_AUTO_SYNC_ENABLED` | Sync Nodeable models to the graph (Neo4j) on create/update/delete. `true` = every model save writes to Neo4j **inline** unless queued (records are not embedded: no Qdrant write, no embedding call) (`config/ai.php:191`) | `true` | Decide deliberately |
 | `AI_AUTO_SYNC_QUEUE` | Queue sync ops — needs a worker when `true` (`config/ai.php:194`) | `false` | **Recommended `true`** |
 | `AI_AUTO_SYNC_QUEUE_CONNECTION` / `AI_AUTO_SYNC_QUEUE_NAME` | Queue routing (`config/ai.php:197,200`) | null / `default` | No |
 | `AI_AUTO_SYNC_CREATE` / `_UPDATE` / `_DELETE` | Per-operation switches (`config/ai.php:204-206`) | all `true` | No |
@@ -181,13 +180,6 @@ Conventions: **(secret)** = store in the secret manager, never in plaintext conf
 |---|---|---|---|
 | `AI_VECTOR_SEARCH_LIMIT` / `AI_SIMILARITY_THRESHOLD` | Vector search defaults (`config/ai.php:593-594`) | `5` / `0.7` | No |
 | `AI_INCLUDE_SCHEMA` / `AI_INCLUDE_EXAMPLES` | Prompt content switches (`config/ai.php:595-596`) | `true` / `true` | No |
-| `AI_RAG_RERANK_ENABLED` | LlmReranker (extra LLM cost/query) vs NullReranker (`config/ai.php:603`; `AiServiceProvider.php:353-361`) | `false` | No |
-| `AI_RAG_HYBRID_ENABLED` | BM25+dense RRF fusion for exact name/ID recall (`config/ai.php:609`) | `false` | No |
-| `AI_SEMANTIC_MATCHING` | Semantic entity/scope detection; needs `ai:index-semantic --rebuild` after enabling (`config/ai.php:671`) | `true` | No |
-| `AI_FALLBACK_EXACT_MATCH` | Exact-match fallback (`config/ai.php:674`) | `true` | No |
-| `AI_SEMANTIC_THRESHOLD_ENTITY` / `_SCOPE` / `_TEMPLATE` / `_LABEL` | Detection thresholds (`config/ai.php:679-682`) | `0.75`/`0.70`/`0.65`/`0.70` | No |
-| `AI_SEMANTIC_CACHE_EMBEDDINGS` | In-memory embedding memoization (`config/ai.php:693`) | `true` | No |
-| `AI_SEMANTIC_CONTEXT_ENABLED` | Semantic context selection (token reduction); needs `ai:index-context` (`config/ai.php:718`) | `true` | No |
 | `AI_SEMANTIC_CONTEXT_COLLECTION` / `_THRESHOLD` / `_TOP_K` / `_DIMENSION` | Context index knobs; dimension must match embeddings (`config/ai.php:721-731`) | `context_index`/`0.45`/`10`/`1536` | No |
 | `AI_SEMANTIC_CONTEXT_CONVERSATION_FOCUS_SCORE` / `_PAGE_CONTEXT_FOCUS_SCORE` / `_QU_ENTITY_SCORE` | Soft priors (`config/ai.php:735-744`) | `0.55`/`0.55`/`0.8` | No |
 | `AI_QUERY_UNDERSTANDING_ENABLED` | QU pre-processing — an extra LLM round-trip on **every** question (`config/ai.php:795`) | `true` | No |
@@ -200,24 +192,22 @@ Conventions: **(secret)** = store in the secret manager, never in plaintext conf
 |---|---|---|---|
 | `AI_QUERY_DEFAULT_LIMIT` / `AI_QUERY_MAX_LIMIT` | Row limits at generation (`config/ai.php:481-482`) | `100` / `1000` | No |
 | `AI_QUERY_MAX_RETRIES` / `AI_QUERY_TEMPERATURE` / `AI_QUERY_MAX_COMPLEXITY` | Generation knobs (`config/ai.php:484-486`) | `3` / `0.1` / `100` | No |
-| `AI_ENABLE_TEMPLATES` / `AI_TEMPLATE_THRESHOLD` | Query templates (`config/ai.php:487-488`) | `true` / `0.8` | No |
 | `AI_EXEC_DEFAULT_LIMIT` / `AI_EXEC_MAX_LIMIT` | Row limits at execution (`config/ai.php:501-502`) | `100` / `1000` | No |
 | `AI_EXEC_FORMAT` / `AI_EXEC_ENABLE_EXPLAIN` | Output format / EXPLAIN (`config/ai.php:504-505`) | `table` / `true` | No |
 
-### Actions & native tool-calling
+### Actions
 
 | Variable | Purpose | Default | Prod |
 |---|---|---|---|
-| `AI_ACTION_TOKEN_TTL` | Max age (s) of the signed PendingActionToken for deferred mutating-action approval; expired tokens rejected on decode; single-use via nonce (`config/ai.php:1223`, docs `:1199-1207`) | `900` | No |
-| `AI_ACTION_NATIVE_TOOLS` | **The native tool-calling kill switch** — see §7 (`config/ai.php:1224`; `ActionToolGate.php:86-108`) | `false` | Staged (§7) |
-| `AI_ACTION_TOOL_ROUNDS` | Max tool-enabled LLM rounds per turn, then one forced no-tools close (`config/ai.php:1225`) | `2` | No |
-| `AI_ACTION_MAX_TOOL_CALLS` | Max action dispatches per turn (`config/ai.php:1226`) | `5` | No |
+| `AI_ACTION_TOKEN_TTL` | Max age (s) of the signed PendingActionToken for deferred mutating-action approval; expired tokens rejected on decode; single-use via nonce (`config/ai.php` `actions.token_ttl`) | `900` | No |
+
+(`AI_ACTION_NATIVE_TOOLS`, `AI_ACTION_TOOL_ROUNDS`, `AI_ACTION_MAX_TOOL_CALLS`, `AI_ACTION_NATIVE_QUERY_TOOL`: removed 2026-10-01 with the native tool loop — no longer read.)
 
 ### Response style, chat UX, branding, observability, eval
 
 | Variable | Purpose | Default | Prod |
 |---|---|---|---|
-| `AI_RESPONSE_FORMAT` / `AI_RESPONSE_STYLE` | `text|markdown|json`; style `minimal|concise|friendly|detailed|technical` — **minimal/concise suppress ALL action channels** (`config/ai.php:573-574`; `ActionToolGate.php:36,88-90`) | `text` / `friendly` | No |
+| `AI_RESPONSE_FORMAT` / `AI_RESPONSE_STYLE` | `text|markdown|json`; style `minimal|concise|friendly|detailed|technical` — chips are attached by code for every style (`ai.attached_actions`, `AI_ATTACHED_ACTIONS=false` disables them) | `text` / `friendly` | No |
 | `AI_RESPONSE_MAX_LENGTH` / `AI_RESPONSE_TEMPERATURE` | Words / sampling (`config/ai.php:575-576`) | `500` / `0.3` | No |
 | `AI_RESPONSE_INSIGHTS` / `AI_RESPONSE_VIZ` / `AI_RESPONSE_SUMMARIZE_THRESHOLD` | Enrichment (`config/ai.php:577-579`) | `true`/`true`/`10` | No |
 | `AI_RESPONSE_HIDE_TECHNICAL` / `_HIDE_STATS` / `_HIDE_PROJECT` | Detail hiding (`config/ai.php:582-584`) | all `true` | No |
@@ -296,7 +286,7 @@ php artisan ai:discover            # add --enhance for LLM-generated description
 php artisan ai:validate-config
 
 # 3. Entity nodes + relationships + per-entity embeddings, in one bulk pass
-php artisan ai:ingest --fresh      # --fresh only on first bootstrap: wipes both stores
+php artisan ai:ingest --fresh      # --fresh only on first bootstrap: wipes the graph AND every Qdrant collection (indexes, file chunks, stored examples)
                                    # add --docs to index ai.file_context.physical_paths
 
 # 4. Reconcile relationships skipped because targets did not exist yet
@@ -323,7 +313,7 @@ Command sources: `IngestEntitiesCommand.php:36-42`, `SyncRelationshipsCommand.ph
 | `ai:diagnose` | exit code 0; all five checks pass |
 | `ai:ingest` | Neo4j: `MATCH (n) RETURN labels(n)[0] AS l, count(*) ORDER BY count(*) DESC` shows your entity labels with plausible counts. Qdrant: `GET http://{host}:6333/collections` lists the entity collections |
 | `ai:sync-relationships` | command output reports created/skipped counts; re-running reports 0 created (idempotent — existing edges are skipped) |
-| index commands | `ai:index-semantic --check` reports index status; Qdrant lists `context_index`, `scope_examples`, `semantic_entities`/`semantic_scopes`/`semantic_templates` |
+| index commands | `ai:index-semantic --check` reports index status; Qdrant lists `context_index`, `scope_examples`, `semantic_entities` (plus `file_chunks`, `documentation_chunks`, `questions`) |
 | `ai:process-files` | `file_chunks` collection exists; `files.processed_at` populated; re-run processes 0 files |
 | end-to-end | `php artisan ai:test-question "How many units are in my union?" --debug` — note its own warning that `currentTeamId()` is null in CLI, so team-security filters may differ from web (`TestQuestionCommand.php:44-47`). Then `GET /api/ai/health` returns 200 |
 
@@ -368,25 +358,13 @@ Nothing in the package schedules itself (§1) — these are host cron recommenda
 
 **What OPEN looks like.** The breaker throws `CircuitBreakerOpenException` with the message `Circuit breaker 'llm' is OPEN. Service unavailable.` (`src/Services/Resilience/CircuitBreaker.php:68-72`). The chat UI maps it to the generic error translation (`src/Kompo/Presenters/ChatPresenter.php:163-169`), so users just see "something went wrong" on **every** question.
 
-**The documented incident shape:** a run of provider 429s (e.g. an OpenAI quota event) opens the breaker, after which **all questions fail until the recovery timeout** — which looks exactly like a logic regression and is not one. Before debugging the pipeline, grep the logs for the `Circuit breaker 'llm' is OPEN` message and for 429 responses preceding it. (This is the live-eval incident referenced in `docs/audit/94b-native-tool-calling-design.md:225`; the tool loop is designed to never make "one more call against a possibly-OPEN breaker" for the same reason.)
+**The documented incident shape:** a run of provider 429s (e.g. an OpenAI quota event) opens the breaker, after which **all questions fail until the recovery timeout** — which looks exactly like a logic regression and is not one. Before debugging the pipeline, grep the logs for the `Circuit breaker 'llm' is OPEN` message and for 429 responses preceding it. (This is the live-eval incident referenced in `docs/audit/94b-native-tool-calling-design.md:225`.)
 
 **Operational requirement:** cross-process breaker state needs a shared atomic cache driver — redis or memcached. On array/file cache drivers each PHP worker keeps its own breaker, tripping and recovering independently (`config/ai.php:533-535`).
 
 ### Query timeouts
 
 Generation timeout `AI_QUERY_TIMEOUT` (30 s, `config/ai.php:489`); execution timeout `AI_EXEC_TIMEOUT` (30 s, ceiling `AI_EXEC_MAX_TIMEOUT` 120 s, `config/ai.php:499-500`). Timeouts surface to the user as the dedicated "took too long" message (`ChatPresenter.php:156-158`). Slow queries log above `AI_EXEC_SLOW_THRESHOLD` (1000 ms, `config/ai.php:506-507`).
-
-### Native tool-calling telemetry
-
-When the native channel runs, the response metadata carries:
-
-```
-metadata.tool_calling = { channel: string, rounds: int, tool_calls: int, degraded: bool }
-```
-
-(`src/Services/Actions/ToolLoopResult.php:16`, attached at `src/Services/ResponseGenerator.php:213`; filtered invocations ride alongside as `metadata.invocations`, `:214-217`). Watch `rounds` against the `tool_rounds` cap (2) and `tool_calls` against `max_tool_calls` (5) to tune the caps on evidence.
-
-**Capability-drift warning:** if `AI_ACTION_NATIVE_TOOLS` is on but the resolved `response_generation` provider does not implement `ToolCallingLlmInterface`, the gate degrades to the markdown channel and logs one warning per turn: *"ai.actions.native_tools is enabled but the resolved response_generation provider does not support tool calling…"* (`src/Services/Actions/ActionToolGate.php:96-99,155-166`). Alert on that string — it means a per-environment config drift (e.g. a tool-less per-role model override) silently downgraded the feature everywhere it fires.
 
 ### Logging (AiLogger)
 
@@ -425,25 +403,9 @@ Work through every line; each has a verification step.
 
 ---
 
-## 7. Rollout of native tool-calling
+## 7. Native tool-calling (removed)
 
-The feature ships **dark**: `AI_ACTION_NATIVE_TOOLS` defaults to `false` (`config/ai.php:1224`), and with it off the action layer uses the pre-existing markdown link grammar byte-identically (`src/Services/Actions/ActionToolGate.php:92-94` — the markdown branch is hit before any spec is built). Full design: `docs/audit/94b-native-tool-calling-design.md`.
-
-The gate requires three things to go native on a turn, cheapest-first (`ActionToolGate.php:86-108`): kill switch on → resolved `response_generation` provider implements `ToolCallingLlmInterface` → relevance-scoped tool set non-empty. Mutating actions keep the **same** signed-token approval gate on both channels (`config/ai.php:1210-1215`), so flipping the switch changes the transport, not the safety model.
-
-Staged plan (stages 1–3 are operational recommendation built on the source's kill switch + telemetry; only stage 0 and the switch itself are in-repo facts):
-
-1. **Stage 0 — off everywhere (current state).** Markdown channel; zero behavioral delta; the gate never even walks the action registry (`ActionToolGate.php:25-27`).
-2. **Stage 1 — staging, with real provider keys.**
-   ```bash
-   AI_ACTION_NATIVE_TOOLS=true
-   ```
-   Watch for two weeks of real traffic:
-   - `metadata.tool_calling` — `channel` should be `native` on action-relevant turns; `degraded=true` or persistent `markdown` means the capability/spec conditions are failing; `rounds` near the cap (2) or `tool_calls` near the cap (5) means the budgets need evidence-based tuning (`ToolLoopResult.php:16`; `config/ai.php:1225-1226`).
-   - The capability-drift warning string in logs (`ActionToolGate.php:158-161`) — it must not fire; if it does, a per-role model override resolved to a tool-less provider.
-   - Run the round-trip and parity suites per-file: `tests/Feature/NativeToolActionRoundTripTest.php`, `tests/Unit/Services/Actions/ToolLoopRunnerTest.php`, `tests/Unit/Services/Actions/ToolApprovalParityTest.php`, `tests/Unit/Services/ResponseGeneratorToolChannelTest.php`.
-3. **Stage 2 — production host flip.** Same env var on the prod host. Rollback is removing the variable — no code change, no cache rebuild beyond config reload.
-4. **Stage 3 — package default flip** (`config/ai.php:1224` default `true`), only after prod telemetry is clean across hosts. No in-repo document commits to criteria or timing for this stage — treat it as a deliberate maintainer decision, not an automatic follow-on.
+Removed 2026-10-01: the opt-in native tool loop (never enabled, never measured) was deleted; links/actions are attached by code (`ActionAttacher`, `ai.attached_actions`). Nothing to roll out; drop any `AI_ACTION_NATIVE_TOOLS` / `AI_ACTION_TOOL_ROUNDS` / `AI_ACTION_MAX_TOOL_CALLS` / `AI_ACTION_NATIVE_QUERY_TOOL` env entries.
 
 ---
 
@@ -463,7 +425,7 @@ Honest list — these are facts of the current source, not roadmap promises.
 6. **`config:cache` fails** until the closure at `config/ai.php:1333` is replaced (§3.2).
 7. **Anthropic embeddings do not exist** — `AI_EMBEDDING_PROVIDER=anthropic` validates the key then always throws on `embed()`/`embedBatch()` (`AnthropicEmbeddingProvider.php:82-100`). OpenAI remains required for embeddings even on Anthropic-LLM deployments.
 8. **OCR defaults to French** (`OCR_LANG` default `fra`, `OcrPdfParser.php:244`).
-9. **Auto-sync writes inline by default** — every Nodeable save and file upload performs embedding + Neo4j + Qdrant work in the web request until `AI_AUTO_SYNC_QUEUE` / `AI_FILE_QUEUE` are enabled with a worker (§1). FileModel plugins attach automatically once condoedge/utils' facade resolves (`AiServiceProvider.php:696-705`), so file uploads start embedding the moment the package is installed.
+9. **Auto-sync writes inline by default** — every Nodeable save writes to Neo4j, and every file upload performs embedding + Qdrant work, in the web request until `AI_AUTO_SYNC_QUEUE` / `AI_FILE_QUEUE` are enabled with a worker (§1). FileModel plugins attach automatically once condoedge/utils' facade resolves (`AiServiceProvider.php:696-705`), so file uploads start embedding the moment the package is installed.
 10. **`NEO4J_ENABLED` / `QDRANT_ENABLED` disable nothing** — no code reads them (`config/ai.php:339,358`).
 
 ---
@@ -472,5 +434,4 @@ Honest list — these are facts of the current source, not roadmap promises.
 
 - **Qdrant minimum version:** the client pins nothing and uses only standard v1 REST endpoints (`QdrantStore.php`); the exact oldest compatible Qdrant release cannot be determined from source.
 - **APOC on the deployed CondoEdge Neo4j:** unverified (`docs/audit/96-condoedge-recommended-questions.md:109`); required only by the `Unit.ordered_by_name` scope (`condo.php:2399`) — resolve by installing APOC or removing the scope.
-- **Native tool-calling stage 3 (package default flip):** no in-repo document defines criteria or timing; stages 1–3 of §7 are operational recommendation layered on the source's kill switch and telemetry.
 - **`ai:setup`'s `ai:ingest-entities` call:** presumed a defect (same class as fixed P0-8); whether the intended fix is renaming the command or the call site is not decided anywhere in source.

@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\DB;
  * Owns the single home of the trailing-message truncation rule: delete every message after
  * the target user message (by id for reliable ordering), then reuse AskQuestionUseCase's
  * shared turn flow with persistUserMessage=false so the user message is not re-stored.
+ * The truncation runs in a short transaction; the turn itself runs outside any transaction.
  *
  * Concrete, container-autowired (not bound, not interfaced) per the Sisc UseCase convention.
  */
@@ -54,17 +55,19 @@ class RegenerateAnswerUseCase
             return ChatTurnResult::failure('ai.chat.injection-blocked');
         }
 
-        return DB::transaction(function () use ($conversation, $userMessage, $style, $user, $allowAnonymous) {
-            $this->truncateTrailingMessages($conversation, $userMessage);
+        // Short write-only transaction for the truncation; the regenerate turn (multi-second
+        // LLM calls) runs OUTSIDE any transaction. Safe: runTurn catches every Throwable and
+        // records a visible error assistant message, so a failed turn never leaves the thread
+        // without an answer row after the truncation.
+        DB::transaction(fn () => $this->truncateTrailingMessages($conversation, $userMessage));
 
-            return $this->askQuestionUseCase->regenerate(
-                conversation: $conversation,
-                userMessage: $userMessage,
-                style: $style,
-                user: $user,
-                allowAnonymous: $allowAnonymous,
-            );
-        });
+        return $this->askQuestionUseCase->regenerate(
+            conversation: $conversation,
+            userMessage: $userMessage,
+            style: $style,
+            user: $user,
+            allowAnonymous: $allowAnonymous,
+        );
     }
 
     /**

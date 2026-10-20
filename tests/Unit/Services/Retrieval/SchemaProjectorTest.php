@@ -206,4 +206,28 @@ class SchemaProjectorTest extends TestCase
 
         $this->assertSame([], $labels);
     }
+
+    public function test_project_labels_keeps_exactly_the_given_labels_with_their_edges(): void
+    {
+        $full = [
+            'labels' => ['Unit', 'Union', 'Invoice', 'Tax'],
+            'relationships' => ['UNION', 'CUSTOMER', 'TAXED'],
+            'relationshipPatterns' => [
+                ['from_label' => 'Unit', 'type' => 'UNION', 'to_label' => 'Union', 'count' => 3],
+                ['from_label' => 'Invoice', 'type' => 'CUSTOMER', 'to_label' => 'Unit', 'count' => 2],
+                ['from_label' => 'Invoice', 'type' => 'TAXED', 'to_label' => 'Tax', 'count' => 1],
+            ],
+            'properties' => ['Unit' => ['id', 'name'], 'Union' => ['id', 'team_id'], 'Tax' => ['rate']],
+            'propertyKeys' => ['id', 'name', 'team_id', 'rate'],
+        ];
+
+        $projected = $this->makeProjector()->projectLabels($full, ['Invoice', 'Unit', 'Union', 'Ghost']);
+
+        // Selection order kept; labels absent from the graph dropped.
+        $this->assertSame(['Invoice', 'Unit', 'Union'], $projected['labels']);
+        $this->assertSame(['UNION', 'CUSTOMER'], $projected['relationships']);
+        $this->assertCount(2, $projected['relationshipPatterns']);
+        $this->assertSame(['Unit', 'Union'], array_keys($projected['properties']));
+        $this->assertSame(['id', 'name', 'team_id'], $projected['propertyKeys']);
+    }
 }
