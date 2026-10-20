@@ -3,7 +3,6 @@
 namespace Condoedge\Ai\Tests\Unit;
 
 use Condoedge\Ai\Services\Context\EntityExtractor;
-use Condoedge\Ai\Services\Context\ReferenceResolver;
 use Condoedge\Ai\Services\Context\ConversationContextManager;
 use Condoedge\Ai\Tests\TestCase;
 
@@ -14,13 +13,6 @@ class ServiceProviderRegistrationTest extends TestCase
     {
         $extractor = app(EntityExtractor::class);
         $this->assertInstanceOf(EntityExtractor::class, $extractor);
-    }
-
-    /** @test */
-    public function it_registers_reference_resolver(): void
-    {
-        $resolver = app(ReferenceResolver::class);
-        $this->assertInstanceOf(ReferenceResolver::class, $resolver);
     }
 
     /** @test */
@@ -47,14 +39,6 @@ class ServiceProviderRegistrationTest extends TestCase
     }
 
     /** @test */
-    public function it_uses_singleton_for_reference_resolver(): void
-    {
-        $resolver1 = app(ReferenceResolver::class);
-        $resolver2 = app(ReferenceResolver::class);
-        $this->assertSame($resolver1, $resolver2);
-    }
-
-    /** @test */
     public function it_injects_dependencies_into_context_manager(): void
     {
         $manager = app(ConversationContextManager::class);
@@ -66,11 +50,7 @@ class ServiceProviderRegistrationTest extends TestCase
         $extractorProperty->setAccessible(true);
         $extractor = $extractorProperty->getValue($manager);
 
-        $resolverProperty = $reflection->getProperty('referenceResolver');
-        $resolverProperty->setAccessible(true);
-        $resolver = $resolverProperty->getValue($manager);
-
         $this->assertInstanceOf(EntityExtractor::class, $extractor);
-        $this->assertInstanceOf(ReferenceResolver::class, $resolver);
+        $this->assertFalse($reflection->hasProperty('referenceResolver'), 'the regex ReferenceResolver is gone (Phase 2.B)');
     }
 }

@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Console\Commands;
 
 use Condoedge\Ai\Domain\Contracts\Nodeable;
-use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Services\BatchDataIngestionService;
+use Condoedge\Ai\Console\Commands\Concerns\FlushesGraphSchemaCache;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Symfony\Component\Finder\Finder;
@@ -32,6 +33,8 @@ use Symfony\Component\Finder\Finder;
  */
 class SyncRelationshipsCommand extends Command
 {
+    use FlushesGraphSchemaCache;
+
     /**
      * The name and signature of the console command.
      *
@@ -39,7 +42,8 @@ class SyncRelationshipsCommand extends Command
      */
     protected $signature = 'ai:sync-relationships
                             {--model= : Specific model class to sync (e.g., App\\Models\\User)}
-                            {--chunk=100 : Batch size for processing}
+                            {--from= : Skip models until this one (e.g., InboundEmail or App\\Models\\Messaging\\InboundEmail)}
+                            {--chunk=2000 : Batch size for processing}
                             {--dry-run : Show what would be synced without actually syncing}';
 
     /**
@@ -53,7 +57,7 @@ class SyncRelationshipsCommand extends Command
      * Create a new command instance.
      */
     public function __construct(
-        private DataIngestionServiceInterface $ingestionService
+        private BatchDataIngestionService $ingestionService
     ) {
         parent::__construct();
     }
@@ -65,13 +69,27 @@ class SyncRelationshipsCommand extends Command
      */
     public function handle(): int
     {
+        // Same memory hygiene as ai:ingest — this command walks every row of every model:
+        // raise the CLI limit, and detach the per-query retention (QueryExecuted collectors
+        // hold every query + bindings for the process lifetime; gc cannot reclaim it).
+        @ini_set('memory_limit', (string) config('ai.ingestion.memory_limit', '2G'));
+        try {
+            \Illuminate\Support\Facades\DB::connection()->disableQueryLog();
+            \Illuminate\Support\Facades\DB::connection()->unsetEventDispatcher();
+        } catch (\Throwable $e) {
+            // No default DB connection — nothing to detach.
+        }
+
         $this->info('🔗 Relationship Synchronization');
         $this->newLine();
 
-        // Get models to sync
         $models = $this->option('model')
             ? [$this->option('model')]
             : $this->findNodeableModels();
+    
+        if ($from = $this->option('from')) {
+            $models = $this->skipModelsUntil($models, $from);
+        }
 
         if (empty($models)) {
             $this->warn('No Nodeable models found.');
@@ -92,7 +110,6 @@ class SyncRelationshipsCommand extends Command
         $totalSkipped = 0;
         $totalFailed = 0;
 
-        // Process each model
         foreach ($models as $modelClass) {
             $result = $this->syncModelRelationships($modelClass, $chunkSize);
 
@@ -101,7 +118,6 @@ class SyncRelationshipsCommand extends Command
             $totalFailed += $result['failed'];
         }
 
-        // Summary
         $this->newLine();
         $this->info('✓ Synchronization Complete');
         $this->line("  Created: {$totalCreated}");
@@ -144,7 +160,6 @@ class SyncRelationshipsCommand extends Command
             return ['created' => 0, 'skipped' => 0, 'failed' => 0];
         }
 
-        // Get total count
         $total = $modelClass::count();
 
         if ($total === 0) {
@@ -158,21 +173,28 @@ class SyncRelationshipsCommand extends Command
         $skipped = 0;
         $failed = 0;
 
-        // Progress bar
         $progressBar = $this->output->createProgressBar($total);
-        $progressBar->setFormat('  [%bar%] %current%/%max% (%percent:3s%%) Created: %message%');
-        $progressBar->setMessage('0');
+        $progressBar->setFormat('  [%bar%] %current%/%max% (%percent:3s%%) %message%');
+        $progressBar->setMessage('Created: 0');
         $progressBar->start();
 
-        // Process in chunks
-        $modelClass::chunk($chunkSize, function ($entities) use (
+        // Column-pruned loading: relationship sync reads only the key + FK/morph columns
+        // per row, but a full hydration drags every column along — InboundEmail's complete
+        // email bodies OOM'd a 2000-row chunk before a single relationship was checked.
+        $query = $modelClass::query();
+        $columns = $this->relationshipColumns($model);
+        if ($columns !== null) {
+            $query->select($columns);
+        }
+
+        $query->chunk($chunkSize, function ($entities) use (
             &$created,
             &$skipped,
             &$failed,
             $progressBar
         ) {
             if ($this->option('dry-run')) {
-                // In dry-run, just count without syncing
+                // Dry-run only counts; it never writes.
                 $progressBar->advance(count($entities));
                 return;
             }
@@ -183,8 +205,13 @@ class SyncRelationshipsCommand extends Command
             $skipped += $result['relationships_skipped'];
             $failed += $result['relationships_failed'];
 
-            $progressBar->setMessage((string) $created);
+            $mem = round(memory_get_usage(true) / 1048576);
+            $peak = round(memory_get_peak_usage(true) / 1048576);
+            $progressBar->setMessage("Created: {$created} | Mem: {$mem}MB (peak {$peak}MB)");
             $progressBar->advance(count($entities));
+
+            // Entities + relations form reference cycles; collect deterministically per chunk.
+            gc_collect_cycles();
         });
 
         $progressBar->finish();
@@ -198,6 +225,50 @@ class SyncRelationshipsCommand extends Command
             'skipped' => $skipped,
             'failed' => $failed,
         ];
+    }
+
+    /**
+     * The only columns relationship sync reads per row: the primary key, each
+     * relationship's foreign key, the morph-type column for polymorphic targets, and any
+     * relationship-property source fields. The list is intersected with the table's real
+     * columns (one cheap schema query) so a convention-derived morph column that does not
+     * exist can never break the SELECT. Returns null (full row) when the graph config or
+     * schema cannot be read — correctness over optimization.
+     *
+     * Trade-off: models whose $appends accessors read non-selected attributes will see
+     * null there during toArray(); the sync service's per-entity try/catch keeps any such
+     * failure contained to that entity.
+     */
+    private function relationshipColumns(Nodeable $model): ?array
+    {
+        try {
+            $columns = [$model->getKeyName()];
+
+            foreach ($model->getGraphConfig()->relationships as $rel) {
+                $columns[] = $rel->foreignKey;
+                if ($rel->isPolymorphic()) {
+                    $columns[] = $rel->morphTypeColumn();
+                }
+                foreach ($rel->properties as $sourceField) {
+                    if (is_string($sourceField)) {
+                        $columns[] = $sourceField;
+                    }
+                }
+            }
+
+            $existing = array_flip(
+                $model->getConnection()->getSchemaBuilder()->getColumnListing($model->getTable())
+            );
+            $columns = array_values(array_filter(
+                array_unique($columns),
+                static fn ($column) => isset($existing[$column])
+            ));
+
+            // The key must survive the intersection or chunk() ordering breaks — bail to full rows.
+            return in_array($model->getKeyName(), $columns, true) ? $columns : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**
@@ -229,12 +300,30 @@ class SyncRelationshipsCommand extends Command
 
             $reflection = new \ReflectionClass($className);
 
-            // Check if class implements Nodeable
             if ($reflection->implementsInterface(Nodeable::class)) {
                 $models[] = $className;
             }
         }
 
         return $models;
+    }
+
+    private function skipModelsUntil(array $models, string $from): array
+    {
+        $skipping = true;
+        $filtered = [];
+
+        foreach ($models as $model) {
+            if ($skipping) {
+                if (str_contains($model, $from)) {
+                    $skipping = false;
+                    $filtered[] = $model;
+                }
+            } else {
+                $filtered[] = $model;
+            }
+        }
+
+        return $filtered;
     }
 }

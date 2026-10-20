@@ -122,9 +122,32 @@
       "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" diff tests/Feature/FileContextIntegrationTest.php)",
       "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" add tests/Feature/FileContextIntegrationTest.php)",
       "Bash(git -C \"C:\\\\Users\\\\jkend\\\\Documents\\\\Projects\\\\kompo\\\\ai\" commit -m \"$\\(cat <<''EOF''\nAdd explicit shouldNotReceive assertion for searchByFilename\n\nReplace incorrect comment with proper Mockery assertion to ensure\ntest_semantic_search_still_works_without_filename actually validates\nthat searchByFilename is not called when no filename is detected.\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline -15)"
+      "Bash(git -C \"C:/Users/jkend/Documents/Projects/kompo/ai\" log --oneline -15)",
+      "Bash(2)",
+      "Bash(php artisan tinker --execute=\":*)",
+      "Bash(grep -r \"prop\\(\" /c/Users/jkend/Documents/Projects/kompo/CondoEdge/app/View/Contact/*.php)",
+      "Bash(do echo:*)",
+      "Bash(curl:*)",
+      "Bash(php -d memory_limit=1G artisan tinker --execute=\":*)",
+      "Bash(grep -n \"App.*Contact\\\\b''''\\\\|''''description'''' => ''''An individual\" config/ai-entities/contact.php)",
+      "Bash(grep -n \"''description'' => ''An individual\\\\|''description'' => ''A person\" config/ai-entities/contact.php)",
+      "Bash(grep -n \"''description'' => .*[Ii]nvoice\" config/ai-entities/finance.php)",
+      "Bash(php artisan tinker --execute=':*)",
+      "Bash(find C:/Users/jkend/Documents/Projects/kompo/CondoEdge -type f \\\\\\(-name ai.php -o -name *ai*.php -o -name *entities* \\\\\\))",
+      "Bash(find C:/Users/jkend/Documents/Projects/kompo/CondoEdge -type f \\\\\\(-name *.md -o -name *.txt \\\\\\) -path *laws*)",
+      "Bash(wc:*)",
+      "Bash(do php:*)",
+      "mcp__code-index__build_deep_index",
+      "mcp__code-index__search_code_advanced",
+      "mcp__code-index__set_project_path",
+      "mcp__code-index__find_files",
+      "mcp__code-index__get_file_summary",
+      "mcp__code-index__get_settings_info"
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "enabledMcpjsonServers": [
+    "code-index"
+  ]
 }

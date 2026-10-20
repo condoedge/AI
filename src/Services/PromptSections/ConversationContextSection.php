@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\Response\PiiMasker;
+use Condoedge\Ai\Support\UntrustedLabel;
+
 /**
  * ConversationContextSection
  *
@@ -21,9 +25,9 @@ class ConversationContextSection extends BasePromptSection
     /**
      * Only include when there's actual conversation context
      */
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
-        $conversationContext = $context['conversation_context'] ?? [];
+        $conversationContext = $context->conversationContext;
 
         // Need at least one of these context elements to be useful
         return !empty($conversationContext['focused_entity'])
@@ -41,17 +45,22 @@ class ConversationContextSection extends BasePromptSection
      * - Build upon previous queries
      * - Resolve pronouns like "those", "them", "the same"
      */
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
-        $conversationContext = $context['conversation_context'] ?? [];
+        $conversationContext = $context->conversationContext;
 
         if (empty($conversationContext)) {
             return '';
         }
 
+        // P-1 (Phase 8-A review): previous answers now carry the real-value table and
+        // the sample carries real rows — both reach the query generator masked with the
+        // turn's ONE token map. A token the model copies into its cypher is rebound as a
+        // query parameter carrying the real value (PiiMasker::bindCypher).
+        $conversationContext = PiiMasker::for($context)->maskConversation($conversationContext);
+
         $output = "## Conversation Context\n\n";
 
-        // Focused entity with filter
         if (!empty($conversationContext['focused_entity'])) {
             $output .= "**Current Focus:** {$conversationContext['focused_entity']}";
 
@@ -66,21 +75,25 @@ class ConversationContextSection extends BasePromptSection
             }
         }
 
-        // Previous query reference
-        if (!empty($conversationContext['last_cypher_query'])) {
-            $output .= "\n**Previous Query:**\n```cypher\n{$conversationContext['last_cypher_query']}\n```\n";
+        // The query the generator wrote last turn (eval p12-1001-A): a FanOutCollapse
+        // turn executed a per-anchor rewrite (`WITH u, collect(…) AS role` — every
+        // other pattern variable out of scope); extending THAT made the model use
+        // `t` after the WITH ("Variable `t` not defined"). The generator extends its
+        // own query; an extension that fans out again is collapsed again at
+        // execution. last_cypher_query (the rewrite) stays the re-execution source.
+        $previousQuery = $this->previousQuery($conversationContext);
+        if ($previousQuery !== null) {
+            $output .= "\n**Previous Query:**\n```cypher\n{$previousQuery}\n```\n";
             $resultCount = $conversationContext['last_result_count'] ?? 0;
             $output .= "Returned {$resultCount} results.\n";
         }
 
-        // Result sample for reference
         if (!empty($conversationContext['last_result_sample'])) {
             $output .= "\n**Sample of Previous Results:**\n```json\n";
             $output .= json_encode($conversationContext['last_result_sample'], JSON_PRETTY_PRINT);
             $output .= "\n```\n";
         }
 
-        // Recent exchanges
         if (!empty($conversationContext['recent_exchanges'])) {
             $output .= "\n**Recent Conversation:**\n";
 
@@ -96,78 +109,104 @@ class ConversationContextSection extends BasePromptSection
             }
         }
 
-        // Mentioned entities for reference
         if (!empty($conversationContext['mentioned_entities'])) {
             $entities = implode(', ', $conversationContext['mentioned_entities']);
             $output .= "\n**Entities discussed:** {$entities}\n";
         }
 
-        // Referenced files from previous response
         if (!empty($conversationContext['last_referenced_files'])) {
             $output .= "\n**Files Referenced in Previous Response:**\n";
             foreach ($conversationContext['last_referenced_files'] as $file) {
                 // Handle both structures: name/id (from ResponseFileEnricher) and filename/file_id
-                $filename = $file['name'] ?? $file['filename'] ?? 'Unknown file';
+                $file = (array) $file;
+                $filename = UntrustedLabel::fileName((string) ($file['name'] ?? $file['filename'] ?? ''));
                 $fileId = $file['id'] ?? $file['file_id'] ?? '';
-                $snippet = $this->truncate($file['snippet'] ?? '', 100);
-                $output .= "- [{$filename}] (ID: {$fileId}): {$snippet}\n";
+                $fileId = is_int($fileId) ? (string) $fileId : UntrustedLabel::of(is_scalar($fileId) ? (string) $fileId : '');
+                $snippet = $this->truncate((string) ($file['snippet'] ?? ''), 100);
+                $output .= "- file (ID: {$fileId})\n";
+                // The file's name and the excerpt came from an untrusted document (an
+                // uploaded file is named by its uploader): both are spotlighted so they
+                // stay data, never instructions (same wrapper as current file text).
+                $output .= $this->spotlight(
+                    'File: ' . ($filename !== '' ? $filename : 'Unknown file') . ($snippet !== '' ? "\n" . $snippet : ''),
+                    'retrieved_document',
+                    ['source' => 'previous_turn']
+                ) . "\n";
             }
         }
 
-        // Previous insights from response
-        if (!empty($conversationContext['last_insights'])) {
-            $output .= "\n**Previous Insights:**\n";
-            foreach ($conversationContext['last_insights'] as $insight) {
-                $output .= "- {$insight}\n";
-            }
+        // AUGMENTATION ANCHOR (item B): QU judged this turn a follow-up that
+        // OPERATES ON the previous result AND a previous query is recorded —
+        // instruct the generator to EXTEND that query rather than start blind
+        // (the exact live failure: "add their last login to it" regenerated
+        // from nothing and lost the members table entirely).
+        if (($context->qu->followUpReference ?? false)
+            && !empty($conversationContext['last_cypher_query'])) {
+            $output .= "\n**THIS REQUEST OPERATES ON THE PREVIOUS RESULT.** "
+                . "EXTEND the Previous Query above: keep its MATCH/WHERE and returned columns, "
+                . "and ADD the newly requested data (extra columns / relationships) to it. "
+                . "Do NOT write an unrelated fresh query and do NOT drop columns the user was already shown.\n";
         }
 
-        // Truncation warning from execution stats
-        if (!empty($conversationContext['last_execution_stats']['was_truncated'])) {
-            $stats = $conversationContext['last_execution_stats'];
-            $rowsReturned = $stats['rows_returned'] ?? 0;
-            $rowsAvailable = $stats['rows_available'] ?? 0;
-            $output .= "\n**Note:** Previous results were truncated ";
-            $output .= "(showing {$rowsReturned} of {$rowsAvailable} available).\n";
-        }
-
-        // Available actions from previous response
-        $availableActions = $conversationContext['last_available_actions'] ?? [];
-        if (!empty($availableActions)) {
-            $output .= $this->formatAvailableActions($availableActions);
-        }
-
-        // Follow-up hint (enhanced instructions)
-        $output .= "\n**Instructions:** Use the above context to understand follow-up questions. ";
-        $output .= "If user references 'those', 'them', 'the same', etc., use the previous results/filter. ";
-        $output .= "If user asks about 'the file', 'that file', etc., refer to the files referenced above.\n";
+        // Follow-up instructions: each bullet is gated on the data it references, so the model
+        // is never handed guidance about context that isn't present.
+        $output .= $this->formatFollowUpInstructions($conversationContext);
 
         return $output;
     }
 
     /**
-     * Format available actions for display in prompt
+     * Build the follow-up instruction bullets, including only those whose referent data is
+     * present. Returns '' when nothing to follow up on, so the block is omitted entirely.
      */
-    protected function formatAvailableActions(array $actions): string
+    private function formatFollowUpInstructions(array $conversationContext): string
     {
-        if (empty($actions)) {
+        $hasPreviousQuery = !empty($conversationContext['last_cypher_query']);
+        $hasPreviousResultsOrFilter = !empty($conversationContext['last_result_sample'])
+            || !empty($conversationContext['focused_entity_filter'])
+            || $hasPreviousQuery;
+        $hasFocus = !empty($conversationContext['focused_entity']);
+        $hasReferencedFiles = !empty($conversationContext['last_referenced_files']);
+
+        $bullets = [];
+
+        if ($hasPreviousResultsOrFilter) {
+            $bullets[] = "- If the user references 'those', 'them', 'the same', 'it', use the previous results/filter.";
+        }
+        if ($hasPreviousQuery) {
+            $bullets[] = "- If the user asks 'what about X?' or 'and the Y?', modify the previous query for entity X/Y.";
+        }
+        if ($hasFocus) {
+            $bullets[] = "- If the user asks about a DIFFERENT topic/entity than the current focus, generate a FRESH query for that entity. Do NOT force the previous entity into the new query.";
+        }
+        if ($hasPreviousQuery) {
+            $bullets[] = "- If the user asks for an aggregation ('total amount', 'sum', 'average') of previous results, reuse the previous query pattern but change the RETURN clause.";
+        }
+        if ($hasReferencedFiles) {
+            $bullets[] = "- If the user asks about 'the file', 'that file', refer to the files referenced above.";
+        }
+
+        if (empty($bullets)) {
             return '';
         }
 
-        $output = "\n**Available Actions from Previous Response:**\n";
+        return "\n**Instructions for using conversation context:**\n" . implode("\n", $bullets) . "\n";
+    }
 
-        foreach ($actions as $entityType => $entityActions) {
-            $output .= "- **{$entityType}:**\n";
-            foreach ($entityActions as $action) {
-                $actionKey = $action['action_key'] ?? 'unknown';
-                $label = $action['label'] ?? $actionKey;
-                $output .= "  - `{$actionKey}`: {$label}\n";
+    /**
+     * The generator-facing previous query: last_generated_cypher (pre-collapse),
+     * else the recorded last_cypher_query (snapshots that predate the split).
+     */
+    private function previousQuery(array $conversationContext): ?string
+    {
+        foreach (['last_generated_cypher', 'last_cypher_query'] as $key) {
+            $query = $conversationContext[$key] ?? null;
+            if (is_string($query) && trim($query) !== '') {
+                return $query;
             }
         }
 
-        $output .= "\nIf user asks about actions, reference the above.\n";
-
-        return $output;
+        return null;
     }
 
     /**

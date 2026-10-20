@@ -1,0 +1,3477 @@
+{
+    "_source": "CondoEdge live graph schema + config, frozen 2026-09-30 (Phase 5C). QU outputs captured live per question (gpt-4o-mini, temperature 0).",
+    "labels": [
+        "Team",
+        "Event",
+        "PaymentMethod",
+        "Plan",
+        "PlanService",
+        "PlanUser",
+        "Price",
+        "Service",
+        "VisitDetail",
+        "Access",
+        "AccessType",
+        "Announcement",
+        "AnnouncementRead",
+        "Building",
+        "ChargerType",
+        "Extra",
+        "Note",
+        "Resource",
+        "Unit",
+        "Vehicle",
+        "Visit",
+        "BoardMember",
+        "Contact",
+        "ContactDirectory",
+        "ContactType",
+        "ContactUnit",
+        "Channel",
+        "Discussion",
+        "DiscussionBox",
+        "DiscussionRead",
+        "Member",
+        "Account",
+        "AccountBalance",
+        "Bank",
+        "Bill",
+        "BillDetail",
+        "BillDetailTax",
+        "BillItem",
+        "BillItemTax",
+        "Budget",
+        "BudgetDetail",
+        "BudgetDetailQuote",
+        "Conciliation",
+        "Entry",
+        "Fund",
+        "FundDate",
+        "FundQuote",
+        "Invoice",
+        "InvoiceDetail",
+        "InvoiceDetailTax",
+        "InvoiceItem",
+        "InvoiceItemTax",
+        "Rgcq",
+        "Tax",
+        "Transaction",
+        "Activity",
+        "Address",
+        "File",
+        "TeamRole",
+        "Newsletter",
+        "Notification",
+        "Recurrence",
+        "Relation",
+        "Review",
+        "Signature",
+        "Tag",
+        "TeamInvitation",
+        "Template",
+        "User",
+        "UserSetting",
+        "Import",
+        "ImportRow",
+        "Meeting",
+        "Motion",
+        "Schedule",
+        "Vote",
+        "Voter",
+        "Attachment",
+        "Distribution",
+        "EmailAccount",
+        "InboundEmail",
+        "Message",
+        "MessageForward",
+        "MessageRead",
+        "Thread",
+        "ThreadBox",
+        "CallLog",
+        "PhoneConfiguration",
+        "Question",
+        "QuestionUser",
+        "Blueprint",
+        "Component",
+        "ComponentModel",
+        "Constituent",
+        "Element",
+        "Maintenance",
+        "MaintenanceContract",
+        "MaintenanceDate",
+        "MaintenanceDetail",
+        "MaintenanceModel",
+        "Material",
+        "Project",
+        "QuoteRequest",
+        "Room",
+        "ServiceElement",
+        "Servicing",
+        "Supplier",
+        "SupplierContact",
+        "WorkOrder",
+        "Task",
+        "TaskDetail",
+        "TaskLink",
+        "TaskRead",
+        "Union",
+        "AccountName"
+    ],
+    "patterns": [
+        [
+            "Access",
+            "ACCESS_TYPE",
+            "AccessType",
+            251
+        ],
+        [
+            "AccountBalance",
+            "ACCOUNT",
+            "Account",
+            1291
+        ],
+        [
+            "BillDetail",
+            "ACCOUNT",
+            "Account",
+            765
+        ],
+        [
+            "BillItem",
+            "ACCOUNT",
+            "Account",
+            603
+        ],
+        [
+            "BudgetDetail",
+            "ACCOUNT",
+            "Account",
+            814
+        ],
+        [
+            "Conciliation",
+            "ACCOUNT",
+            "Account",
+            121
+        ],
+        [
+            "Entry",
+            "ACCOUNT",
+            "Account",
+            12317
+        ],
+        [
+            "InvoiceDetail",
+            "ACCOUNT",
+            "Account",
+            15643
+        ],
+        [
+            "InvoiceItem",
+            "ACCOUNT",
+            "Account",
+            1236
+        ],
+        [
+            "Account",
+            "BANK",
+            "Bank",
+            22
+        ],
+        [
+            "AnnouncementRead",
+            "BELONGS_TO_ANNOUNCEMENT",
+            "Announcement",
+            84
+        ],
+        [
+            "Invoice",
+            "BELONGS_TO_APPROVED_BY",
+            "User",
+            817
+        ],
+        [
+            "BillDetailTax",
+            "BELONGS_TO_BILL_DETAIL",
+            "BillDetail",
+            191
+        ],
+        [
+            "BillItemTax",
+            "BELONGS_TO_BILL_ITEM",
+            "BillItem",
+            183
+        ],
+        [
+            "Extra",
+            "BELONGS_TO_BUILDING",
+            "Building",
+            691
+        ],
+        [
+            "Discussion",
+            "BELONGS_TO_CHANNEL",
+            "Channel",
+            3103
+        ],
+        [
+            "Member",
+            "BELONGS_TO_CHANNEL",
+            "Channel",
+            114
+        ],
+        [
+            "BoardMember",
+            "BELONGS_TO_CONTACT",
+            "Contact",
+            291
+        ],
+        [
+            "Announcement",
+            "BELONGS_TO_CREATED_BY",
+            "User",
+            10
+        ],
+        [
+            "Note",
+            "BELONGS_TO_CREATED_BY",
+            "User",
+            268
+        ],
+        [
+            "DiscussionBox",
+            "BELONGS_TO_DISCUSSION",
+            "Discussion",
+            249
+        ],
+        [
+            "DiscussionRead",
+            "BELONGS_TO_DISCUSSION",
+            "Discussion",
+            11773
+        ],
+        [
+            "Distribution",
+            "BELONGS_TO_EMAIL_ACCOUNT",
+            "EmailAccount",
+            193734
+        ],
+        [
+            "Account",
+            "BELONGS_TO_FUND2",
+            "Fund",
+            12
+        ],
+        [
+            "ImportRow",
+            "BELONGS_TO_IMPORT",
+            "Import",
+            2267
+        ],
+        [
+            "InvoiceDetailTax",
+            "BELONGS_TO_INVOICE_DETAIL",
+            "InvoiceDetail",
+            13
+        ],
+        [
+            "InvoiceItemTax",
+            "BELONGS_TO_INVOICE_ITEM",
+            "InvoiceItem",
+            13
+        ],
+        [
+            "Motion",
+            "BELONGS_TO_MEETING",
+            "Meeting",
+            248
+        ],
+        [
+            "Schedule",
+            "BELONGS_TO_MEETING",
+            "Meeting",
+            718
+        ],
+        [
+            "Voter",
+            "BELONGS_TO_MEETING",
+            "Meeting",
+            2015
+        ],
+        [
+            "Attachment",
+            "BELONGS_TO_MESSAGE",
+            "Message",
+            45769
+        ],
+        [
+            "Distribution",
+            "BELONGS_TO_MESSAGE",
+            "Message",
+            171986
+        ],
+        [
+            "Vote",
+            "BELONGS_TO_MOTION",
+            "Motion",
+            1827
+        ],
+        [
+            "Discussion",
+            "BELONGS_TO_PARENT_DISCUSSION",
+            "Discussion",
+            1768
+        ],
+        [
+            "Schedule",
+            "BELONGS_TO_PARENT_SCHEDULE",
+            "Schedule",
+            206
+        ],
+        [
+            "PlanUser",
+            "BELONGS_TO_PAYMENT_METHOD",
+            "PaymentMethod",
+            5
+        ],
+        [
+            "PlanService",
+            "BELONGS_TO_PLAN",
+            "Plan",
+            16
+        ],
+        [
+            "PlanUser",
+            "BELONGS_TO_PLAN",
+            "Plan",
+            5
+        ],
+        [
+            "Motion",
+            "BELONGS_TO_SCHEDULE",
+            "Schedule",
+            67
+        ],
+        [
+            "Invoice",
+            "BELONGS_TO_SENT_BY",
+            "User",
+            6
+        ],
+        [
+            "PlanService",
+            "BELONGS_TO_SERVICE",
+            "Service",
+            16
+        ],
+        [
+            "Entry",
+            "BELONGS_TO_SUPPLIER",
+            "Supplier",
+            1
+        ],
+        [
+            "AccountName",
+            "BELONGS_TO_TAX",
+            "Tax",
+            20
+        ],
+        [
+            "BillDetailTax",
+            "BELONGS_TO_TAX",
+            "Tax",
+            191
+        ],
+        [
+            "BillItemTax",
+            "BELONGS_TO_TAX",
+            "Tax",
+            183
+        ],
+        [
+            "InvoiceDetailTax",
+            "BELONGS_TO_TAX",
+            "Tax",
+            13
+        ],
+        [
+            "InvoiceItemTax",
+            "BELONGS_TO_TAX",
+            "Tax",
+            13
+        ],
+        [
+            "AccountName",
+            "BELONGS_TO_TEAM",
+            "Team",
+            2389
+        ],
+        [
+            "Activity",
+            "BELONGS_TO_TEAM",
+            "Team",
+            15219
+        ],
+        [
+            "Attachment",
+            "BELONGS_TO_TEAM",
+            "Team",
+            53419
+        ],
+        [
+            "Channel",
+            "BELONGS_TO_TEAM",
+            "Team",
+            137
+        ],
+        [
+            "EmailAccount",
+            "BELONGS_TO_TEAM",
+            "Team",
+            14033
+        ],
+        [
+            "File",
+            "BELONGS_TO_TEAM",
+            "Team",
+            8286
+        ],
+        [
+            "Import",
+            "BELONGS_TO_TEAM",
+            "Team",
+            68
+        ],
+        [
+            "Meeting",
+            "BELONGS_TO_TEAM",
+            "Team",
+            103
+        ],
+        [
+            "Tax",
+            "BELONGS_TO_TEAM",
+            "Team",
+            54
+        ],
+        [
+            "Message",
+            "BELONGS_TO_THREAD",
+            "Thread",
+            500
+        ],
+        [
+            "Access",
+            "BELONGS_TO_UNION",
+            "Union",
+            78
+        ],
+        [
+            "Account",
+            "BELONGS_TO_UNION",
+            "Union",
+            35898
+        ],
+        [
+            "Announcement",
+            "BELONGS_TO_UNION",
+            "Union",
+            10
+        ],
+        [
+            "Bank",
+            "BELONGS_TO_UNION",
+            "Union",
+            23
+        ],
+        [
+            "Bill",
+            "BELONGS_TO_UNION",
+            "Union",
+            557
+        ],
+        [
+            "BillItem",
+            "BELONGS_TO_UNION",
+            "Union",
+            603
+        ],
+        [
+            "BoardMember",
+            "BELONGS_TO_UNION",
+            "Union",
+            230
+        ],
+        [
+            "Budget",
+            "BELONGS_TO_UNION",
+            "Union",
+            45
+        ],
+        [
+            "Building",
+            "BELONGS_TO_UNION",
+            "Union",
+            91
+        ],
+        [
+            "Channel",
+            "BELONGS_TO_UNION",
+            "Union",
+            89
+        ],
+        [
+            "File",
+            "BELONGS_TO_UNION",
+            "Union",
+            7495
+        ],
+        [
+            "Fund",
+            "BELONGS_TO_UNION",
+            "Union",
+            380
+        ],
+        [
+            "Import",
+            "BELONGS_TO_UNION",
+            "Union",
+            57
+        ],
+        [
+            "Invoice",
+            "BELONGS_TO_UNION",
+            "Union",
+            6003
+        ],
+        [
+            "InvoiceItem",
+            "BELONGS_TO_UNION",
+            "Union",
+            1236
+        ],
+        [
+            "Meeting",
+            "BELONGS_TO_UNION",
+            "Union",
+            101
+        ],
+        [
+            "Resource",
+            "BELONGS_TO_UNION",
+            "Union",
+            6
+        ],
+        [
+            "Transaction",
+            "BELONGS_TO_UNION",
+            "Union",
+            4500
+        ],
+        [
+            "Visit",
+            "BELONGS_TO_UNION",
+            "Union",
+            32
+        ],
+        [
+            "Announcement",
+            "BELONGS_TO_UPDATED_BY",
+            "User",
+            10
+        ],
+        [
+            "Note",
+            "BELONGS_TO_UPDATED_BY",
+            "User",
+            268
+        ],
+        [
+            "Activity",
+            "BELONGS_TO_USER",
+            "User",
+            15156
+        ],
+        [
+            "AnnouncementRead",
+            "BELONGS_TO_USER",
+            "User",
+            84
+        ],
+        [
+            "Bank",
+            "BELONGS_TO_USER",
+            "User",
+            143
+        ],
+        [
+            "Channel",
+            "BELONGS_TO_USER",
+            "User",
+            133
+        ],
+        [
+            "Discussion",
+            "BELONGS_TO_USER",
+            "User",
+            3098
+        ],
+        [
+            "DiscussionBox",
+            "BELONGS_TO_USER",
+            "User",
+            287
+        ],
+        [
+            "DiscussionRead",
+            "BELONGS_TO_USER",
+            "User",
+            11764
+        ],
+        [
+            "File",
+            "BELONGS_TO_USER",
+            "User",
+            8267
+        ],
+        [
+            "Import",
+            "BELONGS_TO_USER",
+            "User",
+            68
+        ],
+        [
+            "Meeting",
+            "BELONGS_TO_USER",
+            "User",
+            103
+        ],
+        [
+            "Member",
+            "BELONGS_TO_USER",
+            "User",
+            112
+        ],
+        [
+            "PaymentMethod",
+            "BELONGS_TO_USER",
+            "User",
+            11
+        ],
+        [
+            "PlanUser",
+            "BELONGS_TO_USER",
+            "User",
+            5
+        ],
+        [
+            "Transaction",
+            "BELONGS_TO_USER",
+            "User",
+            4486
+        ],
+        [
+            "Visit",
+            "BELONGS_TO_USER",
+            "User",
+            49
+        ],
+        [
+            "VisitDetail",
+            "BELONGS_TO_USER",
+            "User",
+            42
+        ],
+        [
+            "VisitDetail",
+            "BELONGS_TO_VISIT",
+            "Visit",
+            30
+        ],
+        [
+            "Vote",
+            "BELONGS_TO_VOTER",
+            "Voter",
+            1827
+        ],
+        [
+            "BillDetail",
+            "BILL",
+            "Bill",
+            763
+        ],
+        [
+            "Transaction",
+            "BILL",
+            "Bill",
+            1087
+        ],
+        [
+            "BillDetail",
+            "BILL_ITEM",
+            "BillItem",
+            751
+        ],
+        [
+            "BudgetDetail",
+            "BUDGET",
+            "Budget",
+            818
+        ],
+        [
+            "Invoice",
+            "BUDGET",
+            "Budget",
+            5904
+        ],
+        [
+            "BudgetDetailQuote",
+            "BUDGET_DETAIL",
+            "BudgetDetail",
+            5575
+        ],
+        [
+            "Unit",
+            "BUILDING",
+            "Building",
+            1877
+        ],
+        [
+            "ContactDirectory",
+            "CONTACT",
+            "Contact",
+            7722
+        ],
+        [
+            "ContactUnit",
+            "CONTACT",
+            "Contact",
+            2927
+        ],
+        [
+            "ContactDirectory",
+            "CONTACT_TYPE",
+            "ContactType",
+            7727
+        ],
+        [
+            "Invoice",
+            "CUSTOMER",
+            "Unit",
+            5984
+        ],
+        [
+            "EmailAccount",
+            "ENTITY",
+            "Contact",
+            3057
+        ],
+        [
+            "EmailAccount",
+            "ENTITY",
+            "Supplier",
+            456
+        ],
+        [
+            "EmailAccount",
+            "ENTITY",
+            "SupplierContact",
+            177
+        ],
+        [
+            "EmailAccount",
+            "ENTITY",
+            "Union",
+            54
+        ],
+        [
+            "EmailAccount",
+            "ENTITY",
+            "User",
+            1557
+        ],
+        [
+            "Account",
+            "FUND",
+            "Fund",
+            28642
+        ],
+        [
+            "BudgetDetail",
+            "FUND",
+            "Fund",
+            814
+        ],
+        [
+            "FundDate",
+            "FUND",
+            "Fund",
+            117
+        ],
+        [
+            "FundQuote",
+            "FUND",
+            "Fund",
+            254
+        ],
+        [
+            "InvoiceDetail",
+            "FUND",
+            "Fund",
+            15491
+        ],
+        [
+            "Address",
+            "HAS_REVIEWS",
+            "Review",
+            21
+        ],
+        [
+            "Entry",
+            "INVOICE",
+            "Invoice",
+            6
+        ],
+        [
+            "InvoiceDetail",
+            "INVOICE",
+            "Invoice",
+            15706
+        ],
+        [
+            "Transaction",
+            "INVOICE",
+            "Invoice",
+            3180
+        ],
+        [
+            "InvoiceDetail",
+            "INVOICE_ITEM",
+            "InvoiceItem",
+            991
+        ],
+        [
+            "Activity",
+            "PARENT",
+            "Discussion",
+            2807
+        ],
+        [
+            "Activity",
+            "PARENT",
+            "Maintenance",
+            85
+        ],
+        [
+            "Activity",
+            "PARENT",
+            "MaintenanceContract",
+            56
+        ],
+        [
+            "Activity",
+            "PARENT",
+            "MaintenanceDetail",
+            5
+        ],
+        [
+            "Activity",
+            "PARENT",
+            "Project",
+            49
+        ],
+        [
+            "Activity",
+            "PARENT",
+            "Task",
+            1990
+        ],
+        [
+            "Activity",
+            "PARENT",
+            "TaskDetail",
+            4989
+        ],
+        [
+            "Address",
+            "PARENT",
+            "Building",
+            88
+        ],
+        [
+            "Address",
+            "PARENT",
+            "Contact",
+            545
+        ],
+        [
+            "Address",
+            "PARENT",
+            "Supplier",
+            514
+        ],
+        [
+            "Address",
+            "PARENT",
+            "Team",
+            5
+        ],
+        [
+            "Address",
+            "PARENT",
+            "Union",
+            85
+        ],
+        [
+            "File",
+            "PARENT",
+            "Bill",
+            279
+        ],
+        [
+            "File",
+            "PARENT",
+            "Component",
+            3
+        ],
+        [
+            "File",
+            "PARENT",
+            "Discussion",
+            270
+        ],
+        [
+            "File",
+            "PARENT",
+            "Import",
+            65
+        ],
+        [
+            "File",
+            "PARENT",
+            "Invoice",
+            8
+        ],
+        [
+            "File",
+            "PARENT",
+            "Maintenance",
+            25
+        ],
+        [
+            "File",
+            "PARENT",
+            "MaintenanceContract",
+            36
+        ],
+        [
+            "File",
+            "PARENT",
+            "Meeting",
+            280
+        ],
+        [
+            "File",
+            "PARENT",
+            "Project",
+            31
+        ],
+        [
+            "File",
+            "PARENT",
+            "QuoteRequest",
+            43
+        ],
+        [
+            "File",
+            "PARENT",
+            "TaskDetail",
+            188
+        ],
+        [
+            "File",
+            "PARENT",
+            "Union",
+            1006
+        ],
+        [
+            "File",
+            "PARENT",
+            "Unit",
+            1221
+        ],
+        [
+            "File",
+            "PARENT",
+            "VisitDetail",
+            117
+        ],
+        [
+            "File",
+            "PARENT",
+            "WorkOrder",
+            28
+        ],
+        [
+            "Voter",
+            "PARENT",
+            "Contact",
+            110
+        ],
+        [
+            "Voter",
+            "PARENT",
+            "Unit",
+            1884
+        ],
+        [
+            "Price",
+            "PRICEABLE",
+            "Service",
+            15
+        ],
+        [
+            "Voter",
+            "PROXY",
+            "Voter",
+            139
+        ],
+        [
+            "Bill",
+            "SUPPLIER",
+            "Supplier",
+            558
+        ],
+        [
+            "Account",
+            "TAX",
+            "Tax",
+            180
+        ],
+        [
+            "Contact",
+            "TEAM",
+            "Team",
+            3885
+        ],
+        [
+            "Note",
+            "TEAM",
+            "Team",
+            269
+        ],
+        [
+            "Union",
+            "TEAM",
+            "Team",
+            89
+        ],
+        [
+            "Entry",
+            "TRANSACTION",
+            "Transaction",
+            12329
+        ],
+        [
+            "Event",
+            "UNION",
+            "Union",
+            50
+        ],
+        [
+            "Note",
+            "UNION",
+            "Union",
+            269
+        ],
+        [
+            "Unit",
+            "UNION",
+            "Union",
+            1877
+        ],
+        [
+            "Access",
+            "UNIT",
+            "Unit",
+            251
+        ],
+        [
+            "BudgetDetailQuote",
+            "UNIT",
+            "Unit",
+            5575
+        ],
+        [
+            "ContactUnit",
+            "UNIT",
+            "Unit",
+            2927
+        ],
+        [
+            "Extra",
+            "UNIT",
+            "Unit",
+            2235
+        ],
+        [
+            "FundQuote",
+            "UNIT",
+            "Unit",
+            394
+        ],
+        [
+            "Note",
+            "UNIT",
+            "Unit",
+            206
+        ],
+        [
+            "Transaction",
+            "UNIT",
+            "Unit",
+            8
+        ],
+        [
+            "Vehicle",
+            "UNIT",
+            "Unit",
+            379
+        ],
+        [
+            "Contact",
+            "USER",
+            "User",
+            1308
+        ],
+        [
+            "Event",
+            "USER",
+            "User",
+            50
+        ]
+    ],
+    "configured_edges": {
+        "VisitDetail": [
+            {
+                "type": "BELONGS_TO_VISIT",
+                "target_label": "Visit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_MAINTENANCE_DATE",
+                "target_label": "MaintenanceDate",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "Access": [
+            {
+                "type": "ACCESS_TYPE",
+                "target_label": "AccessType",
+                "direction": "outgoing"
+            },
+            {
+                "type": "UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_FOR_UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Announcement": [
+            {
+                "type": "HAS_ANNOUNCEMENT_READS",
+                "target_label": "AnnouncementRead",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_CREATED_BY",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UPDATED_BY",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "Building": [
+            {
+                "type": "HAS_ADDRESSES",
+                "target_label": "Address",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_UNITS",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            }
+        ],
+        "Event": [
+            {
+                "type": "UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "Extra": [
+            {
+                "type": "CHARGER_TYPE",
+                "target_label": "ChargerType",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CONTACT",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            },
+            {
+                "type": "UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_BUILDING",
+                "target_label": "Building",
+                "direction": "outgoing"
+            }
+        ],
+        "Instruction": [
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Note": [
+            {
+                "type": "UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_CREATED_BY",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UPDATED_BY",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "Pet": [
+            {
+                "type": "UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            }
+        ],
+        "Reservation": [
+            {
+                "type": "RESOURCE",
+                "target_label": "Resource",
+                "direction": "outgoing"
+            },
+            {
+                "type": "USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CONTACT",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            }
+        ],
+        "Resource": [
+            {
+                "type": "HAS_RESERVATIONS",
+                "target_label": "Reservation",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Union": [
+            {
+                "type": "TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "PARENT_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "PAYABLE_BANK",
+                "target_label": "Bank",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BUILDINGS",
+                "target_label": "Building",
+                "direction": "incoming"
+            },
+            {
+                "type": "UNITS",
+                "target_label": "Unit",
+                "direction": "incoming"
+            },
+            {
+                "type": "CHILD_UNIONS",
+                "target_label": "Union",
+                "direction": "incoming"
+            },
+            {
+                "type": "ACCOUNTS",
+                "target_label": "Account",
+                "direction": "incoming"
+            },
+            {
+                "type": "BUDGETS",
+                "target_label": "Budget",
+                "direction": "incoming"
+            },
+            {
+                "type": "TRANSACTIONS",
+                "target_label": "Transaction",
+                "direction": "incoming"
+            },
+            {
+                "type": "BANKS",
+                "target_label": "Bank",
+                "direction": "incoming"
+            },
+            {
+                "type": "FUNDS",
+                "target_label": "Fund",
+                "direction": "incoming"
+            },
+            {
+                "type": "INVOICES",
+                "target_label": "Invoice",
+                "direction": "incoming"
+            },
+            {
+                "type": "BILLS",
+                "target_label": "Bill",
+                "direction": "incoming"
+            },
+            {
+                "type": "MEETINGS",
+                "target_label": "Meeting",
+                "direction": "incoming"
+            },
+            {
+                "type": "RESOURCES",
+                "target_label": "Resource",
+                "direction": "incoming"
+            },
+            {
+                "type": "PROJECTS",
+                "target_label": "Project",
+                "direction": "incoming"
+            },
+            {
+                "type": "COMPONENTS",
+                "target_label": "Component",
+                "direction": "incoming"
+            },
+            {
+                "type": "MAINTENANCES",
+                "target_label": "Maintenance",
+                "direction": "incoming"
+            },
+            {
+                "type": "ACCESSES",
+                "target_label": "Access",
+                "direction": "incoming"
+            },
+            {
+                "type": "ANNOUNCEMENTS",
+                "target_label": "Announcement",
+                "direction": "incoming"
+            },
+            {
+                "type": "EVENTS",
+                "target_label": "Event",
+                "direction": "incoming"
+            },
+            {
+                "type": "BOARD_MEMBERS",
+                "target_label": "BoardMember",
+                "direction": "incoming"
+            },
+            {
+                "type": "UNION_CONTRACTS",
+                "target_label": "UnionContract",
+                "direction": "incoming"
+            },
+            {
+                "type": "FILES",
+                "target_label": "File",
+                "direction": "incoming"
+            },
+            {
+                "type": "ADDRESSES",
+                "target_label": "Address",
+                "direction": "incoming"
+            },
+            {
+                "type": "NOTES",
+                "target_label": "Note",
+                "direction": "incoming"
+            },
+            {
+                "type": "TASKS",
+                "target_label": "Task",
+                "direction": "incoming"
+            },
+            {
+                "type": "THREADS",
+                "target_label": "Thread",
+                "direction": "incoming"
+            }
+        ],
+        "UnionContract": [
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Unit": [
+            {
+                "type": "BUILDING",
+                "target_label": "Building",
+                "direction": "outgoing"
+            },
+            {
+                "type": "UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "REPRESENTED_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_VEHICLES",
+                "target_label": "Vehicle",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_ACCESSES",
+                "target_label": "Access",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_CONTACT_UNITS",
+                "target_label": "ContactUnit",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_PETS",
+                "target_label": "Pet",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_EXTRAS",
+                "target_label": "Extra",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_TRANSACTIONS",
+                "target_label": "Transaction",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_NOTES",
+                "target_label": "Note",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_TASKS",
+                "target_label": "Task",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_THREADS",
+                "target_label": "Thread",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_INVOICES",
+                "target_label": "Invoice",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_VOTERS",
+                "target_label": "Voter",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_INSURANCE_FILE",
+                "target_label": "File",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_INSURANCE2_FILE",
+                "target_label": "File",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_HEATER_FILE",
+                "target_label": "File",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_LOAN_FILE",
+                "target_label": "File",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_BLUEPRINT_FILES",
+                "target_label": "File",
+                "direction": "incoming"
+            },
+            {
+                "type": "HAS_CONTACTS",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_OWNERS",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_RENTERS",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_BANKS",
+                "target_label": "Bank",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            }
+        ],
+        "Vehicle": [
+            {
+                "type": "UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            }
+        ],
+        "Visit": [
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_VISIT_DETAILS",
+                "target_label": "VisitDetail",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            }
+        ],
+        "BoardMember": [
+            {
+                "type": "BELONGS_TO_CONTACT",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Contact": [
+            {
+                "type": "CONTACT_UNITS",
+                "target_label": "ContactUnit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CURRENT_CONTACT_UNITS",
+                "target_label": "ContactUnit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CURRENT_UNITS",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "INVOICES",
+                "target_label": "Invoice",
+                "direction": "outgoing"
+            },
+            {
+                "type": "UNITS",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CONTACTS",
+                "target_label": "ContactDirectory",
+                "direction": "outgoing"
+            },
+            {
+                "type": "EMAILS",
+                "target_label": "ContactDirectory",
+                "direction": "outgoing"
+            },
+            {
+                "type": "PHONES",
+                "target_label": "ContactDirectory",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CALL_LOGS",
+                "target_label": "CallLog",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BOARD_MEMBERS",
+                "target_label": "BoardMember",
+                "direction": "outgoing"
+            },
+            {
+                "type": "USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "ADDRESSES",
+                "target_label": "Address",
+                "direction": "outgoing"
+            },
+            {
+                "type": "REVIEWS",
+                "target_label": "Review",
+                "direction": "outgoing"
+            },
+            {
+                "type": "ALL_EMAIL_ACCOUNTS",
+                "target_label": "EmailAccount",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            }
+        ],
+        "ContactDirectory": [
+            {
+                "type": "CONTACT_TYPE",
+                "target_label": "ContactType",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CONTACT",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            }
+        ],
+        "ContactUnit": [
+            {
+                "type": "UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CONTACT",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            },
+            {
+                "type": "REVIEWS",
+                "target_label": "Review",
+                "direction": "incoming"
+            }
+        ],
+        "Channel": [
+            {
+                "type": "HAS_DISCUSSIONS",
+                "target_label": "Discussion",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_MEMBERS",
+                "target_label": "Member",
+                "direction": "outgoing"
+            },
+            {
+                "type": "USERS",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Discussion": [
+            {
+                "type": "BELONGS_TO_CHANNEL",
+                "target_label": "Channel",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_PARENT_DISCUSSION",
+                "target_label": "Discussion",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_REPLIES",
+                "target_label": "Discussion",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_READS",
+                "target_label": "DiscussionRead",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "EftFile": [
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Folder": [
+            {
+                "type": "BELONGS_TO_PARENT_FOLDER",
+                "target_label": "Folder",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FOLDERS",
+                "target_label": "Folder",
+                "direction": "outgoing"
+            },
+            {
+                "type": "FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILE_FOLDERS",
+                "target_label": "FileFolder",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            }
+        ],
+        "Account": [
+            {
+                "type": "BANK",
+                "target_label": "Bank",
+                "direction": "outgoing"
+            },
+            {
+                "type": "FUND",
+                "target_label": "Fund",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAX",
+                "target_label": "Tax",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_BUDGET_DETAILS",
+                "target_label": "BudgetDetail",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_ACCOUNT_BALANCES",
+                "target_label": "AccountBalance",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_ENTRIES",
+                "target_label": "Entry",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_CONCILIATIONS",
+                "target_label": "Conciliation",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_FUND2",
+                "target_label": "Fund",
+                "direction": "outgoing"
+            }
+        ],
+        "AccountBalance": [
+            {
+                "type": "ACCOUNT",
+                "target_label": "Account",
+                "direction": "outgoing"
+            }
+        ],
+        "Bank": [
+            {
+                "type": "HAS_ACCOUNT",
+                "target_label": "Account",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_UNITS",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_CONTACT",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SUPPLIER",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            }
+        ],
+        "Bill": [
+            {
+                "type": "BILL_DETAILS",
+                "target_label": "BillDetail",
+                "direction": "incoming"
+            },
+            {
+                "type": "BILL_APPROVALS",
+                "target_label": "BillApproval",
+                "direction": "incoming"
+            },
+            {
+                "type": "SUPPLIER",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            },
+            {
+                "type": "RELATED_SUPPLIER",
+                "target_label": "Relation",
+                "direction": "incoming"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_TRANSACTIONS",
+                "target_label": "Transaction",
+                "direction": "outgoing"
+            }
+        ],
+        "BillApproval": [
+            {
+                "type": "BILL",
+                "target_label": "Bill",
+                "direction": "outgoing"
+            },
+            {
+                "type": "USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "BillDetail": [
+            {
+                "type": "BILL",
+                "target_label": "Bill",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BILL_ITEM",
+                "target_label": "BillItem",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAXES",
+                "target_label": "Tax",
+                "direction": "outgoing"
+            },
+            {
+                "type": "ACCOUNT",
+                "target_label": "Account",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAX_DETAILS",
+                "target_label": "BillDetailTax",
+                "direction": "incoming"
+            }
+        ],
+        "Budget": [
+            {
+                "type": "HAS_BUDGET_DETAILS",
+                "target_label": "BudgetDetail",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_INVOICES",
+                "target_label": "Invoice",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "BudgetDetail": [
+            {
+                "type": "BUDGET",
+                "target_label": "Budget",
+                "direction": "outgoing"
+            },
+            {
+                "type": "ACCOUNT",
+                "target_label": "Account",
+                "direction": "outgoing"
+            },
+            {
+                "type": "FUND",
+                "target_label": "Fund",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BUDGET_DETAIL_QUOTES",
+                "target_label": "BudgetDetailQuote",
+                "direction": "incoming"
+            },
+            {
+                "type": "BUDGET_DETAIL_DATES",
+                "target_label": "BudgetDetailDate",
+                "direction": "incoming"
+            }
+        ],
+        "Conciliation": [
+            {
+                "type": "ACCOUNT",
+                "target_label": "Account",
+                "direction": "outgoing"
+            }
+        ],
+        "Entry": [
+            {
+                "type": "TRANSACTION",
+                "target_label": "Transaction",
+                "direction": "outgoing"
+            },
+            {
+                "type": "INVOICE",
+                "target_label": "Invoice",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BILL",
+                "target_label": "Bill",
+                "direction": "outgoing"
+            },
+            {
+                "type": "ACCOUNT",
+                "target_label": "Account",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SUPPLIER",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            }
+        ],
+        "Fund": [
+            {
+                "type": "HAS_ACCOUNT",
+                "target_label": "Account",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_BUDGET_DETAILS",
+                "target_label": "BudgetDetail",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FUND_QUOTES",
+                "target_label": "FundQuote",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FUND_DATES",
+                "target_label": "FundDate",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Invoice": [
+            {
+                "type": "INVOICE_DETAILS",
+                "target_label": "InvoiceDetail",
+                "direction": "incoming"
+            },
+            {
+                "type": "BUDGET",
+                "target_label": "Budget",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_APPROVED_BY",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_EFT_LINE",
+                "target_label": "EftLine",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SENT_BY",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "InvoiceDetail": [
+            {
+                "type": "INVOICE",
+                "target_label": "Invoice",
+                "direction": "outgoing"
+            },
+            {
+                "type": "INVOICE_ITEM",
+                "target_label": "InvoiceItem",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAXES",
+                "target_label": "Tax",
+                "direction": "outgoing"
+            },
+            {
+                "type": "ACCOUNT",
+                "target_label": "Account",
+                "direction": "outgoing"
+            },
+            {
+                "type": "FUND",
+                "target_label": "Fund",
+                "direction": "outgoing"
+            },
+            {
+                "type": "UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAX_DETAILS",
+                "target_label": "InvoiceDetailTax",
+                "direction": "incoming"
+            }
+        ],
+        "Tax": [
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            }
+        ],
+        "Transaction": [
+            {
+                "type": "ENTRIES",
+                "target_label": "Entry",
+                "direction": "incoming"
+            },
+            {
+                "type": "INVOICE",
+                "target_label": "Invoice",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BILL",
+                "target_label": "Bill",
+                "direction": "outgoing"
+            },
+            {
+                "type": "UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "PARENT_CREDIT_NOTE",
+                "target_label": "Bill",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_CN_INVOICE",
+                "target_label": "Invoice",
+                "direction": "outgoing"
+            }
+        ],
+        "UnionApproval": [
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Activity": [
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "File": [
+            {
+                "type": "FOLDERS",
+                "target_label": "Folder",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            }
+        ],
+        "TeamRole": [
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "Notification": [
+            {
+                "type": "NOTIFIER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "Recurrence": [
+            {
+                "type": "HAS_BILLS",
+                "target_label": "Bill",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "Review": [
+            {
+                "type": "REVIEWED_BY",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_MESSAGE",
+                "target_label": "Message",
+                "direction": "outgoing"
+            }
+        ],
+        "Team": [
+            {
+                "type": "HAS_UNIONS",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_CONTACTS",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_SUPPLIER_CONTACTS",
+                "target_label": "SupplierContact",
+                "direction": "outgoing"
+            },
+            {
+                "type": "USERS",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_EMAIL_ACCOUNTS",
+                "target_label": "EmailAccount",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_TASKS",
+                "target_label": "Task",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_TAXES",
+                "target_label": "Tax",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_ADDRESSES",
+                "target_label": "Address",
+                "direction": "outgoing"
+            },
+            {
+                "type": "OWNER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "TeamInvitation": [
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_CONTACT",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            }
+        ],
+        "User": [
+            {
+                "type": "HAS_CONTACTS",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_SUPPLIERS",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_SIGNATURES",
+                "target_label": "Signature",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CHANNELS",
+                "target_label": "Channel",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_REVIEWS",
+                "target_label": "Review",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_OWNED_TEAMS",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TEAMS",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CURRENT_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_EMAIL_ACCOUNTS",
+                "target_label": "EmailAccount",
+                "direction": "outgoing"
+            }
+        ],
+        "Meeting": [
+            {
+                "type": "HAS_MOTIONS",
+                "target_label": "Motion",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_VOTERS",
+                "target_label": "Voter",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_SCHEDULES",
+                "target_label": "Schedule",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Motion": [
+            {
+                "type": "HAS_VOTES",
+                "target_label": "Vote",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_MEETING",
+                "target_label": "Meeting",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SCHEDULE",
+                "target_label": "Schedule",
+                "direction": "outgoing"
+            }
+        ],
+        "Schedule": [
+            {
+                "type": "BELONGS_TO_MEETING",
+                "target_label": "Meeting",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_MOTIONS",
+                "target_label": "Motion",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_PARENT_SCHEDULE",
+                "target_label": "Schedule",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_SCHEDULES",
+                "target_label": "Schedule",
+                "direction": "outgoing"
+            }
+        ],
+        "Vote": [
+            {
+                "type": "BELONGS_TO_VOTER",
+                "target_label": "Voter",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_MOTION",
+                "target_label": "Motion",
+                "direction": "outgoing"
+            }
+        ],
+        "Voter": [
+            {
+                "type": "HAS_VOTES",
+                "target_label": "Vote",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_MEETING",
+                "target_label": "Meeting",
+                "direction": "outgoing"
+            },
+            {
+                "type": "PROXY",
+                "target_label": "Voter",
+                "direction": "outgoing"
+            }
+        ],
+        "Attachment": [
+            {
+                "type": "BELONGS_TO_MESSAGE",
+                "target_label": "Message",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            }
+        ],
+        "EmailAccount": [
+            {
+                "type": "HAS_DISTRIBUTIONS",
+                "target_label": "Distribution",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            }
+        ],
+        "Message": [
+            {
+                "type": "BELONGS_TO_THREAD",
+                "target_label": "Thread",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SENDER",
+                "target_label": "EmailAccount",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_PARENT_MESSAGE",
+                "target_label": "Message",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_ATTACHMENTS",
+                "target_label": "Attachment",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_DISTRIBUTIONS",
+                "target_label": "Distribution",
+                "direction": "outgoing"
+            },
+            {
+                "type": "RECIPIENTS",
+                "target_label": "EmailAccount",
+                "direction": "outgoing"
+            }
+        ],
+        "MessageForward": [
+            {
+                "type": "FORWARD_TO",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "Thread": [
+            {
+                "type": "HAS_MESSAGES",
+                "target_label": "Message",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_THREAD_BOXES",
+                "target_label": "ThreadBox",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            }
+        ],
+        "CallLog": [
+            {
+                "type": "BELONGS_TO_PHONE_CONFIGURATION",
+                "target_label": "PhoneConfiguration",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_CONTACT",
+                "target_label": "Contact",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Component": [
+            {
+                "type": "HAS_MAINTENANCES",
+                "target_label": "Maintenance",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SUPPLIER",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SERVICE_ELEMENT",
+                "target_label": "ServiceElement",
+                "direction": "outgoing"
+            }
+        ],
+        "Maintenance": [
+            {
+                "type": "TASK",
+                "target_label": "Task",
+                "direction": "outgoing"
+            },
+            {
+                "type": "DISCUSSION",
+                "target_label": "Discussion",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_MAINTENANCE_CONTRACTS",
+                "target_label": "MaintenanceContract",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_MAINTENANCE_DETAILS",
+                "target_label": "MaintenanceDetail",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_MAINTENANCE_DATES",
+                "target_label": "MaintenanceDate",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SUPPLIER",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_COMPONENT",
+                "target_label": "Component",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SERVICING",
+                "target_label": "Servicing",
+                "direction": "outgoing"
+            }
+        ],
+        "MaintenanceContract": [
+            {
+                "type": "MAINTENANCE",
+                "target_label": "Maintenance",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SUPPLIER",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            }
+        ],
+        "MaintenanceDate": [
+            {
+                "type": "MAINTENANCE",
+                "target_label": "Maintenance",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SUPPLIER",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            }
+        ],
+        "MaintenanceDetail": [
+            {
+                "type": "MAINTENANCE",
+                "target_label": "Maintenance",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "Project": [
+            {
+                "type": "TASK",
+                "target_label": "Task",
+                "direction": "outgoing"
+            },
+            {
+                "type": "DISCUSSION",
+                "target_label": "Discussion",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_QUOTE_REQUESTS",
+                "target_label": "QuoteRequest",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ],
+        "QuoteRequest": [
+            {
+                "type": "PROJECT",
+                "target_label": "Project",
+                "direction": "outgoing"
+            },
+            {
+                "type": "MAINTENANCE",
+                "target_label": "Maintenance",
+                "direction": "outgoing"
+            },
+            {
+                "type": "WORK_ORDERS",
+                "target_label": "WorkOrder",
+                "direction": "incoming"
+            },
+            {
+                "type": "SUPPLIERS",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            }
+        ],
+        "Supplier": [
+            {
+                "type": "SUPPLIER_CONTACTS",
+                "target_label": "SupplierContact",
+                "direction": "incoming"
+            },
+            {
+                "type": "SUPPLIER_RATINGS",
+                "target_label": "SupplierRating",
+                "direction": "incoming"
+            },
+            {
+                "type": "BILLS",
+                "target_label": "Bill",
+                "direction": "incoming"
+            },
+            {
+                "type": "BANKS",
+                "target_label": "Bank",
+                "direction": "incoming"
+            },
+            {
+                "type": "CREDIT_NOTES",
+                "target_label": "Bill",
+                "direction": "incoming"
+            },
+            {
+                "type": "WORK_ORDERS",
+                "target_label": "WorkOrder",
+                "direction": "incoming"
+            },
+            {
+                "type": "UNIONS",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CENTRAL_SUPPLIER",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            },
+            {
+                "type": "LINKED_SUPPLIERS",
+                "target_label": "Supplier",
+                "direction": "incoming"
+            },
+            {
+                "type": "TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            },
+            {
+                "type": "ADDRESSES",
+                "target_label": "Address",
+                "direction": "incoming"
+            },
+            {
+                "type": "ADDRESS",
+                "target_label": "Address",
+                "direction": "incoming"
+            },
+            {
+                "type": "ALL_EMAIL_ACCOUNTS",
+                "target_label": "EmailAccount",
+                "direction": "incoming"
+            },
+            {
+                "type": "GLOBAL_EMAIL_ACCOUNT",
+                "target_label": "EmailAccount",
+                "direction": "incoming"
+            },
+            {
+                "type": "MAIN_MAILBOX",
+                "target_label": "EmailAccount",
+                "direction": "incoming"
+            },
+            {
+                "type": "MAILBOX",
+                "target_label": "EmailAccount",
+                "direction": "incoming"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            }
+        ],
+        "SupplierContact": [
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SUPPLIER",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            },
+            {
+                "type": "ALL_EMAIL_ACCOUNTS",
+                "target_label": "EmailAccount",
+                "direction": "incoming"
+            },
+            {
+                "type": "GLOBAL_EMAIL_ACCOUNT",
+                "target_label": "EmailAccount",
+                "direction": "incoming"
+            },
+            {
+                "type": "MAIN_MAILBOX",
+                "target_label": "EmailAccount",
+                "direction": "incoming"
+            },
+            {
+                "type": "MAILBOX",
+                "target_label": "EmailAccount",
+                "direction": "incoming"
+            }
+        ],
+        "SupplierRating": [
+            {
+                "type": "BELONGS_TO_SUPPLIER",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_PROJECT",
+                "target_label": "Project",
+                "direction": "outgoing"
+            }
+        ],
+        "WorkOrder": [
+            {
+                "type": "QUOTE_REQUEST",
+                "target_label": "QuoteRequest",
+                "direction": "outgoing"
+            },
+            {
+                "type": "RECIPIENT",
+                "target_label": "WorkOrder",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_SUPPLIER",
+                "target_label": "Supplier",
+                "direction": "outgoing"
+            }
+        ],
+        "Task": [
+            {
+                "type": "HAS_TASK_DETAILS",
+                "target_label": "TaskDetail",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_TASK_LINKS",
+                "target_label": "TaskLink",
+                "direction": "outgoing"
+            },
+            {
+                "type": "ASSIGNED_TO",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "CREATED_BY",
+                "target_label": "User",
+                "direction": "outgoing"
+            },
+            {
+                "type": "PROJECT",
+                "target_label": "Project",
+                "direction": "outgoing"
+            },
+            {
+                "type": "MAINTENANCE",
+                "target_label": "Maintenance",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNION",
+                "target_label": "Union",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_UNIT",
+                "target_label": "Unit",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_TEAM",
+                "target_label": "Team",
+                "direction": "outgoing"
+            },
+            {
+                "type": "TAGS",
+                "target_label": "Tag",
+                "direction": "outgoing"
+            }
+        ],
+        "TaskDetail": [
+            {
+                "type": "BELONGS_TO_TASK",
+                "target_label": "Task",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_READS",
+                "target_label": "TaskRead",
+                "direction": "outgoing"
+            },
+            {
+                "type": "HAS_FILES",
+                "target_label": "File",
+                "direction": "outgoing"
+            },
+            {
+                "type": "BELONGS_TO_USER",
+                "target_label": "User",
+                "direction": "outgoing"
+            }
+        ]
+    },
+    "tenant_paths": {
+        "VisitDetail": "maintenanceDate.maintenance.team_id",
+        "Access": "union.team_id",
+        "Announcement": "union.team_id",
+        "Building": "union.team_id",
+        "Event": "union.team_id",
+        "Extra": "unit.union.team_id",
+        "Instruction": "union.team_id",
+        "Note": "team_id",
+        "Pet": "unit.union.team_id",
+        "Reservation": "resource.union.team_id",
+        "Resource": "union.team_id",
+        "Union": "team_id",
+        "UnionContract": "union.team_id",
+        "Unit": "union.team_id",
+        "Vehicle": "unit.union.team_id",
+        "Visit": "union.team_id",
+        "BoardMember": "union.team_id",
+        "Contact": "team_id",
+        "ContactDirectory": "contact.team_id",
+        "ContactUnit": "unit.union.team_id",
+        "Channel": "team_id",
+        "Discussion": "channel.team_id",
+        "EftFile": "union.team_id",
+        "Folder": "team_id",
+        "Account": "union.team_id",
+        "AccountBalance": "account.union.team_id",
+        "Bank": "union.team_id",
+        "Bill": "union.team_id",
+        "BillApproval": "bill.union.team_id",
+        "BillDetail": "bill.union.team_id",
+        "Budget": "union.team_id",
+        "BudgetDetail": "budget.union.team_id",
+        "Conciliation": "account.union.team_id",
+        "Entry": "account.union.team_id",
+        "Fund": "union.team_id",
+        "Invoice": "union.team_id",
+        "InvoiceDetail": "invoice.union.team_id",
+        "Tax": "team_id",
+        "Transaction": "union.team_id",
+        "UnionApproval": "union.team_id",
+        "Activity": "team_id",
+        "File": "team_id",
+        "TeamRole": "team_id",
+        "Notification": "team_id",
+        "Recurrence": "team_id",
+        "Review": "team_id",
+        "Team": "id",
+        "TeamInvitation": "team_id",
+        "User": "current_team_id",
+        "Meeting": "team_id",
+        "Motion": "meeting.team_id",
+        "Schedule": "meeting.team_id",
+        "Vote": "motion.meeting.team_id",
+        "Voter": "meeting.team_id",
+        "Attachment": "team_id",
+        "EmailAccount": "team_id",
+        "Message": "thread.team_id",
+        "MessageForward": "user.current_team_id",
+        "Thread": "team_id",
+        "CallLog": "union.team_id",
+        "Component": "union.team_id",
+        "Maintenance": "team_id",
+        "MaintenanceContract": "maintenance.team_id",
+        "MaintenanceDate": "maintenance.team_id",
+        "MaintenanceDetail": "maintenance.team_id",
+        "Project": "team_id",
+        "QuoteRequest": "project.team_id",
+        "Supplier": "team_id",
+        "SupplierContact": "team_id",
+        "SupplierRating": "supplier.team_id",
+        "WorkOrder": "quoteRequest.project.team_id",
+        "Task": "team_id",
+        "TaskDetail": "task.team_id"
+    },
+    "user_entity_paths": {
+        "Unit": {
+            "entities": [
+                "User",
+                "Contact",
+                "ContactUnit",
+                "Unit"
+            ]
+        },
+        "Contact": {
+            "entities": [
+                "User",
+                "Contact"
+            ]
+        },
+        "Invoice": {
+            "entities": [
+                "User",
+                "Contact",
+                "ContactUnit",
+                "Unit",
+                "Invoice"
+            ]
+        },
+        "Vehicle": {
+            "entities": [
+                "User",
+                "Contact",
+                "ContactUnit",
+                "Unit",
+                "Vehicle"
+            ]
+        },
+        "Access": {
+            "entities": [
+                "User",
+                "Contact",
+                "ContactUnit",
+                "Unit",
+                "Access"
+            ]
+        },
+        "Extra": {
+            "entities": [
+                "User",
+                "Contact",
+                "ContactUnit",
+                "Unit",
+                "Extra"
+            ]
+        },
+        "Announcement": {
+            "entities": [
+                "User",
+                "Contact",
+                "ContactUnit",
+                "Unit",
+                "Union",
+                "Announcement"
+            ]
+        },
+        "Meeting": {
+            "entities": [
+                "User",
+                "Contact",
+                "ContactUnit",
+                "Unit",
+                "Union",
+                "Meeting"
+            ]
+        },
+        "Resource": {
+            "entities": [
+                "User",
+                "Contact",
+                "ContactUnit",
+                "Unit",
+                "Union",
+                "Resource"
+            ]
+        },
+        "Thread": {
+            "entities": [
+                "User",
+                "Contact",
+                "EmailAccount",
+                "Message",
+                "Thread"
+            ]
+        },
+        "BoardMember": {
+            "entities": [
+                "User",
+                "Contact",
+                "BoardMember"
+            ]
+        }
+    },
+    "questions": {
+        "q1": {
+            "question": "Can I get the list of members of my team with their roles?",
+            "entity_types": [
+                "Team",
+                "TeamRole"
+            ],
+            "is_possessive": true,
+            "intent": "list",
+            "question_type": "data_query",
+            "scope_labels": [
+                "Team"
+            ],
+            "vector_hits": {
+                "TeamRole": 0.786
+            }
+        },
+        "q2": {
+            "question": "What does unit 310 currently owe?",
+            "entity_types": [
+                "Unit",
+                "Invoice",
+                "AccountBalance"
+            ],
+            "is_possessive": false,
+            "intent": "lookup",
+            "question_type": "data_query",
+            "scope_labels": [
+                "Account",
+                "Invoice"
+            ],
+            "vector_hits": {
+                "Contact": 0.525,
+                "Account": 0.509,
+                "AccountBalance": 0.488,
+                "Invoice": 0.48,
+                "Unit": 0.449,
+                "Conciliation": 0.415
+            }
+        },
+        "q3": {
+            "question": "Who is on the board of our condos and who is the president?",
+            "entity_types": [
+                "BoardMember",
+                "Union"
+            ],
+            "is_possessive": true,
+            "intent": "list",
+            "question_type": "data_query",
+            "scope_labels": [
+                "Team",
+                "Component"
+            ],
+            "vector_hits": {
+                "Instruction": 0.562,
+                "UnionApproval": 0.536
+            }
+        },
+        "q4": {
+            "question": "What does our team have outstanding in receivables?",
+            "entity_types": [
+                "Account",
+                "AccountBalance",
+                "Team"
+            ],
+            "is_possessive": true,
+            "intent": "list",
+            "question_type": "data_query",
+            "scope_labels": [
+                "Account",
+                "Invoice"
+            ],
+            "vector_hits": {
+                "Account": 0.625,
+                "Bill": 0.459
+            }
+        },
+        "q5": {
+            "question": "When is our next meeting and what's on the agenda?",
+            "entity_types": [
+                "Meeting",
+                "Schedule"
+            ],
+            "is_possessive": true,
+            "intent": "lookup",
+            "question_type": "data_query",
+            "scope_labels": [
+                "Meeting"
+            ],
+            "vector_hits": []
+        }
+    }
+}

@@ -35,7 +35,6 @@ class ContentLinkProcessor
         ?ActionLinkHandler $actionHandler = null,
         ?FileCitationHandler $citationHandler = null
     ) {
-        // Register default handlers
         if ($actionHandler) {
             $this->handlers['actions'] = $actionHandler;
         }
@@ -112,9 +111,11 @@ class ContentLinkProcessor
      * Strips links and creates elements in one pass.
      * This is the main entry point for message rendering.
      *
-     * Note: File citation elements are NOT included in the returned elements array
-     * because file references are rendered separately via renderFileReferences().
-     * Citations [1], [2] are still stripped from the content text.
+     * Inline citation [1], [2] chips are created (with data-action-slot
+     * attributes) and included in the returned elements array alongside the
+     * action elements, while still being stripped from the prose content.
+     * Their metadata (slot/id/type/mime) is exposed via the file_citations key
+     * for proxy element wiring.
      *
      * @param string $content The AI response content
      * @param array $context Context for handlers (files, user, etc.)
@@ -127,17 +128,23 @@ class ContentLinkProcessor
             $this->citationHandler->resetMetadata();
         }
 
-        // Only create elements from action handler (not citations)
-        // File citations are rendered separately via renderFileReferences()
+        // Create elements from the action handler.
         $elements = [];
         if (isset($this->handlers['actions'])) {
             $elements = $this->handlers['actions']->createElements($content, $context);
         }
 
+        // Create file citation chip elements. This call also populates the
+        // citation handler's metadata, which we read below for file_citations.
+        if ($this->citationHandler) {
+            $citationElements = $this->citationHandler->createElements($content, $context);
+            $elements = array_merge($elements, $citationElements);
+        }
+
         // Strip all links (including citations) from content
         $cleanContent = $this->stripLinks($content);
 
-        // Collect file citation metadata (for potential future use)
+        // Collect file citation metadata (slot/id/type/mime) for proxy wiring.
         $fileCitations = $this->citationHandler
             ? $this->citationHandler->getCitationMetadata()
             : [];
@@ -148,6 +155,16 @@ class ContentLinkProcessor
             'has_links' => !empty($elements),
             'file_citations' => $fileCitations,
         ];
+    }
+
+    /**
+     * Get a registered handler by name (e.g. 'actions'), for callers that need
+     * handler-specific capabilities beyond the interface — the message renderer reads the
+     * action handler's parsed-link fingerprints to dedupe persisted invocations.
+     */
+    public function getHandler(string $name): ?ContentLinkHandlerInterface
+    {
+        return $this->handlers[$name] ?? null;
     }
 
     /**

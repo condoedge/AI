@@ -1,5 +1,4 @@
 <?php
-// src/Models/AiConversation.php
 
 declare(strict_types=1);
 
@@ -97,52 +96,11 @@ class AiConversation extends Model
     }
 
     /**
-     * Get the last query type (count, list, aggregate, etc.)
-     */
-    public function getLastQueryType(): ?string
-    {
-        return $this->context_snapshot['last_query_type'] ?? null;
-    }
-
-    /**
      * Get mentioned entities from context
      */
     public function getMentionedEntities(): array
     {
         return $this->context_snapshot['mentioned_entities'] ?? [];
-    }
-
-    /**
-     * Get the last Cypher query from most recent assistant message
-     */
-    public function getLastCypherQuery(): ?string
-    {
-        $lastAssistantMessage = $this->messages()
-            ->where('role', 'assistant')
-            ->whereNotNull('cypher_query')
-            ->orderBy('created_at', 'desc')
-            ->first();
-
-        return $lastAssistantMessage?->cypher_query;
-    }
-
-    /**
-     * Update context with entity data from query results.
-     */
-    public function updateEntityContext(array $entityData): void
-    {
-        $this->updateContextSnapshot([
-            'focused_entity_data' => $entityData,
-            'updated_at' => now()->toIso8601String(),
-        ]);
-    }
-
-    /**
-     * Get the focused entity's identifying filter.
-     */
-    public function getFocusedEntityFilter(): ?string
-    {
-        return $this->context_snapshot['focused_entity_filter'] ?? null;
     }
 
     /**
@@ -153,38 +111,12 @@ class AiConversation extends Model
         return $this->context_snapshot['last_result_sample'] ?? [];
     }
 
-    /**
-     * Get previous query for reference.
-     */
-    public function getPreviousCypherQuery(): ?string
-    {
-        return $this->context_snapshot['last_cypher_query'] ?? null;
-    }
-
-    /**
-     * Get the count of last query results.
-     */
-    public function getLastResultCount(): int
-    {
-        return $this->context_snapshot['last_result_count'] ?? 0;
-    }
-
     // ACTIONS
     public function addMessage(string $role, string $content, array $data = []): AiMessage
     {
-        // Extract data fields and merge into metadata
         $metadata = $data['metadata'] ?? [];
         if (isset($data['referenced_files'])) {
             $metadata['referenced_files'] = $data['referenced_files'];
-        }
-        if (isset($data['suggestions'])) {
-            $metadata['suggestions'] = $data['suggestions'];
-        }
-        if (isset($data['is_follow_up'])) {
-            $metadata['is_follow_up'] = $data['is_follow_up'];
-        }
-        if (isset($data['resolved_entity'])) {
-            $metadata['resolved_entity'] = $data['resolved_entity'];
         }
         if (isset($data['error'])) {
             $metadata['error'] = $data['error'];

@@ -4,30 +4,33 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Console\Commands;
 
-use Condoedge\Ai\Contracts\DataIngestionServiceInterface;
+use Condoedge\Ai\Services\BatchDataIngestionService;
 use Condoedge\Ai\Contracts\FileProcessorInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
-use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Services\Files\PhysicalFileIndexer;
+use Condoedge\Ai\Console\Commands\Concerns\FlushesGraphSchemaCache;
 use Illuminate\Console\Command;
 
 /**
  * IngestEntitiesCommand
  *
- * Bulk ingest all existing Nodeable entities into Neo4j and Qdrant.
+ * Bulk ingest all existing Nodeable entities into the graph (Neo4j). Records are not
+ * embedded: Qdrant holds the file chunks and the semantic indexes, not the entities.
  * Useful for initial setup or when migrating existing data.
  *
  * Usage:
  *   php artisan ai:ingest                      # Ingest all entities
  *   php artisan ai:ingest --model=Customer     # Ingest specific model
- *   php artisan ai:ingest --fresh              # Clear stores first
+ *   php artisan ai:ingest --fresh              # Clear the graph first (vector collections are not touched)
  *   php artisan ai:ingest --chunk=100          # Batch size
  *
  * @package Condoedge\Ai\Console\Commands
  */
 class IngestEntitiesCommand extends Command
 {
+    use FlushesGraphSchemaCache;
+
     /**
      * The name and signature of the console command.
      *
@@ -35,8 +38,11 @@ class IngestEntitiesCommand extends Command
      */
     protected $signature = 'ai:ingest
                             {--model= : Specific model class to ingest (e.g., App\\Models\\Customer)}
-                            {--fresh : Clear all data from stores before ingesting}
-                            {--chunk=100 : Batch size for processing}
+                            {--from= : Skip models until this one (e.g., InboundEmail or App\\Models\\Messaging\\InboundEmail)}
+                            {--fresh : Clear the graph before ingesting (vector collections are not touched)}
+                            {--chunk=2000 : Batch size for processing}
+                            {--min-id= : Only ingest rows with primary key >= this value (manual range restriction)}
+                            {--max-id= : Only ingest rows with primary key < this value (manual range restriction)}
                             {--dry-run : Show what would be ingested without actually ingesting}
                             {--docs : Index physical documentation files from configured paths}';
 
@@ -45,15 +51,14 @@ class IngestEntitiesCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Bulk ingest all Nodeable entities into Neo4j and Qdrant';
+    protected $description = 'Bulk ingest all Nodeable entities into the graph (Neo4j)';
 
     /**
      * Create a new command instance.
      */
     public function __construct(
-        private DataIngestionServiceInterface $ingestionService,
-        private GraphStoreInterface $graphStore,
-        private VectorStoreInterface $vectorStore
+        private BatchDataIngestionService $ingestionService,
+        private GraphStoreInterface $graphStore
     ) {
         parent::__construct();
     }
@@ -65,7 +70,25 @@ class IngestEntitiesCommand extends Command
      */
     public function handle(): int
     {
-        // Handle --docs flag for physical file ingestion
+        // Bulk ingestion needs more than the typical 512M CLI default (chunks of Eloquent
+        // models + embedding vectors + store payloads), and every observed OOM happened on
+        // runs where the operator's `-d memory_limit=` flag was missing — so the command
+        // raises its own limit instead of depending on the invocation.
+        @ini_set('memory_limit', (string) config('ai.ingestion.memory_limit', '2G'));
+
+        // Memory hygiene for a long-running process: anything listening to QueryExecuted
+        // (debug toolbars and similar collectors) retains every query + bindings for the
+        // whole run — tens of KB per ingested row that gc_collect_cycles() can never
+        // reclaim because it is referenced, not garbage. Detach the framework query log
+        // and the DB connection's event dispatcher inside THIS process only; Eloquent
+        // model events (auto_sync) live on the model dispatcher and are unaffected.
+        try {
+            \Illuminate\Support\Facades\DB::connection()->disableQueryLog();
+            \Illuminate\Support\Facades\DB::connection()->unsetEventDispatcher();
+        } catch (\Throwable $e) {
+            // No default DB connection (docs-only setups) — nothing to detach.
+        }
+
         if ($this->option('docs')) {
             return $this->handleDocsIngestion();
         }
@@ -73,7 +96,6 @@ class IngestEntitiesCommand extends Command
         $this->info('Bulk Entity Ingestion');
         $this->newLine();
 
-        // Get models to ingest
         $models = $this->option('model')
             ? [$this->option('model')]
             : $this->findNodeableModels();
@@ -87,26 +109,55 @@ class IngestEntitiesCommand extends Command
         $this->info('Found ' . count($models) . ' Nodeable model(s)');
         $this->newLine();
 
-        // Fresh mode - clear stores
         if ($this->option('fresh') && !$this->option('dry-run')) {
-            if ($this->confirm('⚠️  This will DELETE all data from Neo4j and Qdrant. Continue?', false)) {
-                $this->clearStores($models);
-            } else {
+            // In a non-interactive run (spawned by ai:setup, CI, cron) there is no TTY to
+            // prompt on — confirm() would silently pick the default (no) and "succeed"
+            // without wiping OR ingesting. An explicit --fresh flag IS the consent there.
+            $proceed = !$this->input->isInteractive()
+                || $this->confirm('⚠️  This will DELETE all data from the graph (Neo4j). Continue?', false);
+
+            if (!$proceed) {
                 $this->warn('Ingestion cancelled.');
                 return self::SUCCESS;
             }
+
+            if (!$this->input->isInteractive()) {
+                $this->warn('Non-interactive --fresh: clearing the graph without prompting.');
+            }
+
+            $this->clearStores($models);
         }
 
         $chunkSize = (int) $this->option('chunk');
+
+        // Handle --from flag: skip models until we reach the specified one (inclusive)
+        $fromModel = $this->option('from');
+        if ($fromModel !== null) {
+            $remaining = [];
+            $skipping = true;
+            foreach ($models as $modelClass) {
+                if ($skipping && (class_basename($modelClass) === $fromModel || $modelClass === $fromModel)) {
+                    $skipping = false;
+                }
+                if ($skipping) {
+                    $this->comment("Skipping: {$modelClass} (--from)");
+                    continue;
+                }
+                $remaining[] = $modelClass;
+            }
+            $models = $remaining;
+        }
+
         $totalIngested = 0;
+        $totalPartial = 0;
         $totalFailed = 0;
         $errors = [];
 
-        // Process each model
         foreach ($models as $modelClass) {
             $result = $this->ingestModel($modelClass, $chunkSize);
 
             $totalIngested += $result['ingested'];
+            $totalPartial += $result['partial'];
             $totalFailed += $result['failed'];
 
             if (!empty($result['errors'])) {
@@ -117,18 +168,20 @@ class IngestEntitiesCommand extends Command
         $this->newLine();
         $this->newLine();
 
-        // Summary
         if ($this->option('dry-run')) {
             $this->info("✓ DRY RUN - Would ingest {$totalIngested} entities");
         } else {
             $this->info("✓ Successfully ingested: {$totalIngested}");
+
+            if ($totalPartial > 0) {
+                $this->warn("~ Partially ingested: {$totalPartial}");
+            }
 
             if ($totalFailed > 0) {
                 $this->error("✗ Failed: {$totalFailed}");
             }
         }
 
-        // Show errors
         if (!empty($errors)) {
             $this->newLine();
             $this->error('Errors encountered:');
@@ -150,11 +203,26 @@ class IngestEntitiesCommand extends Command
     }
 
     /**
+     * The entity's graph.with eager-loads (relations its graph.computed accessors read).
+     * A config error here is not fatal: the per-entity mapping reports it.
+     *
+     * @return string[]
+     */
+    private function graphEagerLoads(string $modelClass): array
+    {
+        try {
+            return (new $modelClass)->getGraphConfig()->with;
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
      * Ingest all entities for a specific model
      *
      * @param string $modelClass Model class name
      * @param int $chunkSize Batch size
-     * @return array{ingested: int, failed: int, errors: array}
+     * @return array{ingested: int, partial: int, failed: int, errors: array}
      */
     private function ingestModel(string $modelClass, int $chunkSize): array
     {
@@ -162,83 +230,118 @@ class IngestEntitiesCommand extends Command
 
         if (!class_exists($modelClass)) {
             $this->error("  ✗ Class not found: {$modelClass}");
-            return ['ingested' => 0, 'failed' => 0, 'errors' => ["Class not found"]];
+            return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => ["Class not found"]];
         }
 
-        // Check if model implements Nodeable
         if (!in_array(Nodeable::class, class_implements($modelClass) ?: [])) {
             $this->error("  ✗ Model does not implement Nodeable interface");
-            return ['ingested' => 0, 'failed' => 0, 'errors' => ["Not a Nodeable model"]];
+            return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => ["Not a Nodeable model"]];
         }
 
-        // Get total count
+        // Segmentation window (--min-id/--max-id): restrict to a primary-key range so a
+        // parent can split one large model across several bounded child processes.
+        $keyName = (new $modelClass)->getKeyName();
+        $query = $modelClass::query()
+            ->when($this->option('min-id') !== null, fn ($q) => $q->where($keyName, '>=', $this->option('min-id')))
+            ->when($this->option('max-id') !== null, fn ($q) => $q->where($keyName, '<', $this->option('max-id')));
+
+        // graph.with: eager-load the relations graph.computed accessors read, once per chunk.
+        $with = $this->graphEagerLoads($modelClass);
+        if ($with !== []) {
+            $query->with($with);
+        }
+
         try {
-            $total = $modelClass::count();
+            $total = (clone $query)->count();
         } catch (\Throwable $e) {
             $this->error("  ✗ Failed to count entities: {$e->getMessage()}");
-            return ['ingested' => 0, 'failed' => 0, 'errors' => [$e->getMessage()]];
+            return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => [$e->getMessage()]];
         }
 
         if ($total === 0) {
             $this->comment("  ⊘ No entities found");
-            return ['ingested' => 0, 'failed' => 0, 'errors' => []];
+            return ['ingested' => 0, 'partial' => 0, 'failed' => 0, 'errors' => []];
         }
 
         $this->line("  Found {$total} entities");
 
         if ($this->option('dry-run')) {
             $this->comment("  ⊘ Dry run - skipping ingestion");
-            return ['ingested' => $total, 'failed' => 0, 'errors' => []];
+            return ['ingested' => $total, 'partial' => 0, 'failed' => 0, 'errors' => []];
         }
 
-        // Process in chunks with progress bar
-        // Note: Collections are automatically created by DataIngestionService on first use
         $progressBar = $this->output->createProgressBar($total);
         $progressBar->setFormat('  [%bar%] %current%/%max% (%percent:3s%%) %message%');
         $progressBar->setMessage('Ingesting...');
         $progressBar->start();
 
         $ingested = 0;
+        $partial = 0;
         $failed = 0;
         $errors = [];
 
-        $modelClass::chunk($chunkSize, function ($entities) use (&$ingested, &$failed, &$errors, $progressBar) {
+        $query->chunk($chunkSize, function ($entities) use (&$ingested, &$partial, &$failed, &$errors, $progressBar) {
             try {
-                // Use batch ingestion for efficiency
                 $results = $this->ingestionService->ingestBatch($entities->all());
 
                 $ingested += $results['succeeded'];
+                $partial += $results['partially_succeeded'] ?? 0;
                 $failed += $results['failed'];
 
                 if (!empty($results['errors'])) {
                     foreach ($results['errors'] as $error) {
-                        $errors[] = $error['message'] ?? 'Unknown error';
+                        $errors[] = self::formatBatchError($error);
                     }
                 }
 
                 $progressBar->advance($entities->count());
-                $progressBar->setMessage("Ingested: {$ingested}, Failed: {$failed}");
+                // Memory telemetry: a steadily climbing Mem across chunks means something
+                // process-wide is retaining per-row data (e.g. a debug query collector) —
+                // chunk-local work alone keeps this flat.
+                $mem = round(memory_get_usage(true) / 1048576);
+                $peak = round(memory_get_peak_usage(true) / 1048576);
+                $progressBar->setMessage("Ingested: {$ingested}, Partial: {$partial}, Failed: {$failed} | Mem: {$mem}MB (peak {$peak}MB)");
             } catch (\Throwable $e) {
                 $failed += $entities->count();
                 $errors[] = "Batch error: {$e->getMessage()}";
                 $progressBar->advance($entities->count());
             }
+
+            // Eloquent models + their relations form reference cycles; collect them
+            // deterministically each chunk instead of waiting for GC root-buffer pressure.
+            gc_collect_cycles();
         });
 
         $progressBar->finish();
         $this->newLine();
 
         if ($failed > 0) {
-            $this->line("  <fg=yellow>⚠</> Ingested: {$ingested}, Failed: {$failed}");
+            $this->line("  <fg=yellow>⚠</> Ingested: {$ingested}, Partial: {$partial}, Failed: {$failed}");
+        } elseif ($partial > 0) {
+            $this->line("  <fg=yellow>~</> Ingested: {$ingested}, Partial: {$partial}, Failed: {$failed}");
         } else {
             $this->line("  <fg=green>✓</> Ingested: {$ingested}");
         }
 
         return [
             'ingested' => $ingested,
+            'partial' => $partial,
             'failed' => $failed,
             'errors' => $errors,
         ];
+    }
+
+    /**
+     * Render one ingestBatch() error entry. BatchDataIngestionService reports plain strings;
+     * array-shaped entries (other implementations) use their 'message', else their JSON.
+     *
+     * @internal public only for unit testing.
+     */
+    public static function formatBatchError(mixed $error): string
+    {
+        return is_array($error)
+            ? (string) ($error['message'] ?? json_encode($error))
+            : (string) $error;
     }
 
     /**
@@ -252,41 +355,59 @@ class IngestEntitiesCommand extends Command
     }
 
     /**
-     * Clear all data from Neo4j and Qdrant stores
+     * Clear the graph (what the ingest rebuilds). The vector store is left alone.
      *
      * @param array $models Models being ingested (used to determine collections)
      * @return void
      */
     private function clearStores(array $models): void
     {
-        $this->warn('Clearing stores...');
+        $this->warn('Clearing the graph...');
 
-        // Clear Neo4j - delete all nodes and relationships
-        $this->line('  Clearing Neo4j...');
+        $this->line('  Clearing Neo4j (batched)...');
         try {
-            // Delete all nodes (this also deletes relationships)
-            $this->graphStore->query('MATCH (n) DETACH DELETE n');
-            $this->line('    <fg=green>✓</> Neo4j cleared');
+            // A single `MATCH (n) DETACH DELETE n` holds the WHOLE graph's delete set in ONE
+            // transaction — on a real dataset the server heap fills, GC thrashes, and the query
+            // never returns (observed: a 6h hang on the first full CondoEdge wipe). query() runs
+            // each call as its own auto-commit transaction, so loop small bounded batches
+            // instead: relationships first (a node batch can still drag an unbounded number of
+            // rels via DETACH), then nodes. Each iteration commits, so progress is real and
+            // memory stays flat regardless of graph size.
+            $totalRels = 0;
+            do {
+                $result = $this->graphStore->query(
+                    'MATCH ()-[r]->() WITH r LIMIT 50000 DELETE r RETURN count(r) AS deleted'
+                );
+                $deleted = (int) ($result[0]['deleted'] ?? 0);
+                $totalRels += $deleted;
+                if ($deleted > 0) {
+                    $this->line("    … {$totalRels} relationships deleted");
+                }
+            } while ($deleted > 0);
+
+            $totalNodes = 0;
+            do {
+                // DETACH DELETE in the node phase too: auto_sync app traffic can create new
+                // relationships while the wipe runs; a plain DELETE would then error out.
+                $result = $this->graphStore->query(
+                    'MATCH (n) WITH n LIMIT 50000 DETACH DELETE n RETURN count(n) AS deleted'
+                );
+                $deleted = (int) ($result[0]['deleted'] ?? 0);
+                $totalNodes += $deleted;
+                if ($deleted > 0) {
+                    $this->line("    … {$totalNodes} nodes deleted");
+                }
+            } while ($deleted > 0);
+
+            $this->line("    <fg=green>✓</> Neo4j cleared ({$totalNodes} nodes, {$totalRels} relationships)");
         } catch (\Throwable $e) {
             $this->error("    ✗ Failed to clear Neo4j: {$e->getMessage()}");
         }
 
-        // Clear Qdrant collections for each model
-        $this->line('  Clearing Qdrant collections...');
-        try {
-            $collections = $this->vectorStore->listCollections();
-
-            foreach ($collections as $collection) {
-                try {
-                    $this->vectorStore->deleteAll($collection);
-                    $this->line("    <fg=green>✓</> Cleared: {$collection}");
-                } catch (\Throwable $e) {
-                    $this->error("    ✗ Failed to clear {$collection}: {$e->getMessage()}");
-                }
-            }
-        } catch (\Throwable $e) {
-            $this->error("    ✗ Failed to list collections: {$e->getMessage()}");
-        }
+        // The vector store is NOT cleared. The ingest writes the graph only (2026-10-08), so
+        // nothing here would rebuild a collection it emptied: the uploaded-file chunks and
+        // their document maps, the context / scope / question indexes each have their own
+        // writer (file processing, ai:index-context, ai:index-semantic, ai:index-scopes).
 
         $this->newLine();
     }
@@ -301,6 +422,24 @@ class IngestEntitiesCommand extends Command
      */
     protected function handleDocsIngestion(): int
     {
+        // PROJECT files are global and must never land among the UPLOADED files
+        // (linked to a record, searched under an ACL and a scope). Only
+        // configuration tells the two collections apart, so it is checked here:
+        // an empty name falls back to the chunk store's bound collection — the
+        // uploads — and an equal name IS the uploads.
+        $physical = config('ai.file_context.physical_collection', 'documentation_chunks');
+        $uploads = config('ai.file_processing.collection', 'file_chunks');
+        if (!is_string($physical) || trim($physical) === '' || $physical === $uploads) {
+            $this->error(sprintf(
+                'ai.file_context.physical_collection is %s — the collection of UPLOADED files (ai.file_processing.collection = "%s"). '
+                . 'Project files are global and need a collection of their own (default: documentation_chunks). Nothing was indexed.',
+                is_string($physical) && trim($physical) !== '' ? '"' . $physical . '"' : 'empty',
+                is_string($uploads) ? $uploads : ''
+            ));
+
+            return self::FAILURE;
+        }
+
         $this->info('Discovering physical documentation files...');
 
         $indexer = app(PhysicalFileIndexer::class);
@@ -325,7 +464,7 @@ class IngestEntitiesCommand extends Command
         }
 
         $fileProcessor = app(FileProcessorInterface::class);
-        $collection = config('ai.file_context.physical_collection', 'documentation_chunks');
+        $collection = $physical;
         $force = $this->option('fresh');
 
         $bar = $this->output->createProgressBar(count($fileObjects));

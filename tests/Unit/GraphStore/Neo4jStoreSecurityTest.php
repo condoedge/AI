@@ -51,7 +51,12 @@ class Neo4jStoreSecurityTest extends TestCase
                 $this->capturedQuery[] = $cypher;
                 $this->capturedParams[] = $params;
 
-                // Return mock response based on query type
+                // Return mock response based on query type.
+                // createNode() now uses MERGE...RETURN id(n) as nodeId, n.id as appId
+                // (idempotent) instead of CREATE, so detect it by its RETURN shape.
+                if (str_contains($cypher, 'as nodeId')) {
+                    return [['nodeId' => 123, 'appId' => 1]];
+                }
                 if (str_contains($cypher, 'CREATE')) {
                     return [['id' => 123, 'nodeId' => 123, 'appId' => 1]];
                 }
@@ -130,17 +135,22 @@ class Neo4jStoreSecurityTest extends TestCase
     }
 
     /** @test */
-    public function createNode_handles_empty_properties(): void
+    public function createNode_handles_minimal_properties(): void
     {
-        $this->store->createNode('EmptyNode', []);
+        // createNode() now MERGEs on the node id for idempotency, so the
+        // minimal valid input is just an id. It must still use parameter
+        // binding (SET n = $properties) rather than interpolating values.
+        $minimal = ['id' => 1];
+
+        $this->store->createNode('EmptyNode', $minimal);
 
         $query = $this->capturedQuery[0] ?? '';
         $params = $this->capturedParams[0] ?? [];
 
-        // Should still use parameter binding even for empty properties
+        // Should still use parameter binding even for minimal properties
         $this->assertStringContainsString('$properties', $query);
         $this->assertArrayHasKey('properties', $params);
-        $this->assertEquals([], $params['properties']);
+        $this->assertEquals($minimal, $params['properties']);
     }
 
     /** @test */

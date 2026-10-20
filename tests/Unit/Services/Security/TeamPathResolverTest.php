@@ -26,7 +26,21 @@ class TeamPathResolverTest extends TestCase
 
         $this->assertEquals('direct', $result['type']);
         $this->assertStringContainsString('i.team_id IN', $result['filter']);
-        $this->assertStringContainsString('1, 3, 7', $result['filter']);
+        // Team IDs are bound as parameters, NOT spliced as an inline list.
+        $this->assertStringContainsString('$ai_team_ids', $result['filter']);
+        $this->assertStringNotContainsString('[', $result['filter']);
+        $this->assertSame([1, 3, 7], $result['parameters']['ai_team_ids']);
+    }
+
+    /** @test */
+    public function binds_team_ids_as_integer_parameters(): void
+    {
+        config(['entities.Invoice.security.team_path' => 'team_id']);
+
+        // Non-integer / string ids must be coerced to clean integers.
+        $result = $this->resolver->resolve('Invoice', 'i', ['1', 3, '7']);
+
+        $this->assertSame([1, 3, 7], $result['parameters']['ai_team_ids']);
     }
 
     /** @test */
@@ -90,5 +104,110 @@ class TeamPathResolverTest extends TestCase
         $result = $this->resolver->resolve('Invoice', 'i', [1, 3]);
 
         $this->assertEquals('direct', $result['type']);
+    }
+
+    // =====================================================================
+    // ruleFor(): the team-ID-free clause TEMPLATE shared by the generator
+    // prompt section and the acceptance gate (single source of truth).
+    // =====================================================================
+
+    /** @test */
+    public function rule_for_returns_direct_where_template_without_team_ids(): void
+    {
+        config(['entities.Invoice.security.team_path' => 'team_id']);
+
+        $rule = $this->resolver->ruleFor('Invoice', 'i');
+
+        $this->assertSame('direct', $rule['type']);
+        $this->assertSame('where', $rule['kind']);
+        $this->assertSame('i', $rule['alias']);
+        $this->assertSame('team_id', $rule['column']);
+        // Template references the bound parameter, never inlines ids.
+        $this->assertStringContainsString('WHERE i.team_id IN $ai_team_ids', $rule['filter']);
+        $this->assertStringNotContainsString('[', $rule['filter']);
+    }
+
+    /** @test */
+    public function rule_for_returns_relationship_match_template(): void
+    {
+        config(['entities.Person.security.team_path' => ['rel' => 'MEMBER_OF', 'target' => 'Team']]);
+
+        $rule = $this->resolver->ruleFor('Person', 'p');
+
+        $this->assertSame('relationship', $rule['type']);
+        $this->assertSame('match', $rule['kind']);
+        $this->assertStringContainsString('MATCH (p)-[:MEMBER_OF]->(t:Team)', $rule['filter']);
+        $this->assertStringContainsString('t.id IN $ai_team_ids', $rule['filter']);
+    }
+
+    /** @test */
+    public function rule_for_returns_parent_match_template(): void
+    {
+        config(['entities.InvoiceItem.security.team_path' => 'invoice.team_id']);
+        config(['entities.InvoiceItem.graph.relationships' => [
+            ['type' => 'BELONGS_TO', 'target_label' => 'Invoice'],
+        ]]);
+
+        $rule = $this->resolver->ruleFor('InvoiceItem', 'ii');
+
+        $this->assertSame('parent', $rule['type']);
+        $this->assertSame('match', $rule['kind']);
+        $this->assertStringContainsString('BELONGS_TO', $rule['filter']);
+        $this->assertStringContainsString('team_id IN $ai_team_ids', $rule['filter']);
+    }
+
+    /** @test */
+    public function rule_for_returns_null_when_no_team_path(): void
+    {
+        config(['entities.SystemSetting.security.team_path' => null]);
+        config(['ai.security.default_team_path' => null]);
+
+        $this->assertNull($this->resolver->ruleFor('SystemSetting', 's'));
+    }
+
+    /** @test */
+    public function scope_labels_are_the_labels_the_scoping_rule_traverses(): void
+    {
+        config(['entities.Unit.security.team_path' => 'union.team_id']);
+        config(['entities.Unit.graph.relationships' => [['type' => 'UNION', 'target_label' => 'Union']]]);
+        config(['entities.Vehicle.security.team_path' => 'unit.union.team_id']);
+        config(['entities.Vehicle.graph.relationships' => [['type' => 'UNIT', 'target_label' => 'Unit']]]);
+        config(['entities.Person.security.team_path' => ['rel' => 'MEMBER_OF', 'target' => 'Team']]);
+        config(['entities.Note.security.team_path' => 'team_id']);
+
+        // Parent path: the hop labels (the same labels the rendered rule MATCHes).
+        $this->assertSame(['Union'], $this->resolver->scopeLabels('Unit'));
+        $this->assertSame(['Unit', 'Union'], $this->resolver->scopeLabels('Vehicle'));
+        // Relationship path: its target.
+        $this->assertSame(['Team'], $this->resolver->scopeLabels('Person'));
+        // Direct column: the node scopes itself.
+        $this->assertSame([], $this->resolver->scopeLabels('Note'));
+    }
+
+    /** @test */
+    public function scope_labels_are_empty_when_the_rule_cannot_be_built(): void
+    {
+        // Parent path whose hop relationship is not configured → no rule → no labels.
+        config(['entities.Orphan.security.team_path' => 'union.team_id']);
+        config(['entities.Orphan.graph.relationships' => []]);
+        config(['entities.Loose.security.team_path' => null]);
+        config(['ai.security.default_team_path' => null]);
+
+        $this->assertSame([], $this->resolver->scopeLabels('Orphan'));
+        $this->assertSame([], $this->resolver->scopeLabels('Loose'));
+    }
+
+    /** @test */
+    public function resolve_and_rule_for_emit_the_same_filter_text(): void
+    {
+        config(['entities.Invoice.security.team_path' => 'team_id']);
+
+        $resolved = $this->resolver->resolve('Invoice', 'i', [1, 3, 7]);
+        $rule = $this->resolver->ruleFor('Invoice', 'i');
+
+        // Single source of truth: resolve() is reimplemented on ruleFor(), so the
+        // clause text is byte-identical (only the bound parameters differ).
+        $this->assertSame($resolved['filter'], $rule['filter']);
+        $this->assertSame($resolved['type'], $rule['type']);
     }
 }

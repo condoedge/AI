@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Console\Commands;
 
+use Condoedge\Ai\Console\Commands\Concerns\FlushesGraphSchemaCache;
 use Illuminate\Console\Command;
 use Condoedge\Ai\Services\SemanticContextSelector;
 use Condoedge\Ai\Services\ScopeSemanticMatcher;
@@ -24,6 +25,8 @@ use Condoedge\Ai\Services\ScopeSemanticMatcher;
  */
 class IndexContextCommand extends Command
 {
+    use FlushesGraphSchemaCache;
+
     protected $signature = 'ai:index-context
                             {--scopes-only : Only index scopes}
                             {--all : Index all context (entities, relationships, scopes)}
@@ -48,13 +51,12 @@ class IndexContextCommand extends Command
         $scopesOnly = $this->option('scopes-only');
         $indexAll = $this->option('all') || !$scopesOnly;
 
-        // Count what we're indexing
         $this->displayStats($entityConfigs);
         $this->newLine();
 
         $results = [];
 
-        // Index scopes (always, unless explicitly skipping)
+        // Scopes are always indexed, even when only entities were requested.
         $this->output->write('Indexing scopes... ');
         try {
             $scopeResult = $scopeMatcher->indexScopes($entityConfigs);
@@ -65,7 +67,6 @@ class IndexContextCommand extends Command
             $results['scopes'] = ['error' => $e->getMessage()];
         }
 
-        // Index full context (entities, relationships, properties)
         if ($indexAll) {
             $this->output->write('Indexing entities & relationships... ');
             try {
@@ -96,7 +97,7 @@ class IndexContextCommand extends Command
         $propertyCount = 0;
 
         foreach ($entityConfigs as $config) {
-            $relationshipCount += count($config['relationships'] ?? []);
+            $relationshipCount += count($config['graph']['relationships'] ?? []);
             $propertyCount += count($config['graph']['properties'] ?? []);
 
             $scopes = $config['metadata']['scopes'] ?? [];
@@ -150,7 +151,6 @@ class IndexContextCommand extends Command
             $rows
         );
 
-        // Show errors if any
         foreach ($results as $type => $result) {
             if (!empty($result['errors'])) {
                 $this->newLine();

@@ -1090,6 +1090,35 @@
 
 
 /* ==========================================================================
+   Chat-kit fallbacks (classes emitted by condoedge/utils' ChatBubbleRenderer)
+
+   The ai bubbles are built by the shared chat kit. Hosts that compile the kit's
+   chat-kit.scss into their app css (e.g. through the discussions package import)
+   already ship these rules; this section keeps standalone ai installs styled.
+   Values mirror chat-kit.scss exactly, so double inclusion is harmless.
+   (The themed own bubble keeps its Tailwind gradient classes and needs no rule here.)
+   ========================================================================== */
+
+:root {
+    --chat-bubble-other-bg: #ffffff;
+    --chat-bubble-other-text: #1f2937;   /* gray-800 */
+    --chat-bubble-other-border: #f3f4f6; /* gray-100 */
+    --chat-bubble-pending-opacity: 0.75;
+}
+
+.chat-bubble-other {
+    background: var(--chat-bubble-other-bg);
+    color: var(--chat-bubble-other-text);
+    border: 1px solid var(--chat-bubble-other-border);
+}
+
+/* Optimistic/sending style (the placeholder user bubble while the LLM turn runs) */
+.chat-bubble-pending {
+    opacity: var(--chat-bubble-pending-opacity);
+}
+
+
+/* ==========================================================================
    Print Styles
    ========================================================================== */
 

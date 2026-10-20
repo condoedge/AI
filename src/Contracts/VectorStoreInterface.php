@@ -107,6 +107,31 @@ interface VectorStoreInterface
     public function count(string $collection, array $filter = []): int;
 
     /**
+     * Ensure a payload field index exists on a collection.
+     *
+     * Used to create full-text ('text') or keyword indexes so payload filters
+     * (e.g. match:{text} on file_name) are reliable and efficient.
+     * Implementations should treat this as best-effort and never throw.
+     *
+     * @param string $collection Collection name
+     * @param string $field Payload field to index
+     * @param string $schema Field schema ('text', 'keyword', 'integer', ...)
+     * @return bool True if created/confirmed, false on failure
+     */
+    public function ensurePayloadIndex(string $collection, string $field, string $schema = 'keyword'): bool;
+
+    /**
+     * Scroll (page) through points in a collection without a query vector.
+     *
+     * @param string $collection Collection name
+     * @param array $filter Optional payload filter
+     * @param int $limit Maximum number of points to return
+     * @param bool $withPayload Whether to include payloads
+     * @return array Array of points (each with 'id' and 'payload')
+     */
+    public function scroll(string $collection, array $filter = [], int $limit = 100, bool $withPayload = true): array;
+
+    /**
      * Ensure a collection exists, create if it doesn't
      *
      * @param string $name Collection name

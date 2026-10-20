@@ -4,9 +4,9 @@ Complete, production-ready examples demonstrating the AI Text-to-Query System.
 
 ---
 
-## Example 1: Customer Search with Semantic Search
+## Example 1: Customer Search in Natural Language
 
-Build a semantic customer search that understands meaning, not just keywords.
+Build a customer search that takes a question in plain language. Records are stored in the graph only; they are not embedded, so there is no semantic search over them: `AI::answerQuestion()` generates a Cypher query and runs it on the graph. See [Data ingestion](/docs/{{version}}/usage/data-ingestion) for what Qdrant holds.
 
 ### Entity Setup
 
@@ -52,11 +52,6 @@ return [
                     'foreign_key' => 'order_id'
                 ]
             ]
-        ],
-        'vector' => [
-            'collection' => 'customers',
-            'embed_fields' => ['name', 'company', 'industry', 'notes'],
-            'metadata' => ['id', 'email', 'company', 'industry']
         ]
     ]
 ];
@@ -77,16 +72,12 @@ class CustomerSearchController extends Controller
     {
         $query = $request->input('query');
 
-        // Semantic search using AI
-        $results = AI::searchSimilar($query, [
-            'collection' => 'customers',
-            'limit' => 10,
-            'scoreThreshold' => 0.7
-        ]);
+        // Generates a Cypher query, runs it on the graph and writes the answer
+        $response = AI::answerQuestion($query);
 
         return view('customers.search', [
             'query' => $query,
-            'results' => $results
+            'answer' => $response['answer']
         ]);
     }
 
@@ -110,18 +101,13 @@ class CustomerSearchController extends Controller
 <!-- resources/views/customers/search.blade.php -->
 <form action="{{ route('customers.search') }}" method="GET">
     <input type="text" name="query" value="{{ $query }}"
-           placeholder="Search customers (e.g., 'software companies in tech')">
+           placeholder="Ask about customers (e.g., 'customers in the software industry')">
     <button type="submit">Search</button>
 </form>
 
-@foreach($results as $result)
-    <div class="customer-result">
-        <h3>{{ $result['metadata']['company'] }}</h3>
-        <p>Industry: {{ $result['metadata']['industry'] }}</p>
-        <p>Email: {{ $result['metadata']['email'] }}</p>
-        <span class="score">Relevance: {{ round($result['score'] * 100) }}%</span>
-    </div>
-@endforeach
+<div class="customer-result">
+    <p>{{ $answer }}</p>
+</div>
 ```
 
 ---
@@ -148,8 +134,7 @@ class AiQuestionController extends Controller
         $context = AI::retrieveContext($question, [
             'collection' => 'questions',
             'limit' => 5,
-            'includeSchema' => true,
-            'includeExamples' => true
+            'includeSchema' => true
         ]);
 
         // Step 2: Build prompt for LLM

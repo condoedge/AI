@@ -1,0 +1,162 @@
+name: Run tests
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }}
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest]
+        php: [8.1]
+        laravel: [10.48.*]
+        include:
+          - laravel: 10.48.*
+            testbench: 8.36.*
+    
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: testing_password
+          MYSQL_DATABASE: testbench
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+          --tmpfs /var/lib/mysql
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, mysql, pdo_mysql, bcmath, soap, intl, gd, exif, iconv, fileinfo
+          coverage: none
+          ini-values: memory_limit=-1, error_reporting=E_ALL, display_errors=On
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-php-${{ matrix.php }}-laravel-${{ matrix.laravel }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-php-${{ matrix.php }}-laravel-${{ matrix.laravel }}-composer-
+            ${{ runner.os }}-php-${{ matrix.php }}-composer-
+
+      - name: Install dependencies
+        run: |
+          composer require "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" --no-interaction --no-update
+          composer update --prefer-stable --prefer-dist --no-interaction --no-progress --no-scripts
+
+      - name: Fix Testbench permissions
+        run: |
+          sudo chmod -R 0777 vendor/orchestra/testbench-core/laravel/bootstrap/*
+          sudo chmod -R 0777 vendor/orchestra/testbench-core/laravel/storage/*
+
+      - name: Configure MySQL
+        run: |
+          # Wait for MySQL to be ready
+          for i in {1..30}; do
+            mysql -h127.0.0.1 -uroot -ptesting_password -e "SELECT 1" && break
+            echo "Waiting for MySQL..."
+            sleep 1
+          done
+          
+          # Enable function creation
+          mysql -h127.0.0.1 -uroot -ptesting_password -e "SET GLOBAL log_bin_trust_function_creators = 1;"
+          
+          # Create test database if it doesn't exist
+          mysql -h127.0.0.1 -uroot -ptesting_password -e "CREATE DATABASE IF NOT EXISTS testbench;"
+
+      - name: Configure environment for MySQL
+        run: |
+          # Create a CI-specific phpunit.xml
+          cp phpunit.xml phpunit.xml.dist
+          
+          # Update the MySQL host to use 127.0.0.1 instead of localhost
+          sed -i 's|<server name="MYSQL_HOST" value="127.0.0.1"/>|<server name="MYSQL_HOST" value="127.0.0.1"/>|g' phpunit.xml
+          sed -i 's|<server name="MYSQL_PORT" value="3309"/>|<server name="MYSQL_PORT" value="3306"/>|g' phpunit.xml
+          
+          # Ensure DB_CONNECTION is set to mysql
+          if ! grep -q "DB_CONNECTION" phpunit.xml; then
+            sed -i '/<php>/a\        <server name="DB_CONNECTION" value="mysql"/>' phpunit.xml
+          fi
+
+      - name: Run Composer Scripts
+        run: |
+          composer run-script post-autoload-dump
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: testbench
+          DB_USERNAME: root
+          DB_PASSWORD: testing_password
+
+      - name: Execute database migrations
+        run: |
+          vendor/bin/testbench migrate:fresh --force
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: testbench
+          DB_USERNAME: root
+          DB_PASSWORD: testing_password
+
+      - name: Dump database schema
+        run: |
+          vendor/bin/testbench schema:dump
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: testbench
+          DB_USERNAME: root
+          DB_PASSWORD: testing_password
+
+      - name: Execute tests
+        run: |
+          vendor/bin/testbench package:test --no-coverage
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: testbench
+          DB_USERNAME: root
+          DB_PASSWORD: testing_password
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: testing_password
+          MYSQL_DATABASE: testbench
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-php${{ matrix.php }}-laravel10
+          path: |
+            storage/logs/
+            tests/_output/
+            .phpunit.cache/
+            phpunit.xml
+          if-no-files-found: ignore

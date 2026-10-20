@@ -8,44 +8,31 @@ Reference for all public interfaces in the AI system.
 
 ### Nodeable
 
-Interface for entities that can be stored in the AI system.
+Interface for entities that can be stored in the graph (Neo4j). Records are written to the graph only: there is no vector configuration and no per-entity vector collection.
 
 ```php
 <?php
 
 namespace Condoedge\Ai\Domain\Contracts;
 
+use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
+
 interface Nodeable
 {
     /**
-     * Get the Neo4j node label.
+     * Get the Neo4j graph configuration for this entity.
      */
-    public function getNodeLabel(): string;
+    public function getGraphConfig(): GraphConfig;
 
     /**
-     * Get properties to store in Neo4j.
+     * Get the unique identifier for this entity.
      */
-    public function getNodeProperties(): array;
+    public function getId(): string|int;
 
     /**
-     * Get the unique identifier for the node.
+     * Get all properties as an associative array.
      */
-    public function getNodeId(): mixed;
-
-    /**
-     * Get text content for embedding.
-     */
-    public function getEmbedContent(): string;
-
-    /**
-     * Get metadata for vector storage.
-     */
-    public function getVectorMetadata(): array;
-
-    /**
-     * Get the Qdrant collection name.
-     */
-    public function getCollectionName(): string;
+    public function toArray();
 }
 ```
 
@@ -195,7 +182,7 @@ interface PromptSectionInterface
 
 **Implementations:**
 - `SystemSection`
-- `SchemaSection`
+- `SchemaCardsSection`
 - `ScopesSection`
 - `ExamplesSection`
 - `GuidelinesSection`
@@ -463,34 +450,68 @@ interface EntityConfigInterface
 
 ---
 
-## Matching Interfaces
+## Semantic Matching Services
 
-### MatcherInterface
+These are concrete service classes (no shared interface). Resolve them from the
+container with `app(...)` and pass `config('ai.entities')` as the entity configs.
 
-Interface for semantic matchers.
+### ScopeSemanticMatcher
+
+Matches a question against the scopes defined on your entities.
 
 ```php
 <?php
 
-namespace Condoedge\Ai\Contracts;
+namespace Condoedge\Ai\Services;
 
-interface MatcherInterface
+class ScopeSemanticMatcher
 {
     /**
-     * Find matches for a query.
+     * Find scopes that semantically match the user's question.
      *
-     * @param string $query Search query
-     * @param array $candidates Candidate items
-     * @param float $threshold Minimum similarity
-     * @return array Matches with scores
+     * @param string $question     User's question
+     * @param array  $entityConfigs Entity configurations (e.g. config('ai.entities'))
+     * @param float  $threshold     Minimum similarity score (0-1)
+     * @param int    $topK          Maximum number of matches to return
+     * @return array Matched scopes keyed by scope, each with 'match_score',
+     *               'entity', 'scope', 'match_type' and 'matched_example'
      */
-    public function match(string $query, array $candidates, float $threshold = 0.7): array;
+    public function findMatchingScopes(
+        string $question,
+        array $entityConfigs,
+        float $threshold = 0.7,
+        int $topK = 5
+    ): array;
 }
 ```
 
-**Implementations:**
-- `SemanticMatcher`
-- `ScopeSemanticMatcher`
+### SemanticContextSelector
+
+Selects the relevant entities, relationships and scopes for a question.
+
+```php
+<?php
+
+namespace Condoedge\Ai\Services;
+
+use Condoedge\Ai\DTOs\SemanticSelectionResult;
+
+class SemanticContextSelector
+{
+    /**
+     * Select relevant context components for a question.
+     *
+     * @param string $question      User's question
+     * @param array  $entityConfigs Entity configurations (e.g. config('ai.entities'))
+     * @param array  $options       ['threshold' => float, 'top_k' => int]
+     */
+    public function selectRelevantContext(
+        string $question,
+        array $entityConfigs,
+        array $options = []
+    ): SemanticSelectionResult;
+}
+```
 
 ---
 
@@ -555,11 +576,6 @@ class NodeableConfig
         string $foreignKey
     ): self;
 
-    // Vector configuration
-    public function collection(string $name): self;
-    public function embedFields(string ...$fields): self;
-    public function metadata(array $fields): self;
-
     // Metadata
     public function aliases(string ...$aliases): self;
     public function description(string $description): self;
@@ -582,8 +598,6 @@ public function nodeableConfig(): NodeableConfig
     return NodeableConfig::for(static::class)
         ->label('Customer')
         ->properties('id', 'name', 'email')
-        ->collection('customers')
-        ->embedFields('name', 'email')
         ->aliases('customer', 'client');
 }
 ```

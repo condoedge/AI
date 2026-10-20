@@ -14,7 +14,8 @@ namespace Condoedge\Ai\Services\Response;
  * Citation format: [1], [2], [3]...
  *
  * Context must include 'files' array from message->getReferencedFiles()
- * with structure: [['id' => 1, 'name' => 'file.pdf', 'type' => 'pdf', ...], ...]
+ * with structure: [['ref' => 1, 'id' => 1, 'name' => 'file.pdf', ...], ...].
+ * [N] resolves to the item whose 'ref' is N (the list is compact, not positional).
  */
 class FileCitationHandler extends AbstractContentLinkHandler
 {
@@ -49,16 +50,11 @@ class FileCitationHandler extends AbstractContentLinkHandler
     protected function createElementForMatch(array $match, array $context): mixed
     {
         $citationNumber = (int) $match[1];
-        $files = $context['files'] ?? [];
+        $file = $this->findFileByRef($context['files'] ?? [], $citationNumber);
 
-        // Citations are 1-indexed, array is 0-indexed
-        $fileIndex = $citationNumber - 1;
-
-        if (!isset($files[$fileIndex])) {
+        if ($file === null) {
             return null;
         }
-
-        $file = $files[$fileIndex];
 
         // Track metadata for this citation
         $this->citationMetadata[] = [
@@ -69,6 +65,38 @@ class FileCitationHandler extends AbstractContentLinkHandler
         ];
 
         return $this->createFileLink($file, $citationNumber);
+    }
+
+    /**
+     * Resolve a citation number to its file by the item's 'ref'.
+     *
+     * The persisted referenced_files list (ResponseFileEnricher::buildReferencedFiles)
+     * is COMPACT — only the cited files, in order of first citation — so array
+     * position is NOT the citation number: "[3] … [1]" yields [ref 3, ref 1].
+     * Each item carries its prompt citation number in 'ref'. When ANY item has a
+     * 'ref', lookup is by ref only (a ref-less item is never matched by position,
+     * which could shadow the real [N]). Only a list where NO item has a 'ref'
+     * (hand-built context) is resolved by 1-based position.
+     */
+    private function findFileByRef(array $files, int $citationNumber): ?array
+    {
+        $files = array_values(array_filter($files, 'is_array'));
+
+        $anyRef = false;
+        foreach ($files as $candidate) {
+            if (isset($candidate['ref'])) {
+                $anyRef = true;
+                if ((int) $candidate['ref'] === $citationNumber) {
+                    return $candidate;
+                }
+            }
+        }
+
+        if ($anyRef) {
+            return null;
+        }
+
+        return $files[$citationNumber - 1] ?? null;
     }
 
     /**
@@ -110,6 +138,12 @@ class FileCitationHandler extends AbstractContentLinkHandler
     protected function createFileLink(array $file, int $citationNumber): mixed
     {
         $fileName = $file['name'] ?? "File {$citationNumber}";
+        // Whose document it is (the record an uploaded file is filed on, or the
+        // "general document" line of a project file) — beside the name.
+        $scope = trim((string) ($file['scope_label'] ?? ''));
+        if ($scope !== '') {
+            $fileName .= " · {$scope}";
+        }
         $slot = "file-citation-{$citationNumber}";
 
         return _Link("[{$citationNumber}]")

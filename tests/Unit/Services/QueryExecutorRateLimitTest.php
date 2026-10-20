@@ -22,15 +22,20 @@ class QueryExecutorRateLimitTest extends TestCase
     {
         parent::setUp();
 
+        // These tests exercise rate-limiting mechanics rather than multi-tenant
+        // filtering. Disable the team-security layer so the (now fail-closed)
+        // security posture doesn't short-circuit them before the rate-limit
+        // branches run. Security behaviour is covered by
+        // QueryExecutorSecurityTest / AiSecurityServiceTest.
+        config()->set('ai.security.enabled', false);
+
         $this->mockGraph = Mockery::mock(GraphStoreInterface::class);
         $this->mockRateLimiter = Mockery::mock(RateLimiter::class);
         $this->config = [
             'default_timeout' => 30,
             'default_limit' => 100,
-            'max_limit' => 1000,
             'read_only_mode' => true,
             'default_format' => 'table',
-            'enable_explain' => true,
             'log_slow_queries' => false,
             'slow_query_threshold_ms' => 1000,
         ];
@@ -66,6 +71,97 @@ class QueryExecutorRateLimitTest extends TestCase
         $this->executor->execute('MATCH (n:Customer) RETURN n LIMIT 10');
     }
 
+    /**
+     * @test Eval p15: the budget was ONE global counter — a few users (or two eval runs)
+     * locked each other out. Each acting user counts against their own budget; an
+     * execution with no user counts against the shared one.
+     */
+    public function the_budget_is_counted_per_acting_user(): void
+    {
+        $this->mockRateLimiter->shouldReceive('attempt')->once()->with('u:13')->andReturn(false);
+
+        try {
+            $this->executor->execute('MATCH (n:Customer) RETURN n LIMIT 10', [], ['user' => (object) ['id' => 13]]);
+            $this->fail('expected the rate-limit refusal');
+        } catch (QueryExecutionException $e) {
+            $this->assertStringContainsString('Rate limit exceeded', $e->getMessage());
+        }
+
+        $this->mockRateLimiter->shouldReceive('attempt')->once()->with('')->andReturn(false);
+        $this->expectException(QueryExecutionException::class);
+        $this->executor->execute('MATCH (n:Customer) RETURN n LIMIT 10');
+    }
+
+    /**
+     * @test Owner decision 2026-10-06: per-user budgets PLUS a global cap (all users together),
+     * so a burst across many users cannot flood the graph either.
+     */
+    public function a_global_cap_applies_on_top_of_the_per_user_budget(): void
+    {
+        $global = Mockery::mock(RateLimiter::class);
+        $executor = new QueryExecutor($this->mockGraph, $this->config, $this->mockRateLimiter, $global);
+
+        // The user is inside their own budget, the global cap is exhausted -> refused.
+        $this->mockRateLimiter->shouldReceive('attempt')->once()->with('u:13')->andReturn(true);
+        $global->shouldReceive('attempt')->once()->withNoArgs()->andReturn(false);
+
+        $this->expectException(QueryExecutionException::class);
+        $this->expectExceptionMessage('Rate limit exceeded for query execution');
+        $executor->execute('MATCH (n:Customer) RETURN n LIMIT 10', [], ['user' => (object) ['id' => 13]]);
+    }
+
+    /** @test A user already over their own budget never consumes the global cap. */
+    public function a_user_over_budget_does_not_consume_the_global_cap(): void
+    {
+        $global = Mockery::mock(RateLimiter::class);
+        $executor = new QueryExecutor($this->mockGraph, $this->config, $this->mockRateLimiter, $global);
+
+        $this->mockRateLimiter->shouldReceive('attempt')->once()->with('u:13')->andReturn(false);
+        $global->shouldNotReceive('attempt');
+
+        $this->expectException(QueryExecutionException::class);
+        $executor->execute('MATCH (n:Customer) RETURN n LIMIT 10', [], ['user' => (object) ['id' => 13]]);
+    }
+
+    /** @test One turn (a rate_limit_batch) charges the user budget AND the global cap once. */
+    public function a_batch_charges_both_budgets_once(): void
+    {
+        $global = Mockery::mock(RateLimiter::class);
+        $executor = new QueryExecutor($this->mockGraph, $this->config, $this->mockRateLimiter, $global);
+
+        $this->mockRateLimiter->shouldReceive('attempt')->once()->with('u:13')->andReturn(true);
+        $global->shouldReceive('attempt')->once()->andReturn(true);
+        $this->mockGraph->shouldReceive('query')->andReturn([]);
+
+        $options = ['user' => (object) ['id' => 13], 'rate_limit_batch' => 'turn:abc'];
+        $executor->execute('MATCH (n:Customer) RETURN n LIMIT 10', [], $options);
+        $executor->execute('MATCH (n:Customer) RETURN n LIMIT 5', [], $options);
+        $this->addToAssertionCount(1);
+    }
+
+    /** @test The default global cap comes from config; 0 disables it. */
+    public function the_global_cap_is_configurable_and_can_be_disabled(): void
+    {
+        config(['ai.rate_limits.global_queries_per_minute' => 0, 'cache.default' => 'array']);
+        $executor = new QueryExecutor($this->mockGraph, $this->config, $this->mockRateLimiter);
+
+        // No global limiter is consulted: 3 allowed user charges -> 3 executions.
+        $this->mockRateLimiter->shouldReceive('attempt')->times(3)->andReturn(true);
+        $this->mockGraph->shouldReceive('query')->andReturn([]);
+        for ($i = 0; $i < 3; $i++) {
+            $executor->execute('MATCH (n:Customer) RETURN n LIMIT 10');
+        }
+
+        config(['ai.rate_limits.global_queries_per_minute' => 2]);
+        \Illuminate\Support\Facades\Cache::flush();
+        $capped = new QueryExecutor($this->mockGraph, $this->config, $this->mockRateLimiter);
+        $this->mockRateLimiter->shouldReceive('attempt')->andReturn(true);
+        $capped->execute('MATCH (n:Customer) RETURN n LIMIT 10');
+        $capped->execute('MATCH (n:Customer) RETURN n LIMIT 10');
+        $this->expectException(QueryExecutionException::class);
+        $capped->execute('MATCH (n:Customer) RETURN n LIMIT 10');
+    }
+
     /** @test */
     public function it_allows_queries_within_rate_limit(): void
     {
@@ -82,8 +178,8 @@ class QueryExecutorRateLimitTest extends TestCase
 
         $result = $this->executor->execute('MATCH (n:Customer) RETURN n LIMIT 10');
 
-        $this->assertTrue($result['success']);
-        $this->assertCount(1, $result['data']);
+        $this->assertTrue($result->success);
+        $this->assertCount(1, $result->data);
     }
 
     /** @test */
@@ -100,11 +196,11 @@ class QueryExecutorRateLimitTest extends TestCase
 
         // First query succeeds
         $result1 = $this->executor->execute('MATCH (n:Customer) RETURN n LIMIT 10');
-        $this->assertTrue($result1['success']);
+        $this->assertTrue($result1->success);
 
         // Second query succeeds
         $result2 = $this->executor->execute('MATCH (n:Product) RETURN n LIMIT 10');
-        $this->assertTrue($result2['success']);
+        $this->assertTrue($result2->success);
 
         // Third query should be rate limited
         $this->expectException(QueryExecutionException::class);
@@ -122,9 +218,10 @@ class QueryExecutorRateLimitTest extends TestCase
 
         $result = $this->executor->execute('');
 
-        $this->assertTrue($result['success']);
-        $this->assertEmpty($result['data']);
-        $this->assertEquals('NO QUERY', $result['context']);
+        $this->assertTrue($result->success);
+        $this->assertEmpty($result->data);
+        $this->assertSame([], $result->errors);
+        $this->assertEquals('NO QUERY', $result->metadata['context']);
     }
 
     /** @test */
@@ -139,20 +236,6 @@ class QueryExecutorRateLimitTest extends TestCase
         $this->expectExceptionMessage('Rate limit exceeded');
 
         $this->executor->executeCount('MATCH (n:Customer) RETURN n');
-    }
-
-    /** @test */
-    public function it_enforces_rate_limit_on_executePaginated(): void
-    {
-        // Paginated queries make multiple execute calls, rate limit on first
-        $this->mockRateLimiter->shouldReceive('attempt')
-            ->once()
-            ->andReturn(false);
-
-        $this->expectException(QueryExecutionException::class);
-        $this->expectExceptionMessage('Rate limit exceeded');
-
-        $this->executor->executePaginated('MATCH (n:Customer) RETURN n', 1, 20);
     }
 
     /** @test */
@@ -171,7 +254,7 @@ class QueryExecutorRateLimitTest extends TestCase
 
         $result = $executor->execute('MATCH (n:Customer) RETURN n LIMIT 10');
 
-        $this->assertTrue($result['success']);
+        $this->assertTrue($result->success);
     }
 
     /** @test */

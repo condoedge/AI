@@ -11,13 +11,14 @@ use Condoedge\Ai\GraphStore\CypherSanitizer;
 use Condoedge\Ai\Exceptions\CypherInjectionException;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
 
 /**
  * Security tests for QueryGenerator
  *
- * Tests protection against Cypher injection via template pattern extraction.
- * Template-matched queries bypass LLM and RAG context, so user input
- * extracted into queries must be validated and sanitized.
+ * CypherSanitizer label escaping, and the guarantee that no user text is
+ * interpolated into a query outside the LLM + validation path (the regex
+ * template path was removed in Phase 2.B).
  */
 class QueryGeneratorSecurityTest extends TestCase
 {
@@ -38,7 +39,6 @@ class QueryGeneratorSecurityTest extends TestCase
             'allow_write_operations' => false,
             'default_limit' => 100,
             'max_complexity' => 100,
-            'enable_templates' => true,
         ];
 
         $this->generator = new QueryGenerator(
@@ -52,6 +52,12 @@ class QueryGeneratorSecurityTest extends TestCase
     {
         Mockery::close();
         parent::tearDown();
+    }
+
+    /** A structured generation reply (Task 5.6 contract). */
+    private function draft(string $cypher): object
+    {
+        return (object) ['needs_query' => true, 'cypher' => $cypher, 'reason' => ''];
     }
 
     // =========================================================================
@@ -130,180 +136,46 @@ class QueryGeneratorSecurityTest extends TestCase
     }
 
     // =========================================================================
-    // Label Validation Tests
+    // No user-text interpolation path (Phase 2.B)
     // =========================================================================
 
     /**
      * @test
      */
-    public function it_validates_labels_against_schema(): void
+    public function user_text_is_never_interpolated_into_a_query_template(): void
     {
-        $this->assertTrue($this->generator->isValidLabel('Customer', ['Customer', 'Order', 'Product']));
-        $this->assertTrue($this->generator->isValidLabel('Order', ['Customer', 'Order', 'Product']));
-        $this->assertFalse($this->generator->isValidLabel('Hacked', ['Customer', 'Order', 'Product']));
-        $this->assertFalse($this->generator->isValidLabel('customer', ['Customer', 'Order', 'Product'])); // Case sensitive
+        // The regex template path (which extracted a label from user text and
+        // interpolated it) is gone: every question — including ones shaped like
+        // the old "show all X" / "how many X" templates, with injection payloads —
+        // goes through the single LLM + validate path.
+        $context = new PipelineContext();
+        $context->graphSchema = ['labels' => ['Customer', 'Order'], 'relationships' => []];
+
+        $this->mockLlm->shouldReceive('chatJson')
+            ->times(3)
+            ->andReturn($this->draft('MATCH (n:Customer) RETURN count(n) AS count'));
+
+        foreach ([
+            'show all Customer})-[:HACKED]->(x',
+            'how many Customer})-[r]->(n) DETACH DELETE n //',
+            'show all Customer',
+        ] as $question) {
+            $result = $this->generator->generate($question, $context, ['explain' => false]);
+
+            $this->assertStringNotContainsString('HACKED', $result->cypher);
+            $this->assertStringNotContainsString('DETACH', $result->cypher);
+            $this->assertStringNotContainsString('})', $result->cypher);
+            $this->assertNull($result->metadata['template_used'] ?? null);
+        }
     }
 
     /**
      * @test
      */
-    public function it_returns_false_for_empty_schema(): void
+    public function the_generator_exposes_no_template_api(): void
     {
-        $this->assertFalse($this->generator->isValidLabel('Customer', []));
-    }
-
-    // =========================================================================
-    // Template Query Security Tests
-    // =========================================================================
-
-    /**
-     * @test
-     */
-    public function it_sanitizes_labels_extracted_from_user_input(): void
-    {
-        // Attempt injection via "show all X" pattern
-        $question = "show all Customer})-[:HACKED]->(x";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Customer', 'Order'],
-                'relationships' => [],
-            ],
-        ];
-
-        $result = $this->generator->generate($question, $context);
-
-        // The query should be safe - no injection characters
-        $this->assertStringNotContainsString('})', $result['cypher']);
-        $this->assertStringNotContainsString('HACKED', $result['cypher']);
-        $this->assertStringNotContainsString('->(', $result['cypher']);
-
-        // Should still be a valid query structure
-        $this->assertStringContainsString('MATCH', $result['cypher']);
-        $this->assertStringContainsString('Customer', $result['cypher']);
-    }
-
-    /**
-     * @test
-     */
-    public function it_rejects_unknown_labels_in_template_queries(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Unknown label');
-
-        $question = "show all Hackers";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Customer', 'Order'],
-                'relationships' => [],
-            ],
-        ];
-
-        $this->generator->generate($question, $context);
-    }
-
-    /**
-     * @test
-     */
-    public function it_falls_through_to_llm_when_schema_is_empty(): void
-    {
-        $question = "show all customers";
-        $context = [
-            'graph_schema' => [
-                'labels' => [], // Empty schema
-                'relationships' => [],
-            ],
-        ];
-
-        // Since schema is empty, should fall through to LLM
-        $this->mockLlm->shouldReceive('complete')
-            ->once()
-            ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
-
-        $result = $this->generator->generate($question, $context, ['explain' => false]);
-
-        // Should use LLM, not template
-        $this->assertNull($result['metadata']['template_used']);
-    }
-
-    /**
-     * @test
-     */
-    public function it_falls_through_to_llm_when_schema_is_missing(): void
-    {
-        $question = "show all customers";
-        $context = []; // No schema at all
-
-        // Since schema is missing, should fall through to LLM
-        $this->mockLlm->shouldReceive('complete')
-            ->once()
-            ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
-
-        $result = $this->generator->generate($question, $context, ['explain' => false]);
-
-        // Should use LLM, not template
-        $this->assertNull($result['metadata']['template_used']);
-    }
-
-    /**
-     * @test
-     */
-    public function it_prevents_cypher_injection_via_count_template(): void
-    {
-        $question = "how many Customer})-[r]->(n) DETACH DELETE n //";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Customer', 'Order'],
-                'relationships' => [],
-            ],
-        ];
-
-        $result = $this->generator->generate($question, $context);
-
-        // The query should be safe
-        $this->assertStringNotContainsString('DETACH', $result['cypher']);
-        $this->assertStringNotContainsString('DELETE', $result['cypher']);
-        $this->assertStringNotContainsString('})', $result['cypher']);
-    }
-
-    /**
-     * @test
-     */
-    public function it_handles_case_insensitive_label_matching(): void
-    {
-        // User types "customers" (lowercase, plural), schema has "Customer"
-        $question = "show all customers";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Customer', 'Order'],
-                'relationships' => [],
-            ],
-        ];
-
-        $result = $this->generator->generate($question, $context);
-
-        // Should match Customer (singularized, capitalized)
-        $this->assertStringContainsString('Customer', $result['cypher']);
-        $this->assertEquals('list_all', $result['metadata']['template_used']);
-    }
-
-    /**
-     * @test
-     */
-    public function it_applies_defense_in_depth_sanitization(): void
-    {
-        // Even if a label somehow passes validation, it should still be sanitized
-        // This tests that escapeLabel is called even after schema validation
-        $question = "show all Customer";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Customer'],
-                'relationships' => [],
-            ],
-        ];
-
-        $result = $this->generator->generate($question, $context);
-
-        // Query should be clean and valid - labels are wrapped in backticks for defense-in-depth
-        $this->assertMatchesRegularExpression('/MATCH \(n:`?[A-Za-z_][A-Za-z0-9_]*`?\)/', $result['cypher']);
+        $this->assertFalse(method_exists($this->generator, 'detectTemplate'));
+        $this->assertFalse(method_exists($this->generator, 'getTemplates'));
+        $this->assertFalse(method_exists(\Condoedge\Ai\Contracts\QueryGeneratorInterface::class, 'detectTemplate'));
     }
 }

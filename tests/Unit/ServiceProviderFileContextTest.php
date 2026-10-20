@@ -133,27 +133,4 @@ class ServiceProviderFileContextTest extends TestCase
             $accessResolver
         );
     }
-
-    /** @test */
-    public function it_includes_file_context_services_in_provides(): void
-    {
-        $provider = app()->getProvider(\Condoedge\Ai\AiServiceProvider::class);
-        $provides = $provider->provides();
-
-        $expectedServices = [
-            FileAccessResolverInterface::class,
-            FileAccessResolver::class,
-            FileContextProvider::class,
-            PhysicalFileIndexer::class,
-            ResponseFileEnricher::class,
-        ];
-
-        foreach ($expectedServices as $service) {
-            $this->assertContains(
-                $service,
-                $provides,
-                "Service {$service} should be in provides() array"
-            );
-        }
-    }
 }

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * DetectedScopesSection
  *
@@ -16,9 +18,9 @@ class DetectedScopesSection extends BasePromptSection
     protected string $name = 'detected_scopes';
     protected int $priority = 65;
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
-        $entityMetadata = $context['entity_metadata'] ?? [];
+        $entityMetadata = $context->entityMetadata;
         $scopes = $entityMetadata['detected_scopes'] ?? [];
 
         if (empty($scopes)) {
@@ -47,12 +49,10 @@ class DetectedScopesSection extends BasePromptSection
 
         $output .= $this->divider() . "\n";
 
-        // Concept description
         if (!empty($scope['concept'])) {
             $output .= "CONCEPT:\n{$scope['concept']}\n\n";
         }
 
-        // Format based on specification type
         $specType = $scope['specification_type'] ?? 'property_filter';
 
         switch ($specType) {
@@ -71,14 +71,12 @@ class DetectedScopesSection extends BasePromptSection
                 break;
 
             default:
-                // For generic or unknown types, show cypher pattern if available
                 if (!empty($scope['cypher_pattern'])) {
                     $output .= "CYPHER PATTERN:\n  {$scope['cypher_pattern']}\n\n";
                 }
                 break;
         }
 
-        // Business rules
         if (!empty($scope['business_rules'])) {
             $output .= "BUSINESS RULES:\n";
             foreach ($scope['business_rules'] as $i => $rule) {
@@ -87,7 +85,6 @@ class DetectedScopesSection extends BasePromptSection
             $output .= "\n";
         }
 
-        // Example questions
         if (!empty($scope['examples'])) {
             $output .= "EXAMPLE QUESTIONS:\n";
             foreach ($scope['examples'] as $example) {
@@ -103,12 +100,10 @@ class DetectedScopesSection extends BasePromptSection
     {
         $output = '';
 
-        // If we have a cypher_pattern directly, show it
         if (!empty($scope['cypher_pattern'])) {
-            $output .= "CYPHER PATTERN:\n  {$scope['cypher_pattern']}\n\n";
+            $output .= ">>> USE THIS EXACT CYPHER PATTERN:\n  {$scope['cypher_pattern']}\n\n";
         }
 
-        // If spec is empty, return what we have
         if (empty($spec)) {
             return $output;
         }
@@ -133,7 +128,6 @@ class DetectedScopesSection extends BasePromptSection
 
             $output .= "  {$path}\n\n";
 
-            // Conditions from parsed_structure
             if (!empty($spec['conditions'])) {
                 $output .= "CONDITIONS:\n";
                 foreach ($spec['conditions'] as $condition) {
@@ -173,7 +167,6 @@ class DetectedScopesSection extends BasePromptSection
 
             $output .= "  {$path}\n\n";
 
-            // Filter conditions (legacy format)
             if (!empty($spec['filter']) && is_array($spec['filter'])) {
                 $filter = $spec['filter'];
                 if (isset($filter['property'])) {
@@ -198,7 +191,6 @@ class DetectedScopesSection extends BasePromptSection
             }
         }
 
-        // Show role_value if available (from scope discovery)
         if (!empty($scope['role_value'])) {
             $output .= "ROLE VALUE: {$scope['role_value']}\n\n";
         }
@@ -210,9 +202,8 @@ class DetectedScopesSection extends BasePromptSection
     {
         $output = '';
 
-        // Show cypher_pattern if available
         if (!empty($scope['cypher_pattern'])) {
-            $output .= "CYPHER PATTERN:\n  {$scope['cypher_pattern']}\n\n";
+            $output .= ">>> USE THIS EXACT CYPHER PATTERN IN YOUR WHERE CLAUSE:\n  {$scope['cypher_pattern']}\n\n";
         }
 
         if (empty($filter)) {
@@ -260,9 +251,9 @@ class DetectedScopesSection extends BasePromptSection
         return $output;
     }
 
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
-        $entityMetadata = $context['entity_metadata'] ?? [];
+        $entityMetadata = $context->entityMetadata;
         return !empty($entityMetadata['detected_scopes']);
     }
 }

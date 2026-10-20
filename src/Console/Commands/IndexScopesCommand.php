@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Console\Commands;
 
+use Condoedge\Ai\Console\Commands\Concerns\FlushesGraphSchemaCache;
 use Illuminate\Console\Command;
 use Condoedge\Ai\Services\ScopeSemanticMatcher;
 
@@ -19,6 +20,8 @@ use Condoedge\Ai\Services\ScopeSemanticMatcher;
  */
 class IndexScopesCommand extends Command
 {
+    use FlushesGraphSchemaCache;
+
     protected $signature = 'ai:index-scopes
                             {--force : Force re-indexing even if collection exists}';
 
@@ -29,7 +32,6 @@ class IndexScopesCommand extends Command
         $this->info('Indexing scope examples for semantic matching...');
         $this->newLine();
 
-        // Load entity configs
         $entityConfigs = config('entities', []);
 
         if (empty($entityConfigs)) {
@@ -37,7 +39,6 @@ class IndexScopesCommand extends Command
             return self::FAILURE;
         }
 
-        // Count scopes
         $totalScopes = 0;
         $totalExamples = 0;
 
@@ -59,7 +60,6 @@ class IndexScopesCommand extends Command
         $this->info("Found {$totalScopes} scopes with {$totalExamples} examples/concepts to index");
         $this->newLine();
 
-        // Index scopes
         $this->output->write('Indexing... ');
 
         try {

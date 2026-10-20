@@ -64,18 +64,113 @@ class FileAccessResolver implements FileAccessResolverInterface
             return $resolver($user);
         }
 
-        // Try accessibleBy macro (registered via FileAccessScopePlugin)
-        try {
-            return FileModel::query()->accessibleBy($user)->pluck('id')->toArray();
-        } catch (\Throwable $e) {
-            \Log::debug("FileAccessResolver: accessibleBy macro failed, using fallback", [
-                'error' => $e->getMessage(),
-                'user_id' => $user->id ?? null,
-            ]);
+        // Invoke the configured access scope on the CONFIGURED File model.
+        // Using config('ai.file_context.file_model') (e.g. App\Models\File) keeps the
+        // authorization model and the indexed model the same class. The scope method
+        // name is config-driven (default 'accessibleBy') so hosts can wire their own.
+        $scope = config('ai.file_context.access_scope', 'accessibleBy');
+        if (is_string($scope) && $scope !== '') {
+            try {
+                return $this->fileModelQuery()->{$scope}($user)->pluck('id')->toArray();
+            } catch (\Throwable $e) {
+                \Log::debug("FileAccessResolver: access scope '{$scope}' failed, using fallback", [
+                    'error' => $e->getMessage(),
+                    'user_id' => $user->id ?? null,
+                ]);
+            }
         }
 
         // Fallback: use user_id and optional team_id filtering
         return $this->getFallbackAccessibleFileIds($user);
+    }
+
+    /**
+     * Enumerate the user's accessible files as lightweight descriptors.
+     *
+     * ACL-respecting by construction: the candidate id set is exactly what
+     * getAccessibleFileIds() returns (closure resolver / configured scope /
+     * fallback user+team filter), so a user can never enumerate a file they may
+     * not access. The descriptors (id, name, type) are then loaded from the
+     * configured File model for those ids only.
+     *
+     * Returns an empty list (never throws) when there is no user, no accessible
+     * ids, or the File model cannot be queried — fail-closed.
+     *
+     * @param mixed $user
+     * @param int|null $limit Optional cap on the number of descriptors returned
+     * @return array<int,array{file_id:int|string,name:string,type:string}>
+     */
+    public function enumerateAccessibleFiles(mixed $user, ?int $limit = null): array
+    {
+        // With security enabled and no user there is no DB file access at all.
+        if ($this->shouldEnforceSecurity() && $user === null) {
+            return [];
+        }
+
+        $accessibleIds = $this->getAccessibleFileIds($user);
+        if (empty($accessibleIds)) {
+            return [];
+        }
+
+        try {
+            $query = $this->fileModelQuery()->whereIn('id', $accessibleIds);
+
+            if ($limit !== null && $limit > 0) {
+                $query->limit($limit);
+            }
+
+            $files = $query->get();
+        } catch (\Throwable $e) {
+            \Log::debug('FileAccessResolver: enumerateAccessibleFiles query failed', [
+                'error' => $e->getMessage(),
+                'user_id' => $user->id ?? null,
+            ]);
+
+            return [];
+        }
+
+        $descriptors = [];
+        foreach ($files as $file) {
+            $descriptors[] = [
+                'file_id' => $file->id,
+                'name' => (string) ($file->name ?? ''),
+                'type' => $this->resolveFileType($file),
+            ];
+        }
+
+        return $descriptors;
+    }
+
+    /**
+     * Derive a human-meaningful file type for enumeration output.
+     *
+     * Prefers an explicit extension/mime if the model exposes one, otherwise
+     * falls back to the filename extension. Returns '' when nothing is available
+     * rather than guessing.
+     *
+     * @param mixed $file An Eloquent File model instance
+     */
+    protected function resolveFileType(mixed $file): string
+    {
+        $extension = $file->extension ?? null;
+        if (is_string($extension) && $extension !== '') {
+            return strtolower(ltrim($extension, '.'));
+        }
+
+        $mime = $file->mime_type ?? null;
+        if (is_string($mime) && $mime !== '') {
+            return $mime;
+        }
+
+        $name = $file->name ?? null;
+        if (is_string($name) && $name !== '') {
+            $ext = pathinfo($name, PATHINFO_EXTENSION);
+            if (is_string($ext) && $ext !== '') {
+                return strtolower($ext);
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -86,7 +181,7 @@ class FileAccessResolver implements FileAccessResolverInterface
      */
     protected function getFallbackAccessibleFileIds(mixed $user): array
     {
-        $query = FileModel::query();
+        $query = $this->fileModelQuery();
         $userId = $user->id ?? $user->getKey();
         $useUserFilter = config('ai.file_context.fallback_filters.use_user_filter', true);
         $useTeamFilter = config('ai.file_context.fallback_filters.use_team_filter', true);
@@ -110,6 +205,27 @@ class FileAccessResolver implements FileAccessResolverInterface
         });
 
         return $query->pluck('id')->toArray();
+    }
+
+    /**
+     * Resolve a query builder for the configured File model.
+     *
+     * Prefers config('ai.file_context.file_model') (e.g. App\Models\File) so the
+     * authorization scope (accessibleBy / scopeAccessibleBy) runs against the same
+     * class that is indexed. Falls back to the condoedge/utils FileModel facade
+     * for backwards compatibility when no model class is configured.
+     *
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    protected function fileModelQuery()
+    {
+        $modelClass = config('ai.file_context.file_model');
+
+        if (is_string($modelClass) && $modelClass !== '' && class_exists($modelClass)) {
+            return $modelClass::query();
+        }
+
+        return FileModel::query();
     }
 
     /**

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Response;
 
+use Condoedge\Ai\Support\ArticleLocator;
+
 /**
  * Response File Enricher
  *
@@ -84,6 +86,8 @@ class ResponseFileEnricher
         }
 
         $referencedFiles = [];
+        // The articles the answer names by number ("art. 1069"), once for the turn.
+        $named = array_map('intval', ArticleLocator::referencedArticles($response));
 
         foreach ($citationMarkers as $marker) {
             // Citations are 1-indexed, array is 0-indexed
@@ -94,10 +98,71 @@ class ResponseFileEnricher
             }
 
             $file = $relevantFiles[$index];
-            $referencedFiles[] = $this->buildFileReference($file, $marker, $options);
+            $referencedFiles[] = $this->buildFileReference($file, $marker, $options)
+                + $this->citedArticles($file, $named)
+                + $this->documentScope($file, $options['locale'] ?? $fileContext['scope_locale'] ?? null);
         }
 
         return $referencedFiles;
+    }
+
+    /**
+     * WHOSE DOCUMENT the cited passage is:
+     *  - `scope_label`: the words the user-facing citation shows — for an uploaded
+     *    file the record it is filed on, by kind and name, with the record that
+     *    owns it ("unit A-101 — condo association Viva Tour 1"); for a project
+     *    file the fixed "General document" line (ai.documents.general);
+     *  - `owner` / `ancestors`: the keys, for the NEXT turn — a follow-up on an
+     *    answer drawn from one record's documents is about that record
+     *    ({@see \Condoedge\Ai\Services\Retrieval\DocumentScopeResolver}).
+     * Nothing for a reference that says nothing about its owner.
+     *
+     * @return array{scope_label?: string, owner?: ?string, ancestors?: list<string>}
+     */
+    private function documentScope(array $file, mixed $locale): array
+    {
+        if ($this->isPhysicalFile($file['file_id'] ?? '') || ($file['source'] ?? null) === 'physical') {
+            return ['scope_label' => (string) trans('ai.documents.general', [], is_string($locale) && $locale !== '' ? $locale : null)];
+        }
+        if (!array_key_exists('owner', $file)) {
+            return [];
+        }
+
+        $scope = [
+            'owner' => is_string($file['owner']) && $file['owner'] !== '' ? $file['owner'] : null,
+            'ancestors' => array_values(array_filter((array) ($file['ancestors'] ?? []), 'is_string')),
+        ];
+
+        $label = is_array($file['scope_label'] ?? null) ? $file['scope_label'] : [];
+        $words = static fn (mixed $kind, mixed $name): string => is_string($kind) && is_string($name) && trim($kind) !== '' && trim($name) !== ''
+            ? trim($kind) . ' ' . trim($name)
+            : '';
+        $record = $words($label['kind'] ?? null, $label['name'] ?? null);
+        if ($record !== '') {
+            $root = $words($label['root_kind'] ?? null, $label['root_name'] ?? null);
+            $scope = ['scope_label' => $record . ($root !== '' ? ' — ' . $root : '')] + $scope;
+        }
+
+        return $scope;
+    }
+
+    /**
+     * The articles of this passage the answer actually named (`cited_articles`):
+     * the ones the passage defines (ArticleLocator — line-start clause numbers,
+     * else its chunk metadata) among those the answer cites by number. A stitched
+     * passage holds several articles and an answer rarely uses them all; the next
+     * turn reads this to tell what the user was already given from what is new
+     * ({@see \Condoedge\Ai\Services\Retrieval\DeepeningContract}). Absent when the
+     * answer named none of them. Numeric grammar only.
+     *
+     * @param list<int> $named
+     * @return array{cited_articles?: list<int>}
+     */
+    private function citedArticles(array $file, array $named): array
+    {
+        $cited = array_values(array_intersect(ArticleLocator::forReference($file), $named));
+
+        return $cited === [] ? [] : ['cited_articles' => $cited];
     }
 
     /**
@@ -130,6 +195,29 @@ class ResponseFileEnricher
      * @return array Complete file reference with actionable metadata
      */
     private function buildFileReference(array $file, int $refNumber, array $options): array
+    {
+        return $this->baseFileReference($file, $refNumber, $options) + $this->citedPassage($file);
+    }
+
+    /**
+     * The cited chunk's own text and locator (Phase 7.5-lite): with
+     * structure-aware chunking the chunk is one article, so a follow-up turn can
+     * re-show exactly the cited article instead of the head of the stitched
+     * ±window snippet. Only present for references that carry them.
+     */
+    private function citedPassage(array $file): array
+    {
+        $cited = [];
+        foreach (['passage', 'article_no', 'article_range', 'heading', 'page'] as $key) {
+            if (isset($file[$key]) && $file[$key] !== '') {
+                $cited[$key] = $file[$key];
+            }
+        }
+
+        return $cited;
+    }
+
+    private function baseFileReference(array $file, int $refNumber, array $options): array
     {
         $fileId = $file['file_id'];
         $source = $file['source'] ?? 'database';

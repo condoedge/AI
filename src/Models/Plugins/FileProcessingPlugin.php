@@ -3,8 +3,13 @@
 namespace Condoedge\Ai\Models\Plugins;
 
 use Condoedge\Utils\Models\Plugins\ModelPlugin;
+use Condoedge\Ai\Contracts\ChunkLinkStoreInterface;
+use Condoedge\Ai\Contracts\ChunkStoreInterface;
+use Condoedge\Ai\Contracts\FileOwnerResolverInterface;
 use Condoedge\Ai\Contracts\FileProcessorInterface;
 use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
+use Condoedge\Ai\Services\Files\RecordAncestry;
 use Condoedge\Ai\Jobs\ProcessFileJob;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Illuminate\Support\Facades\Log;
@@ -21,6 +26,13 @@ use Illuminate\Support\Facades\Storage;
  */
 class FileProcessingPlugin extends ModelPlugin
 {
+    private const CREATED = 'created';
+    private const REPLACED = 'replaced';
+    private const RELINKED = 'relinked';
+
+    /** @var \WeakMap<object, bool>|null model instances whose create was queued */
+    private static ?\WeakMap $createdInstances = null;
+
     /**
      * Boot the plugin and register event listeners
      *
@@ -30,20 +42,119 @@ class FileProcessingPlugin extends ModelPlugin
     {
         $modelClass = $this->modelClass;
 
-        // Event 1: File Created - Sync to both Neo4j and Qdrant
-        $modelClass::created(function ($file) {
-            $this->handleFileCreated($file);
+        // All the file indexing happens in background since sometimes we run ocr and parsing that can take too much
+
+        // Create and update both flow through a single 'saved' listener so one
+        // save dispatches exactly one processing path.
+        //
+        // WHAT HAPPENED IS DECIDED HERE, while the saved model is in hand, and
+        // travels with the job as a plain string. A queued closure does not carry
+        // the model: it carries its identifier and the worker fetches the row
+        // again — never "recently created", never dirty. Decided inside the job
+        // (as it was), neither branch ran on any queue but `sync` and a new upload
+        // was never indexed.
+        $modelClass::saved(function ($file) {
+            $event = $this->savedEvent($file);
+            if ($event === null) {
+                return;
+            }
+
+            dispatch(function () use ($file, $event) {
+                match ($event) {
+                    self::CREATED => $this->handleFileCreated($file),
+                    self::REPLACED => $this->handleFileUpdated($file, true),
+                    self::RELINKED => $this->handleFileRelinked($file),
+                };
+            });
         });
 
-        // Event 2: File Updated - Reprocess if path changed
-        $modelClass::updated(function ($file) {
-            $this->handleFileUpdated($file);
-        });
-
-        // Event 3: File Deleting - Remove from both stores
         $modelClass::deleting(function ($file) {
-            $this->handleFileDeleting($file);
+            dispatch(function () use ($file) {
+                 $this->handleFileDeleting($file);
+            });
         });
+    }
+
+    /**
+     * What a save did to the file, read from the model that was just saved:
+     * created; its stored object replaced (the path changed); moved to another
+     * record (one of the columns its owner is derived from changed) — or nothing
+     * the index cares about (null: no job is queued).
+     */
+    protected function savedEvent($file): ?string
+    {
+        if ($file->wasRecentlyCreated && !$this->handledCreate($file)) {
+            return self::CREATED;
+        }
+        if ($file->isDirty('path') || $file->wasChanged('path')) {
+            return self::REPLACED;
+        }
+
+        $columns = $this->linkColumns($file);
+        if ($columns !== [] && ($file->isDirty($columns) || $file->wasChanged($columns))) {
+            return self::RELINKED;
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether the create of this model instance was already queued: an instance
+     * stays "recently created" for its whole life, and a second save of it is an
+     * update.
+     */
+    private function handledCreate($file): bool
+    {
+        // Static: the plugin itself is bound into the queued closure and must stay
+        // serializable; a WeakMap forgets an instance with it.
+        self::$createdInstances ??= new \WeakMap();
+        if (isset(self::$createdInstances[$file])) {
+            return true;
+        }
+        self::$createdInstances[$file] = true;
+
+        return false;
+    }
+
+    /**
+     * The columns the file's owner is derived from: the bound resolver's own
+     * answer when it gives one (`linkColumns()`), else the foreign keys the File
+     * entity declares ({@see RecordAncestry::linkColumns()}).
+     *
+     * @return list<string>
+     */
+    protected function linkColumns($file): array
+    {
+        try {
+            $resolver = app(FileOwnerResolverInterface::class);
+            if (method_exists($resolver, 'linkColumns')) {
+                return array_values(array_filter((array) $resolver->linkColumns($file), 'is_string'));
+            }
+
+            $label = EntityLabelIndex::shared()->labelForClass($file::class);
+
+            return $label === null ? [] : app(RecordAncestry::class)->linkColumns($label);
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * The file was moved to another record: its stored chunks get the new owner
+     * keys — a payload-only write, nothing is extracted or embedded again.
+     */
+    protected function handleFileRelinked($file): void
+    {
+        try {
+            $store = app(ChunkStoreInterface::class);
+            if (!$store instanceof ChunkLinkStoreInterface || !$this->isProcessed($file)) {
+                return;
+            }
+
+            $store->linkFileChunks($file->id, app(FileOwnerResolverInterface::class)->ownerOf($file));
+        } catch (\Throwable $e) {
+            $this->handleError('relink', $file, $e);
+        }
     }
 
     /**
@@ -55,10 +166,8 @@ class FileProcessingPlugin extends ModelPlugin
     protected function handleFileCreated($file): void
     {
         try {
-            // Step 1: Sync metadata to Neo4j
             $this->syncToNeo4j($file, 'create');
 
-            // Step 2: Process content for Qdrant (if supported file type)
             if ($this->shouldProcessContent($file)) {
                 $this->processFileContent($file);
             }
@@ -73,14 +182,15 @@ class FileProcessingPlugin extends ModelPlugin
      * @param object $file
      * @return void
      */
-    protected function handleFileUpdated($file): void
+    protected function handleFileUpdated($file, bool $replaced = false): void
     {
         try {
-            // Step 1: Sync updated metadata to Neo4j
             $this->syncToNeo4j($file, 'update');
 
-            // Step 2: Reprocess content if path changed (file replaced)
-            if ($file->isDirty('path') && $this->shouldProcessContent($file)) {
+            // Reprocess content only when the path changed (file replaced) —
+            // known from the save itself ($replaced): a model the worker fetched
+            // again is never dirty.
+            if (($replaced || $file->isDirty('path')) && $this->shouldProcessContent($file)) {
                 $this->reprocessFileContent($file);
             }
         } catch (\Throwable $e) {
@@ -97,12 +207,10 @@ class FileProcessingPlugin extends ModelPlugin
     protected function handleFileDeleting($file): void
     {
         try {
-            // Step 1: Remove from Qdrant
             if ($this->isProcessed($file)) {
                 $this->removeFileContent($file);
             }
 
-            // Step 2: Remove from Neo4j
             $this->removeFromNeo4j($file);
         } catch (\Throwable $e) {
             $this->handleError('delete', $file, $e);
@@ -168,13 +276,11 @@ class FileProcessingPlugin extends ModelPlugin
     {
         $processor = app(FileProcessorInterface::class);
 
-        // Check if should queue processing
         if ($this->shouldQueueProcessing($file)) {
             $this->queueFileProcessing($file);
             return;
         }
 
-        // Process synchronously
         $result = $processor->processFile((object) $file->getAttributes());
 
         if ($result->failed()) {
@@ -196,13 +302,11 @@ class FileProcessingPlugin extends ModelPlugin
     {
         $processor = app(FileProcessorInterface::class);
 
-        // Check if should queue
         if ($this->shouldQueueProcessing($file)) {
             $this->queueFileProcessing($file, true);
             return;
         }
 
-        // Reprocess synchronously
         $result = $processor->reprocessFile($file);
 
         if ($result->failed()) {
@@ -234,17 +338,14 @@ class FileProcessingPlugin extends ModelPlugin
      */
     protected function shouldProcessContent($file): bool
     {
-        // Check if file processing is enabled
         if (!config('ai.file_processing.enabled', true)) {
             return false;
         }
 
-        // Check if file exists on disk
-        if (!$file->link) {
+        if (!$file->path) {
             return false;
         }
 
-        // Check if file type is supported
         if (!method_exists($file, 'shouldProcessContent')) {
             // Fallback: check processor directly
             $processor = app(FileProcessorInterface::class);
@@ -279,12 +380,10 @@ class FileProcessingPlugin extends ModelPlugin
      */
     protected function shouldQueueProcessing($file): bool
     {
-        // Check global config
         if (config('ai.file_processing.queue', false)) {
             return true;
         }
 
-        // Check file size threshold
         $queueThreshold = config('ai.file_processing.queue_threshold_bytes', 5 * 1024 * 1024); // 5MB default
         if ($file->size > $queueThreshold) {
             return true;
@@ -304,7 +403,6 @@ class FileProcessingPlugin extends ModelPlugin
     {
         $job = new ProcessFileJob($file, $reprocess);
 
-        // Configure queue connection and name from config
         $queueConnection = config('ai.file_processing.queue_connection');
         $queueName = config('ai.file_processing.queue_name', 'default');
 
@@ -363,7 +461,4 @@ class FileProcessingPlugin extends ModelPlugin
     {
         return $file instanceof Nodeable;
     }
-
-    // Model methods
-
 }

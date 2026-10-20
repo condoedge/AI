@@ -7,7 +7,6 @@ namespace Condoedge\Ai\Services\Security;
 use Condoedge\Ai\Contracts\AiAuthAdapterInterface;
 use Condoedge\Ai\Exceptions\SecurityException;
 use Illuminate\Support\Facades\Log;
-use Kompo\Auth\Models\Teams\Permission;
 
 /**
  * Main security service for AI queries.
@@ -31,11 +30,31 @@ class AiSecurityService
      */
     public function getTeamFilter($user, string $entity, string $alias): ?string
     {
+        return $this->getTeamFilterWithParameters($user, $entity, $alias)['filter'];
+    }
+
+    /**
+     * Get team filter together with the bound Cypher parameters.
+     *
+     * The filter references a bound parameter ($ai_team_ids) instead of an
+     * inline `IN [...]` literal; the returned `parameters` map must be merged
+     * into the query parameters by the executor.
+     *
+     * @param mixed $user User model
+     * @param string $entity Entity name
+     * @param string $alias Cypher alias
+     * @return array{filter: string|null, parameters: array<string, mixed>}
+     * @throws SecurityException When access denied
+     */
+    public function getTeamFilterWithParameters($user, string $entity, string $alias): array
+    {
+        $none = ['filter' => null, 'parameters' => []];
+
         if (!$this->authAdapter->isEnabled()) {
-            return null;
+            return $none;
         }
 
-        if ($this->checkIfPermissionsExist($user, $entity) === false) {
+        if ($this->authAdapter->checkIfPermissionsExist($user, $entity) === false) {
             $action = config('ai.security.on_permission_unexistent', 'deny');
 
             if ($action === 'deny') {
@@ -45,10 +64,9 @@ class AiSecurityService
             }
 
             // 'bypass' - return null (no filter)
-            return null;
+            return $none;
         }
 
-        // Get teams where user has permission
         $teamIds = $this->authAdapter->getTeamsWithPermission($user, $entity);
 
         if (empty($teamIds)) {
@@ -58,14 +76,16 @@ class AiSecurityService
             );
         }
 
-        // Resolve team path to filter
         $resolved = $this->pathResolver->resolve($entity, $alias, $teamIds);
 
         if ($resolved === null) {
-            return $this->handleMissingTeamPath($user, $entity);
+            return ['filter' => $this->handleMissingTeamPath($user, $entity), 'parameters' => []];
         }
 
-        return $resolved['filter'];
+        return [
+            'filter' => $resolved['filter'],
+            'parameters' => $resolved['parameters'] ?? [],
+        ];
     }
 
     /**
@@ -90,23 +110,6 @@ class AiSecurityService
         }
 
         return $this->authAdapter->getTeamsWithPermission($user, $entity);
-    }
-
-    private function checkIfPermissionsExist($user, string $entity): bool
-    {
-        $permissionChain = config('ai.security.permission_chain', [
-            '{Entity}.AiRetrieving',
-            '{Entity}',
-        ]);
-
-        while ($pattern = array_shift($permissionChain)) {
-            $permission = str_replace('{Entity}', $entity, $pattern);
-            if (Permission::findByKey($permission) !== null) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**

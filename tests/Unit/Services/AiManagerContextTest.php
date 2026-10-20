@@ -14,6 +14,9 @@ use Condoedge\Ai\Contracts\QueryGeneratorInterface;
 use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Mockery;
 
 /**
@@ -21,6 +24,12 @@ use Mockery;
  *
  * Task 8: Verify that answerQuestion() passes conversation_context
  * from options through to generateQuery()
+ *
+ * Current contract: context flows through the pipeline as a typed
+ * PipelineContext DTO (not a plain array). retrieveContext() returns a
+ * PipelineContext; AiManager sets the conversation context on the typed
+ * $ctx->conversationContext property; QueryGenerator::generate() and
+ * ResponseGenerator::generate() both receive that same PipelineContext.
  */
 class AiManagerContextTest extends TestCase
 {
@@ -37,6 +46,10 @@ class AiManagerContextTest extends TestCase
     public function setUp(): void
     {
         parent::setUp();
+
+        // These tests exercise the happy path of the pipeline, not security.
+        // Fail-closed security would otherwise throw on entity queries.
+        config(['ai.security.enabled' => false]);
 
         $this->mockIngestion = Mockery::mock(DataIngestionServiceInterface::class);
         $this->mockContext = Mockery::mock(ContextRetrieverInterface::class);
@@ -63,6 +76,21 @@ class AiManagerContextTest extends TestCase
     {
         Mockery::close();
         parent::tearDown();
+    }
+
+    /**
+     * Build a fresh PipelineContext that ContextRetriever would return for a
+     * given question. Mirrors the real contract: a typed DTO seeded with the
+     * question, graph schema, and (empty) similar queries / entities.
+     */
+    private function makePipelineContext(string $question, array $labels = ['Customer']): PipelineContext
+    {
+        $ctx = new PipelineContext();
+        $ctx->question = $question;
+        $ctx->similarQueries = [];
+        $ctx->graphSchema = ['labels' => $labels];
+
+        return $ctx;
     }
 
     /** @test */
@@ -97,35 +125,31 @@ class AiManagerContextTest extends TestCase
             'summary' => 'User was viewing customer Acme Corp',
         ];
 
-        // Mock context retrieval
+        // Mock context retrieval — returns a typed PipelineContext DTO
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
             ->with($question, Mockery::any())
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => ['Customer']],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question));
 
-        // Verify that generateQuery receives context with conversation_context merged
+        // Verify that generateQuery receives a PipelineContext with the
+        // conversation context merged onto its typed property.
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
             ->with(
                 $question,
                 Mockery::on(function ($context) use ($conversationContext) {
-                    // The context should contain conversation_context
-                    return isset($context['conversation_context'])
-                        && $context['conversation_context'] === $conversationContext;
+                    return $context instanceof PipelineContext
+                        && $context->conversationContext === $conversationContext;
                 }),
                 Mockery::any()
             )
-            ->andReturn([
-                'cypher' => 'MATCH (c:Customer {id: 123}) RETURN c',
-                'explanation' => 'Finding customer from conversation',
-                'confidence' => 0.9,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (c:Customer {id: 123}) RETURN c',
+                explanation: 'Finding customer from conversation',
+                confidence: 0.9,
+                warnings: [],
+                metadata: [],
+            ));
 
         // Mock storeQuery call (called inside generateQuery wrapper)
         $this->mockVectorStore->shouldReceive('collectionExists')
@@ -138,16 +162,22 @@ class AiManagerContextTest extends TestCase
         // Mock query execution
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [['id' => 123, 'name' => 'Acme Corp']],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [['id' => 123, 'name' => 'Acme Corp']],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
-        // Mock response generation
+        // Mock response generation — data is present so the grounded
+        // generate() path is taken (not generateEmptyResponse()).
         $this->mockResponseGenerator->shouldReceive('generate')
             ->once()
+            ->with(
+                Mockery::on(fn ($context) => $context instanceof PipelineContext),
+                Mockery::any()
+            )
             ->andReturn([
                 'answer' => 'Found customer Acme Corp',
                 'insights' => [],
@@ -165,6 +195,7 @@ class AiManagerContextTest extends TestCase
         $this->assertArrayHasKey('question', $result);
         $this->assertArrayHasKey('answer', $result);
         $this->assertEquals($question, $result['question']);
+        $this->assertEquals('Found customer Acme Corp', $result['answer']);
     }
 
     /** @test */
@@ -172,33 +203,30 @@ class AiManagerContextTest extends TestCase
     {
         $question = 'Show all customers';
 
-        // Mock context retrieval
+        // Mock context retrieval — returns a typed PipelineContext DTO
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => ['Customer']],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question));
 
-        // Verify generateQuery is called without conversation_context in context
+        // Verify generateQuery is called with a PipelineContext whose
+        // conversation context remains empty when none is provided.
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
             ->with(
                 $question,
                 Mockery::on(function ($context) {
-                    // Should NOT have conversation_context when not provided
-                    return !isset($context['conversation_context']);
+                    return $context instanceof PipelineContext
+                        && $context->conversationContext === [];
                 }),
                 Mockery::any()
             )
-            ->andReturn([
-                'cypher' => 'MATCH (c:Customer) RETURN c',
-                'explanation' => 'Listing all customers',
-                'confidence' => 0.95,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (c:Customer) RETURN c',
+                explanation: 'Listing all customers',
+                confidence: 0.95,
+                warnings: [],
+                metadata: [],
+            ));
 
         // Mock storeQuery dependencies
         $this->mockVectorStore->shouldReceive('collectionExists')
@@ -208,18 +236,21 @@ class AiManagerContextTest extends TestCase
         $this->mockEmbedding->shouldReceive('embed')
             ->andReturn(array_fill(0, 1536, 0.1));
 
-        // Mock query execution
+        // Mock query execution — empty result set
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
-        // Mock response generation
-        $this->mockResponseGenerator->shouldReceive('generate')
+        // With no data and no file context the pipeline abstains via
+        // generateEmptyResponse() (grounded generate() is reserved for
+        // answers that have a source).
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
             ->once()
             ->andReturn([
                 'answer' => 'No customers found',
@@ -233,6 +264,7 @@ class AiManagerContextTest extends TestCase
 
         $this->assertIsArray($result);
         $this->assertArrayHasKey('answer', $result);
+        $this->assertEquals('No customers found', $result['answer']);
     }
 
     /** @test */
@@ -240,33 +272,30 @@ class AiManagerContextTest extends TestCase
     {
         $question = 'Show all teams';
 
-        // Mock context retrieval
+        // Mock context retrieval — returns a typed PipelineContext DTO
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => ['Team']],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question, ['Team']));
 
-        // Verify generateQuery is called without conversation_context when empty array provided
+        // Verify generateQuery is called with a PipelineContext whose
+        // conversation context stays empty when an empty array is provided.
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
             ->with(
                 $question,
                 Mockery::on(function ($context) {
-                    // Should NOT have conversation_context when empty array provided
-                    return !isset($context['conversation_context']);
+                    return $context instanceof PipelineContext
+                        && $context->conversationContext === [];
                 }),
                 Mockery::any()
             )
-            ->andReturn([
-                'cypher' => 'MATCH (t:Team) RETURN t',
-                'explanation' => 'Listing all teams',
-                'confidence' => 0.95,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (t:Team) RETURN t',
+                explanation: 'Listing all teams',
+                confidence: 0.95,
+                warnings: [],
+                metadata: [],
+            ));
 
         // Mock storeQuery dependencies
         $this->mockVectorStore->shouldReceive('collectionExists')
@@ -276,18 +305,19 @@ class AiManagerContextTest extends TestCase
         $this->mockEmbedding->shouldReceive('embed')
             ->andReturn(array_fill(0, 1536, 0.1));
 
-        // Mock query execution
+        // Mock query execution — empty result set
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
-        // Mock response generation
-        $this->mockResponseGenerator->shouldReceive('generate')
+        // No data + no file context => explicit abstention path.
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
             ->once()
             ->andReturn([
                 'answer' => 'No teams found',
@@ -302,5 +332,6 @@ class AiManagerContextTest extends TestCase
         ]);
 
         $this->assertIsArray($result);
+        $this->assertEquals('No teams found', $result['answer']);
     }
 }

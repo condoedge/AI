@@ -40,6 +40,53 @@ php artisan ai:discover --force
 
 ---
 
+### ai:setup
+
+Run the full AI pipeline setup in one command. This orchestrates validation, ingestion, relationship sync, and all indexing steps in the correct order.
+
+```bash
+php artisan ai:setup [options]
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--discover` | Also run `ai:discover` before ingestion (overwrites existing config) | false |
+| `--fresh` | Clear all stores before ingestion | false |
+| `--skip-ingest` | Skip data ingestion (useful for re-indexing only) | false |
+| `--dry-run` | Show what would be executed without running | false |
+
+**Steps executed (in order):**
+
+1. `ai:validate-config` — checks configuration and connections
+2. `ai:ingest` — loads entities into the graph (Neo4j)
+3. `ai:sync-relationships` — creates relationship edges
+4. `ai:index-context` — builds semantic context index
+5. `ai:index-semantic` — indexes entities for detection
+6. `ai:index-scopes` — indexes scope examples
+
+If any step fails, the command stops and shows how to resume.
+
+**Examples:**
+
+```bash
+# Full setup
+php artisan ai:setup
+
+# Preview steps without executing
+php artisan ai:setup --dry-run
+
+# Fresh ingestion (clear stores first)
+php artisan ai:setup --fresh
+
+# Re-index only (skip data ingestion)
+php artisan ai:setup --skip-ingest
+
+# Include discovery step
+php artisan ai:setup --discover
+```
+
+---
+
 ### ai:diagnose
 
 Diagnose AI package configuration and connectivity. Checks configuration files, Neo4j connectivity, Qdrant connectivity, LLM API, and embedding provider.
@@ -101,9 +148,10 @@ php artisan ai:config:validate
 This command has no options. It validates:
 
 - Required `graph` configuration with label
-- Required `vector` configuration with collection name
-- Properties and embed fields
+- Properties
 - Class existence
+
+There is no `vector` section to validate: an entity config has `graph`, `security`, `metadata` and optional `auto_sync`.
 
 **Example:**
 
@@ -117,7 +165,9 @@ php artisan ai:config:validate
 
 ### ai:ingest
 
-Bulk ingest all Nodeable entities into Neo4j and Qdrant.
+Bulk ingest all Nodeable entities into the graph (Neo4j): each node and its relationships. Records are not embedded and get no Qdrant collection; only `--docs` writes to Qdrant (`documentation_chunks`). See [What Is Stored Where](/docs/{{version}}/usage/data-ingestion#what-is-stored-where).
+
+> **Note:** This command automatically uses `BatchDataIngestionService` which groups entities by label and writes them via Cypher `UNWIND` operations, reducing thousands of individual queries to a handful of batched writes.
 
 ```bash
 php artisan ai:ingest [options]
@@ -126,10 +176,12 @@ php artisan ai:ingest [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--model=` | Specific model class to ingest (e.g., `App\Models\Customer`) | All models |
-| `--fresh` | Clear all data from stores before ingesting | false |
+| `--fresh` | Clear the graph before ingesting (vector collections are not touched) | false |
 | `--chunk=` | Batch size for processing | 100 |
 | `--dry-run` | Show what would be ingested without actually ingesting | false |
 | `--docs` | Index physical documentation files from configured paths | false |
+
+> {info} `--fresh` clears the **graph** only. The Qdrant collections (file chunks and their document maps, context / scope / question indexes) are not touched; each has its own writer.
 
 **Examples:**
 
@@ -155,9 +207,46 @@ php artisan ai:ingest --docs
 
 ---
 
+### ai:documents:map
+
+Build or complete the [document map](/docs/{{version}}/advanced/document-map) of ingested documents: a verified plain-language gist per chunk and, for a document divided into parallel parts, which parts govern this application's users. It writes only the `map` key of the chunks' vector payload.
+
+```bash
+php artisan ai:documents:map [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--backfill` | Every file with something left to do |
+| `--file=` | One file id |
+| `--collection=` | Chunk collection (default: the physical docs collection; the uploads collection too when `ai.file_context.document_map.uploads` is on) |
+| `--retry-failed` | Attempt again the chunks recorded as failed |
+| `--rescope` | Judge the parts of divided documents again (no gist is rebuilt) |
+| `--force` | Rebuild fresh entries too |
+| `--dry-run` | List files and their state, no model call |
+
+**Examples:**
+
+```bash
+# List what a backfill would build
+php artisan ai:documents:map --backfill --dry-run
+
+# Build what is missing (a chunk is attempted once per text)
+php artisan ai:documents:map --backfill
+
+# Rebuild one document
+php artisan ai:documents:map --file=physical:docs/guide.md --force
+```
+
+With a non-`sync` queue the map is also built after each ingest of a physical document (`BuildDocumentMapJob`, in 40-second slices).
+
+---
+
 ### ai:sync-relationships
 
 Synchronize missing relationships in Neo4j. Reconciles relationships that couldn't be created during bulk ingestion because target nodes didn't exist yet.
+
+> **Note:** This command automatically uses batch `UNWIND` operations, grouping relationships by `(fromLabel, toLabel, type)` and writing each group in a single Cypher query for significantly faster execution.
 
 ```bash
 php artisan ai:sync-relationships [options]
@@ -231,7 +320,7 @@ php artisan ai:process-files --chunk=25
 
 ### ai:index-semantic
 
-Build vector store indexes for semantic matching. Creates collections for entities, scopes, and templates with embeddings to enable fuzzy/semantic search.
+Build the vector store index for semantic entity matching. Embeds entity names, aliases and descriptions into the `semantic_entities` collection to enable fuzzy/semantic matching of entity labels.
 
 ```bash
 php artisan ai:index-semantic [options]
@@ -239,36 +328,31 @@ php artisan ai:index-semantic [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--rebuild` | Rebuild all indexes (deletes existing) | false |
-| `--entities` | Index entities only | false |
-| `--scopes` | Index scopes only | false |
-| `--templates` | Index templates only | false |
+| `--rebuild` | Rebuild the index (deletes existing) | false |
+| `--entities` | Index entities (the only index; kept for compatibility) | false |
 | `--check` | Check index status | false |
 
 **Examples:**
 
 ```bash
-# Index all (entities, scopes, templates)
+# Index entities
 php artisan ai:index-semantic
 
-# Rebuild all indexes from scratch
+# Rebuild the index from scratch
 php artisan ai:index-semantic --rebuild
 
-# Index entities only
+# Same as the default (entities are the only index)
 php artisan ai:index-semantic --entities
-
-# Index scopes only
-php artisan ai:index-semantic --scopes
 
 # Check index status
 php artisan ai:index-semantic --check
 ```
 
-**Collections created:**
+**Collection created:**
 
 - `semantic_entities`: Entity names, aliases, descriptions
-- `semantic_scopes`: Scope names, descriptions, concepts
-- `semantic_templates`: Query template descriptions
+
+Scopes are indexed by `ai:index-context` / `ai:index-scopes` (`scope_examples`), not by this command.
 
 ---
 
@@ -339,18 +423,19 @@ php artisan ai:diagnose
 # 3. Discover entities
 php artisan ai:discover
 
-# 4. Validate configuration
+# 4. Run full pipeline (validate, ingest, sync, index)
+php artisan ai:setup
+```
+
+Or run each step manually:
+
+```bash
 php artisan ai:config:validate
-
-# 5. Ingest existing data
 php artisan ai:ingest
-
-# 6. Sync relationships (if needed)
 php artisan ai:sync-relationships
-
-# 7. Build semantic indexes
-php artisan ai:index-semantic
 php artisan ai:index-context
+php artisan ai:index-semantic
+php artisan ai:index-scopes
 ```
 
 ### After Model Changes
@@ -359,24 +444,22 @@ php artisan ai:index-context
 # Re-discover configuration
 php artisan ai:discover --force
 
-# Validate the new configuration
-php artisan ai:config:validate
+# Re-run setup (skip ingestion if data hasn't changed)
+php artisan ai:setup --skip-ingest
 
-# Rebuild indexes
-php artisan ai:index-semantic --rebuild
-php artisan ai:index-context --force
+# Or rebuild everything
+php artisan ai:setup --fresh
 ```
 
 ### Fresh Re-ingestion
 
 ```bash
-# Re-ingest with fresh stores
+# Full fresh re-ingestion with ai:setup
+php artisan ai:setup --fresh
+
+# Or run manually:
 php artisan ai:ingest --fresh
-
-# Sync relationships
 php artisan ai:sync-relationships
-
-# Rebuild indexes
 php artisan ai:index-semantic --rebuild
 php artisan ai:index-context --force
 ```
@@ -385,10 +468,7 @@ php artisan ai:index-context --force
 
 ```bash
 # In deployment script
-php artisan ai:discover --force
-php artisan ai:config:validate
-php artisan ai:index-semantic --rebuild
-php artisan ai:index-context --force
+php artisan ai:setup --discover --fresh
 php artisan ai:diagnose
 ```
 

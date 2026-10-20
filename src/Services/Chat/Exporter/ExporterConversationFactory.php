@@ -5,9 +5,9 @@ namespace Condoedge\Ai\Services\Chat\Exporter;
 class ExporterConversationFactory
 {
     protected $types = [
-        // 'pdf' => PdfExporterConversation::class,
-        // 'txt' => TxtExporterConversation::class,
-        'md'  => ExportConversationMdService::class,
+        'md'   => ExportConversationMdService::class,
+        'pdf'  => ExportConversationPdfService::class,
+        'xlsx' => ExportConversationXlsxService::class,
     ];
 
     public function registerExporter($type, $class)
@@ -22,6 +22,6 @@ class ExporterConversationFactory
         }
 
         $class = $this->types[$type];
-        return new $class();
+        return app()->make($class);
     }
 }

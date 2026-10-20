@@ -222,6 +222,11 @@ class CypherScopeAdapter
             return null;
         }
 
+        // Handle union/intersection types (PHP 8.1+) which don't have getName()
+        if (!($type instanceof \ReflectionNamedType)) {
+            return null;
+        }
+
         $typeName = $type->getName();
 
         return match ($typeName) {
@@ -257,14 +262,15 @@ class CypherScopeAdapter
      */
     private function determineScopeType(array $calls): string
     {
-        // Check if any call is a relationship query
+        $relationshipMethods = ['whereHas', 'whereDoesntHave', 'has', 'doesntHave', 'withWhereHas'];
+
         foreach ($calls as $call) {
-            if (($call['method'] ?? '') === 'whereHas') {
+            $method = $call['method'] ?? '';
+            if (in_array($method, $relationshipMethods)) {
                 return 'relationship_traversal';
             }
         }
 
-        // Default to property filter
         return 'property_filter';
     }
 
@@ -403,7 +409,7 @@ class CypherScopeAdapter
                 $targetEntity = Str::studly(Str::singular($relation));
 
                 $relationships[] = [
-                    'type' => 'HAS_' . strtoupper(Str::snake($relation)),
+                    'type' => strtoupper(Str::snake($relation)),
                     'target' => $targetEntity,
                 ];
 
@@ -431,27 +437,54 @@ class CypherScopeAdapter
     /**
      * Extract filter information from calls (for simple property filters)
      *
+     * Produces a simple {column => value} map matching the record shape the
+     * CypherQueryBuilderSpy actually emits (column/operator/value keys), which
+     * is the format the DetectedScopesSection consumer expects.
+     *
      * @param array $calls Recorded calls
-     * @return array Filter data
+     * @return array Filter data keyed by property/column name
      */
     private function extractFilterFromCalls(array $calls): array
     {
-        $filter = [];
+        $filters = [];
 
         foreach ($calls as $call) {
             $method = $call['method'] ?? '';
+            $type = $call['type'] ?? '';
+            $column = $call['column'] ?? '';
 
-            if ($method === 'where' && ($call['type'] ?? '') === 'basic') {
-                $column = $call['column'] ?? '';
-                $value = $call['value'] ?? '';
+            if ($column === '') {
+                continue;
+            }
 
-                if ($column && $call['operator'] === '=') {
-                    $filter[$column] = $value;
-                }
+            switch ($method) {
+                case 'where':
+                case 'orWhere':
+                    // Only capture simple equality property filters; skip nested
+                    // closures and other complex where types.
+                    if ($type === 'basic') {
+                        $filters[$column] = $call['value'] ?? null;
+                    }
+                    break;
+
+                case 'whereIn':
+                    $filters[$column] = $call['values'] ?? [];
+                    break;
+
+                case 'whereBetween':
+                    $values = $call['values'] ?? [];
+                    if (is_array($values) && count($values) === 2) {
+                        $filters[$column] = $values;
+                    }
+                    break;
+
+                case 'whereNull':
+                    $filters[$column] = null;
+                    break;
             }
         }
 
-        return $filter;
+        return $filters;
     }
 
     /**

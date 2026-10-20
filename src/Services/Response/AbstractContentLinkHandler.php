@@ -42,6 +42,11 @@ abstract class AbstractContentLinkHandler implements ContentLinkHandlerInterface
      */
     public function createElements(string $content, array $context = []): array
     {
+        // Document-style actions (e.g. export_pdf?mode=document) render the COMPOSED answer
+        // the link is embedded in, not just the result set — thread it through the dispatch
+        // context. A caller-provided 'answer' wins.
+        $context += ['answer' => $content];
+
         $elements = [];
         $patterns = (array) $this->getPatterns();
 

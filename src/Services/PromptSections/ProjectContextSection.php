@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * ProjectContextSection
  *
@@ -47,7 +49,7 @@ class ProjectContextSection extends BasePromptSection
         return $this;
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
         $projectConfig = $this->customContext ?? config('ai.project', []);
 
@@ -69,9 +71,10 @@ class ProjectContextSection extends BasePromptSection
             $output .= "Domain: {$projectConfig['domain']}\n";
         }
 
-        if (!empty($projectConfig['business_rules'])) {
+        $rules = $this->relevantRules((array) ($projectConfig['business_rules'] ?? []), $context);
+        if ($rules !== []) {
             $output .= "\nBusiness Rules:\n";
-            foreach ($projectConfig['business_rules'] as $rule) {
+            foreach ($rules as $rule) {
                 $output .= "  - {$rule}\n";
             }
         }
@@ -80,7 +83,43 @@ class ProjectContextSection extends BasePromptSection
         return $output;
     }
 
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    /**
+     * The rule texts to render (Task 5.11). A rule is either a string (always
+     * rendered) or ['rule' => string, 'entities' => string[]] — rendered only when
+     * one of its entities is in the projected schema (all rules render when the
+     * context carries no projected schema). Malformed entries are skipped.
+     *
+     * @return string[]
+     */
+    private function relevantRules(array $rules, PipelineContext $context): array
+    {
+        $labels = array_filter((array) ($context->graphSchema['labels'] ?? []), fn ($l) => is_string($l) && $l !== '');
+        $selected = $labels === [] ? null : array_fill_keys(array_map('strtolower', $labels), true);
+
+        $texts = [];
+        foreach ($rules as $rule) {
+            if (is_string($rule) && trim($rule) !== '') {
+                $texts[] = $rule;
+                continue;
+            }
+            if (!is_array($rule) || !is_string($rule['rule'] ?? null) || trim($rule['rule']) === '') {
+                continue;
+            }
+
+            $entities = array_filter((array) ($rule['entities'] ?? []), fn ($e) => is_string($e) && $e !== '');
+            if ($selected !== null && $entities !== []) {
+                $matches = array_filter($entities, fn ($e) => isset($selected[strtolower($e)]));
+                if ($matches === []) {
+                    continue;
+                }
+            }
+            $texts[] = $rule['rule'];
+        }
+
+        return $texts;
+    }
+
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
         $projectConfig = $this->customContext ?? config('ai.project', []);
         return !empty($projectConfig);

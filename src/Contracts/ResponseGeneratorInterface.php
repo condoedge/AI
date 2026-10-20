@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Contracts;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * Response Generator Interface
  *
@@ -13,30 +15,22 @@ namespace Condoedge\Ai\Contracts;
 interface ResponseGeneratorInterface
 {
     /**
-     * Generate natural language response from query results
+     * Generate natural language response from pipeline context
      *
-     * @param string $originalQuestion User's original question
-     * @param array $queryResult Results from QueryExecutor
-     * @param string $cypherQuery The Cypher query that was executed
+     * @param PipelineContext $context Pipeline context containing question, query result, execution data, etc.
      * @param array $options Generation options:
      *                       - format: 'text', 'markdown', 'json' (default: 'text')
      *                       - style: 'concise', 'detailed', 'technical' (default: 'detailed')
-     *                       - include_insights: Include data insights (default: true)
-     *                       - include_visualization: Suggest visualizations (default: true)
      *                       - max_length: Max response length in words (default: 200)
      *                       - temperature: LLM temperature (default: 0.3)
      * @return array Response with keys:
      *               - answer: Natural language answer
-     *               - insights: Array of insights discovered in data
-     *               - visualizations: Suggested visualization types
      *               - format: Response format used
      *               - metadata: Additional metadata
      * @throws \RuntimeException If response generation fails
      */
     public function generate(
-        string $originalQuestion,
-        array $queryResult,
-        ?string $cypherQuery,
+        PipelineContext $context,
         array $options = []
     ): array;
 
@@ -67,30 +61,4 @@ interface ResponseGeneratorInterface
         \Throwable $error,
         array $options = []
     ): array;
-
-    /**
-     * Summarize large result sets
-     *
-     * @param array $queryResult Large result set to summarize
-     * @param int $maxItems Max items to include in summary
-     * @return array Summarized results
-     */
-    public function summarize(array $queryResult, int $maxItems = 10): array;
-
-    /**
-     * Extract insights from data
-     *
-     * @param array $queryResult Query results to analyze
-     * @return array Array of insights (patterns, outliers, trends)
-     */
-    public function extractInsights(array $queryResult): array;
-
-    /**
-     * Suggest appropriate visualizations
-     *
-     * @param array $queryResult Query results
-     * @param string $cypherQuery Original query
-     * @return array Suggested visualization types with rationale
-     */
-    public function suggestVisualizations(array $queryResult, string $cypherQuery): array;
 }

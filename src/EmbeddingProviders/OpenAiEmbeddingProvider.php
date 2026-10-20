@@ -43,12 +43,24 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
     private int $dimensions;
 
     /**
+     * Total attempts (1 try + retries) for a transient embedding failure.
+     */
+    private int $maxAttempts;
+
+    /**
+     * Base backoff delay in milliseconds (doubled per retry).
+     */
+    private int $retryBaseDelayMs;
+
+    /**
      * Create a new OpenAI embedding provider
      *
      * @param array $config Configuration array with keys:
      *                      - api_key: OpenAI API key (required)
      *                      - model: Model name (default: text-embedding-3-small)
      *                      - dimensions: Vector dimensions (default: 1536)
+     *                      - max_retries: Total attempts on transient failures (default: 3)
+     *                      - retry_base_delay_ms: Base backoff in ms, doubled per retry (default: 200)
      * @throws RuntimeException If required configuration is missing
      */
     public function __construct(array $config)
@@ -58,6 +70,8 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
         $this->apiKey = $config['api_key'];
         $this->model = $config['model'] ?? 'text-embedding-3-small';
         $this->dimensions = $config['dimensions'] ?? 1536;
+        $this->maxAttempts = max(1, (int) ($config['max_retries'] ?? 3));
+        $this->retryBaseDelayMs = max(0, (int) ($config['retry_base_delay_ms'] ?? 200));
     }
 
     /**
@@ -114,7 +128,6 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
             throw new RuntimeException('Texts array cannot be empty');
         }
 
-        // Validate all texts are strings
         foreach ($texts as $index => $text) {
             if (!is_string($text)) {
                 throw new RuntimeException("Text at index {$index} must be a string");
@@ -124,24 +137,30 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
             }
         }
 
-        $response = $this->makeApiRequest(['input' => $texts]);
+        $avgLength = array_sum(array_map('strlen', $texts)) / count($texts);
+        $batchSize = $avgLength > 500 ? 50 : 200;
+        $chunks = array_chunk($texts, $batchSize);
+        $allEmbeddings = [];
 
-        if (!isset($response['data']) || !is_array($response['data'])) {
-            throw new RuntimeException('Invalid API response: missing data array');
-        }
+        foreach ($chunks as $chunk) {
+            $response = $this->makeApiRequest(['input' => array_values($chunk)]);
 
-        // Sort by index to match input order
-        usort($response['data'], fn($a, $b) => $a['index'] <=> $b['index']);
-
-        $embeddings = [];
-        foreach ($response['data'] as $item) {
-            if (!isset($item['embedding'])) {
-                throw new RuntimeException('Invalid API response: missing embedding in data item');
+            if (!isset($response['data']) || !is_array($response['data'])) {
+                throw new RuntimeException('Invalid API response: missing data array');
             }
-            $embeddings[] = $item['embedding'];
+
+            // Sort by index to match input order within this chunk
+            usort($response['data'], fn($a, $b) => $a['index'] <=> $b['index']);
+
+            foreach ($response['data'] as $item) {
+                if (!isset($item['embedding'])) {
+                    throw new RuntimeException('Invalid API response: missing embedding in data item');
+                }
+                $allEmbeddings[] = $item['embedding'];
+            }
         }
 
-        return $embeddings;
+        return $allEmbeddings;
     }
 
     /**
@@ -174,8 +193,6 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
      */
     public function getMaxLength(): int
     {
-        // text-embedding-3-small supports 8191 tokens
-        // Using token limit directly as max length
         return 8191;
     }
 
@@ -190,12 +207,69 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
     {
         $payload['model'] = $this->model;
 
+        $jsonBody = json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE);
+
+        if ($jsonBody === false) {
+            throw new RuntimeException(
+                'Failed to encode embedding payload as JSON: ' . json_last_error_msg()
+            );
+        }
+
+        // The embedding endpoint gates ALL retrieval (vector search, semantic selection,
+        // entity labels, file grounding). A single transient SSL/network blip or 429
+        // would otherwise silently drop documents from the answer, so retry transient
+        // failures with exponential backoff — the same resilience the chat path has.
+        // Permanent errors (bad key, malformed input) are surfaced immediately.
+        $attempt = 0;
+        while (true) {
+            $attempt++;
+
+            ['code' => $httpCode, 'body' => $response, 'error' => $curlError] = $this->executeCurl($jsonBody);
+
+            // Transport-level failure (curl returned false): transient — retry if possible.
+            if ($response === false) {
+                if ($attempt < $this->maxAttempts) {
+                    $this->backoff($attempt);
+                    continue;
+                }
+                throw new RuntimeException("Network error: {$curlError}");
+            }
+
+            if ($httpCode === 200) {
+                $decoded = json_decode($response, true);
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    throw new RuntimeException('Failed to decode API response: ' . json_last_error_msg());
+                }
+                return $decoded;
+            }
+
+            // Throttling / server-side transient errors: retry with backoff.
+            if (in_array($httpCode, [429, 500, 502, 503, 504], true) && $attempt < $this->maxAttempts) {
+                $this->backoff($attempt);
+                continue;
+            }
+
+            // Permanent error, or retries exhausted: surface it (always throws).
+            $this->handleApiError($response, $httpCode);
+        }
+    }
+
+    /**
+     * Perform the raw HTTP POST to the embeddings endpoint.
+     *
+     * Isolated as a seam so the transport can be substituted in tests (the retry/error
+     * policy in makeApiRequest is then unit-testable without hitting the network).
+     *
+     * @return array{code:int, body:string|false, error:string}
+     */
+    protected function executeCurl(string $jsonBody): array
+    {
         $ch = curl_init(self::API_ENDPOINT);
 
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => json_encode($payload),
+            CURLOPT_POSTFIELDS => $jsonBody,
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
                 'Authorization: Bearer ' . $this->apiKey,
@@ -205,27 +279,24 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
         ]);
 
         $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlError = curl_error($ch);
         curl_close($ch);
 
-        // Handle cURL errors
-        if ($response === false) {
-            throw new RuntimeException("Network error: {$curlError}");
+        return ['code' => $httpCode, 'body' => $response, 'error' => $curlError];
+    }
+
+    /**
+     * Sleep with exponential backoff before the next retry attempt.
+     */
+    private function backoff(int $attempt): void
+    {
+        if ($this->retryBaseDelayMs <= 0) {
+            return;
         }
 
-        // Handle HTTP errors
-        if ($httpCode !== 200) {
-            $this->handleApiError($response, $httpCode);
-        }
-
-        // Decode response
-        $decoded = json_decode($response, true);
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new RuntimeException('Failed to decode API response: ' . json_last_error_msg());
-        }
-
-        return $decoded;
+        $delayMs = min($this->retryBaseDelayMs * (2 ** ($attempt - 1)), 5000);
+        usleep($delayMs * 1000);
     }
 
     /**
@@ -237,14 +308,12 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
      */
     private function handleApiError(string $response, int $httpCode): void
     {
-        // Try to extract error message from response
         $errorMessage = $response;
         $decoded = json_decode($response, true);
         if (isset($decoded['error']['message'])) {
             $errorMessage = $decoded['error']['message'];
         }
 
-        // Handle specific HTTP codes
         if ($httpCode === 401) {
             throw new RuntimeException("Invalid API key: {$errorMessage}");
         }
@@ -265,7 +334,6 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
             throw new RuntimeException("OpenAI service unavailable: {$errorMessage}");
         }
 
-        // Generic error for other codes
         throw new RuntimeException("API error (HTTP {$httpCode}): {$errorMessage}");
     }
 }

@@ -41,6 +41,13 @@ class QdrantChunkStoreTest extends TestCase
             ->with($this->testCollection)
             ->andReturn(true);
 
+        // ensureCollectionExists() best-effort creates the file_name payload index
+        // on every verification. Allow it to be called any number of times.
+        $this->mockVectorStore
+            ->shouldReceive('ensurePayloadIndex')
+            ->byDefault()
+            ->andReturn(true);
+
         $this->chunkStore = new QdrantChunkStore(
             $this->mockVectorStore,
             $this->mockEmbeddingProvider,
@@ -561,6 +568,52 @@ class QdrantChunkStoreTest extends TestCase
         $this->assertTrue($result);
     }
 
+    public function test_store_chunks_rejects_empty_vector(): void
+    {
+        // A chunk whose embedding silently became [] (e.g. a short/failed batch)
+        // must never be upserted as an unsearchable empty vector.
+        $chunk = new FileChunk(
+            fileId: 1,
+            fileName: 'test.pdf',
+            content: 'content',
+            embedding: [], // empty vector
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 7
+        );
+
+        // upsert must NOT be reached.
+        $this->mockVectorStore->shouldReceive('upsert')->never();
+
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->chunkStore->storeChunks([$chunk]);
+    }
+
+    public function test_store_chunks_rejects_wrong_dimension_vector(): void
+    {
+        // The store is configured for 1536-dim vectors; a mismatched dimension
+        // (e.g. provider/config drift) must be rejected before upsert rather
+        // than corrupting the collection.
+        $chunk = new FileChunk(
+            fileId: 2,
+            fileName: 'test.pdf',
+            content: 'content',
+            embedding: array_fill(0, 768, 0.1), // wrong dimension
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 7
+        );
+
+        $this->mockVectorStore->shouldReceive('upsert')->never();
+
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->chunkStore->storeChunks([$chunk]);
+    }
+
     // =========================================================================
     // searchByContent() Method Tests
     // =========================================================================
@@ -583,7 +636,9 @@ class QdrantChunkStoreTest extends TestCase
                 $this->testCollection,
                 $queryEmbedding,
                 10,
-                [],
+                // Unfiltered document search still leaves out chunks a document
+                // map marked out of scope (see QdrantChunkStoreScopeFilterTest).
+                ['must_not' => [['key' => 'map.scope', 'match' => ['value' => 'out']]]],
                 0.0
             )
             ->andReturn([

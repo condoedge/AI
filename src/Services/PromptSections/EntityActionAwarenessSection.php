@@ -4,12 +4,28 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\Contracts\AiActionInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\Actions\AiActionRegistry;
+use Condoedge\Ai\Services\Actions\BuiltIn\ExportExcelAction;
+use Condoedge\Ai\Services\Actions\BuiltIn\ExportPdfAction;
+
 /**
  * EntityActionAwarenessSection
  *
- * Informs the QueryGenerator about available entity actions so it knows:
- * - "profile link", "profile page" etc. are actions, NOT database fields
- * - When user asks for actions AND context has entity IDs, return NO QUERY REQUIRED
+ * Tells the QueryGenerator which phrases are UI ACTIONS (app pages, exports), NOT
+ * database fields — so "export to excel" or "open the calendar" is never queried as a
+ * property — and that actions never replace a data question.
+ *
+ * Actions plan B5 (skeptic-checked 2026-10-01): links are attached by CODE from the rows
+ * (ActionAttacher), so the generator no longer needs the alias catalog, the per-row ids
+ * of previous results or the "answer needs_query=false and the response layer will write
+ * the link" escape hatch — it only needs the action KEYS + labels, the export action QU
+ * asked for described in full, the data-question guardrail, and one rule: a link to a
+ * specific record is a data question about that record (query it, with its id).
+ *
+ * Single source of truth: actions come from the {@see AiActionRegistry}; mutations the
+ * principal may not perform are never listed (ActionAdvertisement).
  *
  * Priority 58 places this after ConversationContext (55) but before DetectedEntities (60).
  */
@@ -19,107 +35,163 @@ class EntityActionAwarenessSection extends BasePromptSection
     protected int $priority = 58;
 
     /**
-     * Include when there are entity actions or generic actions configured
+     * Include when the registry knows of any action (built-in, config, or registered).
      */
-    public function shouldInclude(string $question, array $context, array $options = []): bool
+    public function shouldInclude(string $question, PipelineContext $context, array $options = []): bool
     {
-        $entityActions = config('ai.entity_actions', []);
-        $genericActions = config('ai.generic_actions', []);
+        $actions = $this->offeredActions(
+            $context->conversationContext['focused_entity'] ?? null
+        );
 
-        return !empty($entityActions) || !empty($genericActions);
+        return !empty($actions['generic']) || !empty($actions['entity']);
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
+        $focusedEntity = $context->conversationContext['focused_entity'] ?? null;
+        $labels = array_values(array_filter(
+            (array) ($context->graphSchema['labels'] ?? []),
+            fn ($l) => is_string($l) && $l !== ''
+        ));
+        $actions = $this->offeredActions($focusedEntity, $labels);
+
         $output = $this->header('ACTION REQUESTS - IMPORTANT');
+        $output .= "These are UI ACTIONS, NOT database fields (the response layer attaches their links):
+";
 
-        $output .= "The following terms are ACTION REQUESTS, NOT database fields:\n\n";
-
-        // Collect all action aliases
-        $allAliases = [];
-        $entityActions = config('ai.entity_actions', []);
-
-        foreach ($entityActions as $entityType => $actions) {
-            foreach ($actions as $actionKey => $actionConfig) {
-                $aliases = $actionConfig['aliases'] ?? [];
-                foreach ($aliases as $alias) {
-                    $allAliases[$alias] = [
-                        'entity' => $entityType,
-                        'action' => $actionKey,
-                        'label' => $actionConfig['label'] ?? $actionKey,
-                    ];
-                }
-            }
+        foreach ($actions['entity'] as $entityType => $entityActions) {
+            $output .= "- {$entityType}: " . implode(', ', array_map(fn (AiActionInterface $a) => $this->keyAndLabel($a), $entityActions)) . "
+";
         }
 
-        // Generic actions
-        $genericActions = config('ai.generic_actions', []);
-        foreach ($genericActions as $actionKey => $actionConfig) {
-            $aliases = $actionConfig['aliases'] ?? [];
-            foreach ($aliases as $alias) {
-                $allAliases[$alias] = [
-                    'entity' => null,
-                    'action' => $actionKey,
-                    'label' => $actionConfig['label'] ?? $actionKey,
-                ];
+        $described = [];
+        $keys = [];
+        foreach ($actions['generic'] as $action) {
+            if ($this->matchesExportFormat($action, $context->qu->exportFormat)) {
+                $described[] = $action;
+            } else {
+                $keys[] = $this->keyAndLabel($action);
             }
         }
-
-        if (!empty($allAliases)) {
-            $output .= "**Action Aliases (these are NOT fields to query):**\n";
-            foreach ($allAliases as $alias => $info) {
-                $entityPart = $info['entity'] ? " ({$info['entity']})" : ' (generic)';
-                $output .= "- \"{$alias}\" → {$info['label']}{$entityPart}\n";
-            }
-            $output .= "\n";
+        if ($keys !== []) {
+            $output .= '- Generic: ' . implode(', ', $keys) . "
+";
+        }
+        foreach ($described as $action) {
+            $output .= $this->describeAction($action);
         }
 
-        // Check if conversation context has entity IDs
-        $conversationContext = $context['conversation_context'] ?? [];
-        $lastResults = $conversationContext['last_result_sample'] ?? [];
-        $focusedEntity = $conversationContext['focused_entity'] ?? null;
+        return $output . "
+" . $this->formatGuardrails();
+    }
 
-        if (!empty($lastResults)) {
-            $output .= "**CRITICAL RULE:**\n";
-            $output .= "If the user asks for any of the above action terms (like 'profile link', 'profile page'):\n";
-            $output .= "1. These are UI actions, NOT database queries\n";
-            $output .= "2. The entity IDs are ALREADY AVAILABLE in context below\n";
-            $output .= "3. You MUST return: `NO QUERY REQUIRED`\n\n";
+    private function keyAndLabel(AiActionInterface $action): string
+    {
+        $label = trim($action->label());
 
-            $output .= "**Available Entity IDs from Previous Results:**\n";
-            foreach ($lastResults as $index => $result) {
-                $id = $this->extractEntityId($result);
-                if ($id === null) {
-                    continue; // Skip entries without valid ID
-                }
-                $name = $result['name'] ?? $result['title'] ?? $result['full_name'] ?? "Item " . ($index + 1);
-                $entityType = $focusedEntity ?? 'Entity';
-                $output .= "- {$entityType}: {$name} (ID: {$id})\n";
-            }
-            $output .= "\n";
-        }
+        return '`' . $action->key() . '`' . ($label !== '' && $label !== $action->key() ? " ({$label})" : '');
+    }
 
-        $output .= "**Example:**\n";
-        $output .= "- User: \"give me the profile link for John\"\n";
-        $output .= "- If John's ID is in context above → Return: `NO QUERY REQUIRED`\n";
-        $output .= "- The response generator will format the action link using the ID\n\n";
+    private function matchesExportFormat(AiActionInterface $action, ?string $exportFormat): bool
+    {
+        return match ($exportFormat) {
+            'excel' => $action instanceof ExportExcelAction,
+            'pdf' => $action instanceof ExportPdfAction,
+            default => false,
+        };
+    }
+
+    /**
+     * The data-question guardrail + the record-link rule.
+     */
+    private function formatGuardrails(): string
+    {
+        // GUARDRAIL (regression pin — ambiguous-balance t0): the action list above
+        // must never legitimize skipping a DATA question. An action's name can
+        // overlap the subject of a legitimate data request; the model once classified
+        // such a question as an action request and answered "no query required",
+        // collapsing the turn into "no results".
+        $output = "**ACTIONS NEVER REPLACE DATA QUESTIONS:**
+";
+        $output .= "The list above only identifies which phrases are UI actions rather than database fields. ";
+        $output .= "When the user asks for information that the graph can answer — a value, an amount, a balance, a list, details of something — ";
+        $output .= "you MUST still generate the Cypher query for the underlying data, ";
+        $output .= "even if the question's wording overlaps an action's name, and even when previous results are available in context — ";
+        $output .= "the response layer attaches any relevant action links separately. ";
+        $output .= "A request to open or get the link of a SPECIFIC record is a data question about that record: query it (returning its id) — its link is attached from the rows. ";
+        $output .= "Answer with `\"needs_query\": false` only when the request is PURELY to open or navigate to one of these app pages or actions ";
+        $output .= "with no informational component to answer.
+
+";
 
         return $output;
     }
 
     /**
-     * Extract entity ID from result using configured field names
+     * One line for an action described in full: key + description, and a note when it
+     * takes params.
      */
-    protected function extractEntityId(array $result): ?string
+    protected function describeAction(AiActionInterface $action): string
     {
-        $idFields = config('ai.entity_id_fields') ?? ['id', '_id', 'neo4j_id'];
+        $line = "- `{$action->key()}` — {$action->description()}";
 
-        foreach ($idFields as $field) {
-            if (isset($result[$field]) && $result[$field] !== null) {
-                return (string) $result[$field];
+        if (!empty($this->userFacingParams($action))) {
+            $line .= ' [accepts params]';
+        }
+
+        return $line . "
+";
+    }
+
+    /**
+     * The params the USER may supply, excluding the entity-id carrier the dispatcher seeds
+     * (a {@see \Condoedge\Ai\Services\Actions\ModelMethodMutationAction} declares it only so
+     * the id rides the approval token).
+     *
+     * @return array<string, mixed>
+     */
+    protected function userFacingParams(AiActionInterface $action): array
+    {
+        if (method_exists($action, 'declaredParams')) {
+            return $action->declaredParams();
+        }
+
+        $schema = $action->inputSchema();
+        unset($schema[\Condoedge\Ai\Services\Actions\ModelMethodMutationAction::ID_PARAM]);
+
+        return $schema;
+    }
+
+    /**
+     * The registry's relevance-scoped actions, minus the MUTATING ones the current principal may not
+     * be offered (security A1/A2) — a resident's query-side prompt never lists a staff-only write.
+     *
+     * @param string[] $resultTypes
+     * @return array{entity: array<string, AiActionInterface[]>, generic: AiActionInterface[]}
+     */
+    protected function offeredActions(?string $focusedEntity, array $resultTypes = []): array
+    {
+        return \Condoedge\Ai\Services\Actions\ActionAdvertisement::filterMutations(
+            $this->actionRegistry()->relevantActions($focusedEntity, $resultTypes),
+            \Condoedge\Ai\Services\Actions\ActionAdvertisement::currentUser()
+        );
+    }
+
+    /**
+     * Resolve the shared registry (built-ins + config + registered actions). Lazily resolved
+     * through the container, degrading to a standalone instance with SAFE DEFAULTS when DI isn't
+     * wired (e.g. pure unit tests) — mirrors EntityAutoDiscovery::actionRegistry().
+     */
+    protected function actionRegistry(): AiActionRegistry
+    {
+        if (function_exists('app')) {
+            try {
+                return app(AiActionRegistry::class);
+            } catch (\Throwable $e) {
+                // Fall through to a standalone instance.
             }
         }
 
-        return null;
+        return new AiActionRegistry();
     }
 }

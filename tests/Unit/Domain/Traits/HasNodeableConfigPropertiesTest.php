@@ -16,36 +16,6 @@ class HasNodeableConfigPropertiesTest extends TestCase
     }
 
     /** @test */
-    public function it_reads_embed_fields_from_model_property(): void
-    {
-        $model = new class extends Model implements Nodeable {
-            use HasNodeableConfig;
-            protected $table = 'persons';
-            protected $fillable = ['name', 'bio', 'email'];
-            protected array $embedFields = ['name', 'bio'];
-
-            // Base config required - model properties merge on top
-            public function nodeableConfig(): array
-            {
-                return [
-                    'graph' => [
-                        'label' => 'Person',
-                        'properties' => ['id', 'name', 'bio', 'email'],
-                    ],
-                    'vector' => [
-                        'collection' => 'persons',
-                        'embed_fields' => ['name'],  // Will be overridden by $embedFields
-                    ],
-                ];
-            }
-        };
-
-        $vectorConfig = $model->getVectorConfig();
-
-        $this->assertEquals(['name', 'bio'], $vectorConfig->embedFields);
-    }
-
-    /** @test */
     public function it_reads_graph_label_from_model_property(): void
     {
         $model = new class extends Model implements Nodeable {
@@ -106,7 +76,7 @@ class HasNodeableConfigPropertiesTest extends TestCase
             use HasNodeableConfig;
             protected $table = 'persons';
             protected $fillable = ['name', 'bio'];
-            protected array $embedFields = ['name', 'bio'];  // Model property
+            protected array $nodeableAliases = ['person', 'people'];  // Model property
 
             public function nodeableConfig(): array
             {
@@ -117,13 +87,18 @@ class HasNodeableConfigPropertiesTest extends TestCase
                     ],
                 ];
             }
+
+            public function getResolvedConfig(): array
+            {
+                return $this->resolveConfig();
+            }
         };
 
         $graphConfig = $model->getGraphConfig();
-        $vectorConfig = $model->getVectorConfig();
+        $config = $model->getResolvedConfig();
 
         $this->assertEquals('CustomLabel', $graphConfig->label);  // From nodeableConfig
-        $this->assertEquals(['name', 'bio'], $vectorConfig->embedFields);  // From property
+        $this->assertEquals(['person', 'people'], $config['metadata']['aliases'] ?? []);  // From property
     }
 
     /** @test */

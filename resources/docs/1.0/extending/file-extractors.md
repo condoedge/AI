@@ -140,14 +140,9 @@ class AiExtensionServiceProvider extends ServiceProvider
 }
 ```
 
-### Step 3: Update Configuration
+### Step 3: No Configuration Needed
 
-```php
-// config/ai.php
-'file_processing' => [
-    'supported_types' => ['pdf', 'docx', 'txt', 'md', 'xlsx', 'xls'],
-],
-```
+Supported file types are determined by the registered extractors (each extractor's `getSupportedExtensions()`), so no `config/ai.php` change is required.
 
 ---
 
@@ -480,12 +475,7 @@ public function test_excel_extractor()
 ```php
 // config/ai.php
 'file_processing' => [
-    'supported_types' => ['pdf', 'docx', 'txt', 'md', 'xlsx', 'csv', 'pptx'],
-
-    // Chunk settings
-    'chunk_size' => 1000,
-    'chunk_overlap' => 200,
-    'preserve_sentences' => true,
+    // Supported types come from the registered extractors (no config key)
 
     // Limits
     'max_file_size' => 50 * 1024 * 1024, // 50MB

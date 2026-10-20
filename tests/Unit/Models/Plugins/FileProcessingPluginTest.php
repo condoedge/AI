@@ -5,7 +5,6 @@ namespace Condoedge\Ai\Tests\Unit\Models\Plugins;
 use Condoedge\Ai\Models\Plugins\FileProcessingPlugin;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
-use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
 use Condoedge\Ai\Facades\AI;
 use Mockery;
 use Orchestra\Testbench\TestCase;
@@ -82,9 +81,6 @@ class FileProcessingPluginTest extends TestCase
         $file->shouldReceive('toArray')->andReturn(['id' => 456]);
         $file->shouldReceive('getGraphConfig')->andReturn(
             new GraphConfig('File', ['id', 'name'], [])
-        );
-        $file->shouldReceive('getVectorConfig')->andReturn(
-            new VectorConfig('files', ['name'], ['id'])
         );
 
         $this->aiMock->shouldReceive('ingest')->once()->with($file)->andReturn([

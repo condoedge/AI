@@ -41,22 +41,6 @@ class SensibleColumnsDiscoveryTest extends TestCase
         $this->assertEquals([], $config['sensible_columns']);
     }
 
-    /** @test */
-    public function it_excludes_sensible_columns_from_embed_fields(): void
-    {
-        $model = new class extends \Illuminate\Database\Eloquent\Model {
-            protected $table = 'persons';
-            protected $fillable = ['name', 'bio', 'ssn', 'medical_notes'];
-            protected $sensibleColumns = ['ssn', 'medical_notes'];
-        };
-
-        $config = $this->callDiscoverVector($model);
-
-        // Sensible columns should NOT be in embed_fields
-        $this->assertNotContains('ssn', $config['embed_fields']);
-        $this->assertNotContains('medical_notes', $config['embed_fields']);
-    }
-
     /**
      * Helper method to call protected discoverSecurityConfig method
      *
@@ -67,21 +51,6 @@ class SensibleColumnsDiscoveryTest extends TestCase
     {
         $reflection = new \ReflectionClass($this->discovery);
         $method = $reflection->getMethod('discoverSecurityConfig');
-        $method->setAccessible(true);
-
-        return $method->invoke($this->discovery, $model);
-    }
-
-    /**
-     * Helper method to call discoverVector method
-     *
-     * @param \Illuminate\Database\Eloquent\Model $model
-     * @return array
-     */
-    private function callDiscoverVector($model): array
-    {
-        $reflection = new \ReflectionClass($this->discovery);
-        $method = $reflection->getMethod('discoverVector');
         $method->setAccessible(true);
 
         return $method->invoke($this->discovery, $model);

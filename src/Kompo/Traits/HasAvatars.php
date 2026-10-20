@@ -6,7 +6,6 @@ trait HasAvatars
 {
     protected function userAvatarHtml(): string
     {
-        // Check if auth is available before accessing user
         $user = auth()->user();
         $initial = strtoupper(substr($user?->name ?? 'U', 0, 1));
         $initial = htmlspecialchars($initial, ENT_QUOTES, 'UTF-8');
@@ -30,11 +29,10 @@ trait HasAvatars
 
     protected function getAvatarGradient(): string
     {
-        // Check if class has theme() method from HasChatTheme
         if (method_exists($this, 'theme')) {
             return $this->theme()->avatarGradient();
         }
-        // Fallback to default
+
         return 'from-indigo-500 via-purple-500 to-fuchsia-500';
     }
 }

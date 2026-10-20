@@ -93,13 +93,17 @@ class FileChunk
     }
 
     /**
-     * Get the content length
+     * Get the content length in characters
+     *
+     * Character-based (mb_strlen) so it stays consistent with the chunker's
+     * character budgets and with the start/end offsets, which are character
+     * positions in the source text.
      *
      * @return int
      */
     public function getContentLength(): int
     {
-        return strlen($this->content);
+        return mb_strlen($this->content, 'UTF-8');
     }
 
     /**

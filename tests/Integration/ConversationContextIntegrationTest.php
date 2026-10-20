@@ -8,8 +8,6 @@ use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Context\ConversationContextManager;
 use Condoedge\Ai\Services\Context\EntityExtractor;
-use Condoedge\Ai\Services\Context\ReferenceResolver;
-use Condoedge\Ai\Services\PatternLibrary;
 use Condoedge\Ai\Services\PromptSections\ConversationContextSection;
 use Condoedge\Ai\Services\SemanticPromptBuilder;
 use Condoedge\Ai\Tests\TestCase;
@@ -39,13 +37,10 @@ class ConversationContextIntegrationTest extends TestCase
         AiMessage::unguard();
 
         // Create context manager
-        $this->contextManager = new ConversationContextManager(
-            new EntityExtractor(),
-            new ReferenceResolver()
-        );
+        $this->contextManager = new ConversationContextManager(new EntityExtractor());
 
         // Create prompt builder
-        $this->promptBuilder = new SemanticPromptBuilder(new PatternLibrary());
+        $this->promptBuilder = new SemanticPromptBuilder();
     }
 
     public function tearDown(): void
@@ -115,54 +110,44 @@ class ConversationContextIntegrationTest extends TestCase
     /** @test */
     public function it_includes_conversation_context_in_prompt(): void
     {
-        // Build prompt with conversation_context
-        $conversationContext = [
+        // Build prompt with conversation context carried on a real PipelineContext.
+        $context = new \Condoedge\Ai\DTOs\PipelineContext();
+        $context->graphSchema = [
+            'labels' => ['Customer', 'Order', 'Product'],
+            'relationships' => ['PURCHASED', 'ORDERED'],
+        ];
+        $context->conversationContext = [
             'focused_entity' => 'Customer',
             'mentioned_entities' => ['Customer', 'Order'],
             'last_query_type' => 'list',
             'recent_exchanges' => [
                 [
-                    'user' => ['content' => 'Show me all customers'],
-                    'assistant' => [
-                        'content' => 'Here are all customers...',
-                        'cypher_query' => 'MATCH (c:Customer) RETURN c',
-                    ],
+                    'question' => 'Show me all customers',
+                    'answer_summary' => 'Here are all customers...',
                 ],
             ],
         ];
 
-        $context = [
-            'schema' => [
-                'labels' => ['Customer', 'Order', 'Product'],
-                'relationships' => ['PURCHASED', 'ORDERED'],
-            ],
-            'conversation_context' => $conversationContext,
-        ];
-
-        $prompt = $this->promptBuilder->buildPrompt(
+        ['user' => $user] = $this->promptBuilder->buildPrompts(
             'Show me those who ordered last month',
             $context,
             false
         );
 
-        // Assert CONVERSATION CONTEXT header is in prompt
+        // The conversation context block (user-role) is present.
         $this->assertStringContainsString(
-            'CONVERSATION CONTEXT',
-            $prompt,
-            'Prompt should include CONVERSATION CONTEXT section'
+            'Conversation Context',
+            $user,
+            'Prompt should include the Conversation Context section'
         );
 
-        // Assert focused entity is in prompt
-        $this->assertStringContainsString(
-            'Customer',
-            $prompt,
-            'Prompt should include the focused entity'
-        );
+        // Focused entity is in the prompt.
+        $this->assertStringContainsString('Customer', $user, 'Prompt should include the focused entity');
 
-        // Assert recent exchange content is in prompt
+        // Recent exchange content is in the prompt.
         $this->assertStringContainsString(
             'Show me all customers',
-            $prompt,
+            $user,
             'Prompt should include recent exchange content'
         );
     }
@@ -170,25 +155,24 @@ class ConversationContextIntegrationTest extends TestCase
     /** @test */
     public function it_does_not_include_conversation_context_when_empty(): void
     {
-        // Build prompt without conversation_context
-        $context = [
-            'schema' => [
-                'labels' => ['Customer', 'Order'],
-                'relationships' => ['PURCHASED'],
-            ],
+        // Build prompt without any conversation context.
+        $context = new \Condoedge\Ai\DTOs\PipelineContext();
+        $context->graphSchema = [
+            'labels' => ['Customer', 'Order'],
+            'relationships' => ['PURCHASED'],
         ];
 
-        $prompt = $this->promptBuilder->buildPrompt(
+        ['user' => $user] = $this->promptBuilder->buildPrompts(
             'How many customers do we have?',
             $context,
             false
         );
 
-        // Assert CONVERSATION CONTEXT is NOT in prompt when context is empty
+        // The Conversation Context block is omitted when there is no conversation context.
         $this->assertStringNotContainsString(
-            'CONVERSATION CONTEXT',
-            $prompt,
-            'Prompt should not include CONVERSATION CONTEXT when context is empty'
+            'Conversation Context',
+            $user,
+            'Prompt should not include Conversation Context when context is empty'
         );
     }
 
@@ -202,20 +186,9 @@ class ConversationContextIntegrationTest extends TestCase
             'status' => 'active',
         ]);
 
-        $schema = [
-            'labels' => ['Customer', 'Order', 'Product'],
-            'relationships' => ['PURCHASED', 'ORDERED'],
-        ];
-
-        // First question
-        $result1 = $this->contextManager->processQuestion(
-            $conversation,
-            'Show me all customers',
-            $schema
-        );
-
-        $this->assertFalse($result1['is_follow_up']);
-        $this->assertEquals('Customer', $result1['focused_entity']);
+        // First question (no pre-pipeline analysis: the snapshot is written only
+        // after the turn executed — Phase 2.B)
+        $this->assertNull($conversation->getFocusedEntity());
 
         // Add message to conversation
         $conversation->addMessage('user', 'Show me all customers');
@@ -234,27 +207,30 @@ class ConversationContextIntegrationTest extends TestCase
         // Verify context was updated
         $conversation->refresh();
         $this->assertEquals('Customer', $conversation->getFocusedEntity());
-        $this->assertEquals('MATCH (c:Customer) RETURN c', $conversation->getLastCypherQuery());
+        $this->assertEquals('MATCH (c:Customer) RETURN c', $conversation->context_snapshot['last_cypher_query'] ?? null);
         $this->assertContains('Customer', $conversation->getMentionedEntities());
 
-        // Second question (follow-up) - "ordered" contains "Order" so focus shifts
-        $result2 = $this->contextManager->processQuestion(
-            $conversation,
-            'Show me those who ordered last month',
-            $schema
-        );
-
-        $this->assertTrue($result2['is_follow_up']);
-
-        // Build prompt context
+        // Second question ("Show me those who ordered last month"): the prompt
+        // context it receives is what the previous turn RECORDED. No substring
+        // guess ("ordered" ⊃ "Order") shifts the focus before QU runs.
         $promptContext = $this->contextManager->buildPromptContext($conversation);
 
         $this->assertArrayHasKey('focused_entity', $promptContext);
         $this->assertArrayHasKey('mentioned_entities', $promptContext);
         $this->assertArrayHasKey('last_cypher_query', $promptContext);
         $this->assertArrayHasKey('recent_exchanges', $promptContext);
-        // Focus shifts to Order because "ordered" is detected as Order entity
-        $this->assertEquals('Order', $promptContext['focused_entity']);
+        $this->assertEquals('Customer', $promptContext['focused_entity']);
+
+        // The second turn's executed query moves the focus.
+        $this->contextManager->recordResponse(
+            $conversation,
+            'Here are the orders...',
+            'MATCH (c:Customer)-[:PURCHASED]->(o:Order) RETURN o',
+            ['data' => [['id' => 1]]]
+        );
+        $conversation->refresh();
+        $this->assertEquals('Customer', $conversation->getFocusedEntity(), 'first label of the executed cypher');
+        $this->assertContains('Order', $conversation->getMentionedEntities());
     }
 
     /** @test */
@@ -262,7 +238,7 @@ class ConversationContextIntegrationTest extends TestCase
     {
         $section = new ConversationContextSection();
 
-        // Priority should be 55 (after SimilarQueriesSection at 50, before DetectedEntitiesSection at 60)
+        // Priority should be 55 (after SimilarQueriesSection at 50, before DetectedScopesSection at 65)
         $priority = $section->getPriority();
 
         $this->assertEquals(55, $priority, 'ConversationContextSection should have priority 55');
@@ -273,37 +249,29 @@ class ConversationContextIntegrationTest extends TestCase
     {
         $section = new ConversationContextSection();
 
-        // Without conversation_context
-        $shouldIncludeEmpty = $section->shouldInclude(
-            'Test question',
-            [],
-            []
+        // Without conversation context.
+        $this->assertFalse(
+            $section->shouldInclude('Test question', $this->pipelineContextWith([]), [])
         );
-        $this->assertFalse($shouldIncludeEmpty);
 
-        // With empty conversation_context
-        $shouldIncludeEmptyContext = $section->shouldInclude(
-            'Test question',
-            ['conversation_context' => []],
-            []
+        // With empty conversation context.
+        $this->assertFalse(
+            $section->shouldInclude('Test question', $this->pipelineContextWith([]), [])
         );
-        $this->assertFalse($shouldIncludeEmptyContext);
 
-        // With focused_entity
-        $shouldIncludeWithFocus = $section->shouldInclude(
-            'Test question',
-            ['conversation_context' => ['focused_entity' => 'Customer']],
-            []
+        // With focused_entity.
+        $this->assertTrue(
+            $section->shouldInclude('Test question', $this->pipelineContextWith(['focused_entity' => 'Customer']), [])
         );
-        $this->assertTrue($shouldIncludeWithFocus);
 
-        // With recent_exchanges
-        $shouldIncludeWithExchanges = $section->shouldInclude(
-            'Test question',
-            ['conversation_context' => ['recent_exchanges' => [['user' => ['content' => 'test']]]]],
-            []
+        // With recent_exchanges.
+        $this->assertTrue(
+            $section->shouldInclude(
+                'Test question',
+                $this->pipelineContextWith(['recent_exchanges' => [['question' => 'test']]]),
+                []
+            )
         );
-        $this->assertTrue($shouldIncludeWithExchanges);
     }
 
     /** @test */
@@ -311,42 +279,44 @@ class ConversationContextIntegrationTest extends TestCase
     {
         $section = new ConversationContextSection();
 
-        $context = [
-            'conversation_context' => [
-                'focused_entity' => 'Customer',
-                'last_query_type' => 'list',
-                'mentioned_entities' => ['Customer', 'Order'],
-                'is_follow_up' => true,
-                'recent_exchanges' => [
-                    [
-                        'user' => ['content' => 'Show me all customers'],
-                        'assistant' => [
-                            'content' => 'Here are the customers',
-                            'cypher_query' => 'MATCH (c:Customer) RETURN c',
-                        ],
-                    ],
+        $context = $this->pipelineContextWith([
+            'focused_entity' => 'Customer',
+            'last_query_type' => 'list',
+            'mentioned_entities' => ['Customer', 'Order'],
+            'recent_exchanges' => [
+                [
+                    'question' => 'Show me all customers',
+                    'answer_summary' => 'Here are the customers',
                 ],
             ],
-        ];
+        ]);
 
         $formatted = $section->format('Show me those who ordered', $context, []);
 
-        // Check header
-        $this->assertStringContainsString('CONVERSATION CONTEXT', $formatted);
+        // Header.
+        $this->assertStringContainsString('Conversation Context', $formatted);
 
-        // Check focused entity
+        // Focused entity.
         $this->assertStringContainsString('Current Focus:', $formatted);
         $this->assertStringContainsString('Customer', $formatted);
 
-        // Check recent exchanges
+        // Recent exchanges.
         $this->assertStringContainsString('Recent Conversation:', $formatted);
         $this->assertStringContainsString('Show me all customers', $formatted);
 
-        // Check mentioned entities
+        // Mentioned entities.
         $this->assertStringContainsString('Entities discussed:', $formatted);
+    }
 
-        // Check follow-up note
-        $this->assertStringContainsString('continuation of the previous conversation', $formatted);
+    /**
+     * Build a PipelineContext carrying the given conversation context array.
+     */
+    private function pipelineContextWith(array $conversationContext): \Condoedge\Ai\DTOs\PipelineContext
+    {
+        $context = new \Condoedge\Ai\DTOs\PipelineContext();
+        $context->conversationContext = $conversationContext;
+
+        return $context;
     }
 
     /** @test */
@@ -361,7 +331,6 @@ class ConversationContextIntegrationTest extends TestCase
         // Initially no context
         $this->assertNull($conversation->getFocusedEntity());
         $this->assertEmpty($conversation->getMentionedEntities());
-        $this->assertNull($conversation->getLastCypherQuery());
 
         // Update context snapshot
         $conversation->updateContextSnapshot([
@@ -374,13 +343,13 @@ class ConversationContextIntegrationTest extends TestCase
 
         $this->assertEquals('Order', $conversation->getFocusedEntity());
         $this->assertEquals(['Order', 'Customer'], $conversation->getMentionedEntities());
-        $this->assertEquals('count', $conversation->getLastQueryType());
+        $this->assertEquals('count', $conversation->context_snapshot['last_query_type'] ?? null);
 
         // Add message with cypher query
-        $conversation->addMessage('assistant', 'There are 42 orders', [
+        $message = $conversation->addMessage('assistant', 'There are 42 orders', [
             'cypher_query' => 'MATCH (o:Order) RETURN count(o)',
         ]);
 
-        $this->assertEquals('MATCH (o:Order) RETURN count(o)', $conversation->getLastCypherQuery());
+        $this->assertEquals('MATCH (o:Order) RETURN count(o)', $message->fresh()->cypher_query);
     }
 }

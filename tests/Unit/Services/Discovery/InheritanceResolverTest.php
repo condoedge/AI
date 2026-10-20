@@ -92,7 +92,6 @@ class InheritanceResolverTest extends TestCase
     {
         $parentConfig = [
             'graph' => ['label' => 'Person'],
-            'vector' => ['collection' => 'persons'],
             'metadata' => [
                 'aliases' => ['person', 'people'],
                 'scopes' => [],

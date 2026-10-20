@@ -33,6 +33,12 @@ class DualStorageCoordinationTest extends TestCase
         // Set up database schema for File model
         $this->setUpDatabase();
 
+        // FileSearchService resolves the File model through the FileModel facade
+        // (the 'file-model' container binding), not the File class directly.
+        // Bind it to a real File instance so FileModel::whereIn(...)->get() queries
+        // the sqlite 'files' table this test populates.
+        $this->app->instance('file-model', new File());
+
         // Create mocks
         $this->fileProcessorMock = Mockery::mock(FileProcessorInterface::class);
         $this->chunkStoreMock = Mockery::mock(ChunkStoreInterface::class);
@@ -154,167 +160,6 @@ class DualStorageCoordinationTest extends TestCase
         $this->assertNotEmpty($results);
         $this->assertArrayHasKey('file_id', $results[0]);
         $this->assertArrayHasKey('score', $results[0]);
-    }
-
-    public function test_hybrid_search_applies_metadata_filters_after_content_search()
-    {
-        // Create a test file in the database
-        $file = File::create([
-            'name' => 'test.pdf',
-            'path' => '/path/to/test.pdf',
-            'extension' => 'pdf',
-            'mime_type' => 'application/pdf',
-            'size' => 1024,
-        ]);
-
-        $searchService = new FileSearchService(
-            $this->chunkStoreMock,
-            $this->graphStoreMock
-        );
-
-        // Mock content search
-        $this->chunkStoreMock->shouldReceive('searchByContent')
-            ->andReturn([
-                [
-                    'chunk' => new \Condoedge\Ai\DTOs\FileChunk(
-                        fileId: $file->id,
-                        fileName: 'test.pdf',
-                        content: 'Content',
-                        embedding: [],
-                        chunkIndex: 0,
-                        totalChunks: 1,
-                        startPosition: 0,
-                        endPosition: 7
-                    ),
-                    'score' => 0.9,
-                ],
-            ]);
-
-        // Mock Neo4j for relationships
-        $this->graphStoreMock->shouldReceive('query')
-            ->andReturn([]);
-
-        $results = $searchService->hybridSearch(
-            contentQuery: 'test',
-            metadataFilters: ['extension' => 'pdf'],
-            options: ['limit' => 10]
-        );
-
-        $this->assertIsArray($results);
-    }
-
-    public function test_get_related_files_uses_graph_traversal()
-    {
-        // Create test files in the database
-        $file1 = File::create(['name' => 'file1.pdf', 'extension' => 'pdf']);
-        $file2 = File::create(['name' => 'file2.pdf', 'extension' => 'pdf']);
-        $file3 = File::create(['name' => 'file3.pdf', 'extension' => 'pdf']);
-
-        $searchService = new FileSearchService(
-            $this->chunkStoreMock,
-            $this->graphStoreMock
-        );
-
-        // Mock Neo4j query for related files
-        $this->graphStoreMock->shouldReceive('query')
-            ->once()
-            ->with(Mockery::type('string'), Mockery::type('array'))
-            ->andReturn([
-                ['id' => $file2->id, 'relationship_type' => 'BELONGS_TO'],
-                ['id' => $file3->id, 'relationship_type' => 'BELONGS_TO'],
-            ]);
-
-        $results = $searchService->getRelatedFiles($file1);
-
-        $this->assertIsArray($results);
-    }
-
-    public function test_search_by_metadata_uses_graph_queries()
-    {
-        // Create test files in the database
-        $file1 = File::create(['name' => 'file1.pdf', 'extension' => 'pdf']);
-        $file2 = File::create(['name' => 'file2.pdf', 'extension' => 'pdf']);
-
-        $searchService = new FileSearchService(
-            $this->chunkStoreMock,
-            $this->graphStoreMock
-        );
-
-        // Mock Neo4j metadata query
-        $this->graphStoreMock->shouldReceive('query')
-            ->once()
-            ->with(Mockery::type('string'), Mockery::type('array'))
-            ->andReturn([
-                ['id' => $file1->id],
-                ['id' => $file2->id],
-            ]);
-
-        // Mock the relationships query for each file
-        $this->graphStoreMock->shouldReceive('query')
-            ->twice()
-            ->with(Mockery::type('string'), Mockery::on(function ($params) {
-                return isset($params['file_id']);
-            }))
-            ->andReturn([]);
-
-        $results = $searchService->searchByMetadata([
-            'extension' => 'pdf',
-            'user_id' => 123,
-        ], limit: 10);
-
-        $this->assertIsArray($results);
-    }
-
-    public function test_get_files_by_user_queries_neo4j()
-    {
-        // Create test files in the database
-        $file1 = File::create(['name' => 'file1.pdf', 'extension' => 'pdf']);
-        $file2 = File::create(['name' => 'file2.pdf', 'extension' => 'pdf']);
-
-        $searchService = new FileSearchService(
-            $this->chunkStoreMock,
-            $this->graphStoreMock
-        );
-
-        $this->graphStoreMock->shouldReceive('query')
-            ->once()
-            ->with(Mockery::type('string'), [
-                'user_id' => 123,
-                'limit' => 10,
-            ])
-            ->andReturn([
-                ['id' => $file1->id],
-                ['id' => $file2->id],
-            ]);
-
-        $results = $searchService->getFilesByUser(123, 10);
-
-        $this->assertIsArray($results);
-    }
-
-    public function test_get_files_by_team_queries_neo4j()
-    {
-        // Create test file in the database
-        $file = File::create(['name' => 'file1.pdf', 'extension' => 'pdf']);
-
-        $searchService = new FileSearchService(
-            $this->chunkStoreMock,
-            $this->graphStoreMock
-        );
-
-        $this->graphStoreMock->shouldReceive('query')
-            ->once()
-            ->with(Mockery::type('string'), [
-                'team_id' => 456,
-                'limit' => 10,
-            ])
-            ->andReturn([
-                ['id' => $file->id],
-            ]);
-
-        $results = $searchService->getFilesByTeam(456, 10);
-
-        $this->assertIsArray($results);
     }
 
     public function test_file_processing_respects_configuration()

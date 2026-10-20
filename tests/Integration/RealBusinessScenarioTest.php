@@ -144,6 +144,7 @@ class RealBusinessScenarioTest extends TestCase
             $table->enum('severity', ['mild', 'moderate', 'severe'])->default('mild');
             $table->text('reaction')->nullable();
             $table->text('treatment')->nullable();
+            $table->text('notes')->nullable();
             $table->timestamps();
         });
 
@@ -181,11 +182,10 @@ class RealBusinessScenarioTest extends TestCase
 
         // Verify auto-discovery works
         $this->assertArrayHasKey('graph', $config);
-        $this->assertArrayHasKey('vector', $config);
         $this->assertArrayHasKey('metadata', $config);
 
-        // Verify label
-        $this->assertEquals('TestPerson', $config['graph']['label']);
+        // Verify label (AliasGenerator strips the 'Test' prefix from test models)
+        $this->assertEquals('Person', $config['graph']['label']);
 
         // Verify properties discovered from fillable
         $properties = $config['graph']['properties'];
@@ -246,7 +246,6 @@ class RealBusinessScenarioTest extends TestCase
 
         // Verify the model has everything needed for count queries
         $this->assertArrayHasKey('graph', $config);
-        $this->assertArrayHasKey('vector', $config);
 
         // Verify scopes that enable filtering
         $scopeAdapter = app(CypherScopeAdapter::class);
@@ -312,10 +311,10 @@ class RealBusinessScenarioTest extends TestCase
         $this->assertArrayHasKey('upcoming', $eventScopes);
         $this->assertStringContainsString('start_date', json_encode($eventScopes['upcoming']));
 
-        // Inscription model with thisYear scope
+        // Inscription model with thisYear scope (scope names are normalized to snake_case)
         $inscriptionScopes = $scopeAdapter->discoverScopes(TestInscription::class);
 
-        $this->assertArrayHasKey('thisYear', $inscriptionScopes);
+        $this->assertArrayHasKey('this_year', $inscriptionScopes);
 
         echo "\n✓ Temporal queries enabled:\n";
         echo "  - 'upcoming' scope for events\n";
@@ -407,17 +406,13 @@ class RealBusinessScenarioTest extends TestCase
         $healthConfig = $discovery->discover(TestHealthRecord::class);
         $allergyConfig = $discovery->discover(TestAllergy::class);
 
-        // Verify health entities have embed fields for RAG
-        $healthEmbedFields = $healthConfig['vector']['embed_fields'] ?? [];
-        $allergyEmbedFields = $allergyConfig['vector']['embed_fields'] ?? [];
-
-        $this->assertNotEmpty($healthEmbedFields, 'Health records should have embed fields');
-        $this->assertNotEmpty($allergyEmbedFields, 'Allergies should have embed fields');
+        // Verify health entities are discovered as graph nodes (records are not embedded)
+        $this->assertNotEmpty($healthConfig['graph']['properties'] ?? [], 'Health records should have graph properties');
+        $this->assertNotEmpty($allergyConfig['graph']['properties'] ?? [], 'Allergies should have graph properties');
 
         echo "\n✓ Health management queries enabled:\n";
-        echo "  - Health records with " . count($healthEmbedFields) . " embed fields\n";
-        echo "  - Allergies with " . count($allergyEmbedFields) . " embed fields\n";
-        echo "  - RAG can provide health recommendations\n";
+        echo "  - Health records with " . count($healthConfig['graph']['properties']) . " graph properties\n";
+        echo "  - Allergies with " . count($allergyConfig['graph']['properties']) . " graph properties\n";
         echo "  - Aggregation can find person with most issues\n";
 
         $this->assertTrue(true);
@@ -614,7 +609,7 @@ class TestAllergy extends Model implements Nodeable
     use HasNodeableConfig;
 
     protected $table = 'allergies';
-    protected $fillable = ['person_id', 'allergen', 'severity', 'reaction', 'treatment'];
+    protected $fillable = ['person_id', 'allergen', 'severity', 'reaction', 'treatment', 'notes'];
 
     public function person() { return $this->belongsTo(TestPerson::class, 'person_id'); }
 }

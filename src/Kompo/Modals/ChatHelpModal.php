@@ -1,5 +1,4 @@
 <?php
-// src/Kompo/Modals/ChatHelpModal.php
 
 namespace Condoedge\Ai\Kompo\Modals;
 

@@ -1,30 +1,31 @@
 /**
  * Chat Message Injector
  *
- * Implements the placeholder injection pattern (from auth/roles-manager.js)
- * to avoid full page reloads when adding new messages.
+ * Implements the optimistic placeholder pattern (from auth/roles-manager.js) to avoid full
+ * page reloads when sending/editing messages. The component shows an instant user bubble +
+ * typing indicator client-side, posts the turn via the ChatPresenter, then drives a Kompo
+ * ->refresh() of the messages panel which re-renders the persisted messages from the DB.
  *
- * Two-panel architecture:
- * - Staging panel (hidden, in bottom()) - receives raw HTML from server via inPanel()
- * - Display panel (JS-created, inside vlQueryWrapper) - shows placeholders and messages
+ * Display panel (JS-created, inside vlQueryWrapper) - shows the optimistic placeholders until
+ * the panel refresh replaces them with the DB-rendered messages.
  *
  * Templates are injected by PHP with theme-aware classes:
- * - $USER_BUBBLE_TEMPLATE - User message bubble HTML
+ * - $USER_BUBBLE_TEMPLATE - User message bubble HTML (shared chat-kit own-bubble template
+ *   with $HTML / $TIME placeholders; avatar baked in server-side)
  * - $TYPING_INDICATOR_TEMPLATE - Typing indicator HTML
- * - $USER_AVATAR_HTML - User avatar HTML
+ *
+ * Scrolling delegates to the shared chat-kit library (window.KompoChatKit, loaded first
+ * by the same PHP carrier - AbstractChatSurface::js()).
  */
 
 const ChatMessageInjector = {
     panelId: 'chat-messages-panel',
-    stagingPanelId: 'temp-message-staging',
     displayPanelId: 'temp-message-display',
 
     // Templates injected by PHP (with theme classes)
     // Using backticks to avoid quote escaping issues with SVG attributes
     userBubbleTemplate: `$USER_BUBBLE_TEMPLATE`,
     typingIndicatorTemplate: `$TYPING_INDICATOR_TEMPLATE`,
-    userAvatarHtml: `$USER_AVATAR_HTML`,
-    dotColor: `$DOT_COLOR`,
 
     // Typing animation settings (injected by PHP from user settings)
     typingStyle: `$TYPING_STYLE`,
@@ -71,7 +72,7 @@ const ChatMessageInjector = {
      * Create a placeholder for a new user message + typing indicator
      * Called immediately when user clicks send
      */
-    precreateMessagePlaceholder(userMessage, avatarHtml) {
+    precreateMessagePlaceholder(userMessage) {
         // Hide welcome/empty state content when sending first message
         const welcomeState = document.getElementById('chat-welcome-state');
         const emptyState = document.getElementById('chat-empty-state');
@@ -84,14 +85,15 @@ const ChatMessageInjector = {
             return;
         }
 
-        // Create user message from template
+        // Create user message from the chat-kit template ($TIME / $HTML placeholders).
+        // Function replacements avoid $-pattern substitution bugs with user content;
+        // $TIME goes first so a literal '$TIME' typed in the message can't hijack it.
         const timestamp = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-        const avatar = avatarHtml || this.userAvatarHtml;
+        const escapedMessage = this.escapeHtml(userMessage);
 
-        let userBubbleHtml = this.userBubbleTemplate
-            .replace('$MESSAGE', this.escapeHtml(userMessage))
-            .replace('$TIMESTAMP', timestamp)
-            .replace('$AVATAR', avatar ? `<div class="ml-3 flex-shrink-0">${avatar}</div>` : '');
+        const userBubbleHtml = this.userBubbleTemplate
+            .replace('$TIME', () => timestamp)
+            .replace('$HTML', () => escapedMessage);
 
         const userBubble = document.createElement('div');
         userBubble.setAttribute('data-placeholder', 'user-message');
@@ -115,107 +117,6 @@ const ChatMessageInjector = {
         displayPanel.appendChild(typingIndicator);
 
         // Scroll to bottom
-        this.scrollToBottom();
-    },
-
-    /**
-     * Process server response from staging panel
-     * - Moves content + action bar to typing indicator
-     * - Moves proxies into message elements for persistence
-     * - Wires visible buttons to proxy buttons
-     */
-    processServerResponse() {
-        const stagingPanel = document.getElementById(this.stagingPanelId);
-        if (!stagingPanel || !stagingPanel.innerHTML.trim()) {
-            console.warn('Staging panel empty or not found');
-            return;
-        }
-
-        // 1. Get content and action bar from staging
-        const content = stagingPanel.querySelector('.chat-staged-content')?.outerHTML || '';
-        const actionBar = stagingPanel.querySelector('.chat-staged-action-bar')?.outerHTML || '';
-        const combinedHtml = content + actionBar;
-
-        // 2. Find the LATEST typing indicator and inject content
-        const contentAreas = document.querySelectorAll('.typing-indicator-content');
-        const contentArea = contentAreas.length > 0 ? contentAreas[contentAreas.length - 1] : null;
-        if (contentArea) {
-            contentArea.innerHTML = combinedHtml;
-            contentArea.classList.remove('typing-indicator-content');
-        }
-
-        // 3. Get message IDs from staging
-        const userMessageId = stagingPanel.querySelector('[data-user-message-id]')?.getAttribute('data-user-message-id');
-        const assistantMessageId = stagingPanel.querySelector('[data-assistant-message-id]')?.getAttribute('data-assistant-message-id');
-
-        // 4. Handle typing indicator element (becomes assistant message)
-        const typingIndicators = document.querySelectorAll('[data-placeholder="typing-indicator"]');
-        const typingIndicator = typingIndicators.length > 0 ? typingIndicators[typingIndicators.length - 1] : null;
-        if (typingIndicator) {
-            typingIndicator.removeAttribute('data-placeholder');
-            typingIndicator.removeAttribute('data-void');
-
-            if (assistantMessageId) {
-                typingIndicator.setAttribute('data-message-id', assistantMessageId);
-            }
-
-            // Move assistant proxies INTO this element (preserves Kompo bindings)
-            const assistantProxies = stagingPanel.querySelector('.chat-staged-assistant-proxies');
-            if (assistantProxies) {
-                typingIndicator.appendChild(assistantProxies);
-            }
-
-            // Move file citation proxies INTO this element (for [1], [2] links)
-            const fileCitationProxies = stagingPanel.querySelector('.chat-staged-file-citation-proxies');
-            if (fileCitationProxies) {
-                typingIndicator.appendChild(fileCitationProxies);
-            }
-
-            // Wire visible action buttons to proxies within same element
-            this.wireActionButtons(typingIndicator);
-        }
-
-        // 5. Handle user message (placeholder OR existing message after edit)
-        let userMessage = null;
-
-        // First try to find a placeholder (new message flow)
-        const userPlaceholders = document.querySelectorAll('[data-placeholder="user-message"]');
-        if (userPlaceholders.length > 0) {
-            userMessage = userPlaceholders[userPlaceholders.length - 1];
-            userMessage.removeAttribute('data-void');
-            userMessage.removeAttribute('data-placeholder');
-            if (userMessageId) {
-                userMessage.setAttribute('data-message-id', userMessageId);
-            }
-        } else if (userMessageId) {
-            // Edit flow: user message already exists with data-message-id
-            userMessage = document.querySelector(`[data-message-id="${userMessageId}"]`);
-        }
-
-        if (userMessage) {
-            // Move user edit proxy INTO user message element
-            const editProxy = stagingPanel.querySelector('.js-action-edit-proxy');
-            if (editProxy) {
-                // Remove any existing proxy container first (for re-edit scenarios)
-                const existingContainer = userMessage.querySelector('.js-proxy-container');
-                if (existingContainer) {
-                    existingContainer.remove();
-                }
-
-                const proxyContainer = document.createElement('div');
-                proxyContainer.className = 'js-proxy-container hidden';
-                proxyContainer.appendChild(editProxy);
-                userMessage.appendChild(proxyContainer);
-            }
-
-            // Wire edit button to proxy within same element
-            this.wireActionButtons(userMessage);
-        }
-
-        // 6. Clear staging (proxies have been moved out)
-        stagingPanel.innerHTML = '';
-
-        // 7. Scroll to show new message
         this.scrollToBottom();
     },
 
@@ -382,70 +283,6 @@ const ChatMessageInjector = {
                 // Reset to inactive
                 negBtn.classList.add('text-gray-400', 'hover:bg-red-50', 'hover:text-red-600');
             }
-        }
-    },
-
-    /**
-     * Add a new message before the display panel
-     * @param {string} messageHtml - The HTML content to insert
-     */
-    addNewMessage(messageHtml) {
-        const displayPanel = this.ensureDisplayPanel();
-        if (!displayPanel) {
-            return;
-        }
-
-        const placeholder = document.createElement('div');
-        placeholder.setAttribute('data-new-message', 'true');
-        placeholder.innerHTML = messageHtml;
-
-        // Insert before the display panel
-        displayPanel.parentNode.insertBefore(placeholder, displayPanel);
-
-        this.scrollToBottom();
-    },
-
-    /**
-     * Inject the actual assistant response, replacing the typing indicator
-     * @deprecated Use processServerResponse() instead
-     */
-    injectAssistantMessage(responseHtml) {
-        const typingIndicator = document.querySelector('[data-placeholder="typing-indicator"]');
-        if (!typingIndicator) {
-            console.warn('Typing indicator not found');
-            return;
-        }
-
-        // Create the actual message element
-        const assistantBubble = document.createElement('div');
-        assistantBubble.innerHTML = responseHtml;
-
-        // Replace typing indicator with actual message
-        typingIndicator.parentNode.replaceChild(assistantBubble, typingIndicator);
-
-        // Remove the void marker from user message
-        const userMessage = document.querySelector('[data-placeholder="user-message"]');
-        if (userMessage) {
-            userMessage.removeAttribute('data-void');
-            userMessage.removeAttribute('data-placeholder');
-        }
-
-        // Scroll to show new message
-        this.scrollToBottom();
-    },
-
-    /**
-     * Remove all placeholders (on error or cancel)
-     */
-    clearPlaceholders() {
-        const displayPanel = document.getElementById(this.displayPanelId);
-        if (displayPanel) {
-            displayPanel.innerHTML = '';
-        }
-
-        const stagingPanel = document.getElementById(this.stagingPanelId);
-        if (stagingPanel) {
-            stagingPanel.innerHTML = '';
         }
     },
 
@@ -663,17 +500,20 @@ const ChatMessageInjector = {
     },
 
     /**
-     * Scroll to bottom of chat
+     * Scroll to bottom of chat - delegates to the shared chat-kit library
+     * (with a minimal inline fallback if the kit was not injected)
      */
     scrollToBottom() {
+        if (window.KompoChatKit) {
+            window.KompoChatKit.snapToBottom('#' + this.panelId, true);
+            return;
+        }
+
         const panel = document.getElementById(this.panelId);
         const wrapper = panel?.querySelector('.vlQueryWrapper');
         if (wrapper) {
             setTimeout(() => {
-                wrapper.scrollTo({
-                    top: wrapper.scrollHeight,
-                    behavior: 'smooth'
-                });
+                wrapper.scrollTo({ top: wrapper.scrollHeight, behavior: 'smooth' });
             }, 100);
         }
     },
@@ -721,20 +561,8 @@ window.ChatMessageInjector = ChatMessageInjector;
 /**
  * Helper functions for Kompo run() calls
  */
-function precreateMessagePlaceholder(message, avatarHtml) {
-    ChatMessageInjector.precreateMessagePlaceholder(message, avatarHtml || '');
-}
-
-function processServerResponse() {
-    ChatMessageInjector.processServerResponse();
-}
-
-function injectAssistantMessage(responseHtml) {
-    ChatMessageInjector.injectAssistantMessage(responseHtml);
-}
-
-function clearMessagePlaceholders() {
-    ChatMessageInjector.clearPlaceholders();
+function precreateMessagePlaceholder(message) {
+    ChatMessageInjector.precreateMessagePlaceholder(message);
 }
 
 function scrollChatToBottom() {
@@ -742,9 +570,6 @@ function scrollChatToBottom() {
 }
 
 window.precreateMessagePlaceholder = precreateMessagePlaceholder;
-window.processServerResponse = processServerResponse;
-window.injectAssistantMessage = injectAssistantMessage;
-window.clearMessagePlaceholders = clearMessagePlaceholders;
 window.scrollChatToBottom = scrollChatToBottom;
 
 /**

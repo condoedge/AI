@@ -9,40 +9,33 @@ use Condoedge\Ai\Domain\Contracts\Nodeable;
 /**
  * DataIngestionServiceInterface
  *
- * Contract for ingesting entities into both graph (Neo4j) and vector (Qdrant) stores.
+ * Contract for ingesting entities into the graph store (Neo4j).
  *
  * This service provides a unified interface for:
  * - Storing entities as nodes in Neo4j graph database
- * - Creating embeddings and storing them in Qdrant vector database
  * - Managing relationships between entities
  * - Batch processing for efficient ingestion
  *
  * Design Principles:
- * - Interface-based: Depends only on abstractions (VectorStoreInterface, GraphStoreInterface)
- * - Resilient: Continues processing even if one store fails
+ * - Interface-based: Depends only on abstractions (GraphStoreInterface)
  * - Transparent: Returns detailed status for each operation
  * - Testable: Can be tested in isolation with mocks
  */
 interface DataIngestionServiceInterface
 {
     /**
-     * Ingest a single entity into both graph and vector stores
+     * Ingest a single entity into the graph store
      *
      * This method:
-     * 1. Extracts GraphConfig from entity and creates/updates node in Neo4j
+     * 1. Extracts GraphConfig from entity and creates the node in Neo4j
      * 2. Creates relationships defined in GraphConfig
-     * 3. Extracts VectorConfig from entity
-     * 4. Generates embedding from specified fields
-     * 5. Stores embedding in Qdrant with metadata
      *
-     * The operation is resilient - if one store fails, the other continues.
-     * Check the returned status array to verify complete success.
+     * Records are not embedded: no embedding call, no vector-store write.
      *
      * @param Nodeable $entity The entity to ingest (must implement Nodeable)
      * @return array Status array with structure:
      *               [
      *                   'graph_stored' => bool,        // True if Neo4j succeeded
-     *                   'vector_stored' => bool,       // True if Qdrant succeeded
      *                   'relationships_created' => int, // Count of relationships created
      *                   'errors' => string[]           // Any error messages
      *               ]
@@ -65,7 +58,7 @@ interface DataIngestionServiceInterface
      *               [
      *                   'total' => int,           // Total entities processed
      *                   'succeeded' => int,       // Entities fully ingested
-     *                   'partially_succeeded' => int, // Entities stored in one store only
+     *                   'partially_succeeded' => int, // Always 0 (kept for the summary shape)
      *                   'failed' => int,          // Entities that failed completely
      *                   'errors' => array         // Detailed errors by entity ID
      *               ]
@@ -74,14 +67,12 @@ interface DataIngestionServiceInterface
     public function ingestBatch(array $entities): array;
 
     /**
-     * Remove an entity from both graph and vector stores
+     * Remove an entity from the graph store
      *
-     * This method:
-     * 1. Deletes the node from Neo4j (relationships are automatically removed)
-     * 2. Deletes the point from Qdrant vector store
+     * Deletes the node from Neo4j (relationships are automatically removed).
      *
      * @param Nodeable $entity The entity to remove
-     * @return bool True if removed from at least one store successfully
+     * @return bool True if the node was removed
      * @throws \InvalidArgumentException If entity does not implement Nodeable
      */
     public function remove(Nodeable $entity): bool;
@@ -89,18 +80,17 @@ interface DataIngestionServiceInterface
     /**
      * Sync an entity (update if exists, create if not)
      *
-     * This method checks if the entity exists in each store:
-     * - If exists: updates properties/embedding
-     * - If not exists: creates new node/point
+     * This method checks if the entity's node exists in the graph:
+     * - If exists: updates its properties
+     * - If not exists: creates the node and its relationships
      *
-     * Useful for keeping stores in sync with application database changes.
+     * Useful for keeping the graph in sync with application database changes.
      *
      * @param Nodeable $entity The entity to sync
      * @return array Status array with structure:
      *               [
      *                   'action' => string,        // 'created' or 'updated'
      *                   'graph_synced' => bool,    // True if Neo4j succeeded
-     *                   'vector_synced' => bool,   // True if Qdrant succeeded
      *                   'errors' => string[]       // Any error messages
      *               ]
      * @throws \InvalidArgumentException If entity does not implement Nodeable

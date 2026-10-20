@@ -96,7 +96,6 @@ NEO4J_URI=bolt://localhost:7687
 NEO4J_USERNAME=neo4j
 NEO4J_PASSWORD=your-secure-password
 NEO4J_DATABASE=neo4j
-NEO4J_ENABLED=true
 ```
 
 | Variable | Type | Default | Description |
@@ -105,7 +104,6 @@ NEO4J_ENABLED=true
 | `NEO4J_USERNAME` | string | neo4j | Database username |
 | `NEO4J_PASSWORD` | string | — | Database password |
 | `NEO4J_DATABASE` | string | neo4j | Database name |
-| `NEO4J_ENABLED` | bool | true | Enable/disable Neo4j |
 
 ---
 
@@ -116,7 +114,6 @@ QDRANT_HOST=localhost
 QDRANT_PORT=6333
 QDRANT_API_KEY=
 QDRANT_TIMEOUT=30
-QDRANT_ENABLED=true
 ```
 
 | Variable | Type | Default | Description |
@@ -125,7 +122,6 @@ QDRANT_ENABLED=true
 | `QDRANT_PORT` | int | 6333 | Qdrant port |
 | `QDRANT_API_KEY` | string | null | API key (cloud only) |
 | `QDRANT_TIMEOUT` | int | 30 | Request timeout (seconds) |
-| `QDRANT_ENABLED` | bool | true | Enable/disable Qdrant |
 
 ---
 
@@ -170,7 +166,7 @@ OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 
 | Variable | Type | Default | Description |
 | --- | --- | --- | --- |
-| `AI_EMBEDDING_PROVIDER` | string | openai | `openai` or `anthropic` |
+| `AI_EMBEDDING_PROVIDER` | string | openai | `openai` (the only embedding provider; Anthropic has no embeddings API) |
 | `OPENAI_EMBEDDING_MODEL` | string | text-embedding-3-small | Embedding model (1536 dims) |
 
 **Important:** Vector dimensions are configured in `config/ai.php`:
@@ -252,7 +248,7 @@ AI_AUTO_SYNC_LOG_ERRORS=true
 | `AI_AUTO_SYNC_FAIL_SILENTLY` | bool | true | Don't throw exceptions |
 | `AI_AUTO_SYNC_LOG_ERRORS` | bool | true | Log sync errors |
 
-**When auto-sync is enabled**, models implementing `Nodeable` and using `HasNodeableConfig` trait automatically sync to Neo4j + Qdrant on create/update/delete.
+**When auto-sync is enabled**, models implementing `Nodeable` and using `HasNodeableConfig` trait automatically sync to the graph (Neo4j) on create/update/delete.
 
 **Performance tip:** For high-throughput applications, set `AI_AUTO_SYNC_QUEUE=true` to process sync operations asynchronously.
 
@@ -262,24 +258,13 @@ AI_AUTO_SYNC_LOG_ERRORS=true
 
 ```env
 AI_MAX_RESULTS=100
-AI_QUERY_TIMEOUT=30
-AI_CACHE_TTL=3600
-
-AI_VECTOR_SEARCH_LIMIT=5
-AI_SIMILARITY_THRESHOLD=0.7
-AI_INCLUDE_SCHEMA=true
-AI_INCLUDE_EXAMPLES=true
+AI_EXEC_TIMEOUT=30
 ```
 
 | Variable | Type | Default | Description |
 | --- | --- | --- | --- |
 | `AI_MAX_RESULTS` | int | 100 | Max query results |
-| `AI_QUERY_TIMEOUT` | int | 30 | Query timeout (seconds) |
-| `AI_CACHE_TTL` | int | 3600 | Cache duration (seconds) |
-| `AI_VECTOR_SEARCH_LIMIT` | int | 5 | Similar queries retrieved |
-| `AI_SIMILARITY_THRESHOLD` | float | 0.7 | Min similarity score |
-| `AI_INCLUDE_SCHEMA` | bool | true | Include graph schema in RAG |
-| `AI_INCLUDE_EXAMPLES` | bool | true | Include example entities |
+| `AI_EXEC_TIMEOUT` | int | 30 | Query execution timeout in seconds (`ai.query_execution.default_timeout`) |
 
 ---
 
@@ -328,8 +313,6 @@ Control access levels and identify sensitive fields:
 
 ```php
 'access_control' => [
-    'default_threshold' => env('AI_ACCESS_DEFAULT_THRESHOLD', 5),
-    'thresholds' => [],
     'identifying_fields' => [
         '*' => ['date_of_birth', 'email', 'phone', 'ssn', 'medical_id'],
     ],
@@ -338,8 +321,6 @@ Control access levels and identify sensitive fields:
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `default_threshold` | int | 5 | Default access level threshold |
-| `thresholds` | array | [] | Custom thresholds per entity/action |
 | `identifying_fields` | array | [...] | Fields considered PII (per entity or `*` for all) |
 
 **Why this matters:**
@@ -349,95 +330,11 @@ Control access levels and identify sensitive fields:
 
 ---
 
-### Sync Triggers Configuration
-
-Define triggers for syncing related models when a model changes:
-
-```php
-'sync_triggers' => [
-    // Example: When a Customer is updated, also sync their Orders
-    // 'App\\Models\\Customer' => [
-    //     'orders' => ['on' => ['update']],
-    // ],
-],
-```
-
-| Option | Type | Description |
-| --- | --- | --- |
-| Model class | array | Map of relationship names to trigger configs |
-| `on` | array | Events that trigger sync: `create`, `update`, `delete` |
-
-**Use case:** Automatically propagate changes to related models in the graph database when a parent model changes.
-
----
-
-### Model Namespaces Configuration
-
-Define which namespaces to scan for Eloquent models during discovery:
-
-```php
-'model_namespaces' => [
-    'App\Models',
-],
-```
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| (array items) | string | `App\Models` | Namespace paths to scan for models |
-
-**Customize this when:**
-- Your models are in a different namespace
-- You have multiple model directories (e.g., `App\Models`, `Domain\Models`)
-
----
-
-### Relationship Weights Configuration
-
-Configure importance weights for different relationship types. Used to prioritize more important relationships when retrieving context for queries:
-
-```php
-'relationship_weights' => [
-    // High importance - direct business relationships
-    'PURCHASED' => 1.0,
-    'BELONGS_TO' => 0.9,
-    'MEMBER_OF' => 0.9,
-    'CREATED_BY' => 0.8,
-    'OWNS' => 0.8,
-
-    // Medium importance - secondary relationships
-    'RELATED_TO' => 0.6,
-    'TAGGED_WITH' => 0.5,
-    'CATEGORIZED_AS' => 0.5,
-
-    // Low importance - metadata relationships
-    'VIEWED' => 0.3,
-    'LOGGED' => 0.2,
-
-    // Default for unspecified relationships
-    'default' => 0.5,
-],
-```
-
-| Weight | Range | Description |
-| --- | --- | --- |
-| High | 0.8 - 1.0 | Direct business relationships (purchases, ownership) |
-| Medium | 0.5 - 0.7 | Secondary relationships (tags, categories) |
-| Low | 0.0 - 0.4 | Metadata relationships (views, logs) |
-| `default` | 0.5 | Applied to unspecified relationship types |
-
-**Why this matters:**
-- Helps the system prioritize context from important relationships
-- Reduces noise from less relevant connections
-- Customize weights based on your domain's relationship importance
-
----
-
 ### Semantic Context Selection
 
 Intelligent context selection uses vector similarity to determine which entities, relationships, and schema information are relevant to a question. This significantly reduces token consumption.
 
 ```env
-AI_SEMANTIC_CONTEXT_ENABLED=true
 AI_SEMANTIC_CONTEXT_COLLECTION=context_index
 AI_SEMANTIC_CONTEXT_THRESHOLD=0.65
 AI_SEMANTIC_CONTEXT_TOP_K=10
@@ -446,7 +343,6 @@ AI_SEMANTIC_CONTEXT_DIMENSION=1536
 
 | Variable | Type | Default | Description |
 | --- | --- | --- | --- |
-| `AI_SEMANTIC_CONTEXT_ENABLED` | bool | true | Enable semantic context selection |
 | `AI_SEMANTIC_CONTEXT_COLLECTION` | string | context_index | Qdrant collection name |
 | `AI_SEMANTIC_CONTEXT_THRESHOLD` | float | 0.65 | Minimum similarity score (0.0-1.0) |
 | `AI_SEMANTIC_CONTEXT_TOP_K` | int | 10 | Maximum context items to retrieve |
@@ -481,14 +377,12 @@ Semantic matching for scope detection uses vector embeddings to match natural la
 
 ```env
 AI_SCOPE_MATCHING_COLLECTION=scope_examples
-AI_SCOPE_MATCHING_THRESHOLD=0.70
 AI_SCOPE_MATCHING_TOP_K=5
 ```
 
 | Variable | Type | Default | Description |
 | --- | --- | --- | --- |
 | `AI_SCOPE_MATCHING_COLLECTION` | string | scope_examples | Qdrant collection for scope examples |
-| `AI_SCOPE_MATCHING_THRESHOLD` | float | 0.70 | Similarity threshold for matching |
 | `AI_SCOPE_MATCHING_TOP_K` | int | 5 | Maximum scopes to retrieve |
 
 **Configure in `config/ai.php`:**
@@ -549,7 +443,6 @@ AI_FILE_ACCESS_LOG=true
     // Response limits
     'max_references' => 5,
     'min_relevance_score' => 0.4,
-    'include_snippets' => true,
     'snippet_length' => 200,
 
     // Database file access
@@ -723,17 +616,12 @@ Configure the sections included in the query generation prompt. Each section add
     \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
     \Condoedge\Ai\Services\PromptSections\GenericContextSection::class,
     \Condoedge\Ai\Services\PromptSections\CurrentUserContextSection::class,
-    \Condoedge\Ai\Services\PromptSections\SchemaSection::class,
-    \Condoedge\Ai\Services\PromptSections\RelationshipsSection::class,
-    \Condoedge\Ai\Services\PromptSections\ExampleEntitiesSection::class,
+    \Condoedge\Ai\Services\PromptSections\SchemaCardsSection::class,
     \Condoedge\Ai\Services\PromptSections\FileContextSection::class,
     \Condoedge\Ai\Services\PromptSections\SimilarQueriesSection::class,
     \Condoedge\Ai\Services\PromptSections\ConversationContextSection::class,
     \Condoedge\Ai\Services\PromptSections\EntityActionAwarenessSection::class,
-    \Condoedge\Ai\Services\PromptSections\DetectedEntitiesSection::class,
     \Condoedge\Ai\Services\PromptSections\DetectedScopesSection::class,
-    // Pattern library (uses closure for dependency injection)
-    fn(SemanticPromptBuilder $promptBuilder) => new \Condoedge\Ai\Services\PromptSections\PatternLibrarySection($promptBuilder->getPatternLibrary()),
     \Condoedge\Ai\Services\PromptSections\QueryRulesSection::class,
     \Condoedge\Ai\Services\PromptSections\QuestionSection::class,
     \Condoedge\Ai\Services\PromptSections\TaskInstructionsSection::class,
@@ -747,16 +635,12 @@ Configure the sections included in the query generation prompt. Each section add
 | `ProjectContextSection` | Project name, description, domain |
 | `GenericContextSection` | General application context |
 | `CurrentUserContextSection` | Current user information for scoping |
-| `SchemaSection` | Neo4j schema (labels, properties) |
-| `RelationshipsSection` | Available relationships between entities |
-| `ExampleEntitiesSection` | Sample data for context |
-| `FileContextSection` | Relevant file/document content |
+| `SchemaCardsSection` | One compact card per selected label: typed properties, enum legends, live directed edges, fk hints |
+| `FileContextSection` | Names of relevant documents (no document text) |
 | `SimilarQueriesSection` | Previously successful similar queries |
 | `ConversationContextSection` | Chat history context |
 | `EntityActionAwarenessSection` | Teaches AI about available actions |
-| `DetectedEntitiesSection` | Entities detected in the question |
 | `DetectedScopesSection` | Scopes detected in the question |
-| `PatternLibrarySection` | Query pattern templates |
 | `QueryRulesSection` | Rules for query generation |
 | `QuestionSection` | The user's question |
 | `TaskInstructionsSection` | Final task instructions |
@@ -771,16 +655,18 @@ Configure the sections included in the response generation prompt:
 
 ```php
 'response_generator_sections' => [
+    \Condoedge\Ai\Services\ResponseSections\IdentitySection::class,
     \Condoedge\Ai\Services\ResponseSections\SystemPromptSection::class,
     \Condoedge\Ai\Services\ResponseSections\PrivacyAndSecurityGuidelinesSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResponseProjectContextSection::class,
     \Condoedge\Ai\Services\ResponseSections\OriginalQuestionSection::class,
-    \Condoedge\Ai\Services\ResponseSections\QueryInfoSection::class,
+    // QueryInfoSection is intentionally NOT registered: it leaked the executed Cypher
+    // (schema/table/property names) into the response prompt. Do not re-add it without
+    // gating it behind a 'technical' response style.
     \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,
-    \Condoedge\Ai\Services\ResponseSections\ResponseEntityActionsSection::class,
-    \Condoedge\Ai\Services\ResponseSections\StatisticsSection::class,
+    \Condoedge\Ai\Services\ResponseSections\AttachedActionsSection::class,
     \Condoedge\Ai\Services\ResponseSections\GuidelinesSection::class,
     \Condoedge\Ai\Services\ResponseSections\ResponseTaskSection::class,
 ],
@@ -790,16 +676,15 @@ Configure the sections included in the response generation prompt:
 
 | Section | Purpose |
 | --- | --- |
+| `IdentitySection` | Assistant identity and persona |
 | `SystemPromptSection` | System-level instructions |
 | `PrivacyAndSecurityGuidelinesSection` | PII handling rules |
 | `ResponseProjectContextSection` | Project context for response tone |
 | `OriginalQuestionSection` | The user's original question |
-| `QueryInfoSection` | Query that was executed |
 | `FileContextSection` | Relevant file content |
 | `ResponseConversationContextSection` | Chat history for follow-ups |
-| `ResultsDataSection` | Query results data |
-| `ResponseEntityActionsSection` | Available entity actions |
-| `StatisticsSection` | Result statistics |
+| `ResultsDataSection` | Query results data, row count / truncation total (execution time only when stats are not hidden) |
+| `AttachedActionsSection` | Links are attached by code — one line + chip labels + `{{record:N}}` |
 | `GuidelinesSection` | Response formatting guidelines |
 | `ResponseTaskSection` | Final response task |
 
@@ -826,9 +711,7 @@ class Customer extends Model implements Nodeable
     {
         return NodeableConfig::for(static::class)
             ->label('Customer')
-            ->properties('id', 'name', 'email')
-            ->collection('customers')
-            ->embedFields('name', 'company');
+            ->properties('id', 'name', 'email');
     }
 }
 ```
@@ -861,11 +744,6 @@ return [
                     'foreign_key' => 'customer_id',
                 ],
             ],
-        ],
-        'vector' => [
-            'collection' => 'customers',
-            'embed_fields' => ['name', 'email', 'company'],
-            'metadata' => ['id', 'name', 'status'],
         ],
     ],
 ];
@@ -928,11 +806,6 @@ return [
                 ],
             ],
         ],
-        'vector' => [
-            'collection' => 'customers',
-            'embed_fields' => ['name', 'description', 'company'],
-            'metadata' => ['id', 'email', 'status', 'created_at'],
-        ],
         'metadata' => [
             'aliases' => ['client', 'buyer', 'account'],
             'description' => 'Customer entity with orders and billing',
@@ -957,17 +830,7 @@ return [
 ];
 ```
 
-### Vector Configuration
-
-```php
-'vector' => [
-    'collection' => 'collection_name',              // Qdrant collection name
-    'embed_fields' => ['name', 'description'],      // Fields to embed
-    'metadata' => ['id', 'status', 'created_at'],  // Metadata for filtering
-];
-```
-
-**Note:** Qdrant collections are **automatically created** on first use with proper dimensions from `config/ai.php`.
+**Note:** An entity has no `vector` section. Records are stored in the graph only; they are not embedded. Qdrant holds the file chunks and the semantic indexes — see [Data ingestion](/docs/{{version}}/usage/data-ingestion).
 
 ### Metadata Configuration
 
@@ -992,7 +855,7 @@ Publish configuration files to customize them:
 # Publish main configuration
 php artisan vendor:publish --tag=ai-config
 
-# Publish entities configuration (or use ai:discover command)
+# Publish an empty entities.php stub (prefer ai:discover, which generates the real config)
 php artisan vendor:publish --tag=ai-entities
 ```
 
@@ -1084,7 +947,6 @@ config(['ai.auto_sync.enabled' => true]);
 - Run `php artisan ai:discover` to generate `config/entities.php`
 - Keep `AI_AUTO_DISCOVERY_RUNTIME=false` in production (use generated config)
 - Use `AI_AUTO_SYNC_QUEUE=true` for high-throughput applications
-- Set appropriate `AI_SIMILARITY_THRESHOLD` (0.65–0.8 works well)
 - Monitor slow queries with `AI_EXEC_LOG_SLOW=true`
 
 **❌ DON'T:**

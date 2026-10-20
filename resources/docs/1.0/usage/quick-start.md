@@ -120,11 +120,6 @@ return [
                 ['type' => 'ORDERS', 'target_label' => 'Order', 'inverse' => true]
             ]
         ],
-        'vector' => [
-            'collection' => 'customers',
-            'embed_fields' => ['name', 'email', 'company'],
-            'metadata' => ['id', 'name', 'company', 'status']
-        ],
         'metadata' => [
             'aliases' => ['customer', 'customers', 'client', 'clients'],
             'scopes' => [
@@ -143,14 +138,13 @@ return [
 **Review and customize** this file as needed. You can:
 - Change the Neo4j label
 - Add/remove properties
-- Customize embed fields
 - Add more aliases
 
 ---
 
 ## Step 3: Bulk Ingest Existing Data (2 minutes)
 
-If you have existing customers in your database, ingest them into Neo4j + Qdrant:
+If you have existing customers in your database, ingest them into the graph (Neo4j):
 
 ```bash
 php artisan ai:ingest
@@ -176,8 +170,9 @@ Ingestion complete!
 **What happened:**
 - All 500 existing customers were processed in batches
 - Customer nodes created in Neo4j with properties
-- Embeddings generated and stored in Qdrant
 - Relationships created (if target nodes exist)
+
+Records are stored in the graph only; they are not embedded. Qdrant holds the file chunks and the semantic indexes — see [Data ingestion](/docs/{{version}}/usage/data-ingestion).
 
 **Important:** If your entities have relationships to other entities (e.g., Users → Persons), some relationships may be skipped if target nodes don't exist yet. After ingesting all entities, run:
 
@@ -203,7 +198,7 @@ php artisan ai:ingest --dry-run
 
 ## Step 4: Auto-Sync New Data (Built-in!)
 
-**Good news:** New and updated entities automatically sync to Neo4j + Qdrant via model events!
+**Good news:** New and updated entities automatically sync to the graph (Neo4j) via model events!
 
 ```php
 // Create a new customer - automatically ingested
@@ -214,18 +209,15 @@ $customer = Customer::create([
     'status' => 'active'
 ]);
 // ✓ Automatically stored in Neo4j
-// ✓ Automatically embedded and stored in Qdrant
 
 // Update customer - automatically synced
 $customer->status = 'inactive';
 $customer->save();
 // ✓ Automatically updated in Neo4j
-// ✓ Automatically re-embedded and updated in Qdrant
 
 // Delete customer - automatically removed
 $customer->delete();
 // ✓ Automatically removed from Neo4j
-// ✓ Automatically removed from Qdrant
 ```
 
 **How it works:**
@@ -323,11 +315,6 @@ class Customer extends Model implements Nodeable
             ->label('Customer')
             ->properties('id', 'name', 'email', 'company', 'status')
             ->relationship('orders', 'Order', 'HAS_ORDER', 'customer_id')
-
-            // Qdrant configuration
-            ->collection('customers')
-            ->embedFields('name', 'email', 'company')
-            ->metadata(['id', 'name', 'company', 'status'])
 
             // Metadata
             ->aliases('customer', 'client', 'account')
@@ -465,7 +452,6 @@ AI_PROJECT_DOMAIN=your-domain
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `$embedFields` | `array` | Fields for semantic search embedding |
 | `$graphLabel` | `string` | Neo4j node label (defaults to class name) |
 | `$sensibleColumns` | `array` | Columns requiring special permission |
 | `$nodeableAliases` | `array` | Alternative names ("person", "people") |
@@ -491,10 +477,10 @@ The system automatically controls what users can see:
 | Command | Purpose |
 |---------|---------|
 | `ai:discover` | Analyze models, generate config cache |
-| `ai:ingest` | Create Neo4j nodes and Qdrant embeddings |
+| `ai:ingest` | Create Neo4j nodes and their relationships |
 | `ai:sync-relationships` | Create/reconcile Neo4j relationships |
 | `ai:index-scopes` | Convert Eloquent scopes to Cypher patterns |
-| `ai:index-semantic` | Generate/update Qdrant embeddings |
+| `ai:index-semantic` | Index entity names, aliases and descriptions in Qdrant |
 
 **First-time setup (run in sequence):**
 
@@ -503,7 +489,7 @@ php artisan ai:discover       # Analyze models
 php artisan ai:ingest         # Create Neo4j nodes
 php artisan ai:sync-relationships  # Create relationships
 php artisan ai:index-scopes   # Index Eloquent scopes
-php artisan ai:index-semantic # Generate embeddings
+php artisan ai:index-semantic # Index entity names and aliases
 ```
 
 ---

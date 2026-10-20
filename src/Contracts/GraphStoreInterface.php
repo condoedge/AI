@@ -88,7 +88,10 @@ interface GraphStoreInterface
     /**
      * Get database schema information
      *
-     * Returns information about node labels, relationship types, and properties
+     * Returns information about node labels, relationship types, and properties.
+     * `relationshipPatterns` is a list of {from_label, type, to_label, count}, or
+     * null when the pattern scan FAILED (unknown — consumers must not read it as
+     * "no edges"; GraphSchemaCache does not cache such a schema).
      *
      * @return array Schema information
      */
@@ -129,37 +132,4 @@ interface GraphStoreInterface
      * @return array|null Node properties or null if not found
      */
     public function getNode(string $label, string|int $id): ?array;
-
-    /**
-     * Begin a transaction
-     *
-     * @return mixed Transaction object/ID
-     */
-    public function beginTransaction();
-
-    /**
-     * Commit a transaction
-     *
-     * @param mixed $transaction Transaction object/ID
-     * @return bool Success status
-     */
-    public function commit($transaction): bool;
-
-    /**
-     * Rollback a transaction
-     *
-     * @param mixed $transaction Transaction object/ID
-     * @return bool Success status
-     */
-    public function rollback($transaction): bool;
-
-    /**
-     * Execute a query within a transaction
-     *
-     * @param mixed $transaction Transaction context from beginTransaction()
-     * @param string $cypher Cypher query
-     * @param array $parameters Query parameters
-     * @return array Query results
-     */
-    public function queryInTransaction(array $transaction, string $cypher, array $parameters = []): array;
 }

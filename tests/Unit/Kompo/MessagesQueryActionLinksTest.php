@@ -4,211 +4,113 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Kompo;
 
-use Condoedge\Ai\Kompo\MessagesQuery;
+use Condoedge\Ai\Services\Actions\ActionDispatcher;
+use Condoedge\Ai\Services\Actions\AiActionRegistry;
+use Condoedge\Ai\Services\Actions\PendingActionToken;
+use Condoedge\Ai\Services\Response\ActionLinkHandler;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
-use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
+use Condoedge\Ai\Tests\Unit\Services\Actions\Stubs\CapturingAction;
+use Condoedge\Ai\Tests\Unit\Services\Actions\Stubs\MutatingSpyAction;
 use Orchestra\Testbench\TestCase;
 use Mockery;
 
 /**
- * Tests for MessagesQuery action link proxy extraction error handling.
+ * MessagesQuery action-link rendering now flows through the AiActionRegistry + ActionDispatcher
+ * (the old entityActionLink/genericActionLink/extractActionLinkProxies proxy path was removed).
  *
- * These tests verify that extractActionLinkProxies() gracefully handles
- * resolver exceptions and logs failures appropriately.
+ * These tests exercise that new substrate at the seam the Query depends on:
+ *  - resolver-driven element creation via ActionLinkHandler (gracefully drops failures),
+ *  - the server-side approval round-trip used by MessagesQuery::approveAiAction.
  */
 class MessagesQueryActionLinksTest extends TestCase
 {
+    protected function getPackageProviders($app): array
+    {
+        return [];
+    }
+
     protected function tearDown(): void
     {
         Mockery::close();
         parent::tearDown();
     }
 
-    /**
-     * Don't load the full AI service provider to avoid API key requirements
-     */
-    protected function getPackageProviders($app): array
+    private function handler(AiActionRegistry $registry): ActionLinkHandler
     {
-        return [];
+        $discovery = Mockery::mock(EntityAutoDiscovery::class);
+        return new ActionLinkHandler($discovery, new ActionDispatcher($registry));
     }
 
     /** @test */
-    public function it_handles_resolver_exceptions_gracefully(): void
+    public function it_renders_entity_action_links_through_the_registry(): void
     {
-        $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
-        $mockDiscovery->shouldReceive('getEntityActionResolver')
-            ->andReturn(function ($id) {
-                throw new \RuntimeException('Resolver failed');
-            });
-        $mockDiscovery->shouldReceive('getGenericActionResolver')
-            ->andReturn(null);
+        $registry = new AiActionRegistry();
+        $registry->registerEntity('Person', new CapturingAction(
+            'profile',
+            fn($input, $context) => 'profile-element:' . $context->entityId,
+        ));
 
-        $this->app->instance(EntityAutoDiscovery::class, $mockDiscovery);
+        $elements = $this->handler($registry)
+            ->createElements('[John](entity://Person/152463/profile)');
 
-        // Create testable subclass that bypasses Kompo initialization
-        $query = new TestableMessagesQueryForActionLinks();
-
-        // Use reflection to test protected method
-        $method = new \ReflectionMethod($query, 'extractActionLinkProxies');
-        $method->setAccessible(true);
-
-        $content = '[John](entity://Person/123/profile)';
-
-        // Should not throw, should return empty array
-        $proxies = $method->invoke($query, $content);
-
-        $this->assertIsArray($proxies);
-        $this->assertEmpty($proxies);
+        $this->assertSame(['profile-element:152463'], $elements);
     }
 
     /** @test */
-    public function it_logs_resolver_failures(): void
+    public function it_drops_failing_resolvers_without_throwing(): void
     {
-        $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
-        $mockDiscovery->shouldReceive('getEntityActionResolver')
-            ->andReturn(function ($id) {
-                throw new \RuntimeException('Test error');
-            });
-        $mockDiscovery->shouldReceive('getGenericActionResolver')
-            ->andReturn(null);
+        $registry = new AiActionRegistry();
+        $registry->registerGeneric(new CapturingAction(
+            'boom',
+            function () {
+                throw new \RuntimeException('resolver failed');
+            },
+        ));
 
-        $this->app->instance(EntityAutoDiscovery::class, $mockDiscovery);
+        // ActionDispatcher::run catches the throwable → AiActionResult isError → handler drops it.
+        $elements = $this->handler($registry)->createElements('[X](action://boom)');
 
-        \Log::shouldReceive('warning')
-            ->once()
-            ->withArgs(function ($message, $context) {
-                return str_contains($message, 'Action link resolver failed')
-                    && $context['entity_type'] === 'Person'
-                    && $context['entity_id'] === '123';
-            });
-
-        $query = new TestableMessagesQueryForActionLinks();
-        $method = new \ReflectionMethod($query, 'extractActionLinkProxies');
-        $method->setAccessible(true);
-
-        $method->invoke($query, '[John](entity://Person/123/profile)');
-
-        // Mockery will verify the Log::warning expectation
-        $this->assertTrue(true);
+        $this->assertSame([], $elements);
     }
 
     /** @test */
-    public function it_handles_generic_action_resolver_exceptions_gracefully(): void
+    public function approval_round_trip_reauthorizes_before_running_a_mutating_action(): void
     {
-        $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
-        $mockDiscovery->shouldReceive('getEntityActionResolver')
-            ->andReturn(null);
-        $mockDiscovery->shouldReceive('getGenericActionResolver')
-            ->andReturn(function () {
-                throw new \RuntimeException('Generic resolver failed');
-            });
+        $ran = false;
+        $registry = new AiActionRegistry();
+        $registry->registerGeneric(new MutatingSpyAction(
+            'archive',
+            authorized: true,
+            onHandle: function () use (&$ran) { $ran = true; return 'archived'; },
+        ));
+        $dispatcher = new ActionDispatcher($registry);
 
-        $this->app->instance(EntityAutoDiscovery::class, $mockDiscovery);
+        // Render-time: deferred, never executed.
+        $deferred = $dispatcher->dispatch($registry->getGeneric('archive'), [], ['user_id' => 5]);
+        $this->assertFalse($ran);
+        $this->assertTrue($deferred->renderable['pending']);
 
-        // Create testable subclass
-        $query = new TestableMessagesQueryForActionLinks();
-        $method = new \ReflectionMethod($query, 'extractActionLinkProxies');
-        $method->setAccessible(true);
-
-        $content = '[Create Report](action://create-report)';
-
-        // Should not throw, should return empty array
-        $proxies = $method->invoke($query, $content);
-
-        $this->assertIsArray($proxies);
-        $this->assertEmpty($proxies);
+        // Approval-time: re-authorized server-side, then executed.
+        $approved = $dispatcher->approve($deferred->renderable['token'], ['user_id' => 5]);
+        $this->assertTrue($ran);
+        $this->assertFalse($approved->isError);
+        $this->assertSame('archived', $approved->renderable);
     }
 
     /** @test */
-    public function it_logs_generic_action_resolver_failures(): void
+    public function approval_is_rejected_for_a_forged_token(): void
     {
-        $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
-        $mockDiscovery->shouldReceive('getEntityActionResolver')
-            ->andReturn(null);
-        $mockDiscovery->shouldReceive('getGenericActionResolver')
-            ->andReturn(function () {
-                throw new \RuntimeException('Generic test error');
-            });
+        $registry = new AiActionRegistry();
+        $registry->registerGeneric(new MutatingSpyAction(
+            'archive',
+            authorized: true,
+            onHandle: fn() => 'archived',
+        ));
+        $dispatcher = new ActionDispatcher($registry);
 
-        $this->app->instance(EntityAutoDiscovery::class, $mockDiscovery);
+        $forged = PendingActionToken::issue('archive', null, [], 5)->encode() . 'tampered';
+        $result = $dispatcher->approve($forged, ['user_id' => 5]);
 
-        \Log::shouldReceive('warning')
-            ->once()
-            ->withArgs(function ($message, $context) {
-                return str_contains($message, 'Action link resolver failed')
-                    && $context['action_key'] === 'create-report';
-            });
-
-        $query = new TestableMessagesQueryForActionLinks();
-        $method = new \ReflectionMethod($query, 'extractActionLinkProxies');
-        $method->setAccessible(true);
-
-        $method->invoke($query, '[Create Report](action://create-report)');
-
-        // Mockery will verify the Log::warning expectation
-        $this->assertTrue(true);
-    }
-
-    /** @test */
-    public function it_continues_processing_other_links_after_failure(): void
-    {
-        // Create a mock element that will be returned by the second resolver
-        $mockElement = Mockery::mock();
-        $mockElement->shouldReceive('class')
-            ->with(Mockery::type('string'))
-            ->andReturnSelf();
-
-        $callCount = 0;
-        $mockDiscovery = Mockery::mock(EntityAutoDiscovery::class);
-        $mockDiscovery->shouldReceive('getEntityActionResolver')
-            ->andReturnUsing(function ($entityType, $actionKey) use (&$callCount, $mockElement) {
-                $callCount++;
-                if ($callCount === 1) {
-                    // First resolver throws
-                    return function ($id) {
-                        throw new \RuntimeException('First resolver failed');
-                    };
-                }
-                // Second resolver returns valid element
-                return function ($id) use ($mockElement) {
-                    return $mockElement;
-                };
-            });
-        $mockDiscovery->shouldReceive('getGenericActionResolver')
-            ->andReturn(null);
-
-        $this->app->instance(EntityAutoDiscovery::class, $mockDiscovery);
-
-        // Suppress the expected log warning
-        \Log::shouldReceive('warning')->once();
-
-        $query = new TestableMessagesQueryForActionLinks();
-        $method = new \ReflectionMethod($query, 'extractActionLinkProxies');
-        $method->setAccessible(true);
-
-        // Two entity links - first should fail, second should succeed
-        $content = '[John](entity://Person/123/profile) and [Jane](entity://Person/456/profile)';
-
-        $proxies = $method->invoke($query, $content);
-
-        $this->assertIsArray($proxies);
-        // Second resolver should have succeeded, so we should have 1 proxy
-        $this->assertCount(1, $proxies);
-    }
-}
-
-/**
- * Testable subclass that bypasses Kompo initialization for action link tests.
- */
-class TestableMessagesQueryForActionLinks extends MessagesQuery
-{
-    public function __construct()
-    {
-        // Don't call parent constructor to avoid Kompo boot
-    }
-
-    public function settings(): ChatSettingsInterface
-    {
-        return Mockery::mock(ChatSettingsInterface::class);
+        $this->assertTrue($result->isError);
     }
 }

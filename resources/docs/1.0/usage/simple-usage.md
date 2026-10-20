@@ -33,7 +33,7 @@ AI::ingest($customer);
 
 **⚠️ Important:** Most ingestion methods are **rarely needed** because **auto-sync handles this automatically**.
 
-When you use the `HasNodeableConfig` trait, entities automatically sync to Neo4j + Qdrant on model events:
+When you use the `HasNodeableConfig` trait, entities automatically sync to the graph (Neo4j) on model events:
 
 ```php
 class Customer extends Model implements Nodeable
@@ -67,7 +67,7 @@ See: [Data Ingestion Guide](/docs/{{version}}/usage/data-ingestion) for auto-syn
 
 ### ingest() - Ingest Single Entity
 
-Ingest an entity into both graph and vector stores.
+Ingest an entity into the graph: its node and its relationships. Records are not embedded (see [What Is Stored Where](/docs/{{version}}/usage/data-ingestion#what-is-stored-where)).
 
 ```php
 AI::ingest(Nodeable $entity): array
@@ -81,7 +81,6 @@ $status = AI::ingest($customer);
 // Returns:
 [
     'graph_stored' => true,
-    'vector_stored' => true,
     'relationships_created' => 2,
     'errors' => []
 ]
@@ -89,9 +88,10 @@ $status = AI::ingest($customer);
 
 **Status Array:**
 - `graph_stored` (bool) - True if stored in Neo4j
-- `vector_stored` (bool) - True if stored in Qdrant
 - `relationships_created` (int) - Number of relationships created
-- `errors` (array) - Error messages if any failures occurred
+- `errors` (array) - Always empty in a returned status
+
+A failed graph write is not reported in the array: `ingest()` throws `Condoedge\Ai\Exceptions\DataConsistencyException`.
 
 ---
 
@@ -111,19 +111,19 @@ $result = AI::ingestBatch($customers->toArray());
 // Returns:
 [
     'total' => 100,
-    'succeeded' => 98,
-    'partially_succeeded' => 1,
+    'succeeded' => 99,
+    'partially_succeeded' => 0,
     'failed' => 1,
     'errors' => [
-        45 => ['Vector: Connection timeout']
+        45 => ['Graph: Connection timeout']
     ]
 ]
 ```
 
 **Summary Array:**
 - `total` (int) - Total entities processed
-- `succeeded` (int) - Fully ingested (both stores)
-- `partially_succeeded` (int) - Ingested in one store only
+- `succeeded` (int) - Ingested into the graph
+- `partially_succeeded` (int) - Always 0 (records go to the graph only)
 - `failed` (int) - Failed completely
 - `errors` (array) - Errors indexed by entity ID
 
@@ -148,16 +148,17 @@ $status = AI::sync($customer);
 [
     'action' => 'updated',  // or 'created'
     'graph_synced' => true,
-    'vector_synced' => true,
     'errors' => []
 ]
 ```
+
+`sync()` does not throw on a graph failure: it returns `'action' => 'unknown'`, `'graph_synced' => false` and the message in `errors`.
 
 ---
 
 ### remove() - Remove Entity
 
-Delete entity from both stores.
+Delete the entity's node (with its relationships) from the graph.
 
 ```php
 AI::remove(Nodeable $entity): bool
@@ -172,7 +173,7 @@ if (AI::remove($customer)) {
 }
 ```
 
-**Returns:** `true` if removed from at least one store.
+**Returns:** `true` if the node was removed from the graph. A failed delete throws `DataConsistencyException`.
 
 ---
 
@@ -196,8 +197,6 @@ AI::retrieveContext(string $question, array $options = []): array
     'collection' => 'questions',      // Vector collection
     'limit' => 5,                     // Max similar queries
     'includeSchema' => true,          // Include graph schema
-    'includeExamples' => true,        // Include sample entities
-    'examplesPerLabel' => 2,          // Examples per label
     'scoreThreshold' => 0.7           // Min similarity score
 ]
 ```
@@ -205,7 +204,7 @@ AI::retrieveContext(string $question, array $options = []): array
 **Example:**
 ```php
 $context = AI::retrieveContext("Show teams with most members", [
-    'collection' => 'teams',
+    'collection' => 'questions',
     'limit' => 10
 ]);
 
@@ -224,49 +223,13 @@ $context = AI::retrieveContext("Show teams with most members", [
         'relationships' => ['MEMBER_OF'],
         'properties' => ['id', 'name', 'size']
     ],
-    'relevant_entities' => [
-        'Team' => [
-            ['id' => 1, 'name' => 'Alpha Team', 'size' => 10]
-        ]
-    ],
     'errors' => []
 ]
 ```
 
 ---
 
-### searchSimilar() - Vector Similarity Search
-
-Find semantically similar items using vector search.
-
-```php
-AI::searchSimilar(string $question, array $options = []): array
-```
-
-**Example:**
-```php
-$similar = AI::searchSimilar("software development", [
-    'collection' => 'teams',
-    'limit' => 5,
-    'scoreThreshold' => 0.7
-]);
-
-// Returns:
-[
-    [
-        'question' => 'Engineering Team description',
-        'query' => '',
-        'score' => 0.89,
-        'metadata' => ['id' => 1, 'name' => 'Engineering Team']
-    ],
-    [
-        'question' => 'Development Squad description',
-        'query' => '',
-        'score' => 0.85,
-        'metadata' => ['id' => 2, 'name' => 'Dev Squad']
-    ]
-]
-```
+> {info} There is no `AI::searchSimilar()` and no semantic search over records: records are queried through the graph (`AI::answerQuestion()` generates and runs Cypher). To look up similar past questions, see [Context Retrieval](/docs/{{version}}/usage/context-retrieval).
 
 ---
 
@@ -471,7 +434,6 @@ class CustomerServiceTest extends TestCase
             ->with(Mockery::type(Customer::class))
             ->andReturn([
                 'graph_stored' => true,
-                'vector_stored' => true,
                 'relationships_created' => 2,
                 'errors' => []
             ]);
@@ -492,7 +454,6 @@ class CustomerServiceTest extends TestCase
             ->andReturn([
                 'similar_queries' => [],
                 'graph_schema' => ['labels' => ['Team']],
-                'relevant_entities' => [],
                 'errors' => []
             ]);
 
@@ -527,7 +488,7 @@ Here's a complete RAG-powered natural language query system:
 use Condoedge\Ai\Facades\AI;
 use Condoedge\Ai\GraphStore\Neo4jStore;
 
-// 1. Create customer (auto-synced to Neo4j + Qdrant!)
+// 1. Create customer (auto-synced to Neo4j!)
 $customer = Customer::create([
     'name' => 'Acme Corporation',
     'email' => 'contact@acme.com',
@@ -540,17 +501,16 @@ $question = "Which customers are in the software industry?";
 
 // 3. Retrieve context using RAG
 $context = AI::retrieveContext($question, [
-    'collection' => 'customers',
+    'collection' => 'questions',
     'limit' => 5,
-    'includeSchema' => true,
-    'includeExamples' => true
+    'includeSchema' => true
 ]);
 
 // 4. Build LLM prompt with retrieved context + project context
 $projectContext = config('ai.project');
 
 $systemPrompt = sprintf(
-    "You are a Cypher query expert for a %s application.\n\nProject: %s\nDescription: %s\n\nGenerate valid Neo4j queries based on the provided schema, examples, and business rules.",
+    "You are a Cypher query expert for a %s application.\n\nProject: %s\nDescription: %s\n\nGenerate valid Neo4j queries based on the provided schema and business rules.",
     $projectContext['domain'] ?? 'business',
     $projectContext['name'] ?? 'Application',
     $projectContext['description'] ?? ''
@@ -561,11 +521,10 @@ $businessRules = !empty($projectContext['business_rules'])
     : '';
 
 $userPrompt = sprintf(
-    "Question: %s\n\nGraph Schema:\n%s\n\nSimilar Previous Queries:\n%s\n\nExample Entities:\n%s%s\n\nGenerate a Cypher query (JSON format with 'query' and 'explanation' fields).",
+    "Question: %s\n\nGraph Schema:\n%s\n\nSimilar Previous Queries:\n%s%s\n\nGenerate a Cypher query (JSON format with 'query' and 'explanation' fields).",
     $question,
     json_encode($context['graph_schema'], JSON_PRETTY_PRINT),
     json_encode($context['similar_queries'], JSON_PRETTY_PRINT),
-    json_encode($context['relevant_entities'], JSON_PRETTY_PRINT),
     $businessRules
 );
 
@@ -621,7 +580,7 @@ echo $response;
 
 **What happens here:**
 
-1. **Customer created** - Auto-synced to Neo4j (graph) + Qdrant (vectors)
+1. **Customer created** - Auto-synced to Neo4j (graph)
 2. **User question** - Natural language query received
 3. **RAG retrieval** - Semantic search finds similar queries + graph schema
 4. **LLM query generation** - Cypher query generated with full context
@@ -646,11 +605,11 @@ echo $response;
 All methods handle errors gracefully:
 
 ```php
-// Partial success - one store fails
-$status = AI::ingest($customer);
-if (!empty($status['errors'])) {
-    Log::warning('Partial ingestion failure', $status['errors']);
-    // Graph or vector might still be stored
+// Ingestion - a failed graph write throws (nothing is stored)
+try {
+    $status = AI::ingest($customer);
+} catch (\Condoedge\Ai\Exceptions\DataConsistencyException $e) {
+    Log::warning('Ingestion failure', $e->getContext());
 }
 
 // Batch ingestion errors
@@ -725,7 +684,7 @@ $vectors = AI::embedBatch($texts);
 ```env
 # Set in .env for slow operations
 QDRANT_TIMEOUT=60
-AI_QUERY_TIMEOUT=60
+AI_EXEC_TIMEOUT=60
 NEO4J_TIMEOUT=60
 ```
 

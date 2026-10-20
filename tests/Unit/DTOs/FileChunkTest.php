@@ -92,7 +92,44 @@ class FileChunkTest extends TestCase
             endPosition: 4
         );
 
-        $this->assertEquals('file_123_chunk_5', $chunk->getVectorId());
+        // The vector ID is now a deterministic UUIDv5 (NAMESPACE_URL) derived
+        // from "file={id};chunk={index}", so the same chunk always maps to the
+        // same point ID in the vector store.
+        $expected = \Ramsey\Uuid\Uuid::uuid5(
+            \Ramsey\Uuid\Uuid::NAMESPACE_URL,
+            'file=123;chunk=5'
+        )->toString();
+
+        $this->assertSame($expected, $chunk->getVectorId());
+        $this->assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
+            $chunk->getVectorId(),
+            'getVectorId() must return a UUIDv5 string'
+        );
+    }
+
+    public function test_vector_id_is_deterministic_for_same_chunk()
+    {
+        $args = [
+            'fileId' => 7,
+            'fileName' => 'doc.pdf',
+            'content' => 'Test',
+            'embedding' => [],
+            'chunkIndex' => 2,
+            'totalChunks' => 4,
+            'startPosition' => 0,
+            'endPosition' => 4,
+        ];
+
+        $a = new FileChunk(...$args);
+        $b = new FileChunk(...$args);
+
+        // Same (fileId, chunkIndex) -> same point ID (idempotent re-ingestion).
+        $this->assertSame($a->getVectorId(), $b->getVectorId());
+
+        // Different chunk index -> different point ID (no collisions).
+        $c = new FileChunk(...[...$args, 'chunkIndex' => 3]);
+        $this->assertNotSame($a->getVectorId(), $c->getVectorId());
     }
 
     public function test_calculates_content_length()
@@ -109,6 +146,25 @@ class FileChunkTest extends TestCase
         );
 
         $this->assertEquals(11, $chunk->getContentLength());
+    }
+
+    public function test_content_length_counts_characters_not_bytes()
+    {
+        // 10 accented characters = 20 bytes in UTF-8. Content length must report
+        // characters (consistent with the chunker's character-based budgets),
+        // not raw byte length.
+        $chunk = new FileChunk(
+            fileId: 1,
+            fileName: 'café.txt',
+            content: str_repeat('é', 10),
+            embedding: [],
+            chunkIndex: 0,
+            totalChunks: 1,
+            startPosition: 0,
+            endPosition: 10
+        );
+
+        $this->assertEquals(10, $chunk->getContentLength());
     }
 
     public function test_identifies_first_chunk()

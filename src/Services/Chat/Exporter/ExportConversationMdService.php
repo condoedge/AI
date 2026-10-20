@@ -2,7 +2,7 @@
 
 namespace Condoedge\Ai\Services\Chat\Exporter;
 
-class ExportConversationMdService
+class ExportConversationMdService implements ExportConversationServiceInterface
 {
     public function export($conversation)
     {
@@ -16,6 +16,11 @@ class ExportConversationMdService
         }
 
         return $markdown;
+    }
+
+    public function getMimeType(): string
+    {
+        return 'text/markdown';
     }
 
     public function getFileExtension(): string

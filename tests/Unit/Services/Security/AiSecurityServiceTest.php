@@ -34,17 +34,75 @@ class AiSecurityServiceTest extends TestCase
         $user = Mockery::mock();
 
         $this->mockAdapter->shouldReceive('isEnabled')->andReturn(true);
+        $this->mockAdapter->shouldReceive('checkIfPermissionsExist')->andReturn(true);
         $this->mockAdapter->shouldReceive('getTeamsWithPermission')
             ->with($user, 'Invoice')
             ->andReturn([1, 3, 7]);
 
         $this->mockResolver->shouldReceive('resolve')
             ->with('Invoice', 'i', [1, 3, 7])
-            ->andReturn(['type' => 'direct', 'filter' => 'WHERE i.team_id IN [1, 3, 7]']);
+            ->andReturn([
+                'type' => 'direct',
+                'filter' => 'WHERE i.team_id IN $ai_team_ids',
+                'parameters' => ['ai_team_ids' => [1, 3, 7]],
+            ]);
 
         $result = $this->service->getTeamFilter($user, 'Invoice', 'i');
 
-        $this->assertEquals('WHERE i.team_id IN [1, 3, 7]', $result);
+        $this->assertEquals('WHERE i.team_id IN $ai_team_ids', $result);
+    }
+
+    /** @test */
+    public function get_team_filter_with_parameters_returns_filter_and_bound_ids(): void
+    {
+        $user = Mockery::mock();
+
+        $this->mockAdapter->shouldReceive('isEnabled')->andReturn(true);
+        $this->mockAdapter->shouldReceive('checkIfPermissionsExist')->andReturn(true);
+        $this->mockAdapter->shouldReceive('getTeamsWithPermission')
+            ->with($user, 'Invoice')
+            ->andReturn([1, 3, 7]);
+
+        $this->mockResolver->shouldReceive('resolve')
+            ->with('Invoice', 'i', [1, 3, 7])
+            ->andReturn([
+                'type' => 'direct',
+                'filter' => 'WHERE i.team_id IN $ai_team_ids',
+                'parameters' => ['ai_team_ids' => [1, 3, 7]],
+            ]);
+
+        $result = $this->service->getTeamFilterWithParameters($user, 'Invoice', 'i');
+
+        $this->assertEquals('WHERE i.team_id IN $ai_team_ids', $result['filter']);
+        $this->assertSame(['ai_team_ids' => [1, 3, 7]], $result['parameters']);
+    }
+
+    /** @test */
+    public function deny_throws_when_permission_metadata_unexistent(): void
+    {
+        $user = Mockery::mock();
+
+        config(['ai.security.on_permission_unexistent' => 'deny']);
+
+        $this->mockAdapter->shouldReceive('isEnabled')->andReturn(true);
+        $this->mockAdapter->shouldReceive('checkIfPermissionsExist')->andReturn(false);
+
+        $this->expectException(SecurityException::class);
+
+        $this->service->getTeamFilter($user, 'Invoice', 'i');
+    }
+
+    /** @test */
+    public function bypass_returns_null_when_permission_metadata_unexistent(): void
+    {
+        $user = Mockery::mock();
+
+        config(['ai.security.on_permission_unexistent' => 'bypass']);
+
+        $this->mockAdapter->shouldReceive('isEnabled')->andReturn(true);
+        $this->mockAdapter->shouldReceive('checkIfPermissionsExist')->andReturn(false);
+
+        $this->assertNull($this->service->getTeamFilter($user, 'Invoice', 'i'));
     }
 
     /** @test */
@@ -54,6 +112,7 @@ class AiSecurityServiceTest extends TestCase
         $user->id = 123;
 
         $this->mockAdapter->shouldReceive('isEnabled')->andReturn(true);
+        $this->mockAdapter->shouldReceive('checkIfPermissionsExist')->andReturn(true);
         $this->mockAdapter->shouldReceive('getTeamsWithPermission')
             ->with($user, 'Invoice')
             ->andReturn([]);
@@ -76,6 +135,7 @@ class AiSecurityServiceTest extends TestCase
         config(['ai.security.on_missing_team_path' => 'deny']);
 
         $this->mockAdapter->shouldReceive('isEnabled')->andReturn(true);
+        $this->mockAdapter->shouldReceive('checkIfPermissionsExist')->andReturn(true);
         $this->mockAdapter->shouldReceive('getTeamsWithPermission')
             ->andReturn([1, 3]);
 
@@ -98,6 +158,7 @@ class AiSecurityServiceTest extends TestCase
         config(['ai.security.on_missing_team_path' => 'bypass']);
 
         $this->mockAdapter->shouldReceive('isEnabled')->andReturn(true);
+        $this->mockAdapter->shouldReceive('checkIfPermissionsExist')->andReturn(true);
         $this->mockAdapter->shouldReceive('getTeamsWithPermission')
             ->andReturn([1, 3]);
 

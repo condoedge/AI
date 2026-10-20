@@ -16,6 +16,9 @@ use Condoedge\Ai\Contracts\QueryGeneratorInterface;
 use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Contracts\ResponseGeneratorInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Mockery;
 
 /**
@@ -70,6 +73,49 @@ class AiManagerFileContextTest extends TestCase
         parent::tearDown();
     }
 
+    /**
+     * Build a real PipelineContext DTO for retrieveContext() mocks.
+     *
+     * The pipeline now flows the typed PipelineContext through every stage
+     * (AiManager reads $ctx->qu, $ctx->conversationContext, etc.), so the
+     * retrieveContext mock must return a DTO, not a plain array.
+     */
+    private function makePipelineContext(string $question, array $graphSchema = []): PipelineContext
+    {
+        $ctx = new PipelineContext();
+        $ctx->question = $question;
+        $ctx->similarQueries = [];
+        $ctx->graphSchema = $graphSchema;
+
+        return $ctx;
+    }
+
+    /**
+     * Rebuild the AiManager with the file-context collaborators wired in.
+     *
+     * The optional FileContextProvider / ResponseFileEnricher are constructor
+     * dependencies of AiManager; binding them in the container is not enough
+     * because the manager under test is instantiated directly. Pass the mocks
+     * explicitly so retrieveFileContext()/enrichResponseWithFiles() exercise them.
+     */
+    private function rebuildManagerWithFileContext(
+        FileContextProvider $fileContextProvider,
+        ?ResponseFileEnricher $responseFileEnricher = null
+    ): void {
+        $this->manager = new AiManager(
+            $this->mockIngestion,
+            $this->mockContext,
+            $this->mockEmbedding,
+            $this->mockLlm,
+            $this->mockQueryGenerator,
+            $this->mockQueryExecutor,
+            $this->mockResponseGenerator,
+            $this->mockVectorStore,
+            $fileContextProvider,
+            $responseFileEnricher
+        );
+    }
+
     /** @test */
     public function it_has_answer_question_method_that_accepts_options(): void
     {
@@ -99,15 +145,19 @@ class AiManagerFileContextTest extends TestCase
             'AiManager should have retrieveFileContext method'
         );
 
-        // Use reflection to check it's protected
+        // retrieveFileContext is intentionally PUBLIC: it is part of the AiManager
+        // API and is called externally by PipelineEvalDriver via $this->ai()->retrieveFileContext().
         $reflection = new \ReflectionMethod($this->manager, 'retrieveFileContext');
-        $this->assertTrue($reflection->isProtected(), 'retrieveFileContext should be protected');
+        $this->assertTrue($reflection->isPublic(), 'retrieveFileContext should be public');
 
-        // Verify parameters
+        // Verify parameters: question, user, and an optional options array (forwarded
+        // to the provider — e.g. the recall net's lower min_score override).
         $parameters = $reflection->getParameters();
-        $this->assertCount(2, $parameters, 'retrieveFileContext should have 2 parameters');
+        $this->assertCount(3, $parameters, 'retrieveFileContext should have 3 parameters');
         $this->assertEquals('question', $parameters[0]->getName());
         $this->assertEquals('user', $parameters[1]->getName());
+        $this->assertEquals('options', $parameters[2]->getName());
+        $this->assertTrue($parameters[2]->isDefaultValueAvailable(), 'options should have a default value');
     }
 
     /** @test */
@@ -144,7 +194,17 @@ class AiManagerFileContextTest extends TestCase
         $mockFileContextProvider = Mockery::mock(FileContextProvider::class);
         $mockFileContextProvider->shouldReceive('getFileContext')
             ->once()
-            ->with($question, $mockUser)
+            // Phase 7: every angle asks for the per-file passage budget — carries the
+            // fan-out's shared memo (FileContextProvider::TURN_MEMO) — and asks which
+            // chunks each snippet is made of, so overlapping passages can be joined
+            // (FileContextProvider::PASSAGE_CHUNKS, eval p18-B rights t0).
+            ->with($question, $mockUser, Mockery::on(static function ($options): bool {
+                return is_array($options)
+                    && ($options['chunks_per_file'] ?? null) === (int) config('ai.file_context.max_chunks_per_file', 5)
+                    && ($options[FileContextProvider::TURN_MEMO] ?? null) instanceof \ArrayObject
+                    && ($options[FileContextProvider::PASSAGE_CHUNKS] ?? null) === true
+                    && array_diff(array_keys($options), ['chunks_per_file', FileContextProvider::TURN_MEMO, FileContextProvider::PASSAGE_CHUNKS]) === [];
+            }))
             ->andReturn([
                 'relevant_files' => [
                     [
@@ -178,24 +238,23 @@ class AiManagerFileContextTest extends TestCase
 
         $this->app->instance(ResponseFileEnricher::class, $mockEnricher);
 
+        // Wire the file-context collaborators into the manager under test.
+        $this->rebuildManagerWithFileContext($mockFileContextProvider, $mockEnricher);
+
         // Set up standard mocks for the pipeline
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => []],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question, ['labels' => []]));
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
-            ->andReturn([
-                'cypher' => 'MATCH (p:Policy) RETURN p',
-                'explanation' => 'Finding policies',
-                'confidence' => 0.9,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (p:Policy) RETURN p',
+                explanation: 'Finding policies',
+                confidence: 0.9,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
@@ -203,12 +262,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [['name' => 'Payment Policy']],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [['name' => 'Payment Policy']],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
         $this->mockResponseGenerator->shouldReceive('generate')
             ->once()
@@ -230,6 +290,112 @@ class AiManagerFileContextTest extends TestCase
     }
 
     /** @test */
+    public function a_qu_judged_french_follow_up_engages_the_file_context_follow_up_angle(): void
+    {
+        // Phase 2.B: "Et celles-là ?" contains none of the removed EN pronoun list
+        // ('those','them',...). The follow-up behavior is engaged by QU's
+        // followUpReference: the verbatim-question angle is searched with the
+        // conversation focus threaded to the provider.
+        config(['ai.file_context.enabled' => true]);
+
+        $question = 'Et celles-là ?';
+        $mockUser = (object) ['id' => 1];
+        $conversation = ['focused_entity' => 'Team', 'recent_exchanges' => [['question' => 'Quelles équipes ?']]];
+
+        $calls = [];
+        $mockFileContextProvider = Mockery::mock(FileContextProvider::class);
+        $mockFileContextProvider->shouldReceive('getFileContext')
+            ->andReturnUsing(function ($q, $user, $options) use (&$calls) {
+                $calls[] = [$q, $options];
+
+                return ['relevant_files' => [], 'file_count' => 0, 'has_physical' => false, 'has_database' => false];
+            });
+        $this->rebuildManagerWithFileContext($mockFileContextProvider);
+
+        $ctx = $this->makePipelineContext($question, ['labels' => []]);
+        $ctx->qu = new \Condoedge\Ai\DTOs\QueryUnderstandingResult(
+            questionType: 'hybrid',
+            language: 'fr',
+            followUpReference: true,
+        );
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+
+        $this->mockQueryGenerator->shouldReceive('generate')->andReturn(new QueryGenerationResult(
+            cypher: 'MATCH (t:Team) RETURN t.name AS name',
+            explanation: '',
+            confidence: 0.9,
+            warnings: [],
+            metadata: [],
+        ));
+        $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
+        $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
+        $this->mockEmbedding->shouldReceive('embed')->andReturn(array_fill(0, 1536, 0.1));
+        $this->mockQueryExecutor->shouldReceive('execute')->andReturn(new QueryExecutionResult(
+            success: true,
+            data: [['name' => 'Équipe A']],
+            stats: [],
+            metadata: [],
+            errors: [],
+        ));
+        $this->mockResponseGenerator->shouldReceive('generate')->andReturn([
+            'answer' => 'Voici les équipes.',
+            'metadata' => [],
+        ]);
+
+        $this->manager->answerQuestion($question, ['user' => $mockUser, 'conversation_context' => $conversation]);
+
+        $verbatim = array_values(array_filter($calls, fn ($c) => $c[0] === $question));
+        $this->assertNotEmpty($verbatim, 'the verbatim question is a file-search angle');
+        $this->assertTrue($verbatim[0][1]['follow_up_reference'] ?? false, 'QU follow-up threads into the provider');
+        $this->assertSame('Team', $verbatim[0][1]['conversation_context']['focused_entity'] ?? null);
+    }
+
+    /** @test */
+    public function without_a_qu_follow_up_judgment_no_follow_up_options_reach_the_provider(): void
+    {
+        config(['ai.file_context.enabled' => true]);
+
+        $question = 'Which of those are active?';
+        $calls = [];
+        $mockFileContextProvider = Mockery::mock(FileContextProvider::class);
+        $mockFileContextProvider->shouldReceive('getFileContext')
+            ->andReturnUsing(function ($q, $user, $options) use (&$calls) {
+                $calls[] = [$q, $options];
+
+                return ['relevant_files' => [], 'file_count' => 0, 'has_physical' => false, 'has_database' => false];
+            });
+        $this->rebuildManagerWithFileContext($mockFileContextProvider);
+
+        $ctx = $this->makePipelineContext($question, ['labels' => []]);
+        $ctx->qu = new \Condoedge\Ai\DTOs\QueryUnderstandingResult(questionType: 'hybrid', followUpReference: false);
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+        $this->mockQueryGenerator->shouldReceive('generate')->andReturn(new QueryGenerationResult(
+            cypher: 'MATCH (t:Team) RETURN t.name AS name',
+            explanation: '',
+            confidence: 0.9,
+            warnings: [],
+            metadata: [],
+        ));
+        $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
+        $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
+        $this->mockEmbedding->shouldReceive('embed')->andReturn(array_fill(0, 1536, 0.1));
+        $this->mockQueryExecutor->shouldReceive('execute')->andReturn(new QueryExecutionResult(
+            success: true, data: [['name' => 'A']], stats: [], metadata: [], errors: [],
+        ));
+        $this->mockResponseGenerator->shouldReceive('generate')->andReturn(['answer' => 'A', 'metadata' => []]);
+
+        $this->manager->answerQuestion($question, [
+            'user' => (object) ['id' => 1],
+            'conversation_context' => ['focused_entity' => 'Team'],
+        ]);
+
+        $this->assertNotEmpty($calls);
+        foreach ($calls as [$q, $options]) {
+            $this->assertArrayNotHasKey('follow_up_reference', $options, "angle '{$q}' must carry no follow-up options");
+        }
+    }
+
+    /** @test */
     public function it_skips_file_context_when_disabled(): void
     {
         // Disable file context
@@ -243,24 +409,23 @@ class AiManagerFileContextTest extends TestCase
 
         $this->app->instance(FileContextProvider::class, $mockFileContextProvider);
 
+        // Wire the provider so the shouldNotReceive() guard is meaningful.
+        $this->rebuildManagerWithFileContext($mockFileContextProvider);
+
         // Set up standard mocks for the pipeline
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => ['Customer']],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question, ['labels' => ['Customer']]));
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
-            ->andReturn([
-                'cypher' => 'MATCH (c:Customer) RETURN c',
-                'explanation' => 'Listing customers',
-                'confidence' => 0.95,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (c:Customer) RETURN c',
+                explanation: 'Listing customers',
+                confidence: 0.95,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
@@ -268,14 +433,18 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
-        $this->mockResponseGenerator->shouldReceive('generate')
+        // With no rows AND no document context the pipeline abstains via
+        // generateEmptyResponse() (the single no-source path) rather than
+        // narrating over an empty result with generate().
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
             ->once()
             ->andReturn([
                 'answer' => 'No customers found',
@@ -309,24 +478,24 @@ class AiManagerFileContextTest extends TestCase
 
         $this->app->instance(FileContextProvider::class, $mockFileContextProvider);
 
+        // Wire the provider so retrieveFileContext() actually invokes (and
+        // swallows) the throwing getFileContext().
+        $this->rebuildManagerWithFileContext($mockFileContextProvider);
+
         // Set up standard mocks for the pipeline
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => []],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question, ['labels' => []]));
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
-            ->andReturn([
-                'cypher' => 'MATCH (p:Policy) RETURN p',
-                'explanation' => 'Finding policies',
-                'confidence' => 0.9,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (p:Policy) RETURN p',
+                explanation: 'Finding policies',
+                confidence: 0.9,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
@@ -334,14 +503,17 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
-        $this->mockResponseGenerator->shouldReceive('generate')
+        // File retrieval failed (swallowed) so there is no document context and
+        // the query returned no rows -> pipeline abstains via generateEmptyResponse().
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')
             ->once()
             ->andReturn([
                 'answer' => 'No refund policy information found',
@@ -406,33 +578,34 @@ class AiManagerFileContextTest extends TestCase
 
         $this->app->instance(ResponseFileEnricher::class, $mockEnricher);
 
+        // Wire the file-context collaborators into the manager under test.
+        $this->rebuildManagerWithFileContext($mockFileContextProvider, $mockEnricher);
+
         // Verify that generateQuery receives context with file_context
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => []],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question, ['labels' => []]));
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
             ->with(
                 $question,
-                Mockery::on(function ($context) use ($fileContext) {
-                    // Context should include file_context
-                    return isset($context['file_context'])
-                        && $context['file_context'] === $fileContext;
+                // The query generator now receives the typed PipelineContext DTO;
+                // file context lives on $context->fileContext, not an array key.
+                Mockery::on(function ($context) {
+                    return $context instanceof PipelineContext
+                        && !empty($context->fileContext['relevant_files'])
+                        && ($context->fileContext['relevant_files'][0]['file_name'] ?? null) === 'guidelines.md';
                 }),
                 Mockery::any()
             )
-            ->andReturn([
-                'cypher' => 'MATCH (d:Document) RETURN d',
-                'explanation' => 'Finding documents',
-                'confidence' => 0.9,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (d:Document) RETURN d',
+                explanation: 'Finding documents',
+                confidence: 0.9,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
@@ -440,12 +613,13 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
         $this->mockResponseGenerator->shouldReceive('generate')
             ->once()
@@ -523,24 +697,23 @@ class AiManagerFileContextTest extends TestCase
 
         $this->app->instance(ResponseFileEnricher::class, $mockEnricher);
 
+        // Wire the file-context collaborators into the manager under test.
+        $this->rebuildManagerWithFileContext($mockFileContextProvider, $mockEnricher);
+
         // Set up standard mocks for the pipeline
         $this->mockContext->shouldReceive('retrieveContext')
             ->once()
-            ->andReturn([
-                'similar_queries' => [],
-                'graph_schema' => ['labels' => []],
-                'relevant_entities' => [],
-            ]);
+            ->andReturn($this->makePipelineContext($question, ['labels' => []]));
 
         $this->mockQueryGenerator->shouldReceive('generate')
             ->once()
-            ->andReturn([
-                'cypher' => 'MATCH (d:Document) RETURN d',
-                'explanation' => 'Finding documents',
-                'confidence' => 0.9,
-                'warnings' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryGenerationResult(
+                cypher: 'MATCH (d:Document) RETURN d',
+                explanation: 'Finding documents',
+                confidence: 0.9,
+                warnings: [],
+                metadata: [],
+            ));
 
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
@@ -548,13 +721,16 @@ class AiManagerFileContextTest extends TestCase
 
         $this->mockQueryExecutor->shouldReceive('execute')
             ->once()
-            ->andReturn([
-                'success' => true,
-                'data' => [],
-                'stats' => [],
-                'metadata' => [],
-            ]);
+            ->andReturn(new QueryExecutionResult(
+                success: true,
+                data: [],
+                stats: [],
+                metadata: [],
+                errors: [],
+            ));
 
+        // Document context is present, so the pipeline produces a grounded
+        // answer via generate() (not the empty/abstain path).
         $this->mockResponseGenerator->shouldReceive('generate')
             ->once()
             ->andReturn([

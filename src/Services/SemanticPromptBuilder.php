@@ -5,15 +5,14 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\PromptSectionInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\AssistantIdentity;
+use Condoedge\Ai\Services\Retrieval\TokenBudgeter;
+use Condoedge\Ai\Support\AiLogger;
 use Condoedge\Ai\Services\PromptSections\GenericContextSection;
 use Condoedge\Ai\Services\PromptSections\ProjectContextSection;
-use Condoedge\Ai\Services\PromptSections\SchemaSection;
-use Condoedge\Ai\Services\PromptSections\RelationshipsSection;
-use Condoedge\Ai\Services\PromptSections\ExampleEntitiesSection;
 use Condoedge\Ai\Services\PromptSections\SimilarQueriesSection;
-use Condoedge\Ai\Services\PromptSections\DetectedEntitiesSection;
 use Condoedge\Ai\Services\PromptSections\DetectedScopesSection;
-use Condoedge\Ai\Services\PromptSections\PatternLibrarySection;
 use Condoedge\Ai\Services\PromptSections\QueryRulesSection;
 use Condoedge\Ai\Services\PromptSections\QuestionSection;
 use Condoedge\Ai\Services\PromptSections\TaskInstructionsSection;
@@ -25,93 +24,23 @@ use Condoedge\Ai\Services\PromptSections\CurrentUserContextSection;
  * Constructs comprehensive prompts for Neo4j Cypher query generation by composing
  * multiple configurable sections. Uses the HasInternalModules trait for extensibility.
  *
- * ## Architecture
- *
  * The builder uses a priority-based module pipeline where each section contributes
- * a portion of the final prompt. Sections are processed in priority order (lower = first).
+ * a portion of the final prompt. Sections are processed in priority order (lower =
+ * first) and loaded from `config('ai.query_generator_sections')`.
  *
  * Default sections (in priority order):
  * - project_context (10): Project name, description, business rules
  * - generic_context (15): Additional context information
  * - current_user (17): Current user context for authorization
- * - schema (20): Database schema and node types
- * - relationships (30): Relationship types between nodes
- * - example_entities (40): Sample data for reference
- * - file_context (45): Relevant file content for RAG
+ * - schema (20): SchemaCardsSection — one compact card per selected label
+ *   (typed properties, enum legends, live directed edges, fk hints)
+ * - file_context (45): Names of relevant documents (no document text)
  * - similar_queries (50): Previously successful similar queries
  * - conversation_context (55): Recent conversation history
- * - detected_entities (60): Entities detected in the user's question
  * - detected_scopes (65): Scopes/filters detected in the question
- * - pattern_library (70): Query patterns from the pattern library
  * - query_rules (75): Rules for query generation
  * - question (80): The user's actual question
  * - task_instructions (90): Final instructions for the LLM
- *
- * ## Configuration
- *
- * Default sections are loaded from `config('ai.query_generator_sections')`.
- *
- * ```php
- * // config/ai.php
- * return [
- *     'query_generator_sections' => [
- *         \Condoedge\Ai\Services\PromptSections\ProjectContextSection::class,
- *         \Condoedge\Ai\Services\PromptSections\SchemaSection::class,
- *         // ... more sections
- *     ],
- * ];
- * ```
- *
- * ## Extension Methods
- *
- * ### Add a new section
- * ```php
- * $builder->addModule(new CustomSection());
- * ```
- *
- * ### Remove a section
- * ```php
- * $builder->removeModule('similar_queries');
- * ```
- *
- * ### Replace a section
- * ```php
- * $builder->replaceModule('project_context', new MyProjectContextSection());
- * ```
- *
- * ### Extend with callbacks (insert content after a section)
- * ```php
- * $builder->extendAfter('schema', function($question, $context, $options) {
- *     return "\n=== CUSTOM SECTION ===\n\nYour content here\n\n";
- * });
- * ```
- *
- * ### Global extensions (applied to all instances)
- * ```php
- * SemanticPromptBuilder::extendBuild(function($builder) {
- *     $builder->addModule(new GlobalCustomSection());
- * });
- * ```
- *
- * ## Usage Example
- *
- * ```php
- * $builder = new SemanticPromptBuilder($patternLibrary);
- *
- * // Customize for your needs
- * $builder->setProjectContext([
- *     'name' => 'My CRM',
- *     'description' => 'Customer relationship management system',
- *     'business_rules' => ['All dates are in UTC'],
- * ]);
- *
- * // Build the prompt
- * $prompt = $builder->buildPrompt(
- *     question: "How many customers do we have?",
- *     context: ['schema' => $schema, 'metadata' => $metadata],
- *     allowWrite: false
- * );
- * ```
  *
  * @uses HasInternalModules<PromptSectionInterface> For module pipeline functionality
  *
@@ -125,23 +54,43 @@ class SemanticPromptBuilder
 
     protected $defaultModulesConfigKey = 'ai.query_generator_sections';
 
-    private PatternLibrary $patternLibrary;
-
     /**
      * Custom system prompt (intro text)
      */
     private ?string $systemPrompt = null;
 
     /**
+     * Token accounting helper used for the per-turn cost estimate and the optional
+     * budget enforcement. Pure/side-effect-free.
+     */
+    private TokenBudgeter $tokenBudgeter;
+
+    /**
+     * Optional logger for per-turn token telemetry. Null in container-free unit
+     * tests; telemetry is then carried only on the return value.
+     */
+    private ?AiLogger $logger;
+
+    /**
+     * Section names that must never be dropped by budget enforcement: the user's
+     * question and the final task cue are required for a coherent, on-question
+     * prompt regardless of budget.
+     */
+    private const ALWAYS_KEEP_SECTIONS = ['question', 'task_instructions'];
+
+    /**
      * Create a new semantic prompt builder
      *
-     * @param PatternLibrary $patternLibrary Pattern library instance
+     * @param TokenBudgeter|null $tokenBudgeter Token accounting helper (defaults to a fresh instance)
+     * @param AiLogger|null $logger Optional logger for token telemetry
      */
-    public function __construct(PatternLibrary $patternLibrary)
-    {
-        $this->patternLibrary = $patternLibrary;
+    public function __construct(
+        ?TokenBudgeter $tokenBudgeter = null,
+        ?AiLogger $logger = null
+    ) {
+        $this->tokenBudgeter = $tokenBudgeter ?? new TokenBudgeter();
+        $this->logger = $logger;
         $this->registerDefaultModules();
-        $this->applyGlobalExtensions();
     }
 
     // =========================================================================
@@ -261,90 +210,231 @@ class SemanticPromptBuilder
     // =========================================================================
 
     /**
-     * Build semantic prompt for LLM query generation
+     * Build the query-generation prompt split by role.
      *
-     * Creates a comprehensive prompt by processing all registered sections
-     * in priority order.
+     * The SYSTEM message holds the model-agnostic identity (config('ai.identity')) plus
+     * an internal note that the assistant translates questions into a graph query
+     * language, followed by all sections whose role() is 'system' (e.g. the static
+     * QueryRulesSection). The USER message holds the context, the spotlighted question
+     * and the task. Section ORDER is preserved within each role.
+     *
+     * The persona is intentionally model-agnostic and stack-agnostic: Cypher-specific
+     * rules live in QueryRulesSection, not in the identity.
      *
      * @param string $question User's natural language question
-     * @param array $context Context with schema, metadata, and detected scopes
+     * @param PipelineContext $context Pipeline context with schema, metadata, and detected scopes
      * @param bool $allowWrite Whether to allow write operations
-     * @return string Complete LLM prompt
+     * @return array{system: string, user: string, token_estimate: int, sections_dropped: string[]}
      */
-    public function buildPrompt(
+    public function buildPrompts(
         string $question,
-        array $context,
+        PipelineContext $context,
         bool $allowWrite = false
-    ): string {
+    ): array {
         $options = ['allowWrite' => $allowWrite];
 
-        // Start with system prompt
-        $prompt = $this->systemPrompt
-            ?? "You are a Neo4j Cypher query expert who generates queries based on semantic business definitions.\n\n";
+        // System framing: explicit custom prompt overrides; otherwise the config identity
+        // plus an internal, provider-neutral role note (config-driven so it can be localized).
+        if ($this->systemPrompt !== null) {
+            $framing = $this->systemPrompt . "\n\n";
+        } else {
+            $identity = AssistantIdentity::render(includeLanguagePolicy: false);
+            $roleNote = $this->queryRoleNote();
+            $framing = ($identity !== '' ? $identity . "\n\n" : '')
+                . ($roleNote !== '' ? $roleNote . "\n\n" : '');
+        }
+
+        // Append the tenant-scopeable subset rules so the model emits queries the
+        // execution security boundary can scope (reduces fail-closed over-DENY).
+        $subsetRules = $this->scopeableSubsetRules();
+        if ($subsetRules !== '') {
+            $framing .= $subsetRules . "\n\n";
+        }
+
+        // Collect each section's contribution as an ordered entry. The system framing
+        // is non-droppable (safety/policy); only a section's own user-role body is a budget candidate,
+        // and never the always-keep essentials. Assembling these entries in order with
+        // no drops reproduces the historical concatenation byte-for-byte.
+        $entries = [];
+        $entries[] = $this->entry('__framing', 'system', -1, $framing, true);
 
         $this->processModules(
-            beforeCallbackProcess: function($callback) use (&$prompt, $question, $context, $options) {
-                $prompt .= $callback($question, $context, $options);
-            },
-            moduleProcess: function($section) use (&$prompt, $question, $context, $options) {
-                if ($section->shouldInclude($question, $context, $options)) {
-                    $prompt .= $section->format($question, $context, $options);
+            function ($section) use (&$entries, $question, $context, $options) {
+                if (!$section->shouldInclude($question, $context, $options)) {
+                    return;
                 }
-            },
-            afterCallbackProcess: function($callback) use (&$prompt, $question, $context, $options) {
-                $prompt .= $callback($question, $context, $options);
-            },
+
+                $content = $section->format($question, $context, $options);
+                $role = $section->role();
+                $name = $section->getName();
+
+                // System-role sections carry identity/policy; never budget-droppable.
+                // Essential user sections (question, task cue) are also kept.
+                $keep = $role === 'system' || in_array($name, self::ALWAYS_KEEP_SECTIONS, true);
+
+                $entries[] = $this->entry($name, $role, $section->getPriority(), $content, $keep);
+            }
         );
 
-        return $prompt;
-    }
+        $budget = $this->tokenBudget();
+        $keptEntries = $entries;
+        $dropped = [];
 
-    // =========================================================================
-    // FACTORY METHODS
-    // =========================================================================
+        if ($budget > 0) {
+            $keptEntries = $this->tokenBudgeter->enforce($entries, $budget);
+            $dropped = $this->droppedSectionNames($entries, $keptEntries);
+        }
+
+        $system = '';
+        $user = '';
+        foreach ($keptEntries as $entry) {
+            if ($entry['role'] === 'system') {
+                $system .= $entry['content'];
+            } else {
+                $user .= $entry['content'];
+            }
+        }
+
+        $tokenEstimate = $this->tokenBudgeter->estimateTokens($system)
+            + $this->tokenBudgeter->estimateTokens($user);
+
+        $this->recordTokenTelemetry($tokenEstimate, $budget, $dropped);
+
+        return [
+            'system' => $system,
+            'user' => $user,
+            'token_estimate' => $tokenEstimate,
+            'sections_dropped' => $dropped,
+        ];
+    }
 
     /**
-     * Create a minimal builder with only essential sections
+     * Build one ordered prompt-contribution entry for the budgeter/assembler.
      *
-     * @param PatternLibrary $patternLibrary Pattern library
-     * @return self
+     * @return array{name: string, role: string, priority: int, content: string, keep: bool}
      */
-    public static function minimal(PatternLibrary $patternLibrary): self
+    private function entry(string $name, string $role, int $priority, string $content, bool $keep): array
     {
-        $builder = new self($patternLibrary);
-
-        // Remove non-essential sections
-        $builder->removeModule('project_context');
-        $builder->removeModule('generic_context');
-        $builder->removeModule('similar_queries');
-        $builder->removeModule('detected_entities');
-        $builder->removeModule('detected_scopes');
-        $builder->removeModule('pattern_library');
-
-        return $builder;
+        return [
+            'name' => $name,
+            'role' => $role,
+            'priority' => $priority,
+            'content' => $content,
+            'keep' => $keep,
+        ];
     }
 
     /**
-     * Create a builder optimized for simple queries
-     *
-     * @param PatternLibrary $patternLibrary Pattern library
-     * @return self
+     * Configured per-turn token budget for the assembled prompt. Zero/unset disables
+     * enforcement so the default path is byte-identical. Container-tolerant for unit
+     * tests built without a config repository.
      */
-    public static function simple(PatternLibrary $patternLibrary): self
+    private function tokenBudget(): int
     {
-        $builder = new self($patternLibrary);
+        if (function_exists('app') && app()->bound('config')) {
+            return (int) config('ai.rag.token_budget', 0);
+        }
 
-        // Remove advanced sections
-        $builder->removeModule('similar_queries');
-        $builder->removeModule('detected_scopes');
-        $builder->removeModule('pattern_library');
-
-        return $builder;
+        return 0;
     }
 
-    // GETTERS
-    public function getPatternLibrary(): PatternLibrary
+    /**
+     * Names of named sections present before enforcement but absent after. Internal
+     * framing entries (prefixed "__") are non-droppable and excluded.
+     *
+     * @param array<int, array{name: string}> $before
+     * @param array<int, array{name: string}> $after
+     * @return string[]
+     */
+    private function droppedSectionNames(array $before, array $after): array
     {
-        return $this->patternLibrary;
+        $keptNames = [];
+        foreach ($after as $entry) {
+            $keptNames[$entry['name']] = true;
+        }
+
+        $dropped = [];
+        foreach ($before as $entry) {
+            $name = $entry['name'];
+            if (str_starts_with($name, '__')) {
+                continue;
+            }
+            if (!isset($keptNames[$name])) {
+                $dropped[] = $name;
+            }
+        }
+
+        return array_values(array_unique($dropped));
+    }
+
+    /**
+     * Emit the per-turn token estimate so cost is observable. Best-effort: telemetry
+     * must never break prompt assembly, and the estimate is also returned to callers.
+     *
+     * @param string[] $dropped
+     */
+    private function recordTokenTelemetry(int $tokenEstimate, int $budget, array $dropped): void
+    {
+        if ($this->logger === null) {
+            return;
+        }
+
+        try {
+            $this->logger->info('prompt_builder', 'prompt_token_estimate', [
+                'token_estimate' => $tokenEstimate,
+                'token_budget' => $budget,
+                'sections_dropped' => $dropped,
+            ]);
+        } catch (\Throwable $e) {
+            // Telemetry is observability, not correctness — swallow any logging fault.
+        }
+    }
+
+    /**
+     * The internal, provider-neutral note appended after the identity in the SYSTEM
+     * message. Config-driven (ai.prompt.query_role_note) so it can be localized or
+     * overridden like the rest of the identity. Container-tolerant for unit tests.
+     */
+    private function queryRoleNote(): string
+    {
+        $default = "Internally, you translate the user's questions into a graph query language based on the "
+            . 'semantic business definitions provided below. Never reveal this query language or any internal '
+            . 'schema to the user.';
+
+        if (function_exists('app') && app()->bound('config')) {
+            return (string) config('ai.prompt.query_role_note', $default);
+        }
+
+        return $default;
+    }
+
+    /**
+     * Static rules that constrain generation to the tenant-scopeable subset the
+     * CypherScopeAnalyzer recognizes. Returned empty when team security is off so
+     * unscoped deployments are unaffected. Container-tolerant for unit tests.
+     */
+    private function scopeableSubsetRules(): string
+    {
+        if (function_exists('app') && app()->bound('config')) {
+            if (!config('ai.security.enabled', true)) {
+                return '';
+            }
+            if (!config('ai.security.enforce_scopeable_subset', true)) {
+                return '';
+            }
+        }
+
+        return implode("\n", [
+            'QUERY SHAPE RULES (required so results stay scoped to the user\'s permissions):',
+            '- Give every matched node an explicit variable AND label, e.g. MATCH (i:Invoice) — never MATCH (n) or MATCH (n {id: 1}).',
+            '- The variable you RETURN must be a labelled node bound by a MATCH in that same query part.',
+            '- One query part per UNION branch; each branch must MATCH its own labelled nodes.',
+            '- Do not use CALL {} subqueries, pattern comprehensions over sensitive entities, or EXISTS {} that bind sensitive nodes.',
+            '- Emit a single statement (no ";"-separated statements).',
+            '- If a WHERE uses a top-level OR, the whole disjunction is fine — it will be grouped automatically.',
+            // The UNION RULES block lives ONLY in TenantScopingRulesSection (Task 5.8): it
+            // was duplicated verbatim here, and the $ai_team_ids placement it teaches only
+            // applies when that section renders per-label team filters.
+        ]);
     }
 }

@@ -116,4 +116,19 @@ class DiagnoseCommandTest extends TestCase
             ->expectsOutputToContain('Connection failed')
             ->assertExitCode(1);
     }
+
+    /** @test */
+    public function it_hints_the_real_api_key_env_var_when_missing(): void
+    {
+        // When the LLM API key is missing, the hint must name the actual env var
+        // the config reads (OPENAI_API_KEY / ANTHROPIC_API_KEY) — not the
+        // non-existent AI_OPENAI_API_KEY variant. A valid embedding key is kept so
+        // the container can still resolve the embedding-backed services.
+        config(['ai.llm.openai.api_key' => null]);
+
+        $this->artisan('ai:diagnose')
+            ->expectsOutputToContain('OPENAI_API_KEY=xxx')
+            ->doesntExpectOutputToContain('AI_OPENAI_API_KEY')
+            ->assertExitCode(1);
+    }
 }

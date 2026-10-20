@@ -23,8 +23,18 @@ trait ResolvesEntityConfigKey
     {
         $entityConfigs ??= config('entities', []);
 
+        // Already a config key: scope/entity hits from the semantic context
+        // index carry the FULL class name (that is what indexing stores in the
+        // point metadata). Comparing only basenames dropped those lookups —
+        // detected scopes then resolved to an EMPTY config and emitted blank
+        // prompt blocks (observed live 2026-07-23: CURRENT_BOARD_MEMBERS).
+        if (isset($entityConfigs[$shortName])) {
+            return $shortName;
+        }
+
         foreach ($entityConfigs as $fullName => $config) {
-            if (strcasecmp(class_basename($fullName), $shortName) === 0) {
+            if (strcasecmp(class_basename($fullName), $shortName) === 0
+                || strcasecmp($fullName, $shortName) === 0) {
                 return $fullName;
             }
         }

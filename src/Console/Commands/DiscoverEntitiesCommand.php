@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Console\Commands;
 
+use Condoedge\Ai\Services\Discovery\AiConfigEnhancer;
+use Condoedge\Ai\Services\Discovery\CodeExplorer;
+use Condoedge\Ai\Services\Discovery\DataExplorer;
+use Condoedge\Ai\Services\Discovery\LangExplorer;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
@@ -28,7 +32,8 @@ class DiscoverEntitiesCommand extends Command
     protected $signature = 'ai:discover
                             {--model= : Specific model class to discover}
                             {--force : Overwrite existing configuration}
-                            {--dry-run : Show what would be generated without writing}';
+                            {--dry-run : Show what would be generated without writing}
+                            {--enhance : Use AI to generate rich descriptions, aliases, and scopes}';
 
     protected $description = 'Discover Nodeable entities and generate config/entities.php';
 
@@ -43,7 +48,7 @@ class DiscoverEntitiesCommand extends Command
         $this->info('Discovering Nodeable entities...');
         $this->newLine();
 
-        // Run discovery through the service (single source of truth)
+        // The discovery service is the single source of truth.
         $result = $this->discovery->discoverAll(
             specificModel: $this->option('model')
         );
@@ -53,7 +58,6 @@ class DiscoverEntitiesCommand extends Command
         $stats = $result['stats'];
         $inheritance = $result['inheritance'] ?? [];
 
-        // Display stats
         $this->info("Found {$stats['total_models_found']} Nodeable model(s)");
 
         if ($stats['child_models_merged'] > 0) {
@@ -62,12 +66,10 @@ class DiscoverEntitiesCommand extends Command
 
         $this->newLine();
 
-        // Display discovered models
         foreach ($configurations as $modelClass => $config) {
             $this->line("Discovered: <fg=cyan>{$modelClass}</>");
             $this->displayConfig($config);
 
-            // Show merged children if any
             if (isset($inheritance[$modelClass])) {
                 foreach ($inheritance[$modelClass]['children'] as $child) {
                     $this->comment("    Merged: " . class_basename($child) . " (child model)");
@@ -75,19 +77,55 @@ class DiscoverEntitiesCommand extends Command
             }
         }
 
-        // Display errors
         foreach ($errors as $modelClass => $error) {
             $this->error("  Error in {$modelClass}: {$error}");
         }
 
         $this->newLine();
 
+        // AI Enhancement (single-pass, no feedback loop — use ai:enhance for iterative)
+        if ($this->option('enhance') && !empty($configurations)) {
+            $this->info('Running AI enhancement (single pass)...');
+            $this->comment('  For iterative improvement with test feedback, run: php artisan ai:enhance');
+            $this->newLine();
+
+            $enhancer = app(AiConfigEnhancer::class);
+            $codeExplorer = new CodeExplorer();
+            $dataExplorer = new DataExplorer();
+            $langExplorer = new LangExplorer();
+
+            foreach ($configurations as $modelClass => &$config) {
+                try {
+                    $codeContext = $codeExplorer->explore($modelClass, base_path());
+
+                    foreach ($config['graph']['relationships'] ?? [] as $rel) {
+                        $relatedModel = $rel['related_model'] ?? null;
+                        if ($relatedModel && class_exists($relatedModel)) {
+                            $codeContext['related_models'][$relatedModel] =
+                                $codeExplorer->readRelatedModel($relatedModel);
+                        }
+                    }
+
+                    $dataContext = $dataExplorer->explore($modelClass);
+                    $langContext = $langExplorer->explore($codeContext['forms'] ?? [], base_path());
+                    $config = $enhancer->enhance($modelClass, $config, $codeContext, $dataContext, $langContext);
+
+                    $this->line("  <fg=green>✓</> " . class_basename($modelClass));
+                } catch (\Throwable $e) {
+                    $this->line("  <fg=red>✗</> " . class_basename($modelClass) . ": " . $e->getMessage());
+                    $errors[$modelClass] = 'Enhancement failed: ' . $e->getMessage();
+                }
+            }
+            unset($config);
+
+            $this->newLine();
+        }
+
         if (empty($configurations)) {
             $this->warn('No configurations to write.');
             return self::SUCCESS;
         }
 
-        // Dry run - just show what would be generated
         if ($this->option('dry-run')) {
             $this->info('DRY RUN - Configuration that would be generated:');
             $this->newLine();
@@ -95,7 +133,6 @@ class DiscoverEntitiesCommand extends Command
             return self::SUCCESS;
         }
 
-        // Write config file
         $configPath = config_path('entities.php');
 
         if (File::exists($configPath) && !$this->option('force')) {
@@ -128,7 +165,7 @@ class DiscoverEntitiesCommand extends Command
         $this->comment('Next steps:');
         $this->line('  1. Review config/entities.php');
         $this->line('  2. Customize as needed (labels, properties, relationships)');
-        $this->line('  3. Run php artisan ai:ingest to populate stores');
+        $this->line('  3. Run php artisan ai:ingest to populate the graph');
 
         return self::SUCCESS;
     }
@@ -137,10 +174,6 @@ class DiscoverEntitiesCommand extends Command
     {
         if (!empty($config['graph']['label'])) {
             $this->line("    Graph: <fg=green>{$config['graph']['label']}</>");
-        }
-
-        if (!empty($config['vector']['collection'])) {
-            $this->line("    Vector: <fg=green>{$config['vector']['collection']}</>");
         }
 
         if (!empty($config['metadata']['aliases'])) {
@@ -161,7 +194,6 @@ class DiscoverEntitiesCommand extends Command
             $this->line("    Children: <fg=yellow>" . implode(', ', $children) . "</>");
         }
 
-        // Display security team_path
         if (!empty($config['security']['team_path'])) {
             $teamPath = $config['security']['team_path'];
             if (is_array($teamPath)) {

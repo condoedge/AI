@@ -1,0 +1,47 @@
+{
+    "conversations": [
+        {
+            "id": "team-roster-export",
+            "role": "manager",
+            "turns": [
+                {
+                    "ask": "Give me all my team members with their roles and contact info.",
+                    "expect": {
+                        "min_rows": 2,
+                        "columns_include": ["name", "role", "email"]
+                    },
+                    "standard": "Lists the CURRENT team's members with role and contact info, in an insider voice (the assistant works for this team), without inventing members or leaking other teams' data."
+                },
+                {
+                    "ask": "Now give me that as an Excel.",
+                    "expect": {
+                        "produces_file": "excel",
+                        "previous_result_available": true
+                    },
+                    "standard": "Produces an Excel of the SAME members from the previous turn — it must not re-ask what to export, claim there are no results, or export different data."
+                }
+            ]
+        },
+        {
+            "id": "building-rules-question",
+            "role": "resident",
+            "turns": [
+                {
+                    "ask": "What do the building rules say about pets?",
+                    "expect": {
+                        "cites_document": true
+                    },
+                    "standard": "Answers from the uploaded building-rules document and cites it; if the document says nothing about pets, says so instead of inventing a policy."
+                },
+                {
+                    "ask": "And what about noise after 10pm?",
+                    "expect": {
+                        "cites_document": true,
+                        "max_latency_ms": 30000
+                    },
+                    "standard": "Understands this follow-up continues the building-rules topic, answers about noise rules citing the same document, in the same language as the question."
+                }
+            ]
+        }
+    ]
+}

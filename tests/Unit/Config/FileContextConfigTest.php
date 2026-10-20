@@ -20,7 +20,6 @@ class FileContextConfigTest extends TestCase
         $this->assertArrayHasKey('physical_collection', $config);
         $this->assertArrayHasKey('max_references', $config);
         $this->assertArrayHasKey('min_relevance_score', $config);
-        $this->assertArrayHasKey('include_snippets', $config);
         $this->assertArrayHasKey('snippet_length', $config);
         $this->assertArrayHasKey('file_model', $config);
         $this->assertArrayHasKey('access_scope', $config);
@@ -82,9 +81,23 @@ class FileContextConfigTest extends TestCase
         $this->assertEquals(['md', 'mdx', 'txt', 'rst'], $config['supported_extensions']);
         $this->assertEquals('documentation_chunks', $config['physical_collection']);
         $this->assertEquals(5, $config['max_references']);
-        $this->assertEquals(0.7, $config['min_relevance_score']);
-        $this->assertTrue($config['include_snippets']);
-        $this->assertEquals(200, $config['snippet_length']);
+        $this->assertEquals(0.4, $config['min_relevance_score']);
+        // Snippet budget must fit the ±2 context-window stitch (~5 chunks of
+        // ~1000 chars) — Task 1.2 raised it from 1200, which cut the window to
+        // ~one chunk. The multi-chunk stitch count is also configurable.
+        $this->assertEquals(6000, $config['snippet_length']);
+        $this->assertEquals(3, $config['snippet_chunks']);
         $this->assertNull($config['access_resolver']);
+    }
+
+    /** @test */
+    public function it_has_enumeration_config_defaults(): void
+    {
+        $enumeration = config('ai.file_context.enumeration');
+
+        $this->assertIsArray($enumeration);
+        $this->assertTrue($enumeration['enabled']);
+        $this->assertEquals(['file_listing'], $enumeration['intents']);
+        $this->assertEquals(50, $enumeration['max_files']);
     }
 }

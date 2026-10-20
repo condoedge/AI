@@ -8,6 +8,7 @@ use Condoedge\Ai\Tests\TestCase;
 use Mockery;
 use Condoedge\Ai\Services\QueryExecutor;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\Exceptions\QueryExecutionException;
 use Condoedge\Ai\Exceptions\QueryTimeoutException;
 use Condoedge\Ai\Exceptions\ReadOnlyViolationException;
@@ -22,14 +23,19 @@ class QueryExecutorTest extends TestCase
     {
         parent::setUp();
 
+        // These tests exercise execution mechanics (read-only detection, limit
+        // injection, formatting, timeouts) rather than multi-tenant filtering.
+        // Disable the team-security layer so the (now fail-closed) security
+        // posture doesn't short-circuit them. Security behaviour is covered by
+        // QueryExecutorSecurityTest / AiSecurityServiceTest.
+        config()->set('ai.security.enabled', false);
+
         $this->mockGraph = Mockery::mock(GraphStoreInterface::class);
         $this->config = [
             'default_timeout' => 30,
             'default_limit' => 100,
-            'max_limit' => 1000,
             'read_only_mode' => true,
             'default_format' => 'table',
-            'enable_explain' => true,
             'log_slow_queries' => false, // Disable logging in tests
             'slow_query_threshold_ms' => 1000,
         ];
@@ -65,11 +71,10 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query);
 
-        $this->assertTrue($result['success']);
-        $this->assertCount(2, $result['data']);
-        $this->assertArrayHasKey('stats', $result);
-        $this->assertArrayHasKey('metadata', $result);
-        $this->assertEmpty($result['errors']);
+        $this->assertInstanceOf(QueryExecutionResult::class, $result);
+        $this->assertTrue($result->success);
+        $this->assertCount(2, $result->data);
+        $this->assertEmpty($result->errors);
     }
 
     public function test_execute_adds_limit_if_missing(): void
@@ -83,15 +88,42 @@ class QueryExecutorTest extends TestCase
             }), [])
             ->andReturn([]);
 
-        $this->executor->execute($query);
+        $result = $this->executor->execute($query);
+
+        $this->assertTrue($result->success);
     }
 
-    public function test_execute_throws_exception_for_empty_query(): void
+    public function test_execute_returns_no_query_success_for_empty_query(): void
     {
-        $this->expectException(QueryExecutionException::class);
-        $this->expectExceptionMessage('Query cannot be empty');
+        // An empty Cypher query is no longer an error: some flows (e.g. a direct
+        // answer that needs no graph lookup) intentionally pass "" so the
+        // executor short-circuits to a NO-QUERY success instead of throwing.
+        // The graph store must NOT be hit in this case.
+        $this->mockGraph->shouldNotReceive('query');
 
-        $this->executor->execute('');
+        $result = $this->executor->execute('');
+
+        // The empty-cypher branch returns the SAME well-formed DTO shape as the
+        // success branch: success + empty data + empty errors. The "no query"
+        // signal rides metadata, not a divergent top-level key.
+        $this->assertInstanceOf(QueryExecutionResult::class, $result);
+        $this->assertTrue($result->success);
+        $this->assertSame([], $result->data);
+        $this->assertSame([], $result->errors);
+        $this->assertSame('NO QUERY', $result->metadata['context']);
+    }
+
+    public function test_execute_returns_no_query_success_for_whitespace_query(): void
+    {
+        // Same short-circuit for whitespace-only / null-ish input.
+        $this->mockGraph->shouldNotReceive('query');
+
+        $result = $this->executor->execute('   ');
+
+        $this->assertTrue($result->success);
+        $this->assertSame([], $result->data);
+        $this->assertSame([], $result->errors);
+        $this->assertSame('NO QUERY', $result->metadata['context']);
     }
 
     public function test_execute_respects_timeout_option(): void
@@ -104,7 +136,7 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query, [], ['timeout' => 60]);
 
-        $this->assertEquals(60, $result['metadata']['timeout']);
+        $this->assertEquals(60, $result->metadata['timeout']);
     }
 
     public function test_execute_respects_limit_option(): void
@@ -118,7 +150,9 @@ class QueryExecutorTest extends TestCase
             }), [])
             ->andReturn([]);
 
-        $this->executor->execute($query, [], ['limit' => 50]);
+        $result = $this->executor->execute($query, [], ['limit' => 50]);
+
+        $this->assertTrue($result->success);
     }
 
     public function test_execute_formats_results_as_table(): void
@@ -134,8 +168,8 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query, [], ['format' => 'table']);
 
-        $this->assertEquals('table', $result['metadata']['format']);
-        $this->assertIsArray($result['data']);
+        $this->assertEquals('table', $result->metadata['format']);
+        $this->assertIsArray($result->data);
     }
 
     public function test_execute_collects_statistics(): void
@@ -148,10 +182,10 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query);
 
-        $this->assertArrayHasKey('execution_time_ms', $result['stats']);
-        $this->assertArrayHasKey('rows_returned', $result['stats']);
-        $this->assertGreaterThanOrEqual(0, $result['stats']['execution_time_ms']);
-        $this->assertEquals(1, $result['stats']['rows_returned']);
+        $this->assertArrayHasKey('execution_time_ms', $result->stats);
+        $this->assertArrayHasKey('rows_returned', $result->stats);
+        $this->assertGreaterThanOrEqual(0, $result->stats['execution_time_ms']);
+        $this->assertEquals(1, $result->stats['rows_returned']);
     }
 
     // =========================================================================
@@ -178,7 +212,7 @@ class QueryExecutorTest extends TestCase
 
         $result = $this->executor->execute($query, [], ['read_only' => false]);
 
-        $this->assertTrue($result['success']);
+        $this->assertTrue($result->success);
     }
 
     public function test_execute_detects_delete(): void
@@ -209,6 +243,35 @@ class QueryExecutorTest extends TestCase
         $this->executor->execute('MATCH (n:Test) SET n.value = 1');
     }
 
+    public function test_execute_detects_drop(): void
+    {
+        // DROP is a dangerous keyword the validator knows but the executor's
+        // read-only gate historically did not. The gate must reject it before
+        // anything reaches the graph store.
+        $this->mockGraph->shouldNotReceive('query');
+
+        $this->expectException(ReadOnlyViolationException::class);
+
+        $this->executor->execute('DROP INDEX index_name');
+    }
+
+    public function test_read_only_gate_shares_validator_keyword_authority(): void
+    {
+        // The executor read-only gate must classify writes from the SAME list the
+        // CypherValidator uses, so a keyword the validator rejects can never slip
+        // through the executor. Prove the two sets are identical.
+        $reflection = new \ReflectionClass($this->executor);
+        $property = $reflection->getProperty('writeKeywords');
+        $property->setAccessible(true);
+
+        $executorKeywords = $property->getValue($this->executor);
+
+        $this->assertEqualsCanonicalizing(
+            \Condoedge\Ai\Services\CypherValidator::DANGEROUS_KEYWORDS,
+            $executorKeywords
+        );
+    }
+
     // =========================================================================
     // Count Tests
     // =========================================================================
@@ -230,113 +293,92 @@ class QueryExecutorTest extends TestCase
         $this->assertEquals(42, $count);
     }
 
-    // =========================================================================
-    // Pagination Tests
-    // =========================================================================
-
-    public function test_executePaginated_returns_paginated_results(): void
+    /**
+     * Build a closure that captures the Cypher query the graph store is asked
+     * to run, so the test can assert the generated count query is well-formed.
+     */
+    private function captureQuery(?string &$captured): \Closure
     {
-        // First call for count
-        $this->mockGraph->shouldReceive('query')
-            ->once()
-            ->with(Mockery::on(function ($q) {
-                return str_contains($q, 'count(*)');
-            }), [])
-            ->andReturn([['total' => 100]]);
+        return function ($q) use (&$captured) {
+            $captured = $q;
+            return true;
+        };
+    }
 
-        // Second call for actual data
-        $this->mockGraph->shouldReceive('query')
-            ->once()
-            ->with(Mockery::on(function ($q) {
-                return str_contains($q, 'SKIP 20') && str_contains($q, 'LIMIT 20');
-            }), [])
-            ->andReturn([['n' => ['id' => 1]]]);
-
-        $result = $this->executor->executePaginated(
-            'MATCH (n:Customer) RETURN n',
-            page: 2,
-            perPage: 20
+    /**
+     * Asserts a generated count query is structurally valid Cypher: it wraps the
+     * original query in a CALL subquery (so any shape stays legal) and the
+     * count(*) aggregation is the single top-level RETURN that follows it.
+     */
+    private function assertWellFormedCountQuery(string $query, string $inner): void
+    {
+        // The old wrapper prepended "WITH * MATCH" in front of an inner clause,
+        // producing impossible adjacencies like "MATCH OPTIONAL MATCH",
+        // "MATCH CALL" or "MATCH WITH". None of those may appear.
+        $this->assertDoesNotMatchRegularExpression(
+            '/\bMATCH\s+(OPTIONAL\b|CALL\b|WITH\b)/i',
+            $query,
+            "Count query is malformed (illegal clause after MATCH): {$query}"
         );
 
-        $this->assertArrayHasKey('data', $result);
-        $this->assertArrayHasKey('pagination', $result);
-        $this->assertEquals(2, $result['pagination']['current_page']);
-        $this->assertEquals(20, $result['pagination']['per_page']);
-        $this->assertEquals(100, $result['pagination']['total']);
-        $this->assertEquals(5, $result['pagination']['last_page']);
-    }
-
-    public function test_executePaginated_validates_page_number(): void
-    {
-        $this->mockGraph->shouldReceive('query')
-            ->twice()
-            ->andReturn([['total' => 10]], []);
-
-        $result = $this->executor->executePaginated(
-            'MATCH (n:Customer) RETURN n',
-            page: -1,
-            perPage: 10
+        // The original query must survive intact inside a CALL subquery, so any
+        // shape (OPTIONAL MATCH / CALL / leading WITH / UNION) stays valid.
+        $this->assertStringContainsString(
+            "CALL { {$inner} }",
+            $query,
+            "Count query must wrap the original in a CALL subquery: {$query}"
         );
 
-        // Should default to page 1
-        $this->assertEquals(1, $result['pagination']['current_page']);
+        // The aggregation must be the OUTER clause, after the subquery's closing
+        // brace — never a second RETURN stacked at the top level.
+        $this->assertMatchesRegularExpression(
+            '/\}\s*RETURN\s+count\(\*\)/i',
+            $query,
+            "Count query must aggregate with count(*) outside the subquery: {$query}"
+        );
+
+        // Exactly one top-level RETURN (the aggregation): the inner query's own
+        // RETURN lives inside the braces and must not be double-counted here.
+        $outer = preg_replace('/CALL\s*\{.*\}/is', '', $query);
+        $this->assertSame(
+            1,
+            preg_match_all('/\bRETURN\b/i', $outer),
+            "Count query must have exactly one top-level RETURN: {$query}"
+        );
     }
 
-    // =========================================================================
-    // Explain Tests
-    // =========================================================================
-
-    public function test_explain_returns_execution_plan(): void
+    public function test_executeCount_wraps_optional_match_as_valid_cypher(): void
     {
-        $query = 'MATCH (n:Customer) RETURN n';
-        $mockPlan = ['plan' => 'some plan data'];
+        $captured = null;
 
         $this->mockGraph->shouldReceive('query')
             ->once()
-            ->with('EXPLAIN ' . $query, [])
-            ->andReturn($mockPlan);
+            ->with(Mockery::on($this->captureQuery($captured)), [])
+            ->andReturn([['total' => 7]]);
 
-        $result = $this->executor->explain($query);
+        $inner = 'OPTIONAL MATCH (n:Customer) RETURN n';
+        $count = $this->executor->executeCount($inner);
 
-        $this->assertArrayHasKey('plan', $result);
-        $this->assertArrayHasKey('query', $result);
-        $this->assertEquals($query, $result['query']);
+        $this->assertEquals(7, $count);
+        $this->assertNotNull($captured);
+        $this->assertWellFormedCountQuery($captured, $inner);
     }
 
-    public function test_explain_throws_when_disabled(): void
+    public function test_executeCount_wraps_call_query_as_valid_cypher(): void
     {
-        $executor = new QueryExecutor($this->mockGraph, ['enable_explain' => false]);
+        $captured = null;
 
-        $this->expectException(QueryExecutionException::class);
-        $this->expectExceptionMessage('EXPLAIN is disabled');
-
-        $executor->explain('MATCH (n) RETURN n');
-    }
-
-    // =========================================================================
-    // Test Query Tests
-    // =========================================================================
-
-    public function test_test_returns_true_for_valid_query(): void
-    {
         $this->mockGraph->shouldReceive('query')
             ->once()
-            ->andReturn(['plan' => []]);
+            ->with(Mockery::on($this->captureQuery($captured)), [])
+            ->andReturn([['total' => 3]]);
 
-        $isValid = $this->executor->test('MATCH (n:Customer) RETURN n');
+        $inner = 'CALL db.labels() YIELD label RETURN label';
+        $count = $this->executor->executeCount($inner);
 
-        $this->assertTrue($isValid);
-    }
-
-    public function test_test_returns_false_for_invalid_query(): void
-    {
-        $this->mockGraph->shouldReceive('query')
-            ->once()
-            ->andThrow(new \Exception('Invalid query'));
-
-        $isValid = $this->executor->test('INVALID QUERY');
-
-        $this->assertFalse($isValid);
+        $this->assertEquals(3, $count);
+        $this->assertNotNull($captured);
+        $this->assertWellFormedCountQuery($captured, $inner);
     }
 
     // =========================================================================
@@ -369,6 +411,8 @@ class QueryExecutorTest extends TestCase
             ->with($query, $params)
             ->andReturn([]);
 
-        $this->executor->execute($query, $params);
+        $result = $this->executor->execute($query, $params);
+
+        $this->assertTrue($result->success);
     }
 }

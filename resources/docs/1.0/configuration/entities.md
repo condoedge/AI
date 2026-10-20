@@ -9,8 +9,9 @@ Complete guide to configuring entities for the AI system.
 Entities are your Eloquent models that you want to query using natural language. Each entity needs configuration for:
 
 - **Graph (Neo4j)**: Node labels, properties, and relationships
-- **Vector (Qdrant)**: Embeddings for semantic search
 - **Metadata**: Aliases, scopes, and descriptions
+
+Records are stored in the graph only; they are not embedded. Qdrant holds the file chunks and the semantic indexes — see [Data ingestion](/docs/{{version}}/usage/data-ingestion).
 
 ---
 
@@ -33,7 +34,7 @@ Configuration is resolved using a layered approach. The `config/entities.php` fi
 │  3. Throw RuntimeException (run ai:discover)                │
 │                                                              │
 │  If config found:                                            │
-│  4. Merge model properties on top ($embedFields, etc.)      │
+│  4. Merge model properties on top ($graphLabel, etc.)       │
 │         │                                                    │
 │         ▼                                                    │
 │  5. Ensure minimum defaults                                 │
@@ -58,11 +59,6 @@ return [
                 ],
             ],
         ],
-        'vector' => [
-            'collection' => 'customers',
-            'embed_fields' => ['name', 'email', 'company'],
-            'metadata' => ['id', 'name', 'status'],
-        ],
         'metadata' => [
             'aliases' => ['customer', 'client', 'account'],
             'description' => 'Customer entity',
@@ -84,9 +80,6 @@ class Customer extends Model implements Nodeable
     use HasNodeableConfig;
 
     protected $fillable = ['name', 'email', 'company', 'ssn'];
-
-    // Fields to embed for semantic search
-    protected array $embedFields = ['name', 'company'];
 
     // Custom Neo4j label
     protected string $graphLabel = 'Customer';
@@ -116,9 +109,6 @@ class Customer extends Model implements Nodeable
             ->label('Customer')
             ->properties('id', 'name', 'email', 'status')
             ->relationship('orders', 'Order', 'HAS_ORDER', 'customer_id')
-            ->collection('customers')
-            ->embedFields('name', 'email', 'company')
-            ->metadata(['id', 'name', 'status'])
             ->aliases('customer', 'client', 'account')
             ->description('Customer entity with orders');
     }
@@ -161,6 +151,133 @@ Properties stored in Neo4j (should include primary key):
 
 **Excluded by default:** `password`, `remember_token`, `api_token`, `secret`, sensitive fields.
 
+### Computed Properties, Eager-Loads and Casts
+
+`graph.properties` only reads stored attributes (`attributesToArray()`), so values your
+model computes in PHP (accessors, methods such as an invoice's amount still due) never
+reach the graph. Don't add them to `$appends` for this: that leaks them into every JSON
+response and causes N+1 queries. Declare them under `graph` instead:
+
+```php
+// config/entities.php
+'graph' => [
+    'label' => 'Invoice',
+    'properties' => ['id', 'status', 'invoice_date'],
+
+    // graph property => accessor/method name on the model, or a callable fn($model)
+    'computed' => [
+        'due_amount'   => 'real_due_amount',      // accessor (getRealDueAmountAttribute / Attribute)
+        'total_amount' => 'total_amount',
+        'balance'      => 'outstandingBalance',   // method, called with no arguments
+        // 'label'     => fn ($invoice) => ...,   // callable (see the config:cache note below)
+    ],
+
+    // relations the computed values read; eager-loaded so ingest does not N+1
+    'with' => ['entryPayments', 'invoiceDetails.taxDetails'],
+
+    // optional: force a property's graph type (computed or regular)
+    'casts' => ['status' => 'string'],   // string | int | float | bool | date
+],
+```
+
+How the values are produced:
+
+- **Evaluation:** for a string, a method with that name is called with no arguments.
+  Otherwise the attribute or accessor is read (`$model->{$name}`). A non-string callable
+  is called as `$fn($model)`. A string is never treated as a PHP function name.
+- **Typing:** numeric strings and decimals become `float`, ints stay `int`, bools stay
+  `bool`. Dates use the model's own `serializeDate()`, the same format `toArray()` gives
+  date columns. Backed enums store their value. `null` is passed through the same way
+  as regular properties, so Neo4j stores no property and clears a stale value on update.
+- **Casts** (`graph.casts`) apply to the raw value before the numeric step, so a `'00042'`
+  code cast to `string` stays `'00042'`. The Eloquent spellings `integer`, `boolean`,
+  `decimal`, `double` and `datetime` also work. With no cast, behaviour is unchanged.
+- **Failures:** if a computed value throws, only that property is skipped for that node.
+  One warning is logged per (model, property) per run, and the rest of the ingest continues.
+- **Every ingestion path** writes computed properties through
+  `GraphPropertyMapper::mapNodeProperties()`. That covers `ai:ingest` (its chunk query
+  applies `->with()`), batch ingest (one eager-load per model class) and auto-sync /
+  `AI::ingest()` / `AI::sync()` (`loadMissing()` on the single model).
+- **Schema:** computed keys are real node properties. They are listed with the label's
+  properties in the schema cards the query generator sees. Describe one the same way as
+  any other property, under `metadata.common_properties`:
+
+```php
+'metadata' => [
+    'common_properties' => [
+        'due_amount' => 'Amount still owed on the invoice after payments and credits, in dollars',
+    ],
+],
+```
+
+#### Money properties (`metadata.money_properties`)
+
+The chat answers data questions with a table that code renders, and it states totals that code
+computes. A column is summed **only** when its source property is listed as money for its
+entity. The list works for stored and computed properties alike:
+
+```php
+'metadata' => [
+    'money_properties' => ['due_amount', 'total_amount'],
+    'common_properties' => [ /* descriptions, unchanged */ ],
+],
+```
+
+Result columns are traced to properties through the query's projections. That covers
+`v.prop AS alias` with any wrapping function (`round(sum(v.prop), 2)`), aliases carried through
+`WITH`, and the keys of collected maps. A column that mixes a non-money source (for example
+`amount * tax_rate`), a `count()`, or anything that cannot be traced is never summed.
+Rates, unit prices and shares are decimals but not money, so leave them out. Without a
+declaration the answer states the row count only.
+
+#### Name properties (`metadata.name_properties`)
+
+The link chips under an answer, and the "different records share a name" check, name each
+record by its first own text column. That is right for an entity with one `name` property.
+An entity whose name is **split** over several properties declares them, in the order they
+read:
+
+```php
+'metadata' => [
+    'name_properties' => ['first_name', 'last_name'],
+],
+```
+
+A record is then named by every declared part the query returned, joined with a space in the
+declared order, whatever order or alias the query projected them in (`c.first_name,
+c.last_name` → "Amélie Quirion"). Without the declaration the chip reads "Amélie" and two
+different people called Julien count as the same name. List only the parts of the name, not
+other text properties such as a company or an email. Optional: an entity that declares
+nothing keeps the first-own-text-column rule.
+
+#### Detail properties (`metadata.detail_properties`)
+
+When an answer is exactly **one record** ("when was our last meeting?"), the chat shows it as a
+record block with the names of the records it belongs to. The query returns only what the
+question asked for, so a field that identifies the record — where the meeting was held — is
+often missing. An entity can declare which of its **own** properties are worth showing on a
+single record:
+
+```php
+'metadata' => [
+    'detail_properties' => ['start_date', 'place', 'president'],
+],
+```
+
+The ones the query did not return are fetched by the record's id, through the same scoped
+executor and in the same lookup as the parents' names (no LLM call), and are shown under the
+property's own name, a coded value as its declared label. Only plain properties listed in
+`graph.properties` count; a property in `security.sensible_columns` is never fetched; a field
+with nothing recorded adds no line; at most four are added. Keep the list to the two to four
+fields a person needs to recognise the record. Optional: an entity that declares nothing is
+shown exactly as before.
+
+Run `php artisan ai:validate-config` after editing. It warns when a computed
+accessor or method, or a `with` relation path, does not exist on the model, and when a
+cast type is unknown. Closures cannot be serialized by `php artisan config:cache`. Put
+callables in `nodeableConfig()` or use `[Class::class, 'method']`, or prefer a model
+method name.
+
 ### Relationships
 
 Define how entities connect:
@@ -191,64 +308,6 @@ Define how entities connect:
 
 ---
 
-## Vector Configuration
-
-### Collection Name
-
-Qdrant collection for embeddings:
-
-```php
-// NodeableConfig
-->collection('customers')
-
-// config/entities.php
-'vector' => [
-    'collection' => 'customers',
-]
-```
-
-**Collections are auto-created** with correct dimensions on first use.
-
-### Embed Fields
-
-Fields to generate embeddings from (for semantic search):
-
-```php
-// NodeableConfig
-->embedFields('name', 'description', 'company')
-
-// config/entities.php
-'vector' => [
-    'embed_fields' => ['name', 'description', 'company'],
-]
-```
-
-**Tips:**
-- Include text fields users might search by
-- Avoid IDs, dates, or numeric-only fields
-- 2-4 fields is usually optimal
-
-### Metadata
-
-Fields stored as filterable metadata in Qdrant:
-
-```php
-// NodeableConfig
-->metadata(['id', 'status', 'tier', 'created_at'])
-
-// config/entities.php
-'vector' => [
-    'metadata' => ['id', 'status', 'tier', 'created_at'],
-]
-```
-
-**Always include:**
-- Primary key (`id`)
-- Fields you'll filter by (status, type, category)
-- Fields needed for display in results
-
----
-
 ## Metadata Configuration
 
 ### Aliases
@@ -269,6 +328,15 @@ Alternative names the LLM should recognize:
 - "Show all customers"
 - "List clients with status active"
 - "Find buyers from USA"
+
+**List each word once — real synonyms only.** Another spelling of the label or of
+an alias already listed is matched automatically and must not be repeated: its
+casing, its accent-less form (`accès` / `acces`), its snake_case / spaced / glued
+form (`visit_detail` / `visit detail` / `visitdetail`) and a trailing plural `s` /
+`x` (`fob` / `fobs`, `niveau` / `niveaux`). Those spellings carry no information
+and only crowd the real synonyms out of the prompt (the Query-Understanding
+catalog shows at most 12 per entity, the schema cards 8). Irregular forms the
+rule cannot derive (`person` / `people`, `box` / `boxes`) are worth listing.
 
 ### Description
 
@@ -338,11 +406,6 @@ public function nodeableConfig(): NodeableConfig
             'customer_id'                      // Foreign key
         )
 
-        // Vector Configuration
-        ->collection('customers')              // Qdrant collection
-        ->embedFields('name', 'company')       // Fields to embed
-        ->metadata(['id', 'status'])           // Filterable metadata
-
         // Metadata
         ->aliases('customer', 'client')        // Alternative names
         ->description('Customer entity')       // Description for LLM
@@ -387,9 +450,6 @@ php artisan ai:discover -v
 | Label | From class name |
 | Properties | From fillable/table columns |
 | Relationships | From Eloquent relations |
-| Collection | From table name |
-| Embed fields | Text columns (name, description, etc.) |
-| Metadata | Key columns (id, status, type) |
 | Aliases | From table name + common variations |
 | Scopes | From Laravel query scopes |
 | Traversal scopes | From relationship discriminators |
@@ -399,19 +459,7 @@ php artisan ai:discover -v
 In `config/ai.php`:
 
 ```php
-'discovery' => [
-    // Additional aliases for tables
-    'alias_mappings' => [
-        'customers' => ['client', 'buyer', 'account'],
-        'orders' => ['purchase', 'transaction'],
-    ],
-
-    // Properties to exclude
-    'exclude_properties' => [
-        'internal_notes',
-        'admin_only_field',
-    ],
-
+'auto_discovery' => [
     // Role mappings for traversal scopes
     'role_mappings' => [
         'PersonTeam' => [
@@ -432,7 +480,7 @@ In `config/ai.php`:
 
 - Run `ai:discover` to generate initial config
 - Review and customize generated config
-- Include primary key in properties and metadata
+- Include primary key in properties
 - Add meaningful aliases users might use
 - Define scopes for common query patterns
 - Re-run `ai:discover` after model changes
@@ -440,7 +488,6 @@ In `config/ai.php`:
 ### Don't
 
 - Store sensitive data (passwords, tokens) in properties
-- Embed numeric-only fields (IDs, amounts)
 - Create too many overlapping aliases
 - Forget to run `ai:discover` before deployment
 

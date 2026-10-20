@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Discovery;
 
 use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Domain\ValueObjects\RelationshipConfig;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -18,7 +19,7 @@ use Symfony\Component\Finder\Finder;
  * to provide complete auto-discovery functionality. Introspects models to
  * discover configuration automatically, using SchemaInspector for database
  * hints, CypherScopeAdapter for scope discovery, and other specialized
- * discoverers for properties, relationships, aliases, and embed fields.
+ * discoverers for properties, relationships and aliases.
  *
  * Usage:
  *   $discovery = new EntityAutoDiscovery(...);
@@ -37,7 +38,6 @@ class EntityAutoDiscovery
      * @param RelationshipDiscoverer $relationships Relationship discoverer
      * @param PropertyDiscoverer $properties Property discoverer
      * @param AliasGenerator $aliases Alias generator
-     * @param EmbedFieldDetector $embedFields Embed field detector
      * @param TraversalScopeGenerator|null $traversalGenerator Traversal scope generator
      * @param InheritanceResolver|null $inheritanceResolver Inheritance resolver
      */
@@ -47,7 +47,6 @@ class EntityAutoDiscovery
         private RelationshipDiscoverer $relationships,
         private PropertyDiscoverer $properties,
         private AliasGenerator $aliases,
-        private EmbedFieldDetector $embedFields,
         private ?TraversalScopeGenerator $traversalGenerator = null,
         private ?InheritanceResolver $inheritanceResolver = null,
     ) {
@@ -76,13 +75,11 @@ class EntityAutoDiscovery
 
             // Discover all parts
             $graph = $this->discoverGraph($model);
-            $vector = $this->discoverVector($model);
             $security = $this->discoverSecurityConfig($model);
             $metadata = $this->discoverMetadata($model);
 
             return [
                 'graph' => $graph,
-                'vector' => $vector,
                 'security' => $security,
                 'metadata' => $metadata,
             ];
@@ -149,8 +146,8 @@ class EntityAutoDiscovery
                     );
                 }
 
-                // Only include if has graph, vector, or security config
-                if (!empty($config['graph']) || !empty($config['vector']) || !empty($config['security'])) {
+                // Only include if has graph or security config
+                if (!empty($config['graph']) || !empty($config['security'])) {
                     $configurations[$modelClass] = $config;
                     $stats['configurations_generated']++;
                 }
@@ -258,39 +255,6 @@ class EntityAutoDiscovery
             'label' => $label,
             'properties' => $graphProperties,
             'relationships' => $graphRelationships,
-        ];
-    }
-
-    /**
-     * Discover only vector configuration
-     *
-     * Discovers Qdrant collection name, embed fields, and metadata fields.
-     *
-     * @param string|Model $model Model class name or instance
-     * @return array Vector configuration
-     */
-    public function discoverVector(string|Model $model): array
-    {
-        $modelInstance = $this->resolveModel($model);
-
-        // Get collection name
-        $collection = $this->aliases->generateCollectionName($model);
-
-        // Get embed fields
-        $embedFields = $this->embedFields->detect($model);
-
-        // Exclude sensible columns from embed fields (they shouldn't be in vector content)
-        $sensibleColumns = $this->getSensibleColumns($modelInstance);
-        $embedFields = array_values(array_diff($embedFields, $sensibleColumns));
-
-        // Get metadata fields (all properties except embed fields)
-        $allProperties = $this->properties->discover($model);
-        $metadata = array_values(array_diff($allProperties, $embedFields));
-
-        return [
-            'collection' => $collection,
-            'embed_fields' => $embedFields,
-            'metadata' => $metadata,
         ];
     }
 
@@ -489,6 +453,12 @@ class EntityAutoDiscovery
                 continue;
             }
 
+            // Polymorphic sentinel has no single concrete label — it must
+            // never leak into generated traversal scopes.
+            if ($targetEntity === RelationshipConfig::POLYMORPHIC_TARGET) {
+                continue;
+            }
+
             // For each discriminator field, generate scopes
             foreach ($discriminatorFields as $discriminatorField) {
                 // Get role mappings from configuration
@@ -638,6 +608,12 @@ class EntityAutoDiscovery
             $targetLabel = $relationship['target_label'] ?? '';
             $relType = $relationship['type'] ?? '';
 
+            // Polymorphic sentinel must never become a team path segment
+            // ('_polymorphic.team_id' could never resolve).
+            if ($targetLabel === RelationshipConfig::POLYMORPHIC_TARGET) {
+                continue;
+            }
+
             // Skip if this is not a "belongs to" type relationship
             if (!str_contains(strtoupper($relType), 'BELONGS') && !str_contains(strtoupper($relType), 'OF')) {
                 continue;
@@ -722,33 +698,32 @@ class EntityAutoDiscovery
         return in_array($column, $fillable);
     }
     /**
-     * Get the action resolver for an entity type
+     * Resolve the shared AiActionRegistry (built-ins + config + registered actions).
      *
-     * @deprecated Use getEntityActionResolver() instead
-     * @param string $entityLabel The entity label (e.g., 'Person', 'Unit')
-     * @return \Closure|null The action resolver closure, or null if none configured
+     * Resolved lazily through the container when available so the accessors below surface the
+     * same actions the render pipeline uses, while still degrading to a self-built registry
+     * with SAFE DEFAULTS if DI isn't wired yet (the registry never throws on absent config).
      */
-    public function getActionResolver(string $entityLabel): ?\Closure
+    protected function actionRegistry(): \Condoedge\Ai\Services\Actions\AiActionRegistry
     {
-        // Backwards compatibility: return first action's resolver
-        $entityActions = config('ai.entity_actions', []);
-        $actions = $entityActions[$entityLabel] ?? [];
-        $firstAction = reset($actions);
-
-        // Handle both old format (direct closure) and new format (nested array)
-        if ($firstAction instanceof \Closure) {
-            return $firstAction;
+        if (function_exists('app')) {
+            try {
+                return app(\Condoedge\Ai\Services\Actions\AiActionRegistry::class);
+            } catch (\Throwable $e) {
+                // Fall through to a standalone instance.
+            }
         }
 
-        return $firstAction['action'] ?? null;
+        return new \Condoedge\Ai\Services\Actions\AiActionRegistry();
     }
 
     /**
-     * Get a specific action resolver for an entity type
+     * Get a specific entity action resolver (legacy closure shape: fn($id, $text)).
      *
-     * @param string $entityLabel The entity label (e.g., 'Person')
-     * @param string $actionKey The action key (e.g., 'profile')
-     * @return \Closure|null The action resolver closure, or null if none configured
+     * Retained for backward-compatibility with any caller still expecting a raw closure;
+     * the rendering pipeline itself now goes through the registry/dispatcher.
+     *
+     * @return \Closure|null
      */
     public function getEntityActionResolver(string $entityLabel, string $actionKey): ?\Closure
     {
@@ -757,33 +732,9 @@ class EntityAutoDiscovery
     }
 
     /**
-     * Get all available actions for an entity type
+     * Get a generic action resolver (legacy closure shape: fn($text)).
      *
-     * @param string $entityLabel The entity label
-     * @return array Array of action configs with keys: action_key, aliases, label
-     */
-    public function getEntityActions(string $entityLabel): array
-    {
-        $entityActions = config('ai.entity_actions', []);
-        $actions = $entityActions[$entityLabel] ?? [];
-
-        $result = [];
-        foreach ($actions as $key => $config) {
-            $result[] = [
-                'action_key' => $key,
-                'aliases' => $config['aliases'] ?? [],
-                'label' => $config['label'] ?? $key,
-            ];
-        }
-
-        return $result;
-    }
-
-    /**
-     * Get a generic action resolver
-     *
-     * @param string $actionKey The action key (e.g., 'settings')
-     * @return \Closure|null The action resolver closure
+     * @return \Closure|null
      */
     public function getGenericActionResolver(string $actionKey): ?\Closure
     {
@@ -792,20 +743,18 @@ class EntityAutoDiscovery
     }
 
     /**
-     * Get all available generic actions
+     * Get all available generic actions (config + built-ins + registered).
      *
-     * @return array Array of action configs
+     * @return array Array of ['action_key','aliases','label'].
      */
     public function getGenericActions(): array
     {
-        $genericActions = config('ai.generic_actions', []);
-
         $result = [];
-        foreach ($genericActions as $key => $config) {
+        foreach ($this->actionRegistry()->genericActions() as $action) {
             $result[] = [
-                'action_key' => $key,
-                'aliases' => $config['aliases'] ?? [],
-                'label' => $config['label'] ?? $key,
+                'action_key' => $action->key(),
+                'aliases' => $action->aliases(),
+                'label' => $action->label(),
             ];
         }
 
@@ -813,12 +762,80 @@ class EntityAutoDiscovery
     }
 
     /**
-     * Check if an entity type has any actions configured
+     * Generic actions the given principal may actually trigger.
+     *
+     * Advertisement-time gate (90c W6): the response prompt used to advertise every
+     * generic action and let the renderer strip unauthorized links afterwards — the
+     * user then saw the stripped offer as dead text (e.g. "Owners registry" shown to
+     * a board member who fails its staff gate). Generic actions take no row, so
+     * authorize($user, []) is exactly the check the renderer applies; advertising only
+     * what survives it keeps prompt and render consistent. An authorize() that throws
+     * is not advertisable — fail closed.
+     *
+     * @return array Array of ['action_key','aliases','label'].
+     */
+    public function getAuthorizedGenericActions(mixed $user): array
+    {
+        $result = [];
+        foreach ($this->actionRegistry()->genericActions() as $action) {
+            if (!$this->authorizesForAdvertisement($action, $user)) {
+                continue;
+            }
+
+            $result[] = [
+                'action_key' => $action->key(),
+                'aliases' => $action->aliases(),
+                'label' => $action->label(),
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Entity actions advertisable to the given principal.
+     *
+     * Every action — mutating ones included (security A1/A2: they used to pass through
+     * unfiltered and were offered to every user) — goes through the single
+     * {@see \Condoedge\Ai\Services\Actions\ActionAdvertisement} rule: a mutation answers
+     * through its row-independent capability (ModelMethodMutationAction's `permission`),
+     * any other action through the same authorize($user, []) the renderer applies. The
+     * render + approval-time row gates still run on top.
+     *
+     * @return array Array of ['action_key','aliases','label'].
+     */
+    public function getAuthorizedEntityActions(string $entityLabel, mixed $user): array
+    {
+        $result = [];
+        foreach ($this->actionRegistry()->entityActions($entityLabel) as $action) {
+            if (!$this->authorizesForAdvertisement($action, $user)) {
+                continue;
+            }
+
+            $result[] = [
+                'action_key' => $action->key(),
+                'aliases' => $action->aliases(),
+                'label' => $action->label(),
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Whether an action may be advertised to the principal (input-less authorize).
+     */
+    private function authorizesForAdvertisement(\Condoedge\Ai\Contracts\AiActionInterface $action, mixed $user): bool
+    {
+        return \Condoedge\Ai\Services\Actions\ActionAdvertisement::allows($action, $user);
+    }
+
+    /**
+     * Check if an entity type has any actions configured/registered.
      */
     public function hasEntityActions(string $entityLabel): bool
     {
-        $entityActions = config('ai.entity_actions', []);
-        return !empty($entityActions[$entityLabel]);
+        return !empty($this->actionRegistry()->entityActions($entityLabel));
     }
 
     /**

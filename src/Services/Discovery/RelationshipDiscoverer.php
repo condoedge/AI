@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Eloquent\Relations\MorphOne;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
+use Illuminate\Database\Eloquent\Relations\MorphToMany;
 use Illuminate\Support\Str;
 use ReflectionClass;
 use ReflectionMethod;
@@ -217,9 +218,18 @@ class RelationshipDiscoverer
             return true;
         }
 
-        // Only process methods defined in this model class
-        if ($method->getDeclaringClass()->getName() !== get_class($model)) {
-            return true;
+        // Only process methods defined in this model class or its traits
+        $declaringClassName = $method->getDeclaringClass()->getName();
+        $modelClassName = get_class($model);
+
+        if ($declaringClassName !== $modelClassName) {
+            // Check if the declaring class is a trait used by the model
+            $modelTraits = $this->getAllTraits(new ReflectionClass($model));
+            $isFromTrait = in_array($declaringClassName, $modelTraits, true);
+
+            if (!$isFromTrait) {
+                return true;
+            }
         }
 
         // Skip methods with parameters (relationships don't take params)
@@ -237,12 +247,70 @@ class RelationshipDiscoverer
             return true;
         }
 
-        // Skip getters/setters
-        if (str_starts_with($methodName, 'get') || str_starts_with($methodName, 'set')) {
+        // Skip known Eloquent internal getters/setters (but not all get* methods,
+        // since legitimate relationship methods like getRelatedModel() would be blocked)
+        $skipMethods = [
+            'getAttribute', 'getAttributes', 'getKey', 'getKeyName', 'getKeyType',
+            'getTable', 'getConnection', 'getConnectionName', 'getQueueableConnection',
+            'getQueueableId', 'getQueueableRelations', 'getRouteKey', 'getRouteKeyName',
+            'getForeignKey', 'getFillable', 'getGuarded', 'getHidden', 'getVisible',
+            'getCasts', 'getDates', 'getIncrementing', 'getPerPage', 'getTouchedRelations',
+            'getMorphClass', 'getCreatedAtColumn', 'getUpdatedAtColumn',
+            'getDeletedAtColumn', 'getDateFormat', 'getRelations',
+            'setRelation', 'setRelations', 'setAttribute', 'setTable',
+            'setConnection', 'setKeyName', 'setPerPage', 'setIncrementing',
+            'setCreatedAt', 'setUpdatedAt',
+        ];
+        if (in_array($methodName, $skipMethods, true)) {
             return true;
         }
 
         return false;
+    }
+
+    /**
+     * Get all trait names used by a class (including traits of traits and parent classes)
+     *
+     * @param ReflectionClass $class Reflection class to inspect
+     * @return array<string> Fully-qualified trait names
+     */
+    private function getAllTraits(ReflectionClass $class): array
+    {
+        $traits = [];
+
+        // Collect traits from the class and all parent classes
+        $current = $class;
+        while ($current) {
+            foreach ($current->getTraitNames() as $traitName) {
+                $traits[] = $traitName;
+                // Also collect traits used by this trait (nested traits)
+                $this->collectNestedTraits($traitName, $traits);
+            }
+            $current = $current->getParentClass();
+        }
+
+        return array_unique($traits);
+    }
+
+    /**
+     * Recursively collect traits used by a trait
+     *
+     * @param string $traitName Trait class name
+     * @param array &$traits Collected trait names
+     */
+    private function collectNestedTraits(string $traitName, array &$traits): void
+    {
+        try {
+            $traitReflection = new ReflectionClass($traitName);
+            foreach ($traitReflection->getTraitNames() as $nestedTrait) {
+                if (!in_array($nestedTrait, $traits, true)) {
+                    $traits[] = $nestedTrait;
+                    $this->collectNestedTraits($nestedTrait, $traits);
+                }
+            }
+        } catch (\Throwable $e) {
+            // Skip if trait reflection fails
+        }
     }
 
     /**
@@ -266,7 +334,7 @@ class RelationshipDiscoverer
     private function convertToNeo4jRelationship(string $methodName, $relation): ?array
     {
         $relatedModel = $relation->getRelated();
-        $targetLabel = class_basename($relatedModel);
+        $targetLabel = $this->resolveTargetLabel($relatedModel);
 
         // Convert method name to Neo4j relationship type
         // e.g., 'customer' -> 'CUSTOMER', 'orders' -> 'ORDERS'
@@ -308,8 +376,86 @@ class RelationshipDiscoverer
             ];
         }
 
-        // Skip unsupported relationship types (MorphTo, etc.)
+        if ($relation instanceof MorphMany || $relation instanceof MorphOne) {
+            // Polymorphic one-to-many / one-to-one
+            // e.g., Unit->invoices() returns morphMany(Invoice::class, 'customer')
+            // Produces: ['type' => 'INVOICES', 'target_label' => 'Invoice', 'foreign_key' => 'customer_id', 'morph' => 'customer']
+            $morphName = $relation->getMorphType(); // e.g. 'customer_type'
+            $morphBaseName = Str::beforeLast($morphName, '_type'); // e.g. 'customer'
+            $sourceLabel = class_basename($relation->getParent());
+            return [
+                'type' => $type,
+                'target_label' => $targetLabel,
+                'foreign_key' => $relation->getForeignKeyName(),
+                'morph' => $morphBaseName,
+                'inverse' => true,
+                'direction' => 'incoming',
+                'inverse_type' => 'BELONGS_TO_' . strtoupper($this->toSnakeCase($sourceLabel)),
+            ];
+        }
+
+        if ($relation instanceof MorphToMany) {
+            // Polymorphic many-to-many
+            // e.g., Unit->tags() returns morphToMany(Tag::class, 'taggable')
+            // Produces: ['type' => 'TAGS', 'target_label' => 'Tag', 'foreign_key' => 'taggable_id', 'morph' => 'taggable']
+            $morphName = $relation->getMorphType(); // e.g. 'taggable_type'
+            $morphBaseName = Str::beforeLast($morphName, '_type'); // e.g. 'taggable'
+            return [
+                'type' => $type,
+                'target_label' => $targetLabel,
+                'foreign_key' => $relation->getForeignKeyName(),
+                'morph' => $morphBaseName,
+                'pivot' => $relation->getTable(),
+            ];
+        }
+
+        if ($relation instanceof MorphTo) {
+            // Inverse polymorphic - the morph target is dynamic, so we mark it accordingly
+            return [
+                'type' => $type,
+                'target_label' => '_polymorphic',
+                'foreign_key' => $relation->getForeignKeyName(),
+                'morph' => $relation->getMorphType(),
+                'direction' => 'outgoing',
+                'polymorphic_inverse' => true,
+            ];
+        }
+
+        // Skip any other unsupported relationship types
         return null;
+    }
+
+    /**
+     * Resolve the clean Neo4j node label for a related model.
+     *
+     * Keeps the label consistent with the rest of the discovery system
+     * (AliasGenerator::generateLabel): prefer the model's own getNodeLabel()
+     * when it implements Nodeable, otherwise fall back to the class basename
+     * with the test-fixture 'Test' prefix stripped.
+     *
+     * @param Model $relatedModel Related model instance
+     * @return string Clean node label (e.g., 'Order' rather than 'TestOrder')
+     */
+    private function resolveTargetLabel(Model $relatedModel): string
+    {
+        if (method_exists($relatedModel, 'getNodeLabel')) {
+            try {
+                $label = $relatedModel->getNodeLabel();
+                if (is_string($label) && $label !== '') {
+                    return $label;
+                }
+            } catch (\Throwable $e) {
+                // Fall through to class-name based resolution
+            }
+        }
+
+        $label = class_basename($relatedModel);
+
+        if (str_starts_with($label, 'Test')) {
+            $label = substr($label, 4);
+        }
+
+        return $label;
     }
 
     /**

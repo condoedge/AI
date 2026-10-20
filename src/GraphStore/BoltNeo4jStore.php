@@ -7,7 +7,6 @@ namespace Condoedge\Ai\GraphStore;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Laudis\Neo4j\ClientBuilder;
 use Laudis\Neo4j\Contracts\ClientInterface;
-use Laudis\Neo4j\Contracts\TransactionInterface;
 use Laudis\Neo4j\Authentication\Authenticate;
 use Laudis\Neo4j\Types\CypherMap;
 use Laudis\Neo4j\Types\CypherList;
@@ -40,11 +39,6 @@ class BoltNeo4jStore implements GraphStoreInterface
     protected string $database;
     protected ClientInterface $client;
 
-    /**
-     * Active transaction for transaction methods
-     */
-    private ?TransactionInterface $activeTransaction = null;
-
     public function __construct(?array $config = null)
     {
         $config = $config ?? config('ai.graph.neo4j');
@@ -53,11 +47,9 @@ class BoltNeo4jStore implements GraphStoreInterface
         $this->username = $config['username'] ?? 'neo4j';
         $this->database = $config['database'] ?? 'neo4j';
 
-        // Initialize credentials using trait
         $this->initializeCredentials($config);
 
-        // Build the Neo4j client
-        // Database is specified in URI as query parameter
+        // Database is specified in the URI as a query parameter.
         $uriWithDatabase = $this->uri;
         if ($this->database && $this->database !== 'neo4j') {
             $separator = str_contains($this->uri, '?') ? '&' : '?';
@@ -77,9 +69,9 @@ class BoltNeo4jStore implements GraphStoreInterface
     {
         $safeLabel = CypherSanitizer::escapeLabel($label);
 
-        $cypher = "CREATE (n:{$safeLabel}) SET n = \$properties RETURN elementId(n) as nodeId, n.id as appId";
+        $cypher = "MERGE (n:{$safeLabel} {id: \$id}) SET n = \$properties RETURN elementId(n) as nodeId, n.id as appId";
 
-        $result = $this->query($cypher, ['properties' => $properties]);
+        $result = $this->query($cypher, ['id' => $properties['id'], 'properties' => $properties]);
 
         if (empty($result)) {
             throw new \RuntimeException("Failed to create node with label '{$label}'");
@@ -128,15 +120,21 @@ class BoltNeo4jStore implements GraphStoreInterface
             MATCH (from:{$safeFromLabel} {id: \$fromId})
             MATCH (to:{$safeToLabel} {id: \$toId})
             MERGE (from)-[r:{$safeType}]->(to)
-            SET r = \$properties
-            RETURN r
         ";
 
-        $result = $this->query($cypher, [
+        $params = [
             'fromId' => $fromId,
             'toId' => $toId,
-            'properties' => $properties,
-        ]);
+        ];
+
+        if (!empty($properties)) {
+            $cypher .= "SET r = \$properties\n";
+            $params['properties'] = $properties;
+        }
+
+        $cypher .= "RETURN r";
+
+        $result = $this->query($cypher, $params);
 
         return !empty($result);
     }
@@ -186,22 +184,62 @@ class BoltNeo4jStore implements GraphStoreInterface
         $schema = [
             'labels' => [],
             'relationshipTypes' => [],
+            'relationshipPatterns' => [],
             'propertyKeys' => [],
         ];
 
-        // Get all node labels
         $labels = $this->query("CALL db.labels()");
         $schema['labels'] = array_column($labels, 'label');
 
-        // Get all relationship types
         $relTypes = $this->query("CALL db.relationshipTypes()");
         $schema['relationshipTypes'] = array_column($relTypes, 'relationshipType');
 
-        // Get all property keys
         $propKeys = $this->query("CALL db.propertyKeys()");
         $schema['propertyKeys'] = array_column($propKeys, 'propertyKey');
 
+        try {
+            $schema['relationshipPatterns'] = $this->getRelationshipPatterns();
+        } catch (\Throwable $e) {
+            // null = UNKNOWN (the full-graph scan failed, e.g. timed out) — never []
+            // ("the graph has no edges"). GraphSchemaCache refuses to cache it.
+            $schema['relationshipPatterns'] = null;
+            Log::warning('Failed to retrieve Neo4j relationship patterns', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         return $schema;
+    }
+
+    /**
+     * @return array<int, array{from_label: string, type: string, to_label: string, count: int}>
+     */
+    private function getRelationshipPatterns(): array
+    {
+        $rows = $this->query("
+            MATCH (from)-[r]->(to)
+            WITH labels(from) AS fromLabels, type(r) AS type, labels(to) AS toLabels, count(r) AS count
+            UNWIND fromLabels AS fromLabel
+            UNWIND toLabels AS toLabel
+            RETURN fromLabel, type, toLabel, count
+            ORDER BY type, fromLabel, toLabel
+        ");
+
+        $patterns = [];
+        foreach ($rows as $row) {
+            if (!isset($row['fromLabel'], $row['type'], $row['toLabel'])) {
+                continue;
+            }
+
+            $patterns[] = [
+                'from_label' => (string) $row['fromLabel'],
+                'type' => (string) $row['type'],
+                'to_label' => (string) $row['toLabel'],
+                'count' => (int) ($row['count'] ?? 0),
+            ];
+        }
+
+        return $patterns;
     }
 
     public function nodeExists(string $label, string|int $id): bool
@@ -248,107 +286,6 @@ class BoltNeo4jStore implements GraphStoreInterface
         }
 
         return $result[0]['n'] ?? null;
-    }
-
-    /**
-     * Begin a new transaction
-     *
-     * @return array Transaction context with 'session' key
-     */
-    public function beginTransaction(): array
-    {
-        $session = $this->client->beginTransaction();
-
-        // Store reference for later use
-        $txId = spl_object_id($session);
-
-        return [
-            'id' => $txId,
-            'session' => $session,
-        ];
-    }
-
-    /**
-     * Commit a transaction
-     *
-     * @param mixed $transaction Transaction context from beginTransaction()
-     * @return bool Success status
-     */
-    public function commit($transaction): bool
-    {
-        if (!is_array($transaction) || empty($transaction['session'])) {
-            return true;
-        }
-
-        try {
-            $session = $transaction['session'];
-            if ($session instanceof TransactionInterface) {
-                $session->commit();
-            }
-            return true;
-        } catch (\Exception $e) {
-            Log::error('Failed to commit Neo4j Bolt transaction', [
-                'error' => $e->getMessage(),
-                'transaction_id' => $transaction['id'] ?? 'unknown',
-            ]);
-            return false;
-        }
-    }
-
-    /**
-     * Rollback a transaction
-     *
-     * @param mixed $transaction Transaction context from beginTransaction()
-     * @return bool Success status
-     */
-    public function rollback($transaction): bool
-    {
-        if (!is_array($transaction) || empty($transaction['session'])) {
-            return true;
-        }
-
-        try {
-            $session = $transaction['session'];
-            if ($session instanceof TransactionInterface) {
-                $session->rollback();
-            }
-            return true;
-        } catch (\Exception $e) {
-            Log::error('Failed to rollback Neo4j Bolt transaction', [
-                'error' => $e->getMessage(),
-                'transaction_id' => $transaction['id'] ?? 'unknown',
-            ]);
-            return false;
-        }
-    }
-
-    /**
-     * Execute a query within a transaction
-     *
-     * @param array $transaction Transaction context from beginTransaction()
-     * @param string $cypher Cypher query
-     * @param array $parameters Query parameters
-     * @return array Query results
-     */
-    public function queryInTransaction(array $transaction, string $cypher, array $parameters = []): array
-    {
-        if (empty($transaction['session'])) {
-            throw new \RuntimeException('Invalid transaction context: missing session');
-        }
-
-        try {
-            $session = $transaction['session'];
-            if (!$session instanceof TransactionInterface) {
-                throw new \RuntimeException('Invalid transaction session type');
-            }
-
-            $result = $session->run($cypher, $parameters);
-
-            return $this->convertResultToArray($result);
-
-        } catch (\Exception $e) {
-            throw new \RuntimeException("Neo4j query error in transaction: " . $e->getMessage(), 0, $e);
-        }
     }
 
     /**
@@ -399,19 +336,16 @@ class BoltNeo4jStore implements GraphStoreInterface
      */
     protected function convertValue(mixed $value): mixed
     {
-        // Handle Node - extract properties as array
         if ($value instanceof Node) {
             $props = $value->getProperties();
             return $this->convertValue($props);
         }
 
-        // Handle Relationship - extract properties
         if ($value instanceof Relationship) {
             $props = $value->getProperties();
             return $this->convertValue($props);
         }
 
-        // Handle CypherMap - convert to associative array with recursive conversion
         if ($value instanceof CypherMap) {
             $result = [];
             foreach ($value as $key => $val) {
@@ -420,7 +354,6 @@ class BoltNeo4jStore implements GraphStoreInterface
             return $result;
         }
 
-        // Handle CypherList - convert to indexed array with recursive conversion
         if ($value instanceof CypherList) {
             $result = [];
             foreach ($value as $val) {
@@ -429,7 +362,7 @@ class BoltNeo4jStore implements GraphStoreInterface
             return $result;
         }
 
-        // Handle other iterables (but not strings/arrays)
+        // Other iterables, but not strings/arrays which are handled below.
         if (is_iterable($value) && !is_array($value) && !is_string($value)) {
             $result = [];
             foreach ($value as $key => $val) {
@@ -438,7 +371,6 @@ class BoltNeo4jStore implements GraphStoreInterface
             return $result;
         }
 
-        // Handle plain arrays - recursively convert values
         if (is_array($value)) {
             $result = [];
             foreach ($value as $key => $val) {
@@ -447,7 +379,6 @@ class BoltNeo4jStore implements GraphStoreInterface
             return $result;
         }
 
-        // Scalar values pass through as-is
         return $value;
     }
 

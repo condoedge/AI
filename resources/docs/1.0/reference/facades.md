@@ -18,7 +18,7 @@ use Condoedge\Ai\Facades\AI;
 
 ### ingest()
 
-Ingest a single entity into the AI system (Neo4j graph + Qdrant vectors).
+Ingest a single entity into the graph (Neo4j): its node and its relationships. Records are not embedded; see [What Is Stored Where](/docs/{{version}}/usage/data-ingestion#what-is-stored-where).
 
 ```php
 AI::ingest(\Condoedge\Ai\Domain\Contracts\Nodeable $entity): array
@@ -33,11 +33,12 @@ AI::ingest(\Condoedge\Ai\Domain\Contracts\Nodeable $entity): array
 ```php
 [
     'graph_stored' => true,
-    'vector_stored' => true,
     'relationships_created' => 2,
     'errors' => []
 ]
 ```
+
+A failed graph write is not returned: `ingest()` throws `Condoedge\Ai\Exceptions\DataConsistencyException`.
 
 **Examples:**
 
@@ -45,7 +46,7 @@ AI::ingest(\Condoedge\Ai\Domain\Contracts\Nodeable $entity): array
 $customer = Customer::find(1);
 $result = AI::ingest($customer);
 
-if ($result['graph_stored'] && $result['vector_stored']) {
+if ($result['graph_stored']) {
     echo "Entity ingested successfully!";
 }
 ```
@@ -70,7 +71,9 @@ $result = AI::ingestBatch($customers);
 
 // Returns:
 [
-    'ingested' => 100,
+    'total' => 100,
+    'succeeded' => 100,
+    'partially_succeeded' => 0, // always 0
     'failed' => 0,
     'errors' => [],
 ]
@@ -89,12 +92,21 @@ AI::sync(\Condoedge\Ai\Domain\Contracts\Nodeable $entity): array
 ```php
 $customer = Customer::find(1);
 $customer->update(['status' => 'premium']);
-$result = AI::sync($customer); // Updates graph and vector stores
+$result = AI::sync($customer); // Updates the graph node
+
+// Returns:
+[
+    'action' => 'updated', // or 'created'
+    'graph_synced' => true,
+    'errors' => [],
+]
 ```
+
+`sync()` does not throw on a graph failure: it returns `'action' => 'unknown'`, `'graph_synced' => false` and the message in `errors`.
 
 ### remove()
 
-Remove an entity from the AI system.
+Remove an entity's node (with its relationships) from the graph. Returns `true`; a failed delete throws `DataConsistencyException`.
 
 ```php
 AI::remove(\Condoedge\Ai\Domain\Contracts\Nodeable $entity): bool
@@ -141,19 +153,26 @@ $context = AI::retrieveContext("Show teams with most active members");
 
 ### searchSimilar()
 
-Search for similar questions/queries in the vector store.
+Search for similar past questions among the stored question→Cypher examples (the `questions` collection). This is **not** a method of the `AI` facade; it lives on `ContextRetrieverInterface`:
 
 ```php
-AI::searchSimilar(string $question, array $options = []): array
+ContextRetrieverInterface::searchSimilar(string $question, string $collection = 'questions', int $limit = 5): array
 ```
 
 **Examples:**
 
 ```php
-$similar = AI::searchSimilar("Show all teams");
+use Condoedge\Ai\Contracts\ContextRetrieverInterface;
 
-// Returns matching questions with similarity scores
+$similar = app(ContextRetrieverInterface::class)->searchSimilar("Show all teams");
+
+// Returns:
+[
+    ['question' => 'List all teams', 'query' => 'MATCH (t:Team) RETURN t', 'score' => 0.89],
+]
 ```
+
+There is no semantic search over records: records are queried through the graph (`AI::answerQuestion()` generates and runs Cypher).
 
 ### getSchema()
 
@@ -178,27 +197,6 @@ $schema = AI::getSchema();
         ['from' => 'Customer', 'type' => 'HAS_ORDER', 'to' => 'Order'],
     ],
 ]
-```
-
-### getExampleEntities()
-
-Get example entities for specific labels (useful for few-shot prompting).
-
-```php
-AI::getExampleEntities(array $labels, int $limit = 3): array
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `$labels` | array | Node labels to get examples for |
-| `$limit` | int | Max examples per label (default: 3) |
-
-**Examples:**
-
-```php
-$examples = AI::getExampleEntities(['Customer', 'Order'], 5);
-
-// Returns example nodes for building context
 ```
 
 ### storeQuery()
@@ -677,7 +675,7 @@ $result = AI::ask("How many customers do we have?");
 
 ### answerQuestion()
 
-Complete pipeline with insights and visualizations.
+Complete pipeline: context retrieval, query generation, execution, and a natural language answer.
 
 ```php
 AI::answerQuestion(string $question, array $options = []): array
@@ -692,8 +690,6 @@ $answer = AI::answerQuestion("Which customers have the most orders?");
 [
     'question' => "Which customers have the most orders?",
     'answer' => "The top customers by order count are...",
-    'insights' => [...],
-    'visualizations' => [...],
     'cypher' => "MATCH (c:Customer)-[:HAS_ORDER]->(o) RETURN c, count(o) ORDER BY count(o) DESC",
     'data' => [...],
     'stats' => [...],
@@ -722,52 +718,11 @@ $response = AI::generateResponse(
 );
 ```
 
-### extractInsights()
-
-Extract insights from query results.
-
-```php
-AI::extractInsights(array $queryResult): array
-```
-
-**Examples:**
-
-```php
-$insights = AI::extractInsights($queryResult);
-
-// Returns:
-[
-    'summary' => "...",
-    'key_findings' => [...],
-    'trends' => [...],
-]
-```
-
-### suggestVisualizations()
-
-Suggest appropriate visualizations for query results.
-
-```php
-AI::suggestVisualizations(array $queryResult, string $cypherQuery): array
-```
-
-**Examples:**
-
-```php
-$charts = AI::suggestVisualizations($results, "MATCH (n) RETURN n");
-
-// Returns:
-[
-    ['type' => 'bar', 'config' => [...]],
-    ['type' => 'pie', 'config' => [...]],
-]
-```
-
 ---
 
 ## FileSearch Facade
 
-Search files across Neo4j (metadata/relationships) and Qdrant (content).
+Search file content and filenames indexed in Qdrant.
 
 ```php
 use Condoedge\Ai\Facades\FileSearch;
@@ -809,93 +764,24 @@ $results = FileSearch::searchByContent("Laravel configuration", [
 ]
 ```
 
-### searchByMetadata()
+### searchByFilename()
 
-Search files by metadata using Neo4j.
+Search files by filename.
 
 ```php
-FileSearch::searchByMetadata(array $criteria, int $limit = 10): array
+FileSearch::searchByFilename(string $filename, array $options = []): array
 ```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `limit` | int | 10 | Max results |
+| `file_types` | array | [] | Filter by file extensions |
+| `file_id` | int | null | Search within a specific file |
 
 **Examples:**
 
 ```php
-$files = FileSearch::searchByMetadata([
-    'extension' => 'pdf',
-    'user_id' => 123,
-    'size_min' => 1000,
-], limit: 10);
-
-// Returns:
-[
-    [
-        'file' => File,
-        'relationships' => [
-            ['type' => 'UPLOADED_BY', 'labels' => ['User'], 'properties' => [...]],
-            ['type' => 'BELONGS_TO_TEAM', 'labels' => ['Team'], 'properties' => [...]],
-        ],
-    ],
-]
-```
-
-### hybridSearch()
-
-Combine content and metadata search.
-
-```php
-FileSearch::hybridSearch(string $contentQuery, array $metadataFilters = [], array $options = []): array
-```
-
-**Examples:**
-
-```php
-$results = FileSearch::hybridSearch(
-    contentQuery: "Redis configuration",
-    metadataFilters: ['extension' => 'md'],
-    options: ['limit' => 10, 'include_relationships' => true]
-);
-```
-
-### getRelatedFiles()
-
-Get related files via graph traversal.
-
-```php
-FileSearch::getRelatedFiles(\Condoedge\Utils\Models\Files\File $file, ?string $relationshipType = null, int $limit = 10): array
-```
-
-**Examples:**
-
-```php
-$related = FileSearch::getRelatedFiles($file, 'BELONGS_TO', limit: 10);
-```
-
-### getFilesByUser()
-
-Get files uploaded by a specific user.
-
-```php
-FileSearch::getFilesByUser(int $userId, int $limit = 10): array
-```
-
-**Examples:**
-
-```php
-$files = FileSearch::getFilesByUser(userId: 123, limit: 10);
-```
-
-### getFilesByTeam()
-
-Get files belonging to a team.
-
-```php
-FileSearch::getFilesByTeam(int $teamId, int $limit = 10): array
-```
-
-**Examples:**
-
-```php
-$files = FileSearch::getFilesByTeam(teamId: 456, limit: 10);
+$results = FileSearch::searchByFilename('invoice-2024', ['limit' => 5]);
 ```
 
 ---
@@ -990,7 +876,6 @@ AI::shouldReceive('ingest')
     ->with($customer)
     ->andReturn([
         'graph_stored' => true,
-        'vector_stored' => true,
         'relationships_created' => 2,
         'errors' => []
     ]);

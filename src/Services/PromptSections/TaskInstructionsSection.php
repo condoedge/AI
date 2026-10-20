@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\PromptSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * TaskInstructionsSection
  *
@@ -14,6 +16,9 @@ class TaskInstructionsSection extends BasePromptSection
 {
     protected string $name = 'task_instructions';
     protected int $priority = 90;
+
+    /** The generation cue: the reply is the structured JSON object (Task 5.6). */
+    public const RESPONSE_CUE = 'JSON RESPONSE ({"needs_query", "cypher", "reason"}):';
 
     /**
      * Custom instructions that can override or extend default
@@ -32,28 +37,25 @@ class TaskInstructionsSection extends BasePromptSection
         return $this;
     }
 
-    public function format(string $question, array $context, array $options = []): string
+    public function format(string $question, PipelineContext $context, array $options = []): string
     {
         $output = $this->header('YOUR TASK');
 
         if ($this->customInstructions !== null) {
             $output .= $this->customInstructions . "\n\n";
-            $output .= "CYPHER QUERY:";
+            $output .= self::RESPONSE_CUE;
             return $output;
         }
 
-        $output .= "Generate a Cypher query that:\n";
-        $output .= "1. Accurately answers the user's question\n";
-        $output .= "2. Uses the EXACT relationship directions shown in the schema\n";
-        $output .= "3. Uses the EXACT data formats shown in the example entities\n";
-        $output .= "4. Respects all business rules from the detected concepts above\n";
-        $output .= "5. Uses the appropriate query patterns from the library\n";
-        $output .= "6. Follows all query generation rules\n";
-        $output .= "7. Returns clean Cypher only (no markdown, no explanations, no formatting)\n\n";
+        // The OUTPUT-FORMAT, relationship-direction and data-format rules already live in the
+        // QUERY GENERATION RULES block; this section carries only its unique signal: the
+        // structured no-query escape hatch and the response cue.
+        $output .= "Generate a Cypher query that answers the user's question, following the QUERY GENERATION RULES.\n\n";
 
-        $output .= "If the question cannot be answered with a Cypher query based on the provided context or a query it's not required to answer the question, return an strict text: 'NO QUERY REQUIRED'.\n\n";
+        $output .= "If the question cannot be answered with a Cypher query based on the provided context, or a query is not required to answer it, "
+            . "respond with {\"needs_query\": false, \"cypher\": null, \"reason\": \"<why>\"}.\n\n";
 
-        $output .= "CYPHER QUERY:";
+        $output .= self::RESPONSE_CUE;
 
         return $output;
     }

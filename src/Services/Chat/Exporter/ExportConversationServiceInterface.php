@@ -6,5 +6,7 @@ interface ExportConversationServiceInterface
 {
     public function export($conversation);
 
+    public function getMimeType(): string;
+
     public function getFileExtension(): string;
 }

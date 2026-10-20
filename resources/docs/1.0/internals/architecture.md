@@ -41,7 +41,7 @@ graph TB
     end
 
     subgraph "Infrastructure Layer"
-        EP[EmbeddingProvider<br/>OpenAI/Anthropic]
+        EP[EmbeddingProvider<br/>OpenAI]
         LP[LLMProvider<br/>OpenAI/Anthropic]
         VS[VectorStore<br/>Qdrant]
         GS[GraphStore<br/>Neo4j]
@@ -75,8 +75,6 @@ graph TB
 
     FCP --> VS
 
-    DIS --> EP
-    DIS --> VS
     DIS --> GS
 
     IS --> Manager
@@ -122,16 +120,15 @@ The AI system operates in 6 distinct phases:
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │  Model Properties  ──┐                                       │   │
 │  │  entities.php        ├──> HasNodeableConfig ──> GraphConfig  │   │
-│  │  nodeableConfig()  ──┘                      └──> VectorConfig│   │
+│  │  nodeableConfig()  ──┘                                       │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 │                              │                                      │
 │                              ▼                                      │
 │  PHASE 2: INGESTION                                                 │
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │  AI::ingest($entity) ──> DataIngestionService                │   │
-│  │      ├──> Neo4jStore::createNode()     (Graph)               │   │
-│  │      ├──> EmbeddingProvider::embed()   (Vectors)             │   │
-│  │      └──> QdrantStore::upsert()        (Search)              │   │
+│  │      ├──> Neo4jStore::createNode()     (Graph node)          │   │
+│  │      └──> RelationshipSyncer           (Graph relationships) │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 │                              │                                      │
 │                              ▼                                      │
@@ -203,11 +200,8 @@ sequenceDiagram
     CR->>Neo4j: getSchema()
     Neo4j-->>CR: {labels, relationships, properties}
 
-    CR->>Neo4j: getExampleEntities("Team")
-    Neo4j-->>CR: [sample Team nodes]
-
-    CR-->>Manager: {similar_queries, graph_schema, entities}
-    Manager-->>AI: {similar_queries, graph_schema, entities}
+    CR-->>Manager: {similar_queries, graph_schema}
+    Manager-->>AI: {similar_queries, graph_schema}
     AI-->>User: Complete Context
 
     User->>AI: chat(prompt with context)
@@ -228,18 +222,15 @@ sequenceDiagram
 
 #### Contracts (Interfaces)
 
-**`Nodeable`** - Contract for entities storable in graph/vector databases
+**`Nodeable`** - Contract for entities storable in the graph database
 ```php
 interface Nodeable
 {
     public function getGraphConfig(): GraphConfig;
-    public function getVectorConfig(): VectorConfig;
     public function getId(): string|int;
     public function toArray(): array;
 }
 ```
-
-**`Searchable`** - Marker interface for vector-searchable entities
 
 #### Value Objects
 
@@ -247,11 +238,6 @@ interface Nodeable
 - Node label
 - Properties to store
 - Relationships to create
-
-**`VectorConfig`** - Immutable Qdrant configuration
-- Collection name
-- Fields to embed
-- Metadata to store
 
 **`RelationshipConfig`** - Graph relationship definition
 - Relationship type (e.g., "MEMBER_OF")
@@ -276,7 +262,7 @@ interface Nodeable
 │         │                                              │
 │         ▼                                              │
 │  4. Merge model properties on top                      │
-│     ($embedFields, $graphLabel, $sensibleColumns)      │
+│     ($graphLabel, $sensibleColumns, $nodeableAliases)  │
 │         │                                              │
 │         ▼                                              │
 │  5. Ensure minimum defaults                            │
@@ -284,7 +270,6 @@ interface Nodeable
 ```
 
 **Model properties supported:**
-- `$embedFields` - Fields to embed for semantic search
 - `$graphLabel` - Neo4j node label
 - `$sensibleColumns` - Sensitive fields requiring permission
 - `$nodeableAliases` - Alternative names for LLM
@@ -343,7 +328,8 @@ interface EmbeddingProviderInterface
 
 **Implementations:**
 - `OpenAiEmbeddingProvider` - text-embedding-3-small (1536 dimensions)
-- `AnthropicEmbeddingProvider` - Placeholder for future support
+
+OpenAI is the only built-in embedding provider (Anthropic offers no embeddings API; the Anthropic *LLM* provider is still supported).
 
 ---
 
@@ -371,7 +357,7 @@ interface LlmProviderInterface
 
 #### DataIngestionService
 
-**Responsibility:** Ingest entities into both graph and vector stores.
+**Responsibility:** Ingest entities into the graph store (Neo4j).
 
 **Key Methods:**
 ```php
@@ -382,11 +368,26 @@ remove(Nodeable $entity): bool
 ```
 
 **Features:**
-- Dual-store ingestion (Neo4j + Qdrant)
-- Automatic embedding generation
+- Graph-only ingestion (Neo4j): the node, then its relationships
+- No embedding call and no Qdrant write per record
 - Relationship creation from config
 - Batch optimization
 - Graceful error handling
+
+**What is stored where:**
+
+Records (Eloquent models implementing `Nodeable`) are written to the graph (Neo4j) only. Qdrant is still required; it holds exactly six collections:
+
+| Collection | Holds | Written by | Read by |
+|---|---|---|---|
+| `file_chunks` | chunks of files users upload | file processing (`ai:process-files`, upload hooks) | file search / file context |
+| `documentation_chunks` | chunks of the host's own documents, each with its document-map gist (`map` payload) | `ai:ingest --docs`, `ai:documents:map` | file search / file context, the document map |
+| `context_index` | entity descriptions, aliases, example questions, relationships, properties, scopes | `ai:index-context` | choosing which entities and context a question needs |
+| `scope_examples` | scope concepts and example phrasings | `ai:index-context` / `ai:index-scopes` | matching a question to a configured scope |
+| `questions` | proven question→Cypher pairs | the pipeline, after a successful answer | few-shot examples for query generation |
+| `semantic_entities` | entity names, aliases, descriptions | `ai:index-semantic` | fallback entity-label matching |
+
+The document map is described on its own page: [Document Map](/docs/{{version}}/advanced/document-map).
 
 ---
 
@@ -397,15 +398,15 @@ remove(Nodeable $entity): bool
 **Key Methods:**
 ```php
 retrieveContext(string $question, array $options = []): array
-searchSimilar(string $question, string $collection, int $limit): array
+searchSimilar(string $question, string $collection = 'questions', int $limit = 5): array
 getGraphSchema(): array
-getExampleEntities(string $label, int $limit): array
 ```
+
+`searchSimilar()` searches the stored question→Cypher examples only (it is not exposed on the `AI` facade).
 
 **Features:**
 - Vector similarity search for past questions
 - Graph schema discovery
-- Example entity retrieval
 - Combined context assembly
 - Graceful degradation on partial failures
 
@@ -502,12 +503,11 @@ src/
 │   │       ├── resolveConfig()          # 4-step resolution
 │   │       ├── readFromEntitiesConfig() # Read from warm cache
 │   │       ├── readModelProperties()    # Read model properties
-│   │       ├── getGraphConfig()         # Returns GraphConfig VO
-│   │       └── getVectorConfig()        # Returns VectorConfig VO
+│   │       └── getGraphConfig()         # Returns GraphConfig VO
 │   │
 │   └── ValueObjects/
 │       ├── GraphConfig.php              # Neo4j config VO
-│       ├── VectorConfig.php             # Qdrant config VO
+│       ├── RelationshipConfig.php       # Graph relationship VO
 │       └── NodeableConfig.php           # Fluent builder
 │
 ├── Services/
@@ -532,8 +532,7 @@ src/
 │   │   ├── FileContextProvider.php      # File search for RAG
 │   │   ├── FileAccessResolver.php       # File access permissions
 │   │   ├── ConversationContextManager.php # Conversation state tracking
-│   │   ├── EntityExtractor.php          # Extract entities from text
-│   │   └── ReferenceResolver.php        # Resolve pronouns/references
+│   │   └── EntityExtractor.php          # Labels of an executed cypher
 │   │
 │   ├── Query/
 │   │   ├── QueryGenerator.php           # LLM generates queries
@@ -574,11 +573,11 @@ src/
 
 | Layer | Purpose | Key Classes |
 |-------|---------|-------------|
-| **Domain** | Business contracts and value objects | `Nodeable`, `GraphConfig`, `VectorConfig` |
+| **Domain** | Business contracts and value objects | `Nodeable`, `GraphConfig`, `RelationshipConfig` |
 | **Services/Discovery** | Auto-discover models and relationships | `EntityAutoDiscovery`, `PropertyDiscoverer` |
 | **Services/Security** | Access control and input validation | `AccessLevelResolver`, `InputSanitizer`, `QueryResultFilter`, `PromptContextBuilder` |
-| **Services/Ingestion** | Data sync to graph/vector stores | `DataIngestionService` |
-| **Services/Context** | RAG context and conversation state | `ContextRetriever`, `FileContextProvider`, `ConversationContextManager`, `EntityExtractor`, `ReferenceResolver` |
+| **Services/Ingestion** | Record sync to the graph store | `DataIngestionService` |
+| **Services/Context** | RAG context and conversation state | `ContextRetriever`, `FileContextProvider`, `ConversationContextManager`, `EntityExtractor` |
 | **Services/Query** | LLM query generation and execution | `QueryGenerator`, `QueryExecutor` |
 | **Services/Response** | Response formatting and enrichment | `ResponseGenerator`, `ResponseFileEnricher`, `ResponseEntityEnricher`, `ContentLinkProcessor` |
 | **Services/UI** | Chat theming and rendering | `ChatThemeFactoryInterface`, `ConfigChatThemeFactory`, `SafeMarkdownRenderer` |
@@ -786,32 +785,22 @@ $physicalId = $resolver->makePhysicalFileId('/path/to/doc.md');
 
 ### ConversationContextManager
 
-**Responsibility:** Orchestrates conversation context tracking by combining entity extraction, reference resolution, and context snapshot management.
+**Responsibility:** Owns the conversation context snapshot: written once per turn AFTER the pipeline ran, read back as the next turn's prompt context.
 
 **Key Features:**
-- Main entry point for conversation context handling
-- Processes incoming questions and updates context
-- Records AI responses with enhanced entity data
-- Builds prompt context for follow-up questions
+- Records AI responses (focus = first label of the executed cypher, else the turn's QU entity types; last result sample, cypher, subject)
+- Keeps `mentioned_entities` bounded (most recent 10)
+- Builds prompt context (which the QU call receives) for the next turn
+
+There is no pre-pipeline question analysis: follow-up judgment, entity focus and intent of the current question come from the Query Understanding LLM call (`QueryUnderstandingResult::$followUpReference` / `$entityTypes` / `$intent`), never from regex or word lists.
 
 ```php
 $manager = app(ConversationContextManager::class);
 
-// Process incoming question
-$result = $manager->processQuestion($conversation, $question, $schema);
-// Returns: [
-//     'is_follow_up' => true,
-//     'focused_entity' => 'Customer',
-//     'query_type' => 'list',
-//     'mentioned_entities' => ['Customer', 'Order'],
-//     'enriched_question' => 'Show customers with...',
-//     'resolved_entity' => 'Customer',
-// ]
-
-// Record AI response
+// Record AI response (metadata carries QU's entity_types / intent for no-cypher turns)
 $manager->recordResponse($conversation, $response, $cypherQuery, $queryResult);
 
-// Build prompt context for follow-up
+// Build prompt context for the next turn
 $context = $manager->buildPromptContext($conversation, maxHistory: 5);
 ```
 
@@ -819,62 +808,16 @@ $context = $manager->buildPromptContext($conversation, maxHistory: 5);
 
 ### EntityExtractor
 
-**Responsibility:** Extracts entity types and query patterns from questions and Cypher queries.
-
-**Key Features:**
-- Extracts mentioned entities from natural language questions
-- Detects query types (count, list, detail, aggregate, compare)
-- Extracts entities and relationships from Cypher queries
+**Responsibility:** Structural extraction of labels and relationship types from an EXECUTED Cypher query (it does not analyse natural-language questions).
 
 ```php
 $extractor = app(EntityExtractor::class);
 
-// Extract from question
-$result = $extractor->extractFromQuestion('Show all customers with orders', $schema);
-// Returns: [
-//     'focused_entity' => 'Customer',
-//     'query_type' => 'list',
-//     'mentioned_entities' => ['Customer', 'Order'],
-// ]
-
-// Extract from Cypher
 $result = $extractor->extractFromCypher('MATCH (c:Customer)-[:PLACED]->(o:Order)...');
 // Returns: [
 //     'entities' => ['Customer', 'Order'],
 //     'relationships' => ['PLACED'],
 // ]
-```
-
----
-
-### ReferenceResolver
-
-**Responsibility:** Resolves conversational references like "those", "them", "the same" using conversation context.
-
-**Key Features:**
-- Detects follow-up questions
-- Identifies reference types (pronoun, demonstrative, definite, implicit)
-- Enriches questions with resolved entity references
-
-```php
-$resolver = app(ReferenceResolver::class);
-
-// Check if question is a follow-up
-if ($resolver->isFollowUp('Show those with pending status')) {
-    // Resolve references
-    $result = $resolver->resolve($question, $conversationContext);
-    // Returns: [
-    //     'resolved' => true,
-    //     'resolved_entity' => 'Order',
-    //     'operation' => 'filter',
-    //     'enriched_question' => 'Show orders with pending status',
-    //     'reference_type' => 'demonstrative',
-    // ]
-}
-
-// Detect reference type
-$type = $resolver->detectReferenceType('Filter those by date');
-// Returns: 'demonstrative'
 ```
 
 ---
@@ -1112,15 +1055,15 @@ $systemPrompt = $builder->buildSystemPrompt(['Employee', 'Department']);
 
 ### 1. Interface-Based Design
 
-**All dependencies are interfaces**, not concrete classes:
+**Infrastructure dependencies are interfaces**, not concrete classes:
 
 ```php
 class DataIngestionService
 {
     public function __construct(
-        private readonly VectorStoreInterface $vectorStore,
         private readonly GraphStoreInterface $graphStore,
-        private readonly EmbeddingProviderInterface $embeddingProvider
+        ?GraphPropertyMapper $propertyMapper = null,
+        ?RelationshipSyncer $relationshipSyncer = null
     ) {}
 }
 ```
@@ -1169,15 +1112,15 @@ Each component has a single responsibility:
 Services handle partial failures elegantly:
 
 ```php
-$status = AI::ingest($entity);
+$status = AI::sync($entity);
 // [
-//     'graph_stored' => true,
-//     'vector_stored' => false,  // Vector failed but graph succeeded
-//     'errors' => ['Vector: Connection timeout']
+//     'action' => 'unknown',
+//     'graph_synced' => false,  // Graph write failed
+//     'errors' => ['Graph: Connection timeout']
 // ]
 ```
 
-One store failing doesn't crash the entire operation.
+A failed graph write in `sync()` (and per entity in `ingestBatch()`) is reported in `errors` instead of crashing the operation; `ingest()` and `remove()` throw a `DataConsistencyException`. Records live in the graph only, so there is no second store to roll back.
 
 ---
 
@@ -1189,7 +1132,8 @@ Entity mappings defined in config, not code:
 // config/entities.php
 'Customer' => [
     'graph' => ['label' => 'Customer', ...],
-    'vector' => ['collection' => 'customers', ...]
+    'security' => [...],
+    'metadata' => [...]
 ]
 ```
 
@@ -1237,13 +1181,13 @@ ORDER BY members DESC
 - Find similar past questions
 - Search by meaning, not keywords
 - Few-shot learning context
-- Semantic product search
+- Search uploaded files and documentation by meaning
 
 **Query:** Vector similarity
 ```php
-$embedding = embed("software development teams");
+$embedding = embed("Show teams with 5+ members");
 $similar = search($embedding, limit: 5);
-// Returns: ["Engineering Team", "Dev Squad", "Tech Builders"]
+// Returns past questions: ["List all teams", "Show team members"]
 ```
 
 ---
@@ -1278,12 +1222,10 @@ Customer Entity (Laravel Model)
 AI::ingest($customer)
   ↓
 DataIngestionService
-  ├─→ Generate embedding from name+description
   ├─→ Create node in Neo4j {id, name, email}
-  ├─→ Store vector in Qdrant with metadata
   └─→ Create relationships (PURCHASED → Order)
   ↓
-Status Report: {graph_stored: true, vector_stored: true}
+Status Report: {graph_stored: true, relationships_created: 1, errors: []}
 ```
 
 ---
@@ -1301,11 +1243,9 @@ ContextRetriever
   │     Returns: ["List all teams", "Show team members"]
   ├─→ Neo4j: Get schema
   │     Returns: {labels: [Team, Person], relationships: [MEMBER_OF]}
-  ├─→ Neo4j: Get example entities
-  │     Returns: [{id: 1, name: "Alpha", size: 10}]
   └─→ Combine into context
   ↓
-Context: {similar_queries, graph_schema, relevant_entities}
+Context: {similar_queries, graph_schema}
 ```
 
 ---
@@ -1349,8 +1289,8 @@ Context: {similar_queries, graph_schema, relevant_entities}
 - Fast, no external dependencies
 
 ```php
-$mockVector = Mockery::mock(VectorStoreInterface::class);
-$service = new DataIngestionService($mockVector, $mockGraph, $mockEmbed);
+$mockGraph = Mockery::mock(GraphStoreInterface::class);
+$service = new DataIngestionService($mockGraph);
 ```
 
 ---
@@ -1372,10 +1312,9 @@ $result = $neo4j->createNode('Test', ['name' => 'test']);
 ### Batch Operations
 - Use `ingestBatch()` for bulk ingestion
 - Reduces API calls and network overhead
-- Batch embedding generation
+- `ai:ingest` (`BatchDataIngestionService`) writes nodes with Cypher `UNWIND` batches, then relationships
 
 ### Caching
-- Configure `AI_CACHE_TTL` for query result caching
 - Cache schema information
 - Cache frequently accessed embeddings
 

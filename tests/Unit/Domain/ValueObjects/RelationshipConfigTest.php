@@ -107,4 +107,92 @@ class RelationshipConfigTest extends TestCase
         $this->assertTrue($withProps->hasProperties());
         $this->assertFalse($withoutProps->hasProperties());
     }
+
+    public function test_from_array_preserves_morph_key()
+    {
+        $config = RelationshipConfig::fromArray([
+            'type' => 'PRICEABLE',
+            'target_label' => RelationshipConfig::POLYMORPHIC_TARGET,
+            'foreign_key' => 'priceable_id',
+            'morph' => 'priceable_type',
+        ]);
+
+        $this->assertSame('priceable_type', $config->morph);
+    }
+
+    public function test_from_array_defaults_morph_to_null()
+    {
+        $config = RelationshipConfig::fromArray([
+            'type' => 'MEMBER_OF',
+            'target_label' => 'Team',
+            'foreign_key' => 'team_id',
+        ]);
+
+        $this->assertNull($config->morph);
+    }
+
+    public function test_is_polymorphic()
+    {
+        $polymorphic = new RelationshipConfig(
+            type: 'PRICEABLE',
+            targetLabel: RelationshipConfig::POLYMORPHIC_TARGET,
+            foreignKey: 'priceable_id'
+        );
+
+        $concrete = new RelationshipConfig(
+            type: 'MEMBER_OF',
+            targetLabel: 'Team',
+            foreignKey: 'team_id'
+        );
+
+        $this->assertTrue($polymorphic->isPolymorphic());
+        $this->assertFalse($concrete->isPolymorphic());
+    }
+
+    public function test_morph_type_column_uses_explicit_full_column_name()
+    {
+        $config = new RelationshipConfig(
+            type: 'PRICEABLE',
+            targetLabel: RelationshipConfig::POLYMORPHIC_TARGET,
+            foreignKey: 'priceable_id',
+            morph: 'priceable_type'
+        );
+
+        $this->assertSame('priceable_type', $config->morphTypeColumn());
+    }
+
+    public function test_morph_type_column_normalizes_base_morph_name()
+    {
+        $config = new RelationshipConfig(
+            type: 'PRICEABLE',
+            targetLabel: RelationshipConfig::POLYMORPHIC_TARGET,
+            foreignKey: 'priceable_id',
+            morph: 'priceable'
+        );
+
+        $this->assertSame('priceable_type', $config->morphTypeColumn());
+    }
+
+    public function test_morph_type_column_falls_back_to_foreign_key_convention()
+    {
+        $standard = new RelationshipConfig(
+            type: 'PRICEABLE',
+            targetLabel: RelationshipConfig::POLYMORPHIC_TARGET,
+            foreignKey: 'priceable_id'
+        );
+        $numbered = new RelationshipConfig(
+            type: 'PARENT1',
+            targetLabel: RelationshipConfig::POLYMORPHIC_TARGET,
+            foreignKey: 'parent1_id'
+        );
+        $nonIdSuffix = new RelationshipConfig(
+            type: 'OWNER',
+            targetLabel: RelationshipConfig::POLYMORPHIC_TARGET,
+            foreignKey: 'owner_ref'
+        );
+
+        $this->assertSame('priceable_type', $standard->morphTypeColumn());
+        $this->assertSame('parent1_type', $numbered->morphTypeColumn());
+        $this->assertSame('owner_ref_type', $nonIdSuffix->morphTypeColumn());
+    }
 }

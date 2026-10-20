@@ -2,7 +2,15 @@
 
 namespace Condoedge\Ai\Kompo;
 
+use Condoedge\Ai\DTOs\PageContext;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
+use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
+use Condoedge\Ai\Kompo\Support\ConversationActions;
+use Condoedge\Ai\Kompo\Support\ConversationLimitBanner;
+use Condoedge\Ai\Kompo\Support\MessageBubbleRenderer;
+use Condoedge\Ai\Kompo\Support\RichDataRenderer;
+use Condoedge\Ai\Kompo\Support\SuggestionSubmit;
+use Condoedge\Ai\Kompo\Support\WelcomeSuggestions;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
@@ -10,37 +18,65 @@ use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Kompo\Traits\HasFilePreview;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
-use Condoedge\Ai\Services\Chat\RegenerateMessageService;
-use Condoedge\Ai\Services\Chat\SendMessageService;
-use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
-use Condoedge\Ai\Services\Response\ContentLinkProcessor;
-use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
-use Condoedge\Utils\Facades\FileModel;
-use Condoedge\Utils\Kompo\Common\Query;
+use Condoedge\Ai\Services\Actions\ActionInvocation;
+use Condoedge\Ai\Services\Actions\ModelMethodMutationAction;
+use Condoedge\Ai\Services\Actions\PendingActionToken;
+use Condoedge\Ai\Services\Chat\ConversationResumeBuilder;
+use Condoedge\Utils\Kompo\Chat\ChatMessagesQuery;
 
-class MessagesQuery extends Query
+/**
+ * The chat messages panel. Owns list/render orchestration and the Kompo round-trip surface
+ * (the public selfPost/selfGet action methods Kompo resolves against this component), and
+ * delegates the heavy lifting to three plain collaborators:
+ *
+ *  - MessageBubbleRenderer — user/assistant bubble + action-bar markup (kit-backed).
+ *  - RichDataRenderer       — response_data tables/metrics/lists, suggestions, metrics, file cards.
+ *  - ConversationActions    — ownership-scoped pin/feedback/archive/delete mutations.
+ *
+ * The chat list mechanics (Scroll pagination + topPagination, the flex-col-reverse items
+ * wrapper recipe and the snap-to-bottom carrier) come from the shared chat kit's
+ * ChatMessagesQuery (condoedge/utils).
+ *
+ * The action methods stay here as thin entry points because Kompo resolves selfPost('feedback')
+ * / selfGet('editMessage') / etc. against THIS component; they delegate their authorization +
+ * mutation to ConversationActions (one consistent ownership gate) and their domain work to the
+ * ChatPresenter use-case seam.
+ */
+class MessagesQuery extends ChatMessagesQuery
 {
     use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation, HasFilePreview;
 
     public const ID = 'chat-messages-panel';
     public $class = '';
-    public $itemsWrapperClass = '[&>div]:gap-4 [&>div]:flex [&>div]:flex-col-reverse p-6 overflow-y-auto mini-scroll flex-1 min-h-0';
-    public $style = 'max-height: 95vh; display: flex; flex-direction: column;';
 
-    public $noItemsFound = '';
+    // Kit style + the surface's max-height cap
+    public $style = 'max-height: 95vh; display: flex; flex-direction: column;';
 
     protected $conversation;
 
-    public $perPage = 30;
-    public $paginationType = 'Scroll';
-    public $topPagination = true;
-    public $bottomPagination = false;
+    /** The page/record the chat was opened from (forwarded array prop -> DTO). */
+    protected ?PageContext $pageContext = null;
 
     protected $latestMessageId;
+
+    /** Memoized messages()->count() — chatHeader, top and the limit banner all need it; one COUNT per request. */
+    protected ?int $messageCount = null;
+
+    /** Lazily built per-request collaborators (see accessors below). */
+    protected ?MessageBubbleRenderer $bubbleRenderer = null;
+    protected ?RichDataRenderer $richDataRenderer = null;
+    protected ?ConversationActions $conversationActions = null;
 
     public function created()
     {
         $this->id(self::ID);
+
+        // Page context (array prop -> DTO): forwarded to ChatMessageForm and used to prefer
+        // per-entity-type welcome examples. Empty/absent => null (no effect).
+        $page = $this->prop('page_context');
+        if (is_array($page) && !empty($page)) {
+            $this->pageContext = PageContext::fromArray($page);
+        }
 
         // If animations disabled, force speed to 'none' which disables all animations via CSS
         $animationSpeed = $this->settings()->enableAnimations()
@@ -48,7 +84,6 @@ class MessagesQuery extends Query
             : 'none';
         $speedClass = 'animation-speed-' . $animationSpeed;
 
-        // Only query for conversation if auth is available
         $this->conversation = AiConversation::where('user_id', auth()->id())
             ->find($this->prop('conversation_id') ?? session('selected_conversation_id'));
 
@@ -67,7 +102,7 @@ class MessagesQuery extends Query
             $content = $this->emptyState();
         }
 
-        if ($this->conversation && $this->conversation->messages()->count() === 0) {
+        if ($this->conversation && $this->messageCount() === 0) {
             $content = $this->welcomeState();
         }
 
@@ -84,7 +119,7 @@ class MessagesQuery extends Query
         }
 
         $isPinned = $this->conversation->metadata['pinned'] ?? false;
-        $messageCount = $this->conversation->messages()->count();
+        $messageCount = $this->messageCount();
 
         return _FlexBetween(
             _Rows(
@@ -141,18 +176,62 @@ class MessagesQuery extends Query
         // Always show the form - even without a conversation
         // ChatMessageForm will auto-create conversation on first message
         return _Rows(
+            $this->limitBanner(),
+
             new ChatMessageForm(null, [
                 'conversation_id' => $this->conversation?->id,
                 'response_style' => $this->settings()->responseStyle(),
+                'page_context' => $this->pageContext?->toArray(),
             ]),
 
+            // Kit snap-to-bottom carrier: remounts (and re-snaps to the newest message)
+            // at mount and on every refresh of this Query
             $this->conversation
-                ? _Hidden()->onLoad->run($this->scrollScript(false))
+                ? $this->snapToBottomOnLoad()
                 : null,
         )->class('flex-shrink-0 relative z-0');
     }
 
-    
+    /**
+     * The soft conversation-length banner, shown right below the thread (above the composer)
+     * once the conversation reaches the configured message count. Purely advisory — the
+     * composer stays enabled (ConversationLimitBanner::shouldShow owns + unit-tests the gate).
+     *
+     * The button does BOTH things in ONE click via TWO SIBLING click interactions ($e->run
+     * + $e->selfPost as separate statements): the kompo front end runs every click
+     * interaction of the element, whereas chaining ->run(js)->selfPost(...) would nest the
+     * selfPost under the runJs action's 'success' event — which runJsAction never fires
+     * (verified in vue-kompo core/Action.js), so a single chain would silently drop the
+     * new-conversation call.
+     *
+     *  1. run(): copies the server-built mini resume to the clipboard (user-gesture-safe,
+     *     JSON_HEX_*-encoded — see ConversationLimitBanner::copyResumeJs).
+     *  2. selfPost('createConversation') + refresh(AiChatPanel::ID): the exact chain the
+     *     emptyState "start new" button uses (HasConversationCreation).
+     *
+     * The resume is built server-side at render time — deterministic serialization of the
+     * context snapshot + recent questions, NO LLM call (ConversationResumeBuilder).
+     */
+    protected function limitBanner()
+    {
+        if (!ConversationLimitBanner::shouldShow($this->conversation, $this->messageCount())) {
+            return null;
+        }
+
+        $resume = app(ConversationResumeBuilder::class)->build($this->conversation);
+
+        return _Rows(
+            _Html(e(__('ai.chat.limit-banner-text')))
+                ->class('text-sm text-amber-800'),
+            _Link(e(__('ai.chat.limit-banner-button')))->icon(_Sax('copy', 16))
+                ->class('mt-2 self-start px-4 py-2 bg-amber-100 hover:bg-amber-200 text-amber-800 text-sm font-medium rounded-xl transition-all')
+                ->onClick(function ($e) use ($resume) {
+                    $e->run(ConversationLimitBanner::copyResumeJs($resume));
+                    $e->selfPost('createConversation')->refresh(AiChatPanel::ID);
+                }),
+        )->class('flex flex-col px-6 py-3 mx-4 mb-2 bg-amber-50 border border-amber-200 rounded-xl');
+    }
+
     public function query()
     {
         if (!$this->conversation) {
@@ -169,32 +248,9 @@ class MessagesQuery extends Query
             ->orderBy('created_at', 'desc');
     }
 
-    /**
-     * Get only the latest messages (for partial refresh)
-     */
-    public function getLatestMessages()
-    {
-        $lastKnownId = request('last_message_id');
-
-        $newMessages = $this->conversation?->messages()
-            ->when($lastKnownId, fn($q) => $q->where('id', '>', $lastKnownId))
-            ->orderBy('created_at')
-            ->get();
-
-        if ($newMessages->isEmpty()) {
-            return null;
-        }
-
-        return _Rows(
-            ...$newMessages->map(fn($msg) => $this->render($msg))->toArray()
-        );
-    }
-
     public function render($message)
     {
-        $bubble = $message->role === 'user'
-            ? $this->userBubble($message)
-            : $this->assistantBubble($message);
+        $bubble = $this->bubbleRenderer()->render($message, $this->messageResultSet($message));
 
         $isLatest = $message->id === $this->latestMessageId;
 
@@ -206,292 +262,17 @@ class MessagesQuery extends Query
         ]);
     }
 
-    public function userBubble($message)
-    {
-        $isNew = $this->isNewMessage($message);
-        $animationClass = $isNew ? ' animate-message-user' : '';
-        $highlightClass = $isNew ? ' animate-new-message-highlight' : '';
-
-        return _Rows(
-            _FlexEnd(
-                _Rows(
-                    _Html(e($message->content))->class('whitespace-pre-wrap'),
-                    $this->settings()->showTimestamps()
-                        ? _Html($message->created_at->format('g:i A'))->class('text-xs opacity-60 mt-2')
-                        : null,
-                )->class('group px-4 py-3 rounded-2xl rounded-tr-md max-w-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-md' . $highlightClass),
-                $this->settings()->showAvatars()
-                    ? _Html($this->userAvatarHtml())->class('ml-3 flex-shrink-0')
-                    : null,
-            )->class('items-end' . $animationClass),
-            // Edit button on hover
-            $this->settings()->enableEdit() ? _FlexEnd(
-                _Link(__('ai.common.edit'))->icon('pencil')
-                    ->class('opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-gray-600 mt-1 transition-opacity')
-                    ->selfGet('editMessage', ['id' => $message->id])->inModal(),
-            ) : null,
-        )->class('group');
-    }
-
-    public function assistantBubble($message)
-    {
-        $isNew = $this->isNewMessage($message);
-        $animationClass = $isNew ? ' animate-message-assistant' : '';
-        $contentRevealClass = $isNew ? ' animate-content-reveal' : '';
-        $staggerClass = $isNew ? ' animate-stagger-content' : '';
-
-        $content = [];
-
-        // Get file references for citation linking
-        $files = $message->hasFileReferences() ? $message->getReferencedFiles() : [];
-
-        // Process content: strip action links, strip citations, create elements
-        $processed = $this->getContentLinkProcessor()->processForDirectRendering(
-            $message->content,
-            ['files' => $files]
-        );
-
-        // Main content (links stripped to plain text)
-        $content[] = _Html($this->renderMarkdown($processed['content']))->class('prose prose-sm max-w-none' . $contentRevealClass);
-
-        // Link elements rendered directly (actions + file citations)
-        if ($processed['has_links']) {
-            $content[] = _Flex(...$processed['elements'])
-                ->class('mt-3 pt-2 border-t border-gray-100 gap-2 flex-wrap');
-        }
-
-        // Rich data display (tables, metrics, lists)
-        if ($responseData = $message->response_data) {
-            $richData = $this->renderRichData($responseData);
-            if ($richData && $isNew) {
-                $richData->class($staggerClass);
-            }
-            $content[] = $richData;
-        }
-
-        // File reference cards (separate from citations)
-        if (!empty($files)) {
-            $content[] = $this->renderFileReferences($files);
-        }
-
-        // Follow-up suggestions
-        $suggestions = $message->metadata['suggestions'] ?? [];
-        if ($this->settings()->showSuggestions() && !empty($suggestions)) {
-            $content[] = $this->renderSuggestions($suggestions);
-        }
-
-        // Metrics (execution time, confidence)
-        if ($this->settings()->showMetrics() && $message->execution_time_ms) {
-            $content[] = $this->renderMetrics($message);
-        }
-
-        // Action bar (copy, feedback, regenerate)
-        $content[] = $this->messageActionBar($message);
-
-        return _Rows(
-            _Flex(
-                $this->settings()->showAvatars()
-                    ? _Html($this->assistantAvatarHtml())->class('mr-3 flex-shrink-0 self-start')
-                    : null,
-                _Rows(...$content)
-                    ->class('group px-5 py-4 rounded-2xl rounded-tl-md max-w-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md transition-shadow'),
-            )->class('items-start' . $animationClass),
-        );
-    }
-
-    protected function messageActionBar($message)
-    {
-        $actions = [];
-
-        // Copy button
-        if ($this->settings()->enableCopy()) {
-            $actions[] = _Link()->icon(_Sax('copy', 16))
-                ->class('p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all')
-                ->balloon(__('ai.messages.copy'), 'up')
-                ->copyToClipboard($message->content, 'translate.copied-to-clipboard');
-        }
-
-        // Feedback buttons
-        if ($this->settings()->enableFeedback()) {
-            $feedback = $message->metadata['feedback'] ?? null;
-            $actions[] = _Link()->icon(_Sax('like-1', 16))
-                ->class('p-1.5 rounded-lg transition-all ' . ($feedback === 'positive'
-                    ? 'bg-emerald-100 text-emerald-600'
-                    : 'hover:bg-emerald-50 text-gray-400 hover:text-emerald-600'))
-                ->balloon(__('ai.messages.helpful'), 'up')
-                ->selfPost('feedback', ['id' => $message->id, 'type' => 'positive'])
-                ->alert('translate.feedback-received-successfully')
-                ->refresh();
-
-            $actions[] = _Link()->icon(_Sax('dislike', 16))
-                ->class('p-1.5 rounded-lg transition-all ' . ($feedback === 'negative'
-                    ? 'bg-red-100 text-red-600'
-                    : 'hover:bg-red-50 text-gray-400 hover:text-red-600'))
-                ->balloon(__('ai.messages.not-helpful'), 'up')
-                ->selfPost('feedback', ['id' => $message->id, 'type' => 'negative'])
-                ->alert('translate.feedback-received-successfully')
-                ->refresh();
-        }
-
-        // Regenerate button
-        if ($this->settings()->enableRegenerate()) {
-            $dotColor = $this->theme()->primarySolid();
-            $regeneratingText = __('ai.messages.regenerating');
-            $messageId = $message->id;
-            $actions[] = _Link()->icon(_Sax('refresh', 16))
-                ->class('p-1.5 rounded-lg text-gray-400 ' . $this->theme()->linkHover() . ' transition-all')
-                ->balloon(__('ai.messages.regenerate'), 'up')
-                ->onClick(fn($e) => $e
-                    ->run('() => {
-                        // Show typing dots indicator on this message (find by ID injected from PHP)
-                        const bubble = document.querySelector("[data-message-id=\"' . $messageId . '\"]");
-                        if (bubble) {
-                            const content = bubble.querySelector(".prose");
-                            if (content) {
-                                content.innerHTML = "<div class=\"flex items-center gap-1.5 h-6\"><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-1\"></span><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-2\"></span><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-3\"></span></div><div class=\"text-xs text-gray-400 mt-2\">' . $regeneratingText . '</div>";
-                            }
-                        }
-                    }')
-                    && $e->selfPost('regenerate', ['id' => $message->id])
-                        ->refresh()
-                );
-        }
-
-        return _Flex(...$actions)
-            ->class('mt-3 pt-2 border-t border-gray-50 gap-1 opacity-0 group-hover:opacity-100 transition-opacity');
-    }
-
-    protected function renderSuggestions(array $suggestions)
-    {
-        $chips = array_map(fn($s) =>
-            _Link($s)
-                ->class('inline-flex items-center px-3 py-1.5 text-sm rounded-full bg-gray-100 text-gray-700 ' . $this->theme()->primaryLightBgHover() . ' transition-all cursor-pointer')
-                ->selfPost('askSuggestion', ['question' => $s])->refresh(),
-            array_slice($suggestions, 0, $this->settings()->maxSuggestions())
-        );
-
-        return _Rows(
-            _Html(__('ai.messages.follow-up'))->class('text-xs font-medium text-gray-400 mb-2'),
-            _Flex(...$chips)->class('flex-wrap gap-2'),
-        )->class('mt-4 pt-3 border-t border-gray-100');
-    }
-
-    protected function renderRichData($responseData)
-    {
-        if (!is_array($responseData)) {
-            return null;
-        }
-
-        $type = $responseData['type'] ?? 'text';
-
-        return match($type) {
-            'table' => $this->renderTableData($responseData),
-            'metric' => $this->renderMetricData($responseData),
-            'list' => $this->renderListData($responseData),
-            default => null,
-        };
-    }
-
-    protected function renderTableData($data)
-    {
-        $headers = $data['headers'] ?? [];
-        $rows = $data['rows'] ?? [];
-
-        if (empty($headers) || empty($rows)) {
-            return null;
-        }
-
-        $headerHtml = '<tr>' . implode('', array_map(fn($h) =>
-            '<th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">' . e($h) . '</th>',
-            $headers)) . '</tr>';
-
-        $rowsHtml = implode('', array_map(fn($row) =>
-            '<tr class="hover:bg-gray-50">' . implode('', array_map(fn($cell) =>
-                '<td class="px-4 py-2 text-sm text-gray-700 border-t border-gray-100">' . e($cell) . '</td>',
-                $row)) . '</tr>',
-            array_slice($rows, 0, 10)));
-
-        return _Html('<div class="mt-4 overflow-hidden rounded-lg border border-gray-200"><table class="min-w-full">' . $headerHtml . $rowsHtml . '</table></div>');
-    }
-
-    protected function renderMetricData($data)
-    {
-        return _Flex(
-            _Html($data['icon'] ?? '📊')->class('text-3xl'),
-            _Rows(
-                _Html($data['label'] ?? __('ai.common.value'))->class('text-sm text-gray-500'),
-                _Flex(
-                    _Html($data['value'] ?? '-')->class('text-2xl font-bold text-gray-800'),
-                    isset($data['trend']) ? _Badge($data['trend'])
-                        ->class(str_contains($data['trend'], '+') ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700') : null,
-                )->class('items-center gap-2'),
-            ),
-        )->class('mt-4 p-4 ' . $this->theme()->primaryLightBg() . ' rounded-xl items-center gap-4');
-    }
-
-    protected function renderListData($data)
-    {
-        $items = $data['items'] ?? [];
-        if (empty($items)) {
-            return null;
-        }
-
-        $badgeColors = $this->theme()->activeBadge();
-        $listItems = array_map(fn($item) =>
-            _Flex(
-                _Html('<span class="w-6 h-6 rounded-full ' . $badgeColors . ' flex items-center justify-center text-xs font-medium flex-shrink-0">' . e($item['icon'] ?? '•') . '</span>'),
-                _Rows(
-                    _Html(e($item['title'] ?? ''))->class('font-medium text-gray-800'),
-                    _Html(e($item['description'] ?? ''))->class('text-sm text-gray-500'),
-                ),
-            )->class('items-start gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors'),
-            array_slice($items, 0, 5)
-        );
-
-        return _Rows(...$listItems)->class('mt-4 space-y-2');
-    }
-
-    protected function renderMetrics($message)
-    {
-        return _Flex(
-            _Html('⚡ ' . $message->execution_time_ms . 'ms')->class('text-xs text-gray-400'),
-            $message->confidence_score ? _Html('🎯 ' . round($message->confidence_score * 100) . '%')->class('text-xs text-gray-400') : null,
-        )->class('mt-2 gap-3');
-    }
-
-    protected function renderFileReferences(array $files)
-    {
-        if (empty($files)) {
-            return null;
-        }
-
-        $cards = array_map(fn($file) => $this->fileReferenceCard($file), $files);
-
-        return _Rows(
-            _Html('📎 Referenced Files:')->class('text-xs font-medium text-gray-400 mb-2'),
-            _Flex(...$cards)->class('flex-wrap gap-2'),
-        )->class('mt-4 pt-3 border-t border-gray-100');
-    }
-
-    protected function fileReferenceCard(array $file)
-    {
-        $file = FileModel::find($file['id']);
-        $type = $file->file_type_enum;
-        $icon = $type->icon();
-        $isPreviewable = $type->isPreviewable();
-
-        return _Flex(
-            _Sax($icon, 16)->class($this->theme()->primaryText()),
-            _Html($file['name'])->class('text-sm text-gray-700 font-medium'),
-        )->class('inline-flex items-center gap-2 px-3 py-2 rounded-lg ' . $this->theme()->primaryLightBg() . ' ' . $this->theme()->primaryLightBgHover() . ' cursor-pointer transition-all')
-         ->balloon(__('ai.messages.click-to-view'), 'up')
-         ->when($isPreviewable, fn($link) => $type->getPreviewButton($link, $file)
-         );
-    }
-
     protected function emptyState()
     {
-        return _Rows(
+        // The empty state (no conversation selected yet — first-ever open, or right after an
+        // archive/delete cleared the session selection) also surfaces the example questions:
+        // this is the state a user actually lands in when opening the chat from a record page,
+        // so the per-page page_examples must show HERE, not only on a freshly created empty
+        // conversation. Clicking a suggestion is safe without a conversation: it fills the
+        // composer and clicks send (SuggestionSubmit), and ChatMessageForm auto-creates the
+        // conversation on first send — the injector already hides #chat-empty-state on the
+        // optimistic echo (chat-message-injector.js precreateMessagePlaceholder).
+        return _Rows(array_filter([
             _Html($this->welcomeAvatarHtml())->class('mb-6'),
             _Html(__('ai.chat.select-conversation'))->class('text-2xl font-bold text-gray-800 mb-3'),
             _Html(__('ai.chat.select-conversation-desc'))
@@ -499,8 +280,9 @@ class MessagesQuery extends Query
             _Button(__('ai.chat.start-new'))->icon('plus')
                 ->class('px-6 py-3 bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white rounded-xl shadow-lg hover:shadow-xl transition-all')
                 ->selfPost('createConversation')
-                ->refresh(),
-        )->id('chat-empty-state')->class('flex flex-col items-center justify-center flex-1 py-8');
+                ->refresh(AiChatPanel::ID),
+            $this->exampleQuestionsBlock('mt-8'),
+        ]))->id('chat-empty-state')->class('flex flex-col items-center justify-center flex-1 py-8');
     }
 
     protected function welcomeState()
@@ -511,45 +293,91 @@ class MessagesQuery extends Query
             _Html($this->settings()->welcomeMessage())->class('text-gray-500 text-center max-w-md mb-6'),
         ];
 
-        // Example questions
-        $examples = $this->settings()->exampleQuestions();
-        if (!empty($examples)) {
-            $questionButtons = array_map(fn($q) =>
-                _Link($q)->icon('chat-bubble-left-ellipsis')
-                    ->class('w-full p-3 text-left rounded-xl border border-gray-200 bg-white ' . $this->theme()->primaryLightBgHover() . ' transition-all flex items-center gap-3 group text-sm')
-                    ->selfPost('askSuggestion', ['question' => $q])->refresh(),
-                $examples
-            );
+        $elements[] = $this->exampleQuestionsBlock();
 
-            $elements[] = _Rows(
-                _Html(__('ai.chat.try-asking'))->class('text-sm font-medium text-gray-400 mb-3'),
-                _Rows(...$questionButtons)->class('space-y-2 w-full max-w-md'),
-            )->class('w-full flex flex-col items-center');
+        return _Rows(array_filter($elements))->id('chat-welcome-state')->class('flex flex-col items-center justify-center flex-1 py-8 px-4');
+    }
+
+    /**
+     * The example-questions suggestion block, shared by welcomeState() and emptyState().
+     *
+     * Prefers a per-entity-type override for the page the chat was opened from (config
+     * 'ai.chat.page_examples.{EntityType}'), falling back to the global example_questions —
+     * honoring show_suggestions + max_suggestions (WelcomeSuggestions). Null when nothing
+     * resolves, so callers can array_filter it away.
+     *
+     * CLICK = TYPED-SEND PARITY: each button runs client-side JS that fills the composer
+     * input and clicks the real send button (SuggestionSubmit::fillAndSendJs), so the click
+     * goes through ChatMessageForm's own sendingMessageActions() chain — optimistic user
+     * bubble + typing indicator appear immediately, THEN the answer arrives via the panel
+     * refresh. No separate server endpoint, no parallel send implementation.
+     *
+     * Labels are e()-escaped because Kompo Link labels render through v-html client-side;
+     * the raw question still goes to fillAndSendJs, which JSON_HEX_*-encodes it for JS.
+     */
+    protected function exampleQuestionsBlock(string $extraClass = '')
+    {
+        $examples = $this->resolveExampleQuestions();
+        if (empty($examples)) {
+            return null;
         }
 
-        return _Rows(...$elements)->id('chat-welcome-state')->class('flex flex-col items-center justify-center flex-1 py-8 px-4');
+        $questionButtons = array_map(fn($q) =>
+            _Link(e($q))->icon('chat-bubble-left-ellipsis')
+                ->class('w-full p-3 text-left rounded-xl border border-gray-200 bg-white ' . $this->theme()->primaryLightBgHover() . ' transition-all flex items-center gap-3 group text-sm')
+                ->onClick(fn($e) => $e->run(SuggestionSubmit::fillAndSendJs($q))),
+            $examples
+        );
+
+        return _Rows(
+            _Html(__('ai.chat.try-asking'))->class('text-sm font-medium text-gray-400 mb-3'),
+            _Rows(...$questionButtons)->class('space-y-2 w-full max-w-md'),
+        )->class(trim('w-full flex flex-col items-center ' . $extraClass));
+    }
+
+    /**
+     * Resolve the welcome-screen example questions.
+     *
+     * When the chat was opened from a page with a known entity type, a host can tailor the
+     * suggestions via config('ai.chat.page_examples.{EntityType}') (config-only, no LLM call) so
+     * a Unit page shows "Show this unit's payment history." Falls back to the global example list.
+     * Empty when show_suggestions is off; always capped at max_suggestions (see the plain,
+     * kit-free WelcomeSuggestions collaborator, which owns + unit-tests this resolution).
+     *
+     * @return array<int,string>
+     */
+    protected function resolveExampleQuestions(): array
+    {
+        return WelcomeSuggestions::resolve($this->pageContext, $this->settings());
     }
 
     public function togglePin($id)
     {
-        $conversation = AiConversation::where('user_id', auth()->id())->find($id);
-        if ($conversation) {
-            $metadata = $conversation->metadata ?? [];
-            $metadata['pinned'] = !($metadata['pinned'] ?? false);
-            $conversation->update(['metadata' => $metadata]);
-        }
+        $this->conversationActions()->togglePin((int) $id, auth()->user());
     }
 
     public function feedback($id, $type)
     {
-        $message = $this->conversation?->messages()->find($id);
-        if ($message) {
-            $metadata = $message->metadata ?? [];
-            $metadata['feedback'] = $type;
-            $message->update(['metadata' => $metadata]);
+        if (!$this->conversation) {
+            return;
         }
+
+        $this->conversationActions()->recordFeedback(
+            (int) $this->conversation->id,
+            (int) $id,
+            $type,
+            auth()->user(),
+        );
     }
 
+    /**
+     * Regenerate the assistant answer attached to $id.
+     *
+     * The refresh button lives on the ASSISTANT bubble, so $id is an assistant message; we
+     * resolve the user message it answered (the most recent user message before it) and route
+     * the turn through ChatPresenter::handleRegenerate (which owns truncation + the security
+     * gate via RegenerateAnswerUseCase). The panel ->refresh() then re-renders from the DB.
+     */
     public function regenerate($id)
     {
         if (!$this->conversation) {
@@ -561,19 +389,36 @@ class MessagesQuery extends Query
             return;
         }
 
+        // The refresh button is on the assistant bubble; resolve the user message it answered.
+        $userMessage = $this->conversation->messages()
+            ->where('id', '<', $message->id)
+            ->where('role', 'user')
+            ->orderByDesc('id')
+            ->first();
+
+        if (!$userMessage) {
+            return;
+        }
+
         try {
-            $service = app(RegenerateMessageService::class);
-            $service->regenerateFromAssistantMessage(
+            app(ChatPresenter::class)->handleRegenerate(
                 $this->conversation,
-                $message,
+                $userMessage,
+                $this->settings()->responseStyle(),
                 auth()->user(),
-                ['style' => $this->settings()->responseStyle()]
             );
         } catch (\Throwable $e) {
             \Log::error('Regenerate failed: ' . $e->getMessage());
         }
     }
 
+    /**
+     * Server-side "ask this suggestion" entry point. KEPT for backward compatibility (hosts /
+     * older surfaces may still selfPost here), but the package UI no longer targets it: welcome
+     * examples and follow-up chips now fill the composer and click the real send button
+     * (SuggestionSubmit::fillAndSendJs) so a click gets the same optimistic user bubble +
+     * typing indicator as a typed send instead of silently waiting for the whole LLM turn.
+     */
     public function askSuggestion($question)
     {
         if (empty(trim($question))) {
@@ -585,16 +430,16 @@ class MessagesQuery extends Query
             return;
         }
 
-        $service = app(SendMessageService::class);
-
         try {
-            $service->sendMessage(
-                conversation: $this->conversation,
-                message: $question,
-                options: [
-                    'user' => auth()->user(),
-                    'style' => $this->settings()->responseStyle(),
-                ]
+            // Thread the page context the surface was mounted with, exactly like the
+            // typed-question path (ChatMessageForm::sendMessage) — a suggestion clicked
+            // from a record page must keep its "this unit/invoice" binding.
+            app(ChatPresenter::class)->handleSend(
+                $this->conversation,
+                $question,
+                $this->settings()->responseStyle(),
+                auth()->user(),
+                $this->pageContext,
             );
         } catch (\Throwable $e) {
             \Log::error('Suggestion question failed: ' . $e->getMessage());
@@ -611,93 +456,255 @@ class MessagesQuery extends Query
         ]);
     }
 
+    /**
+     * Server-side approval round-trip for an APPROVAL-REQUIRED (mutating) action.
+     *
+     * The ApprovalCard's "Confirm" button posts here with the signed pending token. We hand
+     * it to ActionDispatcher::approve(), which RE-DECODES + RE-VERIFIES the token, confirms it
+     * belongs to the current user, RE-RUNS the action's authorize() server-side, and only THEN
+     * executes handle(). A mutating action is NEVER executed during render — only here, after
+     * this explicit confirmation. Forged/stale/unauthorized tokens are rejected with an alert
+     * and nothing is mutated.
+     *
+     * Cards built from a persisted native invocation also post the owning message id + the
+     * invocation fingerprint, so a confirmed approval stamps a resolution marker on the
+     * message and later renders show a done-note instead of re-offering the card. The
+     * markdown-path cards post only the token; both extras are optional.
+     */
+    public function approveAiAction(string $token, $messageId = null, $fingerprint = null)
+    {
+        $result = app(\Condoedge\Ai\Services\Actions\ActionDispatcher::class)->approve($token, [
+            'user' => auth()->user(),
+            'result_set' => [],
+        ]);
+
+        if ($result->isError) {
+            return _Html(e($result->summaryForLlm ?: __('ai.actions.failed')))
+                ->class('mt-2 px-3 py-2 text-sm text-red-600 bg-red-50 rounded-lg');
+        }
+
+        $this->markInvocationApproved($token, $messageId, $fingerprint);
+
+        // Successful mutation: surface the action's renderable (often a link/confirmation),
+        // falling back to a brief acknowledgement when the action returns nothing visual.
+        return $result->renderable ?? _Html(e($result->summaryForLlm))
+            ->class('mt-2 px-3 py-2 text-sm text-emerald-700 bg-emerald-50 rounded-lg');
+    }
+
+    /**
+     * Server-side round-trip of the export chip of a CAPPED list (export_* `mode=rerun`,
+     * eval p18-A roster "25 of 523").
+     *
+     * Every other chip's action runs when the bubble renders; this one re-executes a query,
+     * so it runs HERE, on the click: the chip posts the message id + the invocation's
+     * fingerprint, and the answer (the download link, or a visible failure) lands in the
+     * chip's own panel.
+     *
+     * Who and what, at click time:
+     *  - the message is looked up inside $this->conversation — the CLICKING user's own
+     *    conversation (created() scopes it to auth()->id()); a foreign or unknown message
+     *    id resolves to nothing;
+     *  - the client-supplied fingerprint only selects an invocation stored on that message;
+     *  - the query re-run is the one recorded with that message, executed as auth()->user()
+     *    through the scoped executor (fresh tenant scope, read-only, one rate-limit charge),
+     *    after the action's authorize() is re-run — MessageBubbleRenderer::exportRecordedResult.
+     */
+    public function exportRecordedResult($messageId = null, $fingerprint = null)
+    {
+        $message = $this->conversation && $messageId !== null && (is_int($messageId) || is_string($messageId))
+            ? $this->conversation->messages()->find($messageId)
+            : null;
+
+        if (!$message || $message->role !== 'assistant') {
+            return $this->bubbleRenderer()->exportFailure();
+        }
+
+        return $this->bubbleRenderer()->exportRecordedResult($message, $fingerprint, auth()->user());
+    }
+
+    /**
+     * Stamp resolved_invocations[fingerprint] = 'approved' on the (ownership-scoped) message
+     * after a confirmed approval. Best-effort: absent ids and unknown messages are ignored —
+     * the approval itself already succeeded and must not be reported as failed. The fingerprint
+     * is client-supplied, so it is only stamped once it matches an invocation actually
+     * persisted on the message that proposes the very action the token carried; a mismatch
+     * skips the stamp (logged), so a tampered fingerprint cannot mark an unrelated proposal
+     * as done.
+     */
+    protected function markInvocationApproved(string $token, $messageId, $fingerprint): void
+    {
+        if (!$this->conversation || !$messageId || !is_string($fingerprint) || $fingerprint === '') {
+            return;
+        }
+
+        $message = $this->conversation->messages()->find($messageId);
+        if (!$message) {
+            return;
+        }
+
+        $metadata = $message->metadata ?? [];
+
+        if (!$this->fingerprintMatchesApprovedAction($token, $fingerprint, $metadata['invocations'] ?? null)) {
+            \Log::warning('AI action approval: supplied fingerprint matches no persisted invocation for the approved action — resolution stamp skipped.', [
+                'message_id' => $message->id,
+                'fingerprint' => $fingerprint,
+            ]);
+            return;
+        }
+
+        $resolved = is_array($metadata['resolved_invocations'] ?? null) ? $metadata['resolved_invocations'] : [];
+        $resolved[$fingerprint] = 'approved';
+        $metadata['resolved_invocations'] = $resolved;
+        $message->metadata = $metadata;
+        $message->save();
+    }
+
+    /**
+     * Whether the client-supplied fingerprint identifies an invocation persisted in the
+     * message's metadata AND that invocation proposes the same action the just-approved token
+     * carried — key, entity type, and entity id (the token stores it in its input). The stamp
+     * must never outrun what was actually approved.
+     */
+    protected function fingerprintMatchesApprovedAction(string $token, string $fingerprint, $records): bool
+    {
+        if (!is_array($records)) {
+            return false;
+        }
+
+        $approved = PendingActionToken::decode($token);
+        if ($approved === null) {
+            return false;
+        }
+
+        $approvedEntityId = $approved->input[ModelMethodMutationAction::ID_PARAM] ?? null;
+
+        foreach ($records as $record) {
+            $invocation = ActionInvocation::fromArray($record);
+            if ($invocation === null || $invocation->fingerprint() !== $fingerprint) {
+                continue;
+            }
+
+            if ($invocation->key === $approved->actionKey
+                && $invocation->entityType === $approved->entityType
+                && (string) ($invocation->entityId ?? '') === (string) ($approvedEntityId ?? '')
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Extract a tabular result set for the message, used as render context for
+     * render_table/export_* actions. Prefers the structured response_data table rows, falling
+     * back to the conversation's last_result_sample.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    protected function messageResultSet($message): array
+    {
+        $responseData = $message->response_data ?? null;
+
+        if (is_array($responseData)) {
+            // Structured 'table' shape → list of associative rows keyed by header.
+            if (($responseData['type'] ?? null) === 'table'
+                && !empty($responseData['headers'])
+                && !empty($responseData['rows'])
+            ) {
+                $headers = $responseData['headers'];
+                $rows = [];
+                foreach ($responseData['rows'] as $row) {
+                    $rows[] = array_combine(
+                        $headers,
+                        array_pad(array_slice((array) $row, 0, count($headers)), count($headers), null)
+                    );
+                }
+                return $rows;
+            }
+
+            // Already a list of associative rows.
+            if (isset($responseData[0]) && is_array($responseData[0])) {
+                return $responseData;
+            }
+        }
+
+        // The sample lives in context_snapshot (written by ConversationContextManager::recordResponse).
+        $sample = $this->conversation?->getLastResultSample() ?? [];
+        return is_array($sample) ? $sample : [];
+    }
+
+    // ========== COLLABORATORS ==========
+
+    /**
+     * The bubble renderer, built once per request from the component's resolved theme/settings
+     * and avatar HTML. Defaults to an internally-constructed instance so the existing
+     * service-provider binding (which constructs MessagesQuery with no args) keeps working.
+     */
+    protected function bubbleRenderer(): MessageBubbleRenderer
+    {
+        if ($this->bubbleRenderer === null) {
+            $this->bubbleRenderer = new MessageBubbleRenderer(
+                $this->theme(),
+                $this->settings(),
+                $this->richDataRenderer(),
+                app(\Condoedge\Ai\Services\Response\ContentLinkProcessor::class),
+                $this->userAvatarHtml(),
+                $this->assistantAvatarHtml(),
+            );
+        }
+        return $this->bubbleRenderer;
+    }
+
+    /**
+     * The rich-data renderer (tables/metrics/lists, suggestions, metrics, file cards).
+     */
+    protected function richDataRenderer(): RichDataRenderer
+    {
+        if ($this->richDataRenderer === null) {
+            $this->richDataRenderer = new RichDataRenderer($this->theme(), $this->settings());
+        }
+        return $this->richDataRenderer;
+    }
+
+    /**
+     * The ownership-scoped conversation/message mutation service.
+     */
+    protected function conversationActions(): ConversationActions
+    {
+        if ($this->conversationActions === null) {
+            $this->conversationActions = app(ConversationActions::class);
+        }
+        return $this->conversationActions;
+    }
+
     // ========== HELPERS ==========
 
     /**
-     * Handle entity action link click
+     * The conversation's message count, computed at most once per request (chatHeader,
+     * top()'s welcome gate and the limit banner all consume it).
      */
-    public function entityActionLink($entityType, $entityId, $actionKey)
+    protected function messageCount(): int
     {
-        $discovery = app(EntityAutoDiscovery::class);
-        $resolver = $discovery->getEntityActionResolver($entityType, $actionKey);
-
-        if (!$resolver) {
-            return _Html(__('ai.action.not-configured'))->class('text-red-500 p-4');
+        if ($this->messageCount === null) {
+            $this->messageCount = $this->conversation
+                ? $this->conversation->messages()->count()
+                : 0;
         }
-
-        return $resolver($entityId);
-    }
-
-    /**
-     * Handle generic action link click
-     */
-    public function genericActionLink($actionKey)
-    {
-        $discovery = app(EntityAutoDiscovery::class);
-        $resolver = $discovery->getGenericActionResolver($actionKey);
-
-        if (!$resolver) {
-            return _Html(__('ai.action.not-configured'))->class('text-red-500 p-4');
-        }
-
-        return $resolver();
-    }
-
-    protected function renderMarkdown(string $text): string
-    {
-        $renderer = new SafeMarkdownRenderer([
-            'activeBadge' => $this->theme()->activeBadge(),
-            'primaryText' => $this->theme()->primaryText(),
-        ]);
-
-        return $renderer->render($text);
-    }
-
-    /**
-     * Get the content link processor service.
-     */
-    protected function getContentLinkProcessor(): ContentLinkProcessor
-    {
-        return app(ContentLinkProcessor::class);
-    }
-
-    protected function scrollScript($withTransition = true): string
-    {
-        return "() => {
-            const c = document.getElementById('" . self::ID . "').querySelector('.vlQueryWrapper');
-            if (c) {
-                setTimeout(() => c.scrollTo({ top: c.scrollHeight, behavior: '" . ($withTransition ? "smooth" : "auto") . "' }), 100);
-            }
-        }";
+        return $this->messageCount;
     }
 
     public function deleteConversation($id)
     {
-        AiConversation::where('user_id', auth()->id())->where('id', $id)->delete();
+        $this->conversationActions()->delete((int) $id, auth()->user());
 
         session(['selected_conversation_id' => null]);
     }
 
     public function archiveConversation($id)
     {
-        AiConversation::where('user_id', auth()->id())
-            ->where('id', $id)
-            ->update(['status' => 'archived']);
+        $this->conversationActions()->archive((int) $id, auth()->user());
 
         session(['selected_conversation_id' => null]);
     }
-
-    /**
-     * Check if message is newly added (for animation purposes)
-     * Messages created within the last 5 seconds are considered "new"
-     */
-    protected function isNewMessage($message): bool
-    {
-        if (!$message->created_at) {
-            return true; // Temp messages are always "new"
-        }
-
-        return $message->created_at->diffInSeconds(now()) < 5;
-    }
-
 }

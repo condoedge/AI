@@ -197,24 +197,6 @@ $context = $resolver->buildContextForEntity($user, 'Customer');
 // Returns: entity, access_tags, threshold, sensible_columns, identifying_fields, user_teams
 ```
 
-### Configuring Thresholds
-
-Thresholds protect against identifying individuals through specific counts:
-
-```php
-// config/ai.php
-'access_control' => [
-    'default_threshold' => 5,
-    'thresholds' => [
-        'Customer' => 5,
-        'Employee' => 10,
-        'Transaction' => 3,
-    ],
-],
-```
-
-When a count is below the threshold, the system returns "fewer than N" instead of the exact number.
-
 ### Configuring Identifying Fields
 
 Fields that could identify individuals when used in filters:
@@ -530,21 +512,7 @@ if ($analysis['has_injection_risk']) {
 }
 ```
 
-### 3. Configure Thresholds Appropriately
-
-```php
-// config/ai.php
-'access_control' => [
-    // Higher threshold for sensitive entities
-    'thresholds' => [
-        'Employee' => 10,  // HR data
-        'Customer' => 5,   // Business data
-        'LogEntry' => 1,   // Audit data (no threshold)
-    ],
-],
-```
-
-### 4. Use Team Filtering at Database Level
+### 3. Use Team Filtering at Database Level
 
 ```php
 // Prefer database-level filtering over post-processing
@@ -556,7 +524,7 @@ $results = $vectorStore->search('entities', $vector);
 $results = array_filter($results, fn($r) => in_array($r['team_id'], $teamIds));
 ```
 
-### 5. Always Sanitize Logs
+### 4. Always Sanitize Logs
 
 ```php
 // Always use forLogging() when logging potentially sensitive data
@@ -592,10 +560,6 @@ AI_BLOCK_HIGH_RISK_INPUT=true
     ],
 
     'access_control' => [
-        'default_threshold' => 5,
-        'thresholds' => [
-            'Employee' => 10,
-        ],
         'identifying_fields' => [
             '*' => ['email', 'phone'],
         ],

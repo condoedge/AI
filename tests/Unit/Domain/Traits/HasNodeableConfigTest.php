@@ -8,7 +8,6 @@ use Condoedge\Ai\Tests\TestCase;
 use Condoedge\Ai\Domain\Traits\HasNodeableConfig;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Domain\ValueObjects\GraphConfig;
-use Condoedge\Ai\Domain\ValueObjects\VectorConfig;
 use Condoedge\Ai\Domain\ValueObjects\NodeableConfig;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
 use Illuminate\Database\Eloquent\Model;
@@ -56,11 +55,6 @@ class HasNodeableConfigTest extends TestCase
                         'properties' => ['id', 'name'],
                         'relationships' => [],
                     ],
-                    'vector' => [
-                        'collection' => 'test_collection',
-                        'embed_fields' => ['name'],
-                        'metadata' => ['id'],
-                    ],
                 ];
             }
         };
@@ -69,11 +63,6 @@ class HasNodeableConfigTest extends TestCase
         $graphConfig = $model->getGraphConfig();
         $this->assertInstanceOf(GraphConfig::class, $graphConfig);
         $this->assertEquals('TestNode', $graphConfig->label);
-
-        // Get vector config
-        $vectorConfig = $model->getVectorConfig();
-        $this->assertInstanceOf(VectorConfig::class, $vectorConfig);
-        $this->assertEquals('test_collection', $vectorConfig->collection);
     }
 
     /** @test */
@@ -90,19 +79,13 @@ class HasNodeableConfigTest extends TestCase
             {
                 return NodeableConfig::for(static::class)
                     ->label('BuilderNode')
-                    ->properties('id', 'name')
-                    ->collection('builder_collection')
-                    ->embedFields('name');
+                    ->properties('id', 'name');
             }
         };
 
         // Get graph config
         $graphConfig = $model->getGraphConfig();
         $this->assertEquals('BuilderNode', $graphConfig->label);
-
-        // Get vector config
-        $vectorConfig = $model->getVectorConfig();
-        $this->assertEquals('builder_collection', $vectorConfig->collection);
     }
 
     /** @test */
@@ -200,35 +183,6 @@ class HasNodeableConfigTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('No configuration found');
         $model->getGraphConfig();
-    }
-
-    /** @test */
-    public function it_throws_exception_when_vector_config_not_configured()
-    {
-        // Create model with only graph config
-        $model = new class extends Model implements Nodeable {
-            use HasNodeableConfig;
-
-            protected $table = 'test_models';
-            protected $fillable = ['name'];
-
-            public function nodeableConfig(): array
-            {
-                return [
-                    'graph' => [
-                        'label' => 'TestNode',
-                        'properties' => ['id', 'name'],
-                        'relationships' => [],
-                    ],
-                    // No vector config
-                ];
-            }
-        };
-
-        // Get vector config - should throw LogicException
-        $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('is not vectorizable');
-        $model->getVectorConfig();
     }
 
     /** @test */

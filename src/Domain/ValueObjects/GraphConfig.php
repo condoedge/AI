@@ -16,11 +16,20 @@ class GraphConfig
      * @param string $label Node label (e.g., "Customer", "Person", "Order")
      * @param array $properties List of property names to store (e.g., ['id', 'name', 'email'])
      * @param RelationshipConfig[] $relationships Array of relationship configurations
+     * @param array<string, string|callable> $computed Graph property => model accessor/method
+     *        name (string) or callable fn($model). Evaluated at ingest by GraphPropertyMapper.
+     * @param string[] $with Relations eager-loaded before computed properties are evaluated
+     *        (ingest chunk queries use ->with(), single-model sync uses loadMissing()).
+     * @param array<string, string> $casts Graph property => forced graph type
+     *        (string|int|float|bool|date). Absent = today's behaviour (no cast).
      */
     public function __construct(
         public readonly string $label,
         public readonly array $properties,
-        public readonly array $relationships = []
+        public readonly array $relationships = [],
+        public readonly array $computed = [],
+        public readonly array $with = [],
+        public readonly array $casts = [],
     ) {
         if (empty($this->label)) {
             throw new \InvalidArgumentException('Graph label cannot be empty');
@@ -54,10 +63,32 @@ class GraphConfig
                 : $relationship;
         }
 
+        $computed = [];
+        foreach ((array) ($config['computed'] ?? []) as $property => $source) {
+            if (is_string($property) && $property !== '' && (is_string($source) || is_callable($source))) {
+                $computed[$property] = $source;
+            }
+        }
+
+        $with = array_values(array_filter(
+            (array) ($config['with'] ?? []),
+            static fn ($relation) => is_string($relation) && $relation !== ''
+        ));
+
+        $casts = [];
+        foreach ((array) ($config['casts'] ?? []) as $property => $type) {
+            if (is_string($property) && is_string($type) && $type !== '') {
+                $casts[$property] = $type;
+            }
+        }
+
         return new self(
             label: $config['label'],
             properties: $config['properties'],
-            relationships: array_filter($relationships)
+            relationships: array_filter($relationships),
+            computed: $computed,
+            with: $with,
+            casts: $casts,
         );
     }
 

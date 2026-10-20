@@ -15,7 +15,6 @@ class AiUserSetting extends Model
     protected static function booted(): void
     {
         static::creating(function (self $model) {
-            // Set defaults from config when creating new records
             $defaults = $model->getConfigDefaults();
             foreach ($defaults as $key => $value) {
                 if ($model->getAttribute($key) === null) {

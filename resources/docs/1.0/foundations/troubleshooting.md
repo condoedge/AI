@@ -168,8 +168,7 @@ class Customer extends Model implements Nodeable
 ```php
 // config/entities.php
 'Customer' => [
-    'graph' => [...],
-    'vector' => [...]
+    'graph' => [...]
 ]
 ```
 
@@ -195,23 +194,13 @@ if (!empty($status['errors'])) {
 
 **Error:** `Failed to generate embedding`
 
+Records are stored in the graph only; they are not embedded. Embeddings are generated for the file chunks and the semantic indexes that Qdrant holds — see [Data ingestion](/docs/{{version}}/usage/data-ingestion).
+
 **Solutions:**
 
-1. **Check embed_fields contain data:**
-```php
-// Entity must have these fields populated
-'embed_fields' => ['name', 'description']
-```
+1. **Check API key is valid**
 
-2. **Verify fields are not empty:**
-```php
-$customer->name = 'John Doe';  // Not null or empty
-$customer->description = 'Customer description';
-```
-
-3. **Check API key is valid**
-
-4. **Test embedding directly:**
+2. **Test embedding directly:**
 ```php
 $vector = AI::embed("Test text");
 ```
@@ -239,19 +228,12 @@ AI::ingestBatch($customers->toArray());
 
 2. **Increase timeouts:**
 ```env
-QDRANT_TIMEOUT=60
-AI_QUERY_TIMEOUT=60
+AI_EXEC_TIMEOUT=60
 ```
 
 3. **Queue ingestion:**
 ```php
 IngestEntityJob::dispatch($customer);
-```
-
-4. **Reduce embed_fields:**
-```php
-// Only embed essential fields
-'embed_fields' => ['name']  // Instead of all fields
 ```
 
 ---
@@ -260,21 +242,13 @@ IngestEntityJob::dispatch($customer);
 
 **Problem:** Similarity search is slow
 
+Records are not searched by similarity; they are queried through the graph. Qdrant serves file search and the semantic indexes.
+
 **Solutions:**
 
-1. **Reduce search limit:**
-```php
-AI::searchSimilar($query, ['limit' => 5]);  // Instead of 50
-```
+1. **Index Qdrant collection properly**
 
-2. **Increase score threshold:**
-```php
-AI::searchSimilar($query, ['scoreThreshold' => 0.8]);  // Filter more
-```
-
-3. **Index Qdrant collection properly**
-
-4. **Check Qdrant resources**
+2. **Check Qdrant resources**
 
 ---
 
@@ -356,17 +330,22 @@ class Customer extends Model implements Nodeable
 
 ### "Collection does not exist"
 
-**Error:** `Collection 'customers' does not exist`
+**Error:** `Collection 'context_index' does not exist`
+
+There is no per-entity collection. Qdrant holds the file chunks and the semantic indexes — see [Data ingestion](/docs/{{version}}/usage/data-ingestion).
 
 **Solution:**
 
-1. **Create collection manually:**
-```php
-$qdrant = new QdrantStore(config('ai.qdrant'));
-$qdrant->createCollection('customers', 1536);
+1. **Run the command that writes the collection** (it is created on first write):
+```bash
+php artisan ai:index-context
 ```
 
-2. **Or let system auto-create on first upsert**
+2. **Or create the collection manually:**
+```php
+$qdrant = new QdrantStore(config('ai.qdrant'));
+$qdrant->createCollection('context_index', 1536);
+```
 
 ---
 

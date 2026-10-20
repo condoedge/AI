@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "code-index": {
+      "command": "uvx",
+      "args": [
+        "code-index-mcp",
+        "--project-path",
+        "C:/Users/jkend/Documents/Projects/kompo/SISC"
+      ]
+    }
+  }
+}

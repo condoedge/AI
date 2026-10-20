@@ -1,5 +1,4 @@
 <?php
-// src/Models/AiQueryLog.php
 
 declare(strict_types=1);
 

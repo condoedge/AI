@@ -1,6 +1,6 @@
 # Embeddings API
 
-Generate vector embeddings from text using OpenAI or Anthropic.
+Generate vector embeddings from text using OpenAI.
 
 ---
 
@@ -10,7 +10,8 @@ Embeddings convert text into numerical vectors that represent semantic meaning. 
 
 **Supported Providers:**
 - OpenAI: text-embedding-3-small (1536 dimensions)
-- Anthropic: Placeholder for future support
+
+OpenAI is the only built-in embedding provider (Anthropic offers no embeddings API). You can still use Anthropic as the LLM provider, and custom embedding providers can be registered (see Custom Embedding Providers).
 
 ---
 
@@ -62,10 +63,6 @@ Set in `.env`:
 AI_EMBEDDING_PROVIDER=openai
 OPENAI_API_KEY=sk-your-key-here
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-
-# Anthropic (future)
-AI_EMBEDDING_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-your-key-here
 ```
 
 ---
@@ -76,7 +73,6 @@ ANTHROPIC_API_KEY=sk-ant-your-key-here
 |----------|-------|------------|
 | OpenAI | text-embedding-3-small | 1536 |
 | OpenAI | text-embedding-ada-002 | 1536 |
-| Anthropic | (future) | 1024 |
 
 ---
 

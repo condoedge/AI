@@ -38,7 +38,6 @@ class CustomerServiceTest extends TestCase
             ->with(Mockery::type(Customer::class))
             ->andReturn([
                 'graph_stored' => true,
-                'vector_stored' => true,
                 'relationships_created' => 2,
                 'errors' => []
             ]);
@@ -64,7 +63,6 @@ class CustomerServiceTest extends TestCase
                     'labels' => ['Team', 'Person'],
                     'relationships' => ['MEMBER_OF']
                 ],
-                'relevant_entities' => [],
                 'errors' => []
             ]);
 
@@ -84,7 +82,7 @@ public function test_full_workflow()
     // Mock multiple methods
     AI::shouldReceive('ingest')
         ->once()
-        ->andReturn(['graph_stored' => true, 'vector_stored' => true]);
+        ->andReturn(['graph_stored' => true, 'relationships_created' => 0, 'errors' => []]);
 
     AI::shouldReceive('retrieveContext')
         ->once()
@@ -143,7 +141,6 @@ class CustomerControllerTest extends TestCase
             ->with(Mockery::type(Customer::class))
             ->andReturn([
                 'graph_stored' => true,
-                'vector_stored' => true,
                 'relationships_created' => 1,
                 'errors' => []
             ]);
@@ -160,8 +157,7 @@ class CustomerControllerTest extends TestCase
         $response->assertStatus(201);
         $response->assertJson([
             'ai_status' => [
-                'graph_stored' => true,
-                'vector_stored' => true
+                'graph_stored' => true
             ]
         ]);
     }
@@ -274,9 +270,7 @@ class CustomerServiceTest extends TestCase
 
 ```php
 use Condoedge\Ai\Services\DataIngestionService;
-use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
-use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use Mockery;
 use Tests\TestCase;
 
@@ -284,28 +278,17 @@ class DataIngestionServiceTest extends TestCase
 {
     public function test_successful_ingestion()
     {
-        // Create mocks
-        $vectorStore = Mockery::mock(VectorStoreInterface::class);
+        // Create mock (records are written to the graph only: no embedding, no vector store)
         $graphStore = Mockery::mock(GraphStoreInterface::class);
-        $embedding = Mockery::mock(EmbeddingProviderInterface::class);
 
         // Set expectations
-        $embedding->shouldReceive('embed')
-            ->once()
-            ->with('Customer Name Description')
-            ->andReturn([0.1, 0.2, 0.3]);
-
-        $vectorStore->shouldReceive('upsert')
-            ->once()
-            ->andReturn(true);
-
         $graphStore->shouldReceive('createNode')
             ->once()
             ->with('Customer', Mockery::any())
             ->andReturn('node-123');
 
-        // Create service with mocks
-        $service = new DataIngestionService($vectorStore, $graphStore, $embedding);
+        // Create service with mock
+        $service = new DataIngestionService($graphStore);
 
         // Create test entity
         $customer = new TestCustomer([
@@ -319,7 +302,6 @@ class DataIngestionServiceTest extends TestCase
 
         // Assert
         $this->assertTrue($status['graph_stored']);
-        $this->assertTrue($status['vector_stored']);
         $this->assertEmpty($status['errors']);
     }
 
@@ -513,8 +495,7 @@ class AiApiTest extends TestCase
 
         $response->assertStatus(200);
         $response->assertJson([
-            'graph_stored' => true,
-            'vector_stored' => true
+            'graph_stored' => true
         ]);
     }
 
@@ -547,8 +528,8 @@ $mockAi = Mockery::mock(AiManager::class);
 $service = new ComplexService($mockAi);
 
 // Testing core services - Mock individual dependencies
-$mockVector = Mockery::mock(VectorStoreInterface::class);
-$service = new DataIngestionService($mockVector, $mockGraph, $mockEmbed);
+$mockGraph = Mockery::mock(GraphStoreInterface::class);
+$service = new DataIngestionService($mockGraph);
 ```
 
 ### 2. Always Clean Up Mocks
@@ -580,12 +561,12 @@ AI::shouldReceive('ingest')
 ```php
 public function test_ingestion_failure()
 {
+    // A failed graph write THROWS: ingest() never returns graph_stored => false
     AI::shouldReceive('ingest')
-        ->andReturn([
-            'graph_stored' => false,
-            'vector_stored' => true,
-            'errors' => ['Graph: Connection timeout']
-        ]);
+        ->andThrow(new \Condoedge\Ai\Exceptions\DataConsistencyException(
+            'Graph store failed for entity 1: Connection timeout',
+            ['operation' => 'ingest', 'graph_success' => false]
+        ));
 
     $service = new CustomerService();
     $result = $service->processCustomer($customer);

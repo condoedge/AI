@@ -9,6 +9,8 @@ use Mockery;
 use Condoedge\Ai\Services\QueryGenerator;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
+use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Exceptions\QueryValidationException;
 
@@ -31,8 +33,6 @@ class QueryGeneratorTest extends TestCase
             'allow_write_operations' => false,
             'default_limit' => 100,
             'max_complexity' => 100,
-            'enable_templates' => true,
-            'template_confidence_threshold' => 0.8,
         ];
 
         $this->generator = new QueryGenerator(
@@ -48,6 +48,37 @@ class QueryGeneratorTest extends TestCase
         parent::tearDown();
     }
 
+    /**
+     * Build a PipelineContext DTO from the legacy array-shaped context fields.
+     *
+     * QueryGenerator::generate() takes the canonical PipelineContext DTO, so the
+     * tests map the schema/entity/query fields onto the corresponding properties.
+     */
+    /** A structured generation reply (Task 5.6 contract). */
+    private function draft(?string $cypher, bool $needsQuery = true): object
+    {
+        return (object) ['needs_query' => $needsQuery, 'cypher' => $cypher, 'reason' => ''];
+    }
+
+    /** chatJson receives the system (identity + rules) and user messages. */
+    private function systemAndUserMessages(): \Mockery\Matcher\Closure
+    {
+        return Mockery::on(fn ($messages) => is_array($messages)
+            && ($messages[0]['role'] ?? null) === 'system'
+            && ($messages[1]['role'] ?? null) === 'user');
+    }
+
+    private function makeContext(array $fields = []): PipelineContext
+    {
+        $context = new PipelineContext();
+        $context->graphSchema = $fields['graph_schema'] ?? [];
+        $context->similarQueries = $fields['similar_queries'] ?? [];
+        $context->entityMetadata = $fields['entity_metadata'] ?? [];
+        $context->conversationContext = $fields['conversation_context'] ?? [];
+
+        return $context;
+    }
+
     // =========================================================================
     // Query Generation Tests
     // =========================================================================
@@ -55,90 +86,89 @@ class QueryGeneratorTest extends TestCase
     public function test_generate_simple_query(): void
     {
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => [
                 'labels' => ['Customer', 'Order'],
                 'relationships' => ['PURCHASED'],
             ],
             'similar_queries' => [],
             'relevant_entities' => [],
-        ];
+        ]);
 
-        $this->mockLlm->shouldReceive('complete')
+        $this->mockLlm->shouldReceive('chatJson')
             ->once()
-            ->with(Mockery::any(), null, Mockery::any())
-            ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
+            ->with($this->systemAndUserMessages(), Mockery::any())
+            ->andReturn($this->draft('MATCH (n:Customer) RETURN n LIMIT 100'));
 
         // Disable explanation to avoid second complete() call
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('cypher', $result);
-        $this->assertArrayHasKey('explanation', $result);
-        $this->assertArrayHasKey('confidence', $result);
-        $this->assertArrayHasKey('warnings', $result);
-        $this->assertArrayHasKey('metadata', $result);
-        $this->assertStringContainsString('MATCH', $result['cypher']);
+        $this->assertInstanceOf(QueryGenerationResult::class, $result);
+        $this->assertStringContainsString('MATCH', $result->cypher);
     }
 
-    public function test_generate_uses_template_for_list_all(): void
+    public function test_how_many_residents_goes_through_the_llm_and_never_hard_fails(): void
     {
-        $question = "Show all customers";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Customer'],
-                'relationships' => [],
-            ],
-        ];
+        // Phase 2.B (plan issue #11): the English-only TemplateMatcher matched
+        // "How many residents?", singularized it to "Resident" and threw
+        // InvalidArgumentException("Unknown label") OUTSIDE the retry loop when
+        // the graph named that concept differently. There is one generation path
+        // now: the LLM, which maps the concept onto the real schema.
+        $context = $this->makeContext([
+            'graph_schema' => ['labels' => ['Contact', 'Unit'], 'relationships' => []],
+        ]);
 
-        $result = $this->generator->generate($question, $context);
+        $this->mockLlm->shouldReceive('chatJson')
+            ->once()
+            ->with($this->systemAndUserMessages(), Mockery::any())
+            ->andReturn($this->draft('MATCH (c:Contact) RETURN count(c) AS residents'));
 
-        $this->assertStringContainsString('MATCH', $result['cypher']);
-        $this->assertStringContainsString('Customer', $result['cypher']);
-        $this->assertStringContainsString('LIMIT', $result['cypher']);
-        $this->assertNotNull($result['metadata']['template_used']);
+        $result = $this->generator->generate('How many residents?', $context, ['explain' => false]);
+
+        $this->assertSame('MATCH (c:Contact) RETURN count(c) AS residents', $result->cypher);
+        $this->assertNull($result->metadata['template_used'] ?? null);
     }
 
-    public function test_generate_uses_template_for_count(): void
+    public function test_formerly_template_shaped_questions_use_the_llm_path(): void
     {
-        $question = "How many orders";
-        $context = [
-            'graph_schema' => [
-                'labels' => ['Order'],
-                'relationships' => [],
-            ],
-        ];
+        $context = $this->makeContext([
+            'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
+        ]);
 
-        $result = $this->generator->generate($question, $context);
+        $this->mockLlm->shouldReceive('chatJson')
+            ->twice()
+            ->with($this->systemAndUserMessages(), Mockery::any())
+            ->andReturn($this->draft('MATCH (n:Customer) RETURN n LIMIT 100'));
 
-        $this->assertStringContainsString('count', strtolower($result['cypher']));
-        $this->assertStringContainsString('Order', $result['cypher']);
-        $this->assertNotNull($result['metadata']['template_used']);
+        foreach (['Show all customers', 'How many orders'] as $question) {
+            $result = $this->generator->generate($question, $context, ['explain' => false]);
+            $this->assertStringContainsString('MATCH', $result->cypher);
+        }
     }
 
     public function test_generate_retries_on_validation_failure(): void
     {
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
-        ];
+        ]);
 
         // First attempt returns invalid query
-        $this->mockLlm->shouldReceive('complete')
+        $this->mockLlm->shouldReceive('chatJson')
             ->once()
-            ->with(Mockery::any(), null, Mockery::any())
-            ->andReturn('INVALID QUERY');
+            ->with($this->systemAndUserMessages(), Mockery::any())
+            ->andReturn($this->draft('INVALID QUERY'));
 
         // Second attempt returns valid query
-        $this->mockLlm->shouldReceive('complete')
+        $this->mockLlm->shouldReceive('chatJson')
             ->once()
-            ->with(Mockery::any(), null, Mockery::any())
-            ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
+            ->with($this->systemAndUserMessages(), Mockery::any())
+            ->andReturn($this->draft('MATCH (n:Customer) RETURN n LIMIT 100'));
 
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
-        $this->assertGreaterThan(0, $result['metadata']['retry_count']);
-        $this->assertStringContainsString('MATCH', $result['cypher']);
+        $this->assertGreaterThan(0, $result->metadata['retry_count']);
+        $this->assertStringContainsString('MATCH', $result->cypher);
     }
 
     public function test_generate_throws_exception_after_max_retries(): void
@@ -146,15 +176,15 @@ class QueryGeneratorTest extends TestCase
         $this->expectException(QueryGenerationException::class);
 
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
-        ];
+        ]);
 
         // All attempts return invalid queries
-        $this->mockLlm->shouldReceive('complete')
+        $this->mockLlm->shouldReceive('chatJson')
             ->times(3)
-            ->with(Mockery::any(), null, Mockery::any())
-            ->andReturn('INVALID QUERY');
+            ->with($this->systemAndUserMessages(), Mockery::any())
+            ->andReturn($this->draft('INVALID QUERY'));
 
         $this->generator->generate($question, $context, ['explain' => false]);
     }
@@ -162,37 +192,37 @@ class QueryGeneratorTest extends TestCase
     public function test_generate_respects_temperature_option(): void
     {
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
-        ];
+        ]);
 
-        $this->mockLlm->shouldReceive('complete')
+        $this->mockLlm->shouldReceive('chatJson')
             ->once()
-            ->with(Mockery::any(), null, Mockery::on(function ($options) {
+            ->with($this->systemAndUserMessages(), Mockery::on(function ($options) {
                 return isset($options['temperature']) && $options['temperature'] === 0.5;
             }))
-            ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
+            ->andReturn($this->draft('MATCH (n:Customer) RETURN n LIMIT 100'));
 
         $result = $this->generator->generate($question, $context, ['temperature' => 0.5, 'explain' => false]);
 
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('cypher', $result);
+        $this->assertInstanceOf(QueryGenerationResult::class, $result);
+        $this->assertNotNull($result->cypher);
     }
 
     public function test_generate_includes_explanation_when_requested(): void
     {
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
-        ];
+        ]);
 
-        // First call generates the query
-        $this->mockLlm->shouldReceive('complete')
+        // First call generates the query (structured JSON reply)
+        $this->mockLlm->shouldReceive('chatJson')
             ->once()
-            ->with(Mockery::any(), null, Mockery::on(function ($options) {
-                return isset($options['max_tokens']) && $options['max_tokens'] === 500;
+            ->with($this->systemAndUserMessages(), Mockery::on(function ($options) {
+                return isset($options['max_tokens']) && $options['max_tokens'] === 800;
             }))
-            ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
+            ->andReturn($this->draft('MATCH (n:Customer) RETURN n LIMIT 100'));
 
         // Second call generates the explanation
         $this->mockLlm->shouldReceive('complete')
@@ -204,7 +234,7 @@ class QueryGeneratorTest extends TestCase
 
         $result = $this->generator->generate($question, $context, ['explain' => true]);
 
-        $this->assertNotEmpty($result['explanation']);
+        $this->assertNotEmpty($result->explanation);
     }
 
     // =========================================================================
@@ -294,155 +324,41 @@ class QueryGeneratorTest extends TestCase
     }
 
     // =========================================================================
-    // Sanitization Tests
-    // =========================================================================
-
-    public function test_sanitize_removes_delete(): void
-    {
-        $query = 'MATCH (n:Customer) DELETE n';
-
-        $sanitized = $this->generator->sanitize($query);
-
-        $this->assertStringNotContainsString('DELETE', $sanitized);
-    }
-
-    public function test_sanitize_removes_drop(): void
-    {
-        $query = 'DROP INDEX customer_email';
-
-        $sanitized = $this->generator->sanitize($query);
-
-        $this->assertStringNotContainsString('DROP', $sanitized);
-    }
-
-    public function test_sanitize_adds_limit_if_missing(): void
-    {
-        $query = 'MATCH (n:Customer) RETURN n';
-
-        $sanitized = $this->generator->sanitize($query);
-
-        $this->assertStringContainsString('LIMIT', $sanitized);
-        $this->assertStringContainsString('100', $sanitized);
-    }
-
-    public function test_sanitize_preserves_existing_limit(): void
-    {
-        $query = 'MATCH (n:Customer) RETURN n LIMIT 50';
-
-        $sanitized = $this->generator->sanitize($query);
-
-        $this->assertStringContainsString('LIMIT 50', $sanitized);
-        $this->assertEquals(1, substr_count(strtoupper($sanitized), 'LIMIT'));
-    }
-
-    public function test_sanitize_removes_multiple_dangerous_operations(): void
-    {
-        $query = 'MATCH (n:Customer) DELETE n; DROP INDEX x; CREATE (m:New)';
-
-        $sanitized = $this->generator->sanitize($query);
-
-        $this->assertStringNotContainsString('DELETE', $sanitized);
-        $this->assertStringNotContainsString('DROP', $sanitized);
-        $this->assertStringNotContainsString('CREATE', $sanitized);
-    }
-
-    // =========================================================================
-    // Template Tests
-    // =========================================================================
-
-    public function test_get_templates_returns_array(): void
-    {
-        $templates = $this->generator->getTemplates();
-
-        $this->assertIsArray($templates);
-        $this->assertNotEmpty($templates);
-    }
-
-    public function test_get_templates_includes_metadata(): void
-    {
-        $templates = $this->generator->getTemplates();
-
-        foreach ($templates as $template) {
-            $this->assertArrayHasKey('name', $template);
-            $this->assertArrayHasKey('description', $template);
-            $this->assertArrayHasKey('pattern', $template);
-        }
-    }
-
-    public function test_detect_template_finds_list_all(): void
-    {
-        $question = "Show all customers";
-
-        $template = $this->generator->detectTemplate($question);
-
-        $this->assertNotNull($template);
-        $this->assertEquals('list_all', $template);
-    }
-
-    public function test_detect_template_finds_count(): void
-    {
-        $question = "How many orders";
-
-        $template = $this->generator->detectTemplate($question);
-
-        $this->assertNotNull($template);
-        $this->assertEquals('count', $template);
-    }
-
-    public function test_detect_template_returns_null_for_no_match(): void
-    {
-        $question = "This is a very complex question that doesn't match any template";
-
-        $template = $this->generator->detectTemplate($question);
-
-        $this->assertNull($template);
-    }
-
-    public function test_detect_template_is_case_insensitive(): void
-    {
-        $question = "SHOW ALL CUSTOMERS";
-
-        $template = $this->generator->detectTemplate($question);
-
-        $this->assertNotNull($template);
-    }
-
-    // =========================================================================
     // Edge Cases
     // =========================================================================
 
     public function test_generate_with_empty_context(): void
     {
         $question = "What are the customers?";
-        $context = [];
+        $context = $this->makeContext();
 
-        $this->mockLlm->shouldReceive('complete')
+        $this->mockLlm->shouldReceive('chatJson')
             ->once()
-            ->with(Mockery::any(), null, Mockery::any())
-            ->andReturn('MATCH (n:Customer) RETURN n LIMIT 100');
+            ->with($this->systemAndUserMessages(), Mockery::any())
+            ->andReturn($this->draft('MATCH (n:Customer) RETURN n LIMIT 100'));
 
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('cypher', $result);
+        $this->assertInstanceOf(QueryGenerationResult::class, $result);
+        $this->assertNotNull($result->cypher);
     }
 
     public function test_generate_extracts_cypher_from_markdown(): void
     {
         $question = "What are the customers?";
-        $context = [
+        $context = $this->makeContext([
             'graph_schema' => ['labels' => ['Customer'], 'relationships' => []],
-        ];
+        ]);
 
-        $this->mockLlm->shouldReceive('complete')
+        $this->mockLlm->shouldReceive('chatJson')
             ->once()
-            ->with(Mockery::any(), null, Mockery::any())
-            ->andReturn("```cypher\nMATCH (n:Customer) RETURN n LIMIT 100\n```");
+            ->with($this->systemAndUserMessages(), Mockery::any())
+            ->andReturn($this->draft("```cypher\nMATCH (n:Customer) RETURN n LIMIT 100\n```"));
 
         $result = $this->generator->generate($question, $context, ['explain' => false]);
 
-        $this->assertStringNotContainsString('```', $result['cypher']);
-        $this->assertStringContainsString('MATCH', $result['cypher']);
+        $this->assertStringNotContainsString('```', $result->cypher);
+        $this->assertStringContainsString('MATCH', $result->cypher);
     }
 
     public function test_validate_with_cypher_comments(): void

@@ -49,13 +49,6 @@ abstract class AbstractChatSettings implements ChatSettingsInterface
     /**
      * Convert all settings to an array for serialization.
      *
-     * Includes all 16 configurable settings:
-     * - Content: welcome_title, welcome_message, example_questions, input_placeholder
-     * - Display: show_timestamps, show_avatars, show_typing, show_suggestions, show_metrics
-     * - Features: enable_copy, enable_feedback, enable_edit, enable_regenerate
-     * - Limits: max_suggestions
-     * - Behavior: response_style, typing_animation_style
-     *
      * @return array<string, mixed>
      */
     public function toArray(): array

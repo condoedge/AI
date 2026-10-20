@@ -6,6 +6,9 @@ namespace Condoedge\Ai\Tests\Unit\Services\Context;
 
 use Condoedge\Ai\Contracts\FileAccessResolverInterface;
 use Condoedge\Ai\Services\Context\FileAccessResolver;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Mockery;
 use Orchestra\Testbench\TestCase;
 
 class FileAccessResolverTest extends TestCase
@@ -30,6 +33,12 @@ class FileAccessResolverTest extends TestCase
     {
         parent::setUp();
         $this->resolver = new FileAccessResolver();
+    }
+
+    public function tearDown(): void
+    {
+        Mockery::close();
+        parent::tearDown();
     }
 
     // =========================================================================
@@ -333,6 +342,154 @@ class FileAccessResolverTest extends TestCase
     public function it_has_physical_prefix_constant(): void
     {
         $this->assertEquals('physical:', FileAccessResolver::PHYSICAL_PREFIX);
+    }
+
+    // =========================================================================
+    // enumerateAccessibleFiles tests (capability A — Q4)
+    // =========================================================================
+
+    /** @test */
+    public function enumeration_returns_empty_when_no_user_and_security_enabled(): void
+    {
+        config(['ai.file_context.security_enabled' => true]);
+
+        $this->assertSame([], $this->resolver->enumerateAccessibleFiles(null));
+    }
+
+    /** @test */
+    public function enumeration_returns_empty_when_no_accessible_ids(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        config([
+            'ai.file_context.security_enabled' => true,
+            'ai.file_context.access_resolver' => fn ($u) => [],
+        ]);
+
+        $resolver = new FileAccessResolver();
+
+        $this->assertSame([], $resolver->enumerateAccessibleFiles($user));
+    }
+
+    /** @test */
+    public function enumeration_loads_descriptors_for_only_the_accessible_ids(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        // ACL closure says the user may access exactly files 10 and 11.
+        config([
+            'ai.file_context.security_enabled' => true,
+            'ai.file_context.access_resolver' => fn ($u) => [10, 11],
+        ]);
+
+        // The File model is loaded ONLY for those ids; assert the whereIn binds the
+        // ACL-filtered set, proving enumeration never widens it.
+        $rows = collect([
+            (object) ['id' => 10, 'name' => 'lease.pdf', 'extension' => 'pdf'],
+            (object) ['id' => 11, 'name' => 'rules.docx', 'extension' => 'docx'],
+        ]);
+        $this->bindFileModel(function ($builder) use ($rows) {
+            $builder->shouldReceive('whereIn')->once()->with('id', [10, 11])->andReturnSelf();
+            $builder->shouldReceive('get')->once()->andReturn($rows);
+        });
+
+        $resolver = new FileAccessResolver();
+        $result = $resolver->enumerateAccessibleFiles($user);
+
+        $this->assertCount(2, $result);
+        $this->assertEquals(['file_id' => 10, 'name' => 'lease.pdf', 'type' => 'pdf'], $result[0]);
+        $this->assertEquals(['file_id' => 11, 'name' => 'rules.docx', 'type' => 'docx'], $result[1]);
+    }
+
+    /** @test */
+    public function enumeration_applies_the_limit(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        config([
+            'ai.file_context.security_enabled' => true,
+            'ai.file_context.access_resolver' => fn ($u) => [10, 11, 12],
+        ]);
+
+        $this->bindFileModel(function ($builder) {
+            $builder->shouldReceive('whereIn')->once()->andReturnSelf();
+            $builder->shouldReceive('limit')->once()->with(2)->andReturnSelf();
+            $builder->shouldReceive('get')->once()->andReturn(collect([
+                (object) ['id' => 10, 'name' => 'a.pdf', 'extension' => 'pdf'],
+                (object) ['id' => 11, 'name' => 'b.pdf', 'extension' => 'pdf'],
+            ]));
+        });
+
+        $resolver = new FileAccessResolver();
+        $result = $resolver->enumerateAccessibleFiles($user, 2);
+
+        $this->assertCount(2, $result);
+    }
+
+    /** @test */
+    public function enumeration_derives_type_from_filename_when_no_extension_column(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        config([
+            'ai.file_context.security_enabled' => true,
+            'ai.file_context.access_resolver' => fn ($u) => [10],
+        ]);
+
+        $this->bindFileModel(function ($builder) {
+            $builder->shouldReceive('whereIn')->once()->andReturnSelf();
+            $builder->shouldReceive('get')->once()->andReturn(collect([
+                (object) ['id' => 10, 'name' => 'report.PDF'],
+            ]));
+        });
+
+        $resolver = new FileAccessResolver();
+        $result = $resolver->enumerateAccessibleFiles($user);
+
+        $this->assertEquals('pdf', $result[0]['type']);
+    }
+
+    /** @test */
+    public function enumeration_returns_empty_when_file_model_query_fails(): void
+    {
+        $user = new \stdClass();
+        $user->id = 1;
+
+        config([
+            'ai.file_context.security_enabled' => true,
+            'ai.file_context.access_resolver' => fn ($u) => [10],
+        ]);
+
+        $this->bindFileModel(function ($builder) {
+            $builder->shouldReceive('whereIn')->andReturnSelf();
+            $builder->shouldReceive('get')->andThrow(new \RuntimeException('db down'));
+        });
+
+        $resolver = new FileAccessResolver();
+
+        // Fail-closed: a query failure yields an empty list, never an exception.
+        $this->assertSame([], $resolver->enumerateAccessibleFiles($user));
+    }
+
+    /**
+     * Bind a fake `file-model` whose query() returns a Mockery Builder the caller
+     * configures, so enumeration's FileModel::query()->whereIn(...)->get() is
+     * driven without a real database.
+     */
+    private function bindFileModel(callable $configureBuilder): void
+    {
+        $builder = Mockery::mock(Builder::class);
+        $configureBuilder($builder);
+
+        $model = Mockery::mock(Model::class)->makePartial();
+        $model->shouldReceive('query')->andReturn($builder);
+        $model->shouldReceive('newQuery')->andReturn($builder);
+
+        $this->app->instance('file-model', $model);
     }
 
     // =========================================================================

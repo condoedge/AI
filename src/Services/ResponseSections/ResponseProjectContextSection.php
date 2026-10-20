@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\ResponseSections;
 
+use Condoedge\Ai\DTOs\PipelineContext;
+
 /**
  * ResponseProjectContextSection
  *
@@ -27,7 +29,7 @@ class ResponseProjectContextSection extends BaseResponseSection
         return $this;
     }
 
-    public function format(array $context, array $options = []): string
+    public function format(PipelineContext $context, array $options = []): string
     {
         $projectConfig = $this->customContext ?? config('ai.project', []);
 
@@ -52,7 +54,7 @@ class ResponseProjectContextSection extends BaseResponseSection
         return $output . "\n";
     }
 
-    public function shouldInclude(array $context, array $options = []): bool
+    public function shouldInclude(PipelineContext $context, array $options = []): bool
     {
         $projectConfig = $this->customContext ?? config('ai.project', []);
         return !empty($projectConfig);

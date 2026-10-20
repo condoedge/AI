@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Discovery;
 
+use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 /**
@@ -189,13 +190,21 @@ class CypherPatternGenerator
         }
 
         // Convert relation name to relationship type (snake_case to SCREAMING_SNAKE_CASE)
-        $relType = $this->relationshipNameToType($relation);
+        $configuredType = $call['rel_type'] ?? null;
+        $relType = $this->relationshipNameToType($relation, $configuredType);
 
         // Generate relationship variable name
         $relVar = strtolower(substr($relation, 0, 1));
 
-        // Build MATCH pattern
-        $matchPattern = "MATCH ({$nodeVar})-[:{$relType}]->({$relVar})";
+        // Determine direction
+        $direction = $call['direction'] ?? 'outgoing';
+
+        // Build MATCH pattern with appropriate direction
+        if ($direction === 'incoming') {
+            $matchPattern = "MATCH ({$nodeVar})<-[:{$relType}]-({$relVar})";
+        } else {
+            $matchPattern = "MATCH ({$nodeVar})-[:{$relType}]->({$relVar})";
+        }
 
         // Add nested conditions if present
         if (!empty($nestedCalls)) {
@@ -235,8 +244,12 @@ class CypherPatternGenerator
 
         $cypherOperator = $this->convertOperator($operator);
 
-        // In Cypher, use date() function to extract date from datetime
-        $condition = "date({$nodeVar}.{$column}) {$cypherOperator} date('{$value}')";
+        // Use string comparison — dates in this system are stored as strings
+        $formattedValue = $value instanceof \DateTimeInterface
+            ? $value->format('Y-m-d')
+            : (string) $value;
+
+        $condition = "{$nodeVar}.{$column} {$cypherOperator} '{$this->escapeString($formattedValue)}'";
 
         return $this->applyBoolean($condition, $boolean);
     }
@@ -261,8 +274,12 @@ class CypherPatternGenerator
 
         $cypherOperator = $this->convertOperator($operator);
 
-        // In Cypher, use time() function to extract time from datetime
-        $condition = "time({$nodeVar}.{$column}) {$cypherOperator} time('{$value}')";
+        // Use string comparison — times in this system are stored as strings
+        $formattedValue = $value instanceof \DateTimeInterface
+            ? $value->format('H:i:s')
+            : (string) $value;
+
+        $condition = "{$nodeVar}.{$column} {$cypherOperator} '{$this->escapeString($formattedValue)}'";
 
         return $this->applyBoolean($condition, $boolean);
     }
@@ -357,6 +374,11 @@ class CypherPatternGenerator
             return (string) $value;
         }
 
+        // Handle Carbon or DateTimeInterface objects — store as string, not Neo4j date()
+        if ($value instanceof \DateTimeInterface) {
+            return "'" . $value->format('Y-m-d') . "'";
+        }
+
         // Handle LIKE operator - convert to CONTAINS with pattern extraction
         if (strtolower($operator) === 'like') {
             $value = $this->convertLikePattern($value);
@@ -379,30 +401,74 @@ class CypherPatternGenerator
     }
 
     /**
-     * Escape string for Cypher
+     * Escape and sanitize a string literal for safe embedding in Cypher.
+     *
+     * Two layers of defense for values discovered from Eloquent scope defaults
+     * (which are developer-authored config artifacts, not exact user data that
+     * must round-trip):
+     *
+     *  1. Strip injection-control sequences that let an attacker truncate or
+     *     re-shape the surrounding query — SQL/Cypher line comments (`--`, `//`),
+     *     block comments (`/* ... *​/`), statement separators (`;`), and stray
+     *     backslash escapes. These have no legitimate place in a property-filter
+     *     literal, so removing them neutralizes payloads like
+     *     `active' OR 1=1 --` without affecting normal values.
+     *  2. Escape any remaining single quotes by doubling them, which is the
+     *     correct Cypher literal escaping and keeps legitimate apostrophes
+     *     (e.g. O'Brien -> O''Brien) intact so they cannot break out of quotes.
      *
      * @param string $value Value to escape
-     * @return string Escaped value
+     * @return string Sanitized, escaped value
      */
     private function escapeString(string $value): string
     {
-        // Escape single quotes by doubling them
+        $value = $this->stripInjectionSequences($value);
+
+        // Escape single quotes by doubling them (Cypher literal escaping).
         return str_replace("'", "''", $value);
+    }
+
+    /**
+     * Remove injection-control sequences from a literal value.
+     *
+     * Strips comment markers, statement terminators, and backslash escapes that
+     * could otherwise be used to break out of or truncate the generated query.
+     *
+     * @param string $value Raw value
+     * @return string Value with injection-control sequences removed
+     */
+    private function stripInjectionSequences(string $value): string
+    {
+        // Remove block comments first so their contents can't reassemble into
+        // other control sequences.
+        $value = preg_replace('#/\*.*?\*/#s', '', $value) ?? $value;
+
+        // Remove line-comment markers (-- and //) and statement separators (;),
+        // plus any stray backslashes used to escape the closing quote.
+        $value = str_replace(['--', '//', ';', '\\'], '', $value);
+
+        return $value;
     }
 
     /**
      * Convert relationship name to Cypher relationship type
      *
+     * If a pre-configured type is provided (from RelationshipDiscoverer), it is used directly.
+     * Otherwise, the relation name is converted to SCREAMING_SNAKE_CASE without a prefix,
+     * matching the convention used by RelationshipDiscoverer.
+     *
      * @param string $relation Eloquent relation name (e.g., 'userRoles', 'orders')
-     * @return string Cypher relationship type (e.g., 'HAS_ROLE', 'HAS_ORDER')
+     * @param string|null $configuredType Optional pre-configured relationship type
+     * @return string Cypher relationship type (e.g., 'USER_ROLES', 'ORDERS')
      */
-    private function relationshipNameToType(string $relation): string
+    public function relationshipNameToType(string $relation, ?string $configuredType = null): string
     {
-        // Convert camelCase to snake_case
-        $snakeCase = strtolower(preg_replace('/(?<!^)[A-Z]/', '_$0', $relation));
+        if ($configuredType) {
+            return $configuredType;
+        }
 
-        // Convert to SCREAMING_SNAKE_CASE and prefix with HAS_
-        return 'HAS_' . strtoupper($snakeCase);
+        $snakeCase = Str::snake($relation);
+        return strtoupper($snakeCase);
     }
 
     /**
@@ -434,17 +500,15 @@ class CypherPatternGenerator
         }
 
         $result = [];
-        $pendingOr = false;
 
         foreach ($conditions as $condition) {
             if (str_starts_with($condition, 'OR ')) {
-                // Remove OR prefix and mark as pending
+                // Remove OR prefix and join with OR
                 $condition = substr($condition, 3);
                 if (!empty($result)) {
                     $result[] = 'OR';
                 }
                 $result[] = $condition;
-                $pendingOr = false;
             } else {
                 if (!empty($result)) {
                     $result[] = 'AND';
@@ -484,8 +548,11 @@ class CypherPatternGenerator
 
             if ($type && $target) {
                 $targetVar = strtolower(substr($target, 0, 1));
-                $arrow = $direction === 'incoming' ? '<-' : '-';
-                $query .= "{$arrow}[:{$type}]->({$targetVar}:{$target})";
+                if ($direction === 'incoming') {
+                    $query .= "<-[:{$type}]-({$targetVar}:{$target})";
+                } else {
+                    $query .= "-[:{$type}]->({$targetVar}:{$target})";
+                }
             }
         }
 

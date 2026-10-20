@@ -64,7 +64,7 @@ Qdrant delete success → Neo4j delete failure → Qdrant restore
 | --- | --- | --- |
 | `RetryPolicy` attempts | 3–5 | Exponential backoff with jitter |
 | `CircuitBreaker` threshold | 5 failures | Resets after 30s cool-down |
-| Timeout | 30s | Governed by `AI_QUERY_TIMEOUT` |
+| Query execution timeout | 30s | Governed by `AI_EXEC_TIMEOUT` |
 
 Retries wrap outbound HTTP/Bolt calls (Neo4j, Qdrant, LLM). Circuit breakers short-circuit repeated failures to avoid queue pileups.
 

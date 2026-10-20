@@ -66,25 +66,4 @@ class ConfigTheme implements ChatThemeInterface
             'link_hover' => $this->linkHover(),
         ];
     }
-
-    public function isComplete(): bool
-    {
-        $required = ['primary_gradient', 'primary_solid', 'primary_text', 'primary_light_bg',
-            'primary_light_bg_hover', 'primary_ring', 'primary_border', 'primary_shadow',
-            'accent_gradient', 'selected_bg', 'selected_border', 'active_badge', 'inactive_badge',
-            'avatar_gradient', 'hero_background', 'link_hover'];
-        foreach ($required as $key) {
-            if (empty($this->colors[$key])) return false;
-        }
-        return true;
-    }
-
-    public function getMissingColors(): array
-    {
-        $required = ['primary_gradient', 'primary_solid', 'primary_text', 'primary_light_bg',
-            'primary_light_bg_hover', 'primary_ring', 'primary_border', 'primary_shadow',
-            'accent_gradient', 'selected_bg', 'selected_border', 'active_badge', 'inactive_badge',
-            'avatar_gradient', 'hero_background', 'link_hover'];
-        return array_filter($required, fn($key) => empty($this->colors[$key]));
-    }
 }

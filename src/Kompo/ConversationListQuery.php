@@ -1,5 +1,4 @@
 <?php
-// src/Kompo/ConversationListQuery.php
 
 namespace Condoedge\Ai\Kompo;
 
@@ -25,7 +24,6 @@ class ConversationListQuery extends Query
 
         $this->conversationId = (int) session('selected_conversation_id');
 
-        // Only query for conversation if auth is available
         $this->conversation = AiConversation::where('user_id', auth()->id())
             ->find($this->conversationId);
     }

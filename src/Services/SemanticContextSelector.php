@@ -7,6 +7,14 @@ namespace Condoedge\Ai\Services;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Contracts\EmbeddingProviderInterface;
 use Condoedge\Ai\Domain\Traits\ResolvesEntityConfigKey;
+use Condoedge\Ai\DTOs\SelectedEntity;
+use Condoedge\Ai\DTOs\SelectedRelationship;
+use Condoedge\Ai\DTOs\SelectedScope;
+use Condoedge\Ai\DTOs\SemanticSelectionResult;
+use Condoedge\Ai\DTOs\VectorSearchResult;
+use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
+use Condoedge\Ai\Support\AiLogger;
+use Condoedge\Ai\Support\AliasNormalizer;
 
 /**
  * SemanticContextSelector
@@ -39,6 +47,7 @@ class SemanticContextSelector
     public function __construct(
         private readonly VectorStoreInterface $vectorStore,
         private readonly EmbeddingProviderInterface $embeddingProvider,
+        private readonly AiLogger $logger,
         private readonly array $config = []
     ) {
         $this->collectionName = $config['collection'] ?? self::DEFAULT_COLLECTION_NAME;
@@ -56,21 +65,20 @@ class SemanticContextSelector
         string $question,
         array $entityConfigs,
         array $options = []
-    ): array {
+    ): SemanticSelectionResult {
         $threshold = $options['threshold'] ?? self::DEFAULT_THRESHOLD;
         $topK = $options['top_k'] ?? self::DEFAULT_TOP_K;
         $collectionName = $this->config['collection'] ?? $this->collectionName;
 
-        // Check if semantic index exists
-        if (!$this->indexExists($collectionName)) {
-            // Fall back to keyword-based selection
+        // Fall back to keyword-based selection when the semantic index is unavailable.
+        $unavailable = $this->indexUnavailableReason($collectionName);
+        if ($unavailable !== null) {
+            $this->logger->fallback('semantic_selector', 'vector_search', 'keyword_matching', $unavailable);
             return $this->keywordBasedSelection($question, $entityConfigs);
         }
 
-        // Embed the question
         $questionEmbedding = $this->embeddingProvider->embed($question);
 
-        // Search for relevant context pieces
         $results = $this->vectorStore->search(
             $collectionName,
             $questionEmbedding,
@@ -78,113 +86,244 @@ class SemanticContextSelector
             []
         );
 
-        // Group results by type and deduplicate
+        $this->logger->debug('semantic_selector', 'vector search completed', [
+            'result_count' => count($results),
+            'threshold' => $threshold,
+        ]);
+
         $selectedEntities = [];
         $selectedRelationships = [];
         $selectedScopes = [];
         $seenEntities = [];
         $seenRelationships = [];
 
-        foreach ($results as $result) {
-            $score = $result['score'] ?? 0;
+        foreach ($results as $rawResult) {
+            $result = new VectorSearchResult($rawResult);
 
-            if ($score < $threshold) {
+            if ($result->score < $threshold) {
+                $this->logger->debug('semantic_selector', 'result below threshold, rejected', [
+                    'type' => $result->type,
+                    'entity' => $result->entityName ?? $result->relationshipKey,
+                    'score' => $result->score,
+                    'threshold' => $threshold,
+                ]);
                 continue;
             }
 
-            $type = $result['metadata']['type'] ?? 'unknown';
-            $entityName = $result['metadata']['entity'] ?? null;
-
-            switch ($type) {
+            switch ($result->type) {
                 case 'entity':
-                    if ($entityName && !isset($seenEntities[$entityName])) {
-                        $seenEntities[$entityName] = true;
-                        $selectedEntities[$entityName] = [
-                            'score' => $score,
-                            'matched_text' => $result['metadata']['text'] ?? '',
-                            'config' => $entityConfigs[$entityName] ?? null,
-                        ];
+                    if ($result->entityName && !isset($seenEntities[$result->entityName])) {
+                        $seenEntities[$result->entityName] = true;
+                        $selectedEntities[$result->entityName] = new SelectedEntity(
+                            score: $result->score,
+                            matchedText: $result->text,
+                            config: $entityConfigs[$result->entityName] ?? null,
+                        );
                     }
                     break;
 
                 case 'relationship':
-                    $relKey = $result['metadata']['relationship_key'] ?? '';
-                    if ($relKey && !isset($seenRelationships[$relKey])) {
-                        $seenRelationships[$relKey] = true;
-                        $selectedRelationships[$relKey] = [
-                            'score' => $score,
-                            'from_entity' => $result['metadata']['from_entity'] ?? '',
-                            'to_entity' => $result['metadata']['to_entity'] ?? '',
-                            'type' => $result['metadata']['relationship_type'] ?? '',
-                            'foreign_key' => $result['metadata']['foreign_key'] ?? null,
-                            'direction' => $result['metadata']['direction'] ?? 'outgoing',
-                        ];
+                    if ($result->relationshipKey && !isset($seenRelationships[$result->relationshipKey])) {
+                        $seenRelationships[$result->relationshipKey] = true;
+                        $selectedRelationships[$result->relationshipKey] = new SelectedRelationship(
+                            score: $result->score,
+                            fromEntity: $result->fromEntity,
+                            toEntity: $result->toEntity,
+                            type: $result->relationshipType,
+                            foreignKey: $result->foreignKey,
+                            direction: $result->direction,
+                        );
 
                         // Also include related entities
-                        $fromEntity = $result['metadata']['from_entity'] ?? null;
-                        $toEntity = $result['metadata']['to_entity'] ?? null;
-
-                        if ($fromEntity && !isset($seenEntities[$fromEntity])) {
-                            $fullName = $this->findFullEntityName($fromEntity, $entityConfigs);
-                            if ($fullName) {
-                                $seenEntities[$fullName] = true;
-                                $selectedEntities[$fullName] = [
-                                    'score' => $score * 0.8, // Lower score for indirect match
-                                    'matched_text' => "Related via {$relKey}",
-                                    'config' => $entityConfigs[$fullName] ?? null,
-                                ];
-                            }
-                        }
-
-                        if ($toEntity && !isset($seenEntities[$toEntity])) {
-                            $fullName = $this->findFullEntityName($toEntity, $entityConfigs);
-                            if ($fullName) {
-                                $seenEntities[$fullName] = true;
-                                $selectedEntities[$fullName] = [
-                                    'score' => $score * 0.8,
-                                    'matched_text' => "Related via {$relKey}",
-                                    'config' => $entityConfigs[$fullName] ?? null,
-                                ];
+                        foreach ([$result->fromEntity, $result->toEntity] as $relatedEntity) {
+                            if ($relatedEntity && !isset($seenEntities[$relatedEntity])) {
+                                $fullName = $this->findFullEntityName($relatedEntity, $entityConfigs);
+                                if ($fullName) {
+                                    $seenEntities[$fullName] = true;
+                                    $selectedEntities[$fullName] = new SelectedEntity(
+                                        score: $result->score * 0.8,
+                                        matchedText: "Related via {$result->relationshipKey}",
+                                        config: $entityConfigs[$fullName] ?? null,
+                                    );
+                                }
                             }
                         }
                     }
                     break;
 
                 case 'scope':
-                    $scopeKey = $result['metadata']['scope_key'] ?? '';
-                    if ($scopeKey && $entityName) {
-                        $selectedScopes[$scopeKey] = [
-                            'score' => $score,
-                            'entity' => $entityName,
-                            'matched_text' => $result['metadata']['text'] ?? '',
-                        ];
+                    if ($result->scopeKey && $result->entityName) {
+                        // Keep the best hit per scope key: results arrive score-descending,
+                        // and a later, weaker hit of the same key on ANOTHER entity used to
+                        // overwrite it (BoardMember.for_union 0.74 → Component.for_union 0.52).
+                        if (!isset($selectedScopes[$result->scopeKey])
+                            || $selectedScopes[$result->scopeKey]->score < $result->score) {
+                            $selectedScopes[$result->scopeKey] = new SelectedScope(
+                                score: $result->score,
+                                entity: $result->entityName,
+                                matchedText: $result->text,
+                            );
+                        }
 
-                        // Ensure the entity is included
-                        $fullName = $this->findFullEntityName($entityName, $entityConfigs);
+                        $fullName = $this->findFullEntityName($result->entityName, $entityConfigs);
                         if ($fullName && !isset($seenEntities[$fullName])) {
                             $seenEntities[$fullName] = true;
-                            $selectedEntities[$fullName] = [
-                                'score' => $score,
-                                'matched_text' => "Has scope {$scopeKey}",
-                                'config' => $entityConfigs[$fullName] ?? null,
-                            ];
+                            $selectedEntities[$fullName] = new SelectedEntity(
+                                score: $result->score,
+                                matchedText: "Has scope {$result->scopeKey}",
+                                config: $entityConfigs[$fullName] ?? null,
+                                source: SelectedEntity::SOURCE_SCOPE,
+                            );
+                        }
+                    }
+                    break;
+
+                case 'property':
+                    if ($result->entityName && $result->property) {
+                        $fullName = $this->findFullEntityName($result->entityName, $entityConfigs);
+                        if ($fullName && !isset($seenEntities[$fullName])) {
+                            $seenEntities[$fullName] = true;
+                            $selectedEntities[$fullName] = new SelectedEntity(
+                                score: $result->score * 0.9,
+                                matchedText: "Has property {$result->property}",
+                                config: $entityConfigs[$fullName] ?? null,
+                            );
                         }
                     }
                     break;
             }
         }
 
-        // Sort by score
-        uasort($selectedEntities, fn($a, $b) => ($b['score'] ?? 0) <=> ($a['score'] ?? 0));
-        uasort($selectedRelationships, fn($a, $b) => ($b['score'] ?? 0) <=> ($a['score'] ?? 0));
-        uasort($selectedScopes, fn($a, $b) => ($b['score'] ?? 0) <=> ($a['score'] ?? 0));
+        // Expand selected entities through their configured relationships
+        $this->expandEntitiesThroughRelationships(
+            $selectedEntities,
+            $selectedRelationships,
+            $seenEntities,
+            $entityConfigs,
+            $threshold
+        );
 
-        return [
-            'entities' => $selectedEntities,
-            'relationships' => $selectedRelationships,
-            'scopes' => $selectedScopes,
-            'selection_method' => 'semantic',
-        ];
+        // Expand through user entity paths when possessive language detected (from QU or fallback)
+        $isPossessive = $options['query_understanding']['is_possessive']
+            ?? $options['is_possessive']
+            ?? false;
+        if ($isPossessive) {
+            $this->expandThroughUserEntityPaths(
+                $selectedEntities,
+                $selectedRelationships,
+                $seenEntities,
+                $entityConfigs
+            );
+        }
+
+        uasort($selectedEntities, fn($a, $b) => ($b->score) <=> ($a->score));
+        uasort($selectedRelationships, fn($a, $b) => ($b->score) <=> ($a->score));
+        uasort($selectedScopes, fn($a, $b) => ($b->score) <=> ($a->score));
+
+        // SEED SCOPES (Task 5.10): the business concepts of the entities Query
+        // Understanding named are searched directly (scope points of those entities
+        // only) and ranked ahead of cross-entity hits — a generic phrasing ("… for this
+        // condo") on an unrelated entity must not crowd out the seed's own concept.
+        $seedEntities = $this->seedEntityKeys($options, $entityConfigs);
+        if ($seedEntities !== [] && (bool) config('ai.semantic_context.seed_scope_search', true)) {
+            $selectedScopes = $this->withSeedScopes(
+                $selectedScopes,
+                $seedEntities,
+                $collectionName,
+                $questionEmbedding,
+                $topK,
+                $threshold
+            );
+        }
+
+        $this->logger->debug('semantic_selector', 'final selection summary', [
+            'entities' => array_map(fn($e) => $e->score, $selectedEntities),
+            'relationships' => array_keys($selectedRelationships),
+            'scopes' => array_map(fn($s) => $s->score, $selectedScopes),
+        ]);
+
+        // Limit scopes to top 3 by score to avoid overwhelming the LLM
+        $maxScopes = (int) config('ai.scope_matching.top_k', 3);
+        $selectedScopes = array_slice($selectedScopes, 0, $maxScopes, true);
+
+        return new SemanticSelectionResult(
+            entities: $selectedEntities,
+            relationships: $selectedRelationships,
+            scopes: $selectedScopes,
+            selectionMethod: 'semantic',
+        );
+    }
+
+    /**
+     * Config keys of the Query-Understanding entity types (the selection seeds).
+     *
+     * @return string[]
+     */
+    private function seedEntityKeys(array $options, array $entityConfigs): array
+    {
+        $keys = [];
+        foreach ((array) ($options['query_understanding']['entity_types'] ?? []) as $label) {
+            if (is_string($label) && $label !== '') {
+                $key = $this->findFullEntityName($label, $entityConfigs);
+                if ($key !== null) {
+                    $keys[$key] = true;
+                }
+            }
+        }
+
+        return array_keys($keys);
+    }
+
+    /**
+     * Merge the seed entities' own scope hits into the selected scopes, seed scopes
+     * first (score-descending), then the others. A seed's hit takes over a key held
+     * by a non-seed entity. A failed filtered search leaves the scopes untouched.
+     *
+     * @param array<string, SelectedScope> $scopes score-sorted
+     * @param string[] $seedEntities config keys
+     * @param float[] $embedding
+     * @return array<string, SelectedScope>
+     */
+    private function withSeedScopes(array $scopes, array $seedEntities, string $collection, array $embedding, int $topK, float $threshold): array
+    {
+        try {
+            $hits = $this->vectorStore->search($collection, $embedding, $topK, [
+                'must' => [
+                    ['key' => 'type', 'match' => ['value' => 'scope']],
+                    ['key' => 'entity', 'match' => ['any' => $seedEntities]],
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->debug('semantic_selector', 'seed scope search failed', ['error' => $e->getMessage()]);
+
+            return $scopes;
+        }
+
+        $isSeed = array_fill_keys($seedEntities, true);
+        $seedScopes = [];
+        foreach ($scopes as $key => $scope) {
+            if (isset($isSeed[$scope->entity])) {
+                $seedScopes[$key] = $scope;
+            }
+        }
+
+        foreach ($hits as $raw) {
+            $hit = new VectorSearchResult($raw);
+            if ($hit->type !== 'scope' || $hit->scopeKey === '' || !isset($isSeed[(string) $hit->entityName]) || $hit->score < $threshold) {
+                continue;
+            }
+            if (!isset($seedScopes[$hit->scopeKey]) || $seedScopes[$hit->scopeKey]->score < $hit->score) {
+                $seedScopes[$hit->scopeKey] = new SelectedScope(
+                    score: $hit->score,
+                    entity: (string) $hit->entityName,
+                    matchedText: $hit->text,
+                );
+            }
+        }
+
+        uasort($seedScopes, fn ($a, $b) => $b->score <=> $a->score);
+
+        return $seedScopes + array_diff_key($scopes, $seedScopes);
     }
 
     /**
@@ -205,12 +344,14 @@ class SemanticContextSelector
         $collectionName = $this->config['collection'] ?? $this->collectionName;
         $dimension = $this->config['dimension'] ?? 1536;
 
-        // Ensure collection exists
+        $this->logger->info('semantic_selector', 'starting context indexing', [
+            'collection' => $collectionName,
+            'entity_count' => count($entityConfigs),
+        ]);
+
         $this->vectorStore->ensureCollection($collectionName, $dimension);
 
-        // Clear existing data
-        $this->vectorStore->deleteAll($collectionName);
-
+        // Build all points in memory first (does not touch the target collection)
         $points = [];
         $errors = [];
 
@@ -228,21 +369,49 @@ class SemanticContextSelector
             $points = array_merge($points, $this->createScopePoints($entityName, $config));
         }
 
-        // Batch embed and upsert
+        // Embed and build upsert payload BEFORE touching the target collection.
+        // If embedBatch fails, the existing index remains intact.
         if (!empty($points)) {
-            $texts = array_column($points, 'text');
-            $embeddings = $this->embeddingProvider->embedBatch($texts);
+            $this->logger->info('semantic_selector', 'embedding points (target collection untouched until success)', [
+                'points_count' => count($points),
+            ]);
 
-            $upsertPoints = [];
-            foreach ($points as $i => $point) {
-                $upsertPoints[] = [
-                    'id' => $point['id'],
-                    'vector' => $embeddings[$i],
-                    'metadata' => $point['metadata'],
-                ];
+            try {
+                $texts = array_column($points, 'text');
+                $embeddings = $this->embeddingProvider->embedBatch($texts);
+
+                $upsertPoints = [];
+                foreach ($points as $i => $point) {
+                    $upsertPoints[] = [
+                        'id' => $point['id'],
+                        'vector' => $embeddings[$i],
+                        'metadata' => $point['metadata'],
+                    ];
+                }
+
+                // All embedding succeeded — now safe to replace the target collection
+                $this->logger->info('semantic_selector', 'embedding complete, replacing target collection', [
+                    'collection' => $collectionName,
+                    'points_to_upsert' => count($upsertPoints),
+                ]);
+
+                $this->vectorStore->deleteAll($collectionName);
+
+                $chunkSize = 200;
+                foreach (array_chunk($upsertPoints, $chunkSize) as $chunk) {
+                    $this->vectorStore->upsertBatch($collectionName, $chunk);
+                }
+
+                $this->logger->info('semantic_selector', 'context indexing completed successfully', [
+                    'points_indexed' => count($points),
+                ]);
+            } catch (\Exception $e) {
+                $this->logger->error('semantic_selector', 'context indexing failed, existing index preserved', [
+                    'error' => $e->getMessage(),
+                    'points_attempted' => count($points),
+                ]);
+                throw $e;
             }
-
-            $this->vectorStore->upsertBatch($collectionName, $upsertPoints);
         }
 
         return [
@@ -261,6 +430,13 @@ class SemanticContextSelector
         $metadata = $config['metadata'] ?? [];
         $shortName = class_basename($entityName);
 
+        // Structural-only entity (`metadata.askable => false`): never a subject the
+        // semantic selection may pick by name; it is still reached through the
+        // relationships of the entities that join it.
+        if (($metadata['askable'] ?? true) === false) {
+            return [];
+        }
+
         // Index entity label
         $text = $shortName;
         if (!empty($metadata['description'])) {
@@ -277,8 +453,16 @@ class SemanticContextSelector
             ],
         ];
 
-        // Index aliases
-        foreach ($metadata['aliases'] ?? [] as $alias) {
+        // Index the words for this entity: each name it goes by, written as words
+        // ("visit detail"), then each real synonym — ONE point per word. Derivable
+        // spellings (plural, accent-less, snake_case) embed next to the word they
+        // spell, so they add points, not recall; the name point is what a listed
+        // "visit detail" / "access" alias used to provide, config-independent.
+        $words = array_unique(array_merge(
+            array_map([AliasNormalizer::class, 'phrase'], EntityLabelIndex::namesOf($entityName, $config)),
+            EntityLabelIndex::synonymsOf($entityName, $config)
+        ));
+        foreach ($words as $alias) {
             $aliasText = "{$alias} ({$shortName})";
             $points[] = [
                 'id' => md5("alias:{$entityName}:{$alias}"),
@@ -287,6 +471,19 @@ class SemanticContextSelector
                     'type' => 'entity',
                     'entity' => $entityName,
                     'text' => $aliasText,
+                ],
+            ];
+        }
+
+        // Index entity-level examples (question-style text that matches queries better)
+        foreach ($metadata['examples'] ?? [] as $example) {
+            $points[] = [
+                'id' => md5("entity_example:{$entityName}:{$example}"),
+                'text' => $example,
+                'metadata' => [
+                    'type' => 'entity',
+                    'entity' => $entityName,
+                    'text' => $example,
                 ],
             ];
         }
@@ -326,8 +523,8 @@ class SemanticContextSelector
                 'metadata' => [
                     'type' => 'relationship',
                     'relationship_key' => $relKey,
-                    'from_entity' => $shortName,
-                    'to_entity' => $targetShort,
+                    'from_entity' => $entityName,
+                    'to_entity' => $targetEntity,
                     'relationship_type' => $relType,
                     'foreign_key' => $foreignKey,
                     'direction' => $direction,
@@ -392,7 +589,7 @@ class SemanticContextSelector
                     'text' => $scopeConfig['concept'],
                     'metadata' => [
                         'type' => 'scope',
-                        'entity' => $shortName,
+                        'entity' => $entityName,
                         'scope_key' => $scopeName,
                         'text' => $scopeConfig['concept'],
                     ],
@@ -406,7 +603,7 @@ class SemanticContextSelector
                     'text' => $example,
                     'metadata' => [
                         'type' => 'scope',
-                        'entity' => $shortName,
+                        'entity' => $entityName,
                         'scope_key' => $scopeName,
                         'text' => $example,
                     ],
@@ -420,7 +617,7 @@ class SemanticContextSelector
     /**
      * Keyword-based selection fallback
      */
-    private function keywordBasedSelection(string $question, array $entityConfigs): array
+    private function keywordBasedSelection(string $question, array $entityConfigs): SemanticSelectionResult
     {
         $questionLower = strtolower($question);
         $selectedEntities = [];
@@ -432,14 +629,11 @@ class SemanticContextSelector
             $shortName = class_basename($entityName);
             $isRelevant = false;
 
-            // Check entity name
-            if (stripos($question, $shortName) !== false) {
-                $isRelevant = true;
-            }
-
-            // Check aliases
-            foreach ($metadata['aliases'] ?? [] as $alias) {
-                if (stripos($question, $alias) !== false) {
+            // Check the entity's names and aliases, in any spelling (plural,
+            // accent-less, snake_case, spaced) — the config lists each word once.
+            $terms = EntityLabelIndex::termsOf((string) $entityName, $config);
+            foreach ($terms as $term) {
+                if (is_string($term) && AliasNormalizer::mentions($question, $term)) {
                     $isRelevant = true;
                     break;
                 }
@@ -453,20 +647,21 @@ class SemanticContextSelector
 
                 if (stripos($question, $scopeName) !== false) {
                     $isRelevant = true;
-                    $selectedScopes[$scopeName] = [
-                        'score' => 0.5,
-                        'entity' => $shortName,
-                        'matched_text' => $scopeName,
-                    ];
+                    $selectedScopes[$scopeName] = new SelectedScope(
+                        score: 0.5,
+                        entity: $shortName,
+                        matchedText: $scopeName,
+                    );
                 }
             }
 
             if ($isRelevant) {
-                $selectedEntities[$entityName] = [
-                    'score' => 0.5,
-                    'matched_text' => 'keyword match',
-                    'config' => $config,
-                ];
+                $selectedEntities[$entityName] = new SelectedEntity(
+                    score: 0.5,
+                    matchedText: 'keyword match',
+                    config: $config,
+                    source: SelectedEntity::SOURCE_KEYWORD,
+                );
 
                 // Include relationships for this entity
                 foreach ($config['relationships'] ?? [] as $relName => $relConfig) {
@@ -475,36 +670,167 @@ class SemanticContextSelector
                     $targetShort = class_basename($targetEntity);
                     $relKey = "{$shortName}-{$relType}-{$targetShort}";
 
-                    $selectedRelationships[$relKey] = [
-                        'score' => 0.4,
-                        'from_entity' => $shortName,
-                        'to_entity' => $targetShort,
-                        'type' => $relType,
-                        'foreign_key' => $relConfig['foreign_key'] ?? null,
-                        'direction' => $relConfig['direction'] ?? 'outgoing',
-                    ];
+                    $selectedRelationships[$relKey] = new SelectedRelationship(
+                        score: 0.4,
+                        fromEntity: $shortName,
+                        toEntity: $targetShort,
+                        type: $relType,
+                        foreignKey: $relConfig['foreign_key'] ?? null,
+                        direction: $relConfig['direction'] ?? 'outgoing',
+                    );
                 }
             }
         }
 
-        return [
-            'entities' => $selectedEntities,
-            'relationships' => $selectedRelationships,
-            'scopes' => $selectedScopes,
-            'selection_method' => 'keyword',
-        ];
+        return new SemanticSelectionResult(
+            entities: $selectedEntities,
+            relationships: $selectedRelationships,
+            scopes: $selectedScopes,
+            selectionMethod: 'keyword',
+        );
     }
 
     /**
-     * Check if index exists
+     * For each selected entity, check its configured relationships and auto-include
+     * connected entities that meet a relaxed threshold.
      */
-    private function indexExists(string $collectionName): bool
+    private function expandEntitiesThroughRelationships(
+        array &$selectedEntities,
+        array &$selectedRelationships,
+        array &$seenEntities,
+        array $entityConfigs,
+        float $threshold
+    ): void {
+        $newEntities = [];
+
+        foreach ($selectedEntities as $entityName => $entityInfo) {
+            $config = $entityConfigs[$entityName] ?? null;
+            if (!$config) continue;
+
+            $relationships = $config['graph']['relationships'] ?? [];
+            foreach ($relationships as $relConfig) {
+                $targetLabel = $relConfig['target_label'] ?? null;
+                if (!is_string($targetLabel) || $targetLabel === '') continue;
+
+                // Key by the config FQCN like every other selection path: keying by the
+                // short target_label left config=null and let a later FQCN-keyed insert
+                // of the same entity (e.g. Query Understanding) duplicate it.
+                $targetEntity = $this->findFullEntityName($targetLabel, $entityConfigs);
+                if ($targetEntity === null
+                    || isset($seenEntities[$targetEntity])
+                    || isset($selectedEntities[$targetEntity])
+                    || isset($newEntities[$targetEntity])) continue;
+
+                $score = $entityInfo->score * 0.6;
+                if ($score >= $threshold * 0.8) {
+                    $seenEntities[$targetEntity] = true;
+                    $newEntities[$targetEntity] = new SelectedEntity(
+                        score: $score,
+                        matchedText: "Connected to " . class_basename($entityName) . " via " . ($relConfig['type'] ?? 'relationship'),
+                        config: $entityConfigs[$targetEntity] ?? null,
+                        source: SelectedEntity::SOURCE_EXPANSION,
+                    );
+
+                    $this->logger->debug('semantic_selector', 'entity_expanded', [
+                        'from' => class_basename($entityName),
+                        'to' => class_basename($targetEntity),
+                        'via' => $relConfig['type'] ?? '?',
+                        'score' => round($score, 4),
+                    ]);
+                }
+            }
+        }
+
+        $selectedEntities = array_merge($selectedEntities, $newEntities);
+    }
+
+    /**
+     * Expand context with entities from user_entity_paths when possessive language is detected.
+     * This ensures that when a user asks "my unit", the Contact, ContactUnit entities
+     * needed for the traversal are included in the context.
+     */
+    private function expandThroughUserEntityPaths(
+        array &$selectedEntities,
+        array &$selectedRelationships,
+        array &$seenEntities,
+        array $entityConfigs
+    ): void {
+        $paths = config('ai.user_entity_paths', []);
+
+        if (empty($paths)) {
+            return;
+        }
+
+        // For each selected entity, check if there's a user entity path for it
+        $entitiesToAdd = [];
+        foreach ($selectedEntities as $entityName => $entityInfo) {
+            $shortName = class_basename($entityName);
+
+            if (!isset($paths[$shortName])) {
+                continue;
+            }
+
+            $pathConfig = $paths[$shortName];
+            $pathEntities = $pathConfig['entities'] ?? [];
+            $pathRelationships = $pathConfig['relationships'] ?? [];
+
+            // Add all entities from the path
+            foreach ($pathEntities as $pathEntityLabel) {
+                if (isset($seenEntities[$pathEntityLabel])) {
+                    continue;
+                }
+
+                $fullName = $this->findFullEntityName($pathEntityLabel, $entityConfigs);
+                if (!$fullName || isset($seenEntities[$fullName]) || isset($selectedEntities[$fullName])) {
+                    continue;
+                }
+
+                $seenEntities[$pathEntityLabel] = true;
+                $seenEntities[$fullName] = true;
+                $entitiesToAdd[$fullName] = new SelectedEntity(
+                    score: $entityInfo->score,
+                    matchedText: "User ownership path to {$shortName}",
+                    config: $entityConfigs[$fullName] ?? null,
+                    source: SelectedEntity::SOURCE_USER_PATH,
+                );
+
+                $this->logger->debug('semantic_selector', 'entity_added_via_user_path', [
+                    'entity' => $pathEntityLabel,
+                    'target' => $shortName,
+                ]);
+            }
+
+            // Add relationships from the path
+            foreach ($pathRelationships as $relType) {
+                $relKey = "user_path_{$relType}";
+                if (!isset($selectedRelationships[$relKey])) {
+                    $selectedRelationships[$relKey] = new SelectedRelationship(
+                        score: $entityInfo->score,
+                        fromEntity: '',
+                        toEntity: '',
+                        type: $relType,
+                        direction: 'outgoing',
+                    );
+                }
+            }
+        }
+
+        $selectedEntities = array_merge($selectedEntities, $entitiesToAdd);
+    }
+
+    /**
+     * Why the semantic index cannot be used, or null when it is populated.
+     * The reason keeps the store's own error text (e.g. an HTTP 408/5xx) so the
+     * logged fallback distinguishes "index empty" from "vector store unreachable".
+     */
+    private function indexUnavailableReason(string $collectionName): ?string
     {
         try {
             $info = $this->vectorStore->getCollectionInfo($collectionName);
-            return ($info['points_count'] ?? 0) > 0;
+
+            return ($info['points_count'] ?? 0) > 0 ? null : 'semantic index not available (empty collection)';
         } catch (\Exception $e) {
-            return false;
+            return 'semantic index not available: ' . $e->getMessage();
         }
     }
 
