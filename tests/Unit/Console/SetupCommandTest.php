@@ -41,6 +41,34 @@ class SetupCommandTest extends TestCase
             ->assertSuccessful();
     }
 
+    /**
+     * @test One command sets a server up: after the documents and the uploads are processed,
+     * setup also links the uploaded chunks to their records (ai:files:link) and builds the
+     * document maps (ai:documents:map --backfill) — both idempotent, so a re-run costs nothing
+     * for what is already done. Without them a new server answers, but without the reasoning
+     * step on documents and without the per-building filter on uploads already indexed.
+     */
+    public function setup_links_uploads_and_builds_the_document_maps_after_processing_files(): void
+    {
+        $this->artisan('ai:setup', ['--dry-run' => true])
+            ->expectsOutputToContain('Process files')
+            ->expectsOutputToContain('Link uploaded files to their records')
+            ->expectsOutputToContain('Command: ai:files:link')
+            ->expectsOutputToContain('Build document maps')
+            ->expectsOutputToContain('Command: ai:documents:map --backfill')
+            ->assertSuccessful();
+    }
+
+    /** @test The maps step is skipped when the document map is switched off. */
+    public function setup_skips_the_document_maps_when_the_feature_is_off(): void
+    {
+        config(['ai.file_context.document_map.enabled' => false]);
+
+        $this->artisan('ai:setup', ['--dry-run' => true])
+            ->doesntExpectOutputToContain('Build document maps')
+            ->assertSuccessful();
+    }
+
     /** @test */
     public function dry_run_with_skip_ingest_omits_ingestion_steps(): void
     {

@@ -16,7 +16,7 @@ use Illuminate\Console\Command;
  * Usage:
  *   php artisan ai:setup
  *   php artisan ai:setup --discover        # Also run ai:discover before ingestion
- *   php artisan ai:setup --fresh           # Clear all stores before ingestion
+ *   php artisan ai:setup --fresh           # Clear the graph before ingestion (vector collections are not touched)
  *   php artisan ai:setup --skip-ingest     # Skip data ingestion (useful for re-indexing only)
  *   php artisan ai:setup --dry-run         # Show what would be executed without running
  *
@@ -28,7 +28,7 @@ class SetupCommand extends Command
 
     protected $signature = 'ai:setup
         {--discover : Also run ai:discover before ingestion (overwrites existing config)}
-        {--fresh : Clear all stores before ingestion}
+        {--fresh : Clear the graph before ingestion (vector collections are not touched)}
         {--skip-ingest : Skip data ingestion (useful for re-indexing only)}
         {--chunk= : Batch size passed through to ai:ingest}
         {--dry-run : Show what would be executed without running}';
@@ -153,6 +153,25 @@ class SetupCommand extends Command
             'label' => 'Process files',
             'command' => 'ai:process-files',
         ];
+
+        // Files processed from now on are linked to their record (owner / building) as they are
+        // stored; chunks indexed before that carry no link and are filtered by nothing. Payload
+        // only (no re-embedding) and idempotent: a re-run writes nothing.
+        $steps[] = [
+            'label' => 'Link uploaded files to their records',
+            'command' => 'ai:files:link',
+        ];
+
+        // The document map (a gist per passage, and which parts of a divided document apply)
+        // that the reasoning step on documents reads. Idempotent: what is already mapped for
+        // its current text is skipped. Project documents only unless uploads are switched on.
+        if (config('ai.file_context.document_map.enabled', true)) {
+            $steps[] = [
+                'label' => 'Build document maps',
+                'command' => 'ai:documents:map',
+                'args' => ['--backfill' => true],
+            ];
+        }
 
         return $steps;
     }
