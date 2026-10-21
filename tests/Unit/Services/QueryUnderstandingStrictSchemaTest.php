@@ -148,7 +148,7 @@ class QueryUnderstandingStrictSchemaTest extends TestCase
         $this->assertSame(['type' => ['string', 'null'], 'enum' => ['pdf', 'excel', null]], $properties['export_format']);
         $this->assertSame(['type' => ['string', 'null'], 'enum' => ['personal', 'collective', null]], $properties['possessive_scope']);
         $this->assertSame(['type' => 'boolean'], $properties['follow_up_reference']);
-        $this->assertSame(['data_query', 'knowledge_query', 'hybrid', 'conversational'], $properties['question_type']['enum']);
+        $this->assertSame(['data_query', 'knowledge_query', 'hybrid'], $properties['question_type']['enum']);
         $this->assertSame(
             ['count', 'list', 'lookup', 'aggregate', 'compare', 'file_listing', 'page_explanation', 'other'],
             $properties['intent']['enum']

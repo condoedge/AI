@@ -787,6 +787,13 @@ class AiServiceProvider extends ServiceProvider
     {
         Gate::policy(AiConversation::class, AiConversationPolicy::class);
 
+        // The admin conversations / feedback page shows OTHER people's conversations:
+        // denied by default. A host grants it with its own Gate::define (last define
+        // wins, and a host that defined it first is left alone).
+        if (!Gate::has(\Condoedge\Ai\Services\Admin\ConversationInsights::ABILITY)) {
+            Gate::define(\Condoedge\Ai\Services\Admin\ConversationInsights::ABILITY, fn ($user = null) => false);
+        }
+
         $this->loadRoutesFrom(__DIR__."/../routes/api.php");
         $this->loadRoutesFrom(__DIR__."/../routes/web.php");
 

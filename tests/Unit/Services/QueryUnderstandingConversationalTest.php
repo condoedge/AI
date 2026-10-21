@@ -57,13 +57,23 @@ class QueryUnderstandingConversationalTest extends TestCase
         'follow_up_reference' => false,
     ];
 
-    private function analyze(array $reply, string $question = 'How are you?', array $catalog = []): QueryUnderstandingResult
-    {
-        $llm = Mockery::mock(LlmProviderInterface::class);
-        $llm->shouldReceive('chatJson')->once()->andReturnUsing(function ($messages, $options) use ($reply) {
-            $this->calls[] = ['messages' => $messages, 'options' => $options];
+    private const OLD_LINE = '- "question_type": one of "data_query" (needs database/graph lookup), "knowledge_query" (needs file/document content — rules, regulations, policies, "can I do X?"), "hybrid" (needs both data and documents)';
 
-            return $reply;
+    /**
+     * @param list<array|\Throwable> $more the replies of any further call (the old-prompt retry)
+     */
+    private function analyze(array $reply, string $question = 'How are you?', array $catalog = [], array $more = []): QueryUnderstandingResult
+    {
+        $script = [$reply, ...$more];
+        $llm = Mockery::mock(LlmProviderInterface::class);
+        $llm->shouldReceive('chatJson')->times(count($script))->andReturnUsing(function ($messages, $options) use (&$script) {
+            $this->calls[] = ['messages' => $messages, 'options' => $options];
+            $next = array_shift($script);
+            if ($next instanceof \Throwable) {
+                throw $next;
+            }
+
+            return $next;
         });
         $logger = Mockery::mock(AiLogger::class);
         $logger->shouldReceive('startTimer')->andReturn(null)->byDefault();
@@ -75,18 +85,25 @@ class QueryUnderstandingConversationalTest extends TestCase
         return (new QueryUnderstandingService($llm, $logger, []))->analyze($question, $catalog);
     }
 
+    /** The question_type line of a system prompt. */
+    private function questionTypeLine(string $system): string
+    {
+        foreach (preg_split('/\R/', $system) as $candidate) {
+            if (str_starts_with($candidate, '- "question_type":')) {
+                return $candidate;
+            }
+        }
+
+        return '';
+    }
+
     /** @test */
     public function the_question_type_line_documents_the_conversational_value_without_moving_any_key(): void
     {
         $this->analyze(self::SMALL_TALK);
         $system = $this->calls[0]['messages'][0]['content'];
 
-        $line = '';
-        foreach (explode("\n", $system) as $candidate) {
-            if (str_starts_with($candidate, '- "question_type":')) {
-                $line = $candidate;
-            }
-        }
+        $line = $this->questionTypeLine($system);
         // The three existing values keep their wording and their place; the new one comes last.
         $this->assertStringStartsWith(
             '- "question_type": one of "data_query" (needs database/graph lookup), "knowledge_query" (needs file/document content — rules, regulations, policies, "can I do X?"), "hybrid" (needs both data and documents), "conversational" (',
@@ -127,16 +144,76 @@ class QueryUnderstandingConversationalTest extends TestCase
 
     /**
      * @test The guard truth table: ONE structural signal of something to look up and the
-     * turn is not conversational — it normalises as before ('hybrid').
+     * reading is not conversational. Measured live (2026-10-21, replays of the eval p27 QU
+     * prompts): offered the value, the model also chose it for "Create a PDF of this." with
+     * export_format=pdf — and those replies had LOST follow_up_reference and the entity
+     * types. So a rejected conversational reading is not patched to another value: Query
+     * Understanding is asked AGAIN with the prompt and schema of before (no conversational
+     * value), and that reading is the turn's — what the turn got before the value existed.
      *
      * @dataProvider lookupSignals
      */
-    public function a_conversational_reply_naming_anything_to_look_up_normalises_as_before(array $override, array $catalog = []): void
+    public function a_conversational_reply_naming_anything_to_look_up_is_asked_again_without_the_value(array $override, array $catalog = []): void
     {
-        $result = $this->analyze($override + self::SMALL_TALK, 'Hi! Who is on our board of directors?', $catalog);
+        $retry = ['question_type' => 'data_query', 'entity_types' => [], 'intent' => 'list'] + self::SMALL_TALK;
 
-        $this->assertSame('hybrid', $result->questionType);
+        $result = $this->analyze($override + self::SMALL_TALK, 'Hi! Who is on our board of directors?', $catalog, [$retry]);
+
+        $this->assertCount(2, $this->calls);
+        $this->assertSame(self::OLD_LINE, $this->questionTypeLine($this->calls[1]['messages'][0]['content']), 'the retry is the prompt of before');
+        $this->assertSame(
+            ['data_query', 'knowledge_query', 'hybrid'],
+            $this->calls[1]['options']['json_schema']['schema']['properties']['question_type']['enum']
+        );
+        $this->assertSame($this->calls[0]['messages'][1], $this->calls[1]['messages'][1], 'same question');
+
+        $this->assertSame('data_query', $result->questionType, "the retry's reading is the turn's");
+        $this->assertSame('list', $result->intent);
         $this->assertFalse($result->isConversational());
+    }
+
+    /** @test The retry prompt is the prompt of before: the new one without the clause, byte for byte. */
+    public function the_retry_prompt_is_the_new_prompt_without_the_clause(): void
+    {
+        $this->analyze(['navigation_target' => 'own_team'] + self::SMALL_TALK, 'Where can I add members?', [], [self::SMALL_TALK]);
+
+        $new = $this->calls[0]['messages'][0]['content'];
+        $old = $this->calls[1]['messages'][0]['content'];
+        $this->assertSame(str_replace($this->questionTypeLine($new), self::OLD_LINE, $new), $old);
+        $this->assertStringNotContainsString('conversational', $old);
+    }
+
+    /** @test Under the old schema the value cannot come back; if it does anyway (no strict schema) it is hybrid, as before. */
+    public function a_retry_that_still_says_conversational_normalises_as_before(): void
+    {
+        $reply = ['property_concepts' => ['fees']] + self::SMALL_TALK;
+        $result = $this->analyze($reply, 'Hi, what are the fees?', [], [$reply]);
+
+        $this->assertCount(2, $this->calls);
+        $this->assertSame('hybrid', $result->questionType);
+        $this->assertSame(['fees'], $result->propertyConcepts);
+    }
+
+    /** @test A failed retry keeps the first reading, normalised as an unknown type always was. */
+    public function a_failed_retry_keeps_the_first_reading_as_hybrid(): void
+    {
+        $result = $this->analyze(['entity_types' => ['Unit']] + self::SMALL_TALK, 'Hi! Which units are vacant?', [], [new \RuntimeException('provider down')]);
+
+        $this->assertCount(2, $this->calls);
+        $this->assertSame('hybrid', $result->questionType);
+        $this->assertSame(['Unit'], $result->entityTypes);
+        $this->assertFalse($result->failed);
+    }
+
+    /** @test */
+    public function an_accepted_conversational_reading_or_any_other_type_makes_one_call(): void
+    {
+        $this->analyze(self::SMALL_TALK);
+        $this->assertCount(1, $this->calls);
+
+        $this->calls = [];
+        $this->analyze(['question_type' => 'data_query', 'entity_types' => ['Unit']] + self::SMALL_TALK);
+        $this->assertCount(1, $this->calls);
     }
 
     public static function lookupSignals(): array
@@ -162,9 +239,13 @@ class QueryUnderstandingConversationalTest extends TestCase
             'open_tasks' => ['label' => 'Open tasks', 'cypher' => 'MATCH (t:Task) RETURN t'],
         ]]);
 
-        $result = $this->analyze(['digest_request' => true] + self::SMALL_TALK, 'What needs my attention?');
+        $result = $this->analyze(['digest_request' => true] + self::SMALL_TALK, 'What needs my attention?', [], [
+            ['digest_request' => true, 'question_type' => 'data_query'] + self::SMALL_TALK,
+        ]);
 
-        $this->assertSame('hybrid', $result->questionType);
+        $this->assertCount(2, $this->calls);
+        $this->assertSame('data_query', $result->questionType);
+        $this->assertTrue($result->digestRequest);
         $this->assertFalse($result->isConversational());
     }
 

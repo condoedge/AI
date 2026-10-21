@@ -172,7 +172,7 @@ class QueryUnderstandingService
 
     /** The values each enumerated key of the reply may hold (the prompt names the same ones). */
     private const INTENTS = ['count', 'list', 'lookup', 'aggregate', 'compare', 'file_listing', 'page_explanation', 'other'];
-    private const QUESTION_TYPES = ['data_query', 'knowledge_query', 'hybrid', QueryUnderstandingResult::TYPE_CONVERSATIONAL];
+    private const QUESTION_TYPES = ['data_query', 'knowledge_query', 'hybrid'];
     private const NAVIGATION_TARGETS = ['own_profile', 'own_team'];
     /** The intents that ask for a SET of records (or a figure over one) — never for one record or a page. */
     private const RECORD_SET_INTENTS = ['list', 'count', 'aggregate', 'compare'];
@@ -381,7 +381,7 @@ TASK: Given the user's question, return a JSON object with exactly these keys:
 - "possessive_forms": the grammatical form of each of those words, in the same order: "subject" (subject of a verb), "possessive", or "object" (object of a verb or of a preposition).
 - "possessive_scope": "personal" when the "subject" and "possessive" words are first-person SINGULAR (the user alone), "collective" when they are first-person PLURAL (the user's group or organization), null when there is no "subject" or "possessive" word (none at all, or only "object" ones).
 - "intent": one of: "count", "list", "lookup", "aggregate", "compare", "file_listing", "page_explanation", "other". Use "file_listing" when the user asks to see or list the documents/files available to them (e.g. "which files do I have access to?", "show my documents", "list the files I can see"). Never "file_listing" when the user asks to RECEIVE records or a result AS a file (that is the data request's own intent, with export_format set). Use "page_explanation" when the user asks what the current page/screen is or what they can do on it (e.g. "what is this page?", "what can I do here?", "explain this screen") — they want a description of the page itself, not a data lookup.
-- "question_type": one of "data_query" (needs database/graph lookup), "knowledge_query" (needs file/document content — rules, regulations, policies, "can I do X?"), "hybrid" (needs both data and documents), "conversational" (needs neither: a greeting, thanks, small talk, or a question about the chat assistant ITSELF — who or what it is, how it is doing, what it can help with, which model powers it — never a question about the user's data, documents, rules, records or the application's pages)
+- "question_type": one of "data_query" (needs database/graph lookup), "knowledge_query" (needs file/document content — rules, regulations, policies, "can I do X?"), "hybrid" (needs both data and documents)
 - "clarified_question": "Usually the concrete asking of the user hides a more abstract context and intent. If the question is "How many parking spaces do I have?" the clarified_question might be "How many parking space entities are related to the person entity representing me in the graph?" This is meant to clarify the underlying data relationships and intent in a way that can help with debugging and prompt engineering. Keep it concise. Never add an owner the question does not state: "Show me the parking spaces" names no owner (the one who receives the answer is not an owner), so it stays "Which parking space entities exist in the graph?" — the user or the user's group appears in the clarified question ONLY when "possessive_scope" is not null.
 But also it could have a base significance. let's say the user asks "Can i tear down a wall in my apartment?" the clarified question might be "What are the rules and regulations regarding modifying a residential unit in my building, more specifically tearing down a wall, and how do they apply to me as a tenant?"
 - "search_tags": array of 5 to 10 keyword tags for searching documents and files. Include: (1) literal terms from the question, (2) domain synonyms that would appear in the relevant documents, (3) the broader category or domain the question belongs to, (4) related technical terms, and (5) if the project's documents are multilingual, translations of the key terms into the other language(s). Think: what words would appear in a document, rule, or regulation that answers this question? Never use the name or title of a document, code, statute or corpus as a tag (even when the user names it): every passage of that document shares its name, so such a tag matches the title page instead of the passage that answers.
@@ -717,28 +717,6 @@ PROMPT;
         // compare) asks for those records, whatever it names.
         $questionType = $this->normalizeQuestionType($data['question_type'] ?? 'hybrid');
         $navigationTarget = $this->parseNavigationTarget($data['navigation_target'] ?? null);
-
-        // CONVERSATIONAL GUARD (2026-10-21): small talk and questions about the assistant
-        // itself skip every lookup — so the model's "conversational" stands only when the
-        // reply names NOTHING to look up (QueryUnderstandingResult::namesSomethingToLookUp:
-        // entity types as the model wrote them, before catalog validation, persons,
-        // concepts, a page, a file, a digest, a follow-up, a listing / page intent). One such
-        // signal and the value normalises as an unknown type always did ('hybrid'): a mixed
-        // "Hi! Who is on our board?" keeps the full pipeline. Structure only, no word list.
-        if ($questionType === QueryUnderstandingResult::TYPE_CONVERSATIONAL
-            && QueryUnderstandingResult::namesSomethingToLookUp(
-                $this->ensureStringArray($data['entity_types'] ?? []),
-                $personNames,
-                $propertyConcepts,
-                $navigationTarget,
-                $this->parseExportFormat($data['export_format'] ?? null),
-                $digestRequest,
-                $followUpReference,
-                $intent
-            )) {
-            $questionType = 'hybrid';
-        }
-
         if ($navigationTarget !== null && $questionType === 'data_query'
             && ($propertyConcepts !== [] || in_array($intent, self::RECORD_SET_INTENTS, true))) {
             $navigationTarget = null;
@@ -1134,8 +1112,7 @@ PROMPT;
     }
 
     /**
-     * Normalize question type to one of the known values ('conversational' is then
-     * verified by the guard in {@see self::normalizeResponse()}).
+     * Normalize question type to one of the known values.
      */
     private function normalizeQuestionType(mixed $type): string
     {

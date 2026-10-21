@@ -224,7 +224,14 @@ class MessageBubbleRenderer
             $actions[] = _Link()->icon(_Sax('copy', 16))
                 ->class('p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all')
                 ->balloon(__('ai.messages.copy'), 'up')
-                ->copyToClipboard($message->content, 'translate.copied-to-clipboard');
+                // The text reaches the JS as ONE JSON string literal (quotes, line breaks, tags
+                // and ampersands escaped): the utils copyToClipboard() macro pasted it raw into a
+                // "…" literal — an answer with a quote or a line break broke the button, and
+                // answer text could close the string and run as script (2026-10-21).
+                ->onClick(fn ($e) => $e->run('() => {navigator.clipboard?.writeText('
+                        . json_encode((string) $message->content, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE)
+                        . ')}')
+                    && $e->alert('ai.messages.copied'));
         }
 
         if ($this->settings->enableFeedback()) {
@@ -235,7 +242,7 @@ class MessageBubbleRenderer
                     : 'hover:bg-emerald-50 text-gray-400 hover:text-emerald-600'))
                 ->balloon(__('ai.messages.helpful'), 'up')
                 ->selfPost('feedback', ['id' => $message->id, 'type' => 'positive'])
-                ->alert('translate.feedback-received-successfully')
+                ->alert('ai.messages.feedback-received')
                 ->refresh();
 
             $actions[] = _Link()->icon(_Sax('dislike', 16))
@@ -244,7 +251,7 @@ class MessageBubbleRenderer
                     : 'hover:bg-red-50 text-gray-400 hover:text-red-600'))
                 ->balloon(__('ai.messages.not-helpful'), 'up')
                 ->selfPost('feedback', ['id' => $message->id, 'type' => 'negative'])
-                ->alert('translate.feedback-received-successfully')
+                ->alert('ai.messages.feedback-received')
                 ->refresh();
         }
 
