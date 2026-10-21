@@ -30,6 +30,14 @@ class PipelineContext
     public array $errors = [];
     public array $quality = [];
 
+    /**
+     * The retriever stopped after Query Understanding because the reading names nothing
+     * to look up (QueryUnderstandingResult::asksForNothingToLookUp(), on the caller's
+     * request): no selection, schema or metadata was built. AiManager either answers the
+     * turn as conversation or retrieves the context in full before running it as before.
+     */
+    public bool $retrievalDeferred = false;
+
     /** File context from FileContextProvider */
     public array $fileContext = [];
 

@@ -911,40 +911,54 @@ class AiManager
         }
 
         try {
+            // The retriever stops after Query Understanding when the reading names nothing
+            // to look up (see the conversational turn below) — on this request only.
             $ctx = $this->observeStage(
                 $observer,
                 'understanding',
-                fn (): PipelineContext => $this->context->retrieveContext($question, $options + ['observer' => $observer]),
+                fn (): PipelineContext => $this->context->retrieveContext(
+                    $question,
+                    $options + ['observer' => $observer, ContextRetriever::DEFER_WHEN_NOTHING_NAMED => true]
+                ),
                 fn (PipelineContext $c): array => $this->understandingTrace($c)
             );
-            $ctx->observer = $observer;
-
-            if (!empty($options['conversation_context'])) {
-                $ctx->conversationContext = $options['conversation_context'];
-            }
-
-            // Page context is a soft prior — which page/record the chat was opened from.
-            // Symmetric to conversation_context; default-empty keeps the prompt section
-            // silent and adds no retrieval/entity-selection bias when absent.
-            if (!empty($options['page_context'])) {
-                $ctx->pageContext = $options['page_context'];
-            }
+            $ctx = $this->withTurnContext($ctx, $observer, $options);
 
             // CONVERSATIONAL TURN (2026-10-21): a greeting, thanks, small talk or a question
-            // about the assistant itself — QU said so AND named nothing to look up
-            // (QueryUnderstandingResult::isConversational(), structure only). Nothing is
-            // queried: no clarity check, document search, query generation, execution,
-            // follow-up writer or record enrichment — ONE composition call on the identity.
-            // A failed call takes the generic error path below; every other turn runs on.
-            if ($ctx->qu->isConversational()) {
+            // about the assistant itself. Precondition (structure only, no word list): QU's
+            // reading names nothing to look up, so the retriever built no context
+            // ($ctx->retrievalDeferred). Verdict: the conversational composer judges the
+            // message and replies in ONE call — nothing is queried: no clarity check,
+            // document search, query generation, execution, follow-up writer or record
+            // enrichment. Declined (the message asks for something): the context is
+            // retrieved in full on the SAME reading and the turn runs exactly as before. A
+            // failed call takes the generic error path below.
+            if ($ctx->retrievalDeferred) {
                 $stage = 'composition';
-
-                return $this->observeStage(
+                $conversational = $this->observeStage(
                     $observer,
-                    'composition',
-                    fn (): array => $this->conversationalComposer->compose($question, $ctx, $options),
-                    fn (array $r): array => $this->compositionTrace('conversational', $r)
+                    ConversationalReplyComposer::STAGE,
+                    fn (): ?array => $this->conversationalComposer->compose($question, $ctx, $options),
+                    fn (?array $r): array => ['conversational' => $r !== null]
                 );
+                if ($conversational !== null) {
+                    $this->emitStage($observer, 'composition', $this->compositionTrace('conversational', $conversational));
+
+                    return $conversational;
+                }
+
+                $stage = 'understanding';
+                $qu = $ctx->qu;
+                $ctx = $this->observeStage(
+                    $observer,
+                    'context_retrieval',
+                    fn (): PipelineContext => $this->context->retrieveContext(
+                        $question,
+                        $options + ['observer' => $observer, ContextRetriever::UNDERSTOOD => $qu]
+                    ),
+                    fn (PipelineContext $c): array => $this->understandingTrace($c)
+                );
+                $ctx = $this->withTurnContext($ctx, $observer, $options);
             }
 
             // "Explain this page" — read-only page narration. When the user asks what the
@@ -5657,6 +5671,27 @@ class AiManager
         $observer->stageFinished($stage, $data, $this->elapsedMs($start));
 
         return $result;
+    }
+
+    /**
+     * The retrieved context with this turn's observer, conversation and page context.
+     */
+    private function withTurnContext(PipelineContext $ctx, PipelineObserverInterface $observer, array $options): PipelineContext
+    {
+        $ctx->observer = $observer;
+
+        if (!empty($options['conversation_context'])) {
+            $ctx->conversationContext = $options['conversation_context'];
+        }
+
+        // Page context is a soft prior — which page/record the chat was opened from.
+        // Symmetric to conversation_context; default-empty keeps the prompt section
+        // silent and adds no retrieval/entity-selection bias when absent.
+        if (!empty($options['page_context'])) {
+            $ctx->pageContext = $options['page_context'];
+        }
+
+        return $ctx;
     }
 
     /**

@@ -57,6 +57,12 @@ class ContextRetriever implements ContextRetrieverInterface
      */
     private const DEFAULT_SCORE_THRESHOLD = 0.80;
 
+    /** Option: stop after Query Understanding when the reading names nothing to look up (PipelineContext::$retrievalDeferred). */
+    public const DEFER_WHEN_NOTHING_NAMED = '_defer_when_nothing_named';
+
+    /** Option: this turn's QueryUnderstandingResult, already obtained — reused instead of a new QU call. */
+    public const UNDERSTOOD = '_understood';
+
     /**
      * Entity configurations loaded from config/entities.php
      */
@@ -226,8 +232,12 @@ class ContextRetriever implements ContextRetrieverInterface
         $turnConversation = is_array($options['conversation_context'] ?? null) ? $options['conversation_context'] : [];
         $ctx->piiMasker = PiiMasker::forConversation($turnConversation);
 
-        // STEP 1: Query Understanding (always runs if available)
-        if ($this->queryUnderstanding !== null) {
+        // STEP 1: Query Understanding (always runs if available) — unless the caller
+        // already holds this turn's reading (options[UNDERSTOOD]: the second, full pass of
+        // a turn whose retrieval was deferred below), which is reused, never re-asked.
+        if (($options[self::UNDERSTOOD] ?? null) instanceof QueryUnderstandingResult) {
+            $ctx->qu = $options[self::UNDERSTOOD];
+        } elseif ($this->queryUnderstanding !== null) {
             try {
                 $entityCatalog = QueryUnderstandingService::buildEntityCatalog($this->entityConfigs);
                 // QU judges follow_up_reference against the conversation
@@ -257,13 +267,20 @@ class ContextRetriever implements ContextRetrieverInterface
             $ctx->qu = QueryUnderstandingResult::empty($question);
         }
 
-        // A CONVERSATIONAL turn (small talk, a question about the assistant itself — QU
-        // said so and named nothing to look up) is answered from the assistant's identity
-        // alone: no entity selection, few-shot search, schema or metadata is built for it
-        // (each an embedding / vector / graph call the turn never reads).
-        if ($ctx->qu->isConversational()) {
+        // DEFERRED RETRIEVAL (on the caller's request, options[DEFER_WHEN_NOTHING_NAMED]):
+        // a reading that names nothing to look up may be conversation (small talk, a
+        // question about the assistant itself), which is answered from the assistant's
+        // identity alone — so no entity selection, few-shot search, schema or metadata is
+        // built yet (each an embedding / vector / graph call such a turn never reads). The
+        // caller retrieves in full (options[UNDERSTOOD]) when the turn is not conversation.
+        // Only on a reading QU actually made: without the service the empty reading names
+        // nothing by construction, and such a host keeps its pipeline unchanged.
+        if (($options[self::DEFER_WHEN_NOTHING_NAMED] ?? false) === true
+            && $this->queryUnderstanding !== null
+            && $ctx->qu->asksForNothingToLookUp()) {
             $this->logger->stopTimer('total');
-            $this->logger->info('context_retriever', 'Conversational turn: no context retrieved');
+            $this->logger->info('context_retriever', 'Reading names nothing to look up: retrieval deferred');
+            $ctx->retrievalDeferred = true;
 
             return $ctx;
         }

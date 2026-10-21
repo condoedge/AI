@@ -47,16 +47,19 @@ class ConversationalReplyComposerTest extends TestCase
         parent::tearDown();
     }
 
-    private function composer(string $reply = 'I am doing well, thanks!'): ConversationalReplyComposer
+    /** @param array|string $reply the verdict the model returns (a string = a conversational reply) */
+    private function composer(array|string $reply = 'I am doing well, thanks!'): ConversationalReplyComposer
     {
+        $verdict = is_string($reply) ? ['conversational' => true, 'reply' => "  {$reply}
+"] : $reply;
         $llm = Mockery::mock(LlmProviderInterface::class);
-        $llm->shouldReceive('chat')->once()->andReturnUsing(function ($messages, $options = []) use ($reply) {
+        $llm->shouldReceive('chatJson')->once()->andReturnUsing(function ($messages, $options = []) use ($verdict) {
             $this->calls[] = ['messages' => $messages, 'options' => $options];
 
-            return "  {$reply}\n";
+            return $verdict;
         });
         $llm->shouldReceive('complete')->never();
-        $llm->shouldReceive('chatJson')->never();
+        $llm->shouldReceive('chat')->never();
 
         return new ConversationalReplyComposer($llm);
     }
@@ -105,7 +108,7 @@ class ConversationalReplyComposerTest extends TestCase
         $this->composer()->compose('Which AI model are you?', $this->ctx('Which AI model are you?'));
         $system = $this->system();
 
-        $this->assertStringContainsString('Nothing was looked up', $system);
+        $this->assertStringContainsString('nothing was looked up', $system);
         $this->assertStringContainsString('Never say or imply that you searched, checked, looked up, found or did not find', $system);
         $this->assertStringContainsString('never invent', $system);
         $this->assertStringContainsString('Never name, confirm or deny any AI model, vendor or provider', $system);
@@ -209,6 +212,48 @@ class ConversationalReplyComposerTest extends TestCase
 
         $this->composer()->compose('How are you?', $ctx);
 
-        $this->assertSame($this->calls[0]['messages'], $observer->prompts('composition')[0] ?? null);
+        $this->assertSame($this->calls[0]['messages'], $observer->prompts('conversational')[0] ?? null);
+    }
+
+    /**
+     * @test The model judges the message in the same call: anything that asks for
+     * information or an action is declined (null) — the caller runs the turn as before.
+     */
+    public function a_message_the_model_judges_not_conversational_is_declined(): void
+    {
+        $this->assertNull($this->composer(['conversational' => false, 'reply' => ''])
+            ->compose('What can I do on this page?', $this->ctx('What can I do on this page?')));
+    }
+
+    /** @test Only an explicit true with a reply is conversation. */
+    public function an_unusable_verdict_is_declined(): void
+    {
+        $this->assertNull($this->composer(['conversational' => true, 'reply' => '  '])->compose('Hi', $this->ctx('Hi')));
+        $this->calls = [];
+        $this->assertNull($this->composer(['conversational' => 'yes', 'reply' => 'Hello!'])->compose('Hi', $this->ctx('Hi')));
+        $this->calls = [];
+        $this->assertNull($this->composer([])->compose('Hi', $this->ctx('Hi')));
+    }
+
+    /** @test */
+    public function the_verdict_is_asked_first_under_a_strict_schema_and_described_in_the_prompt(): void
+    {
+        $this->composer()->compose('How are you?', $this->ctx('How are you?'));
+
+        $schema = $this->calls[0]['options']['json_schema'] ?? null;
+        $this->assertSame(['conversational', 'reply'], array_keys($schema['schema']['properties']));
+        $this->assertSame(['conversational', 'reply'], $schema['schema']['required']);
+        $this->assertFalse($schema['schema']['additionalProperties']);
+        $this->assertStringContainsString('"conversational": true when the message is such conversation; false when it asks for any information or action', $this->system());
+    }
+
+    /** @test A provider failure is not a verdict: it propagates (the caller's generic error path). */
+    public function a_provider_failure_propagates(): void
+    {
+        $llm = Mockery::mock(LlmProviderInterface::class);
+        $llm->shouldReceive('chatJson')->once()->andThrow(new \RuntimeException('provider down'));
+
+        $this->expectException(\RuntimeException::class);
+        (new ConversationalReplyComposer($llm))->compose('Hi', $this->ctx('Hi'));
     }
 }

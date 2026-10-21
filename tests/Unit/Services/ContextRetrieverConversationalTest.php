@@ -17,11 +17,15 @@ use Condoedge\Ai\Tests\TestCase;
 use Mockery;
 
 /**
- * A conversational turn (QueryUnderstandingResult::isConversational()) needs no context:
- * after Query Understanding, the retriever makes NO further call — no semantic entity
- * selection (embedding + vector search), no few-shot search, no graph schema, no property
- * sampling, no entity metadata. Its QU call is the only one: with the conversational
- * composition, the turn makes two LLM calls in all. Every other turn is unchanged.
+ * DEFERRED RETRIEVAL — the retriever's half of a conversational turn.
+ *
+ * On the caller's request (ContextRetriever::DEFER_WHEN_NOTHING_NAMED, AiManager's first
+ * pass), a reading that names nothing to look up stops after Query Understanding: no
+ * semantic entity selection (embedding + vector search), no few-shot search, no graph
+ * schema, no property sampling, no entity metadata — the QU call is the only one, and
+ * PipelineContext::$retrievalDeferred says so. When the turn is not conversation, the
+ * caller retrieves in full on the SAME reading (ContextRetriever::UNDERSTOOD): QU is not
+ * asked again. Without the request, or on a reading that names something, nothing changes.
  */
 class ContextRetrieverConversationalTest extends TestCase
 {
@@ -46,7 +50,8 @@ class ContextRetrieverConversationalTest extends TestCase
         parent::tearDown();
     }
 
-    private function retriever(QueryUnderstandingResult $qu): ContextRetriever
+    /** @param int $quCalls how many times the QU service may be asked */
+    private function retriever(QueryUnderstandingResult $qu, int $quCalls = 1): ContextRetriever
     {
         $logger = Mockery::mock(AiLogger::class);
         $logger->shouldReceive('startTrace')->andReturn('trace')->byDefault();
@@ -60,14 +65,13 @@ class ContextRetrieverConversationalTest extends TestCase
         $retriever->setContextSelector($this->selector);
 
         $service = Mockery::mock(QueryUnderstandingService::class);
-        $service->shouldReceive('analyze')->once()->andReturn($qu);
+        $service->shouldReceive('analyze')->times($quCalls)->andReturn($qu);
         $retriever->setQueryUnderstanding($service);
 
         return $retriever;
     }
 
-    /** @test */
-    public function a_conversational_turn_makes_no_call_after_query_understanding(): void
+    private function expectNoRetrievalCall(): void
     {
         $this->selector->shouldReceive('selectRelevantContext')->never();
         $this->embedding->shouldReceive('embed')->never();
@@ -75,28 +79,80 @@ class ContextRetrieverConversationalTest extends TestCase
         $this->vectorStore->shouldReceive('search')->never();
         $this->graphStore->shouldReceive('getSchema')->never();
         $this->graphStore->shouldReceive('query')->never();
-
-        $ctx = $this->retriever(new QueryUnderstandingResult(questionType: 'conversational', language: 'en'))
-            ->retrieveContext('How are you?');
-
-        $this->assertTrue($ctx->qu->isConversational());
-        $this->assertSame('How are you?', $ctx->question);
-        $this->assertSame([], $ctx->graphSchema);
-        $this->assertSame([], $ctx->similarQueries);
     }
 
-    /** @test A "conversational" that names a record kind is not one: the context is built as before. */
-    public function a_conversational_type_naming_a_record_kind_builds_the_context_as_before(): void
+    private function allowRetrieval(): void
     {
         $this->embedding->shouldReceive('embed')->andReturn([0.1, 0.2])->byDefault();
         $this->vectorStore->shouldReceive('search')->andReturn([])->byDefault();
         $this->graphStore->shouldReceive('getSchema')->andReturn(['labels' => [], 'relationshipTypes' => [], 'propertyKeys' => []])->byDefault();
         $this->graphStore->shouldReceive('query')->andReturn([])->byDefault();
+    }
+
+    /** @test */
+    public function a_reading_that_names_nothing_stops_after_query_understanding_when_asked(): void
+    {
+        $this->expectNoRetrievalCall();
+
+        $ctx = $this->retriever(new QueryUnderstandingResult(questionType: 'knowledge_query', language: 'en'))
+            ->retrieveContext('How are you?', [ContextRetriever::DEFER_WHEN_NOTHING_NAMED => true]);
+
+        $this->assertTrue($ctx->retrievalDeferred);
+        $this->assertTrue($ctx->qu->asksForNothingToLookUp());
+        $this->assertSame('How are you?', $ctx->question);
+        $this->assertSame([], $ctx->graphSchema);
+        $this->assertSame([], $ctx->similarQueries);
+    }
+
+    /** @test Without the caller's request nothing changes (every other caller of the retriever). */
+    public function without_the_request_the_context_is_built_as_before(): void
+    {
+        $this->allowRetrieval();
         $this->selector->shouldReceive('selectRelevantContext')->once()->andReturn(new SemanticSelectionResult());
 
-        $ctx = $this->retriever(new QueryUnderstandingResult(entityTypes: ['BoardMember'], questionType: 'conversational'))
-            ->retrieveContext('Hi! Who is on our board?');
+        $ctx = $this->retriever(new QueryUnderstandingResult(questionType: 'knowledge_query'))->retrieveContext('How are you?');
 
-        $this->assertFalse($ctx->qu->isConversational());
+        $this->assertFalse($ctx->retrievalDeferred);
+    }
+
+    /** @test A host without Query Understanding (the empty reading names nothing by construction) keeps its pipeline. */
+    public function without_query_understanding_nothing_is_deferred(): void
+    {
+        $this->allowRetrieval();
+        $this->selector->shouldReceive('selectRelevantContext')->once()->andReturn(new SemanticSelectionResult());
+        $logger = Mockery::mock(AiLogger::class)->shouldIgnoreMissing();
+        $logger->shouldReceive('stopTimer')->andReturn(0.0);
+        $retriever = new ContextRetriever($this->vectorStore, $this->graphStore, $this->embedding, $logger, []);
+        $retriever->setContextSelector($this->selector);
+
+        $ctx = $retriever->retrieveContext('How are you?', [ContextRetriever::DEFER_WHEN_NOTHING_NAMED => true]);
+
+        $this->assertFalse($ctx->retrievalDeferred);
+    }
+
+    /** @test A reading that names something is built as before, request or not. */
+    public function a_reading_that_names_something_is_built_as_before(): void
+    {
+        $this->allowRetrieval();
+        $this->selector->shouldReceive('selectRelevantContext')->once()->andReturn(new SemanticSelectionResult());
+
+        $ctx = $this->retriever(new QueryUnderstandingResult(entityTypes: ['BoardMember'], questionType: 'data_query'))
+            ->retrieveContext('Hi! Who is on our board?', [ContextRetriever::DEFER_WHEN_NOTHING_NAMED => true]);
+
+        $this->assertFalse($ctx->retrievalDeferred);
+    }
+
+    /** @test The full second pass reuses the turn's reading: QU is not asked again. */
+    public function the_full_pass_reuses_the_reading_it_is_given(): void
+    {
+        $this->allowRetrieval();
+        $this->selector->shouldReceive('selectRelevantContext')->once()->andReturn(new SemanticSelectionResult());
+        $reading = new QueryUnderstandingResult(intent: 'page_explanation', questionType: 'knowledge_query', language: 'en');
+
+        $ctx = $this->retriever(new QueryUnderstandingResult(), quCalls: 0)
+            ->retrieveContext('What can I do on this page?', [ContextRetriever::UNDERSTOOD => $reading]);
+
+        $this->assertSame($reading, $ctx->qu);
+        $this->assertFalse($ctx->retrievalDeferred);
     }
 }

@@ -38,7 +38,7 @@ class QueryUnderstandingResult
         public readonly bool $isPossessive = false,
         /** count|list|lookup|aggregate|compare|other */
         public readonly string $intent = 'other',
-        /** data_query|knowledge_query|hybrid|conversational (verified: {@see self::isConversational()}) */
+        /** data_query|knowledge_query|hybrid */
         public readonly string $questionType = 'hybrid',
         /** Clarified underlying question for better search/prompting */
         public readonly string $clarifiedQuestion = '',
@@ -218,70 +218,36 @@ class QueryUnderstandingResult
         return $this->isPossessive && $this->possessiveScope === self::SCOPE_COLLECTIVE;
     }
 
-    /** $questionType of a greeting, thanks, small talk or a question about the assistant itself. */
-    public const TYPE_CONVERSATIONAL = 'conversational';
+    /** The one intent that asks for something to be SHOWN even when nothing else is named. */
+    private const LISTING_INTENT = 'file_listing';
 
     /**
-     * Intents that ask for something to be looked up or shown even with nothing else
-     * named: a conversational reply carrying one of them is not small talk.
-     */
-    private const LOOKUP_INTENTS = ['file_listing', 'page_explanation'];
-
-    /**
-     * The turn is conversation with the assistant — a greeting, thanks, small talk, a
-     * question about the assistant itself — and nothing is to be looked up for it.
+     * The reading names NOTHING to look up, show or act on: no entity type, person,
+     * property concept, navigation target, export format, digest ask, follow-up on a
+     * previous result, file listing or clarification need — and the QU call did not fail.
      *
-     * The model classifies (questionType 'conversational'); this VERIFIES it
-     * structurally: no entity type, person, property concept, navigation target,
-     * export format, digest ask, follow-up on a previous result, file listing / page
-     * explanation intent or clarification need — and the QU call did not fail. One
-     * such signal and the turn is not conversational (a mixed "Hi! Who is on our
-     * board?" names a record kind). No word list: only the reply's structure is read.
+     * The structural precondition of a CONVERSATIONAL turn (a greeting, thanks, small talk,
+     * a question about the assistant itself): measured 2026-10-21 (user 13), QU's reading of
+     * "How are you?", "Who are you?", "Thanks, that helps!", "What can you do?", "Which AI
+     * model are you?", "Comment ça va ?", "Qui es-tu ?" names nothing (27 of 27 replays),
+     * while every turn of the two eval suites names something (or is a digest ask). It is
+     * only a precondition: the conversational composer judges the message itself and
+     * declines what is not conversation (AiManager then runs the turn as before). No word
+     * list: only the reading's structure is read. A page explanation names nothing either
+     * ("What can you do?" is read as one); the composer tells the page from the assistant.
      */
-    public function isConversational(): bool
+    public function asksForNothingToLookUp(): bool
     {
-        return $this->questionType === self::TYPE_CONVERSATIONAL
-            && !self::namesSomethingToLookUp(
-                $this->entityTypes,
-                $this->personNames,
-                $this->propertyConcepts,
-                $this->navigationTarget,
-                $this->exportFormat,
-                $this->digestRequest,
-                $this->followUpReference,
-                $this->intent
-            )
+        return $this->entityTypes === []
+            && $this->personNames === []
+            && $this->propertyConcepts === []
+            && $this->navigationTarget === null
+            && $this->exportFormat === null
+            && !$this->digestRequest
+            && !$this->followUpReference
+            && $this->intent !== self::LISTING_INTENT
             && !$this->needsClarification
             && !$this->failed;
-    }
-
-    /**
-     * Whether a Query-Understanding reading names anything to look up, show or act on
-     * (the structural half of {@see self::isConversational()}; QueryUnderstandingService
-     * applies it to the reply before the result exists).
-     *
-     * @param array<int, mixed> $entityTypes
-     * @param array<int, mixed> $personNames
-     * @param array<int, mixed> $propertyConcepts
-     */
-    public static function namesSomethingToLookUp(
-        array $entityTypes,
-        array $personNames,
-        array $propertyConcepts,
-        ?string $navigationTarget,
-        ?string $exportFormat,
-        bool $digestRequest,
-        bool $followUpReference,
-        string $intent
-    ): bool {
-        return $entityTypes !== []
-            || $personNames !== []
-            || $propertyConcepts !== []
-            || $navigationTarget !== null
-            || $exportFormat !== null
-            || $digestRequest
-            || $followUpReference
-            || in_array($intent, self::LOOKUP_INTENTS, true);
     }
 
     /** The user-visible subject: the localized label, else the search subject ('' when neither). */

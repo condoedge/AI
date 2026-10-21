@@ -20,10 +20,21 @@ use Condoedge\Ai\Support\TokenUsage;
  * no execution), so the prompt holds nothing of the data / document pipeline:
  *
  *  - SYSTEM: the assistant's configured identity ({@see AssistantIdentity::render()} —
- *    persona, language policy, non-disclosure), the reply rules, and what the host says
- *    the project is (ai.project name / description / domain) for "what can you do?";
+ *    persona, language policy, non-disclosure), the task and reply rules, and what the
+ *    host says the project is (ai.project name / description / domain) for "what can
+ *    you do?";
  *  - USER: the user's name (when known), the recent turns (for "thanks" / "and you?")
  *    and the message itself.
+ *
+ * The call is made only when Query Understanding's reading of the message names nothing
+ * to look up ({@see \Condoedge\Ai\DTOs\QueryUnderstandingResult::asksForNothingToLookUp()}).
+ * That is a precondition, not the verdict: the model JUDGES the message in the same call
+ * ("conversational": true / false, then the reply) and a message that asks for anything
+ * is declined (null) — AiManager then runs the turn exactly as before. The verdict is
+ * not asked of Query Understanding on purpose: measured 2026-10-21 (replays of the eval
+ * p27 QU prompts), offering a "conversational" question type there moved other keys of
+ * unrelated turns ("Create a PDF of this." lost its follow-up flag and its entity types,
+ * and the live turn re-generated a query instead of exporting the recorded result).
  *
  * Measured before (2026-10-21, user 13): "How are you?" ran clarity check, document
  * probes, query generation and execution and answered "No results were found for that
@@ -31,6 +42,9 @@ use Condoedge\Ai\Support\TokenUsage;
  */
 class ConversationalReplyComposer
 {
+    /** Observer stage of the call's prompt, usage and outcome. */
+    public const STAGE = 'conversational';
+
     /** The recent turns shown: the last 3 exchanges = up to 6 messages. */
     private const MAX_MESSAGES = 6;
 
@@ -45,10 +59,14 @@ class ConversationalReplyComposer
     }
 
     /**
+     * The turn's answer when the message is conversation, else null (declined: the
+     * message asks for something — the caller runs the turn as before). A provider
+     * failure propagates (the caller's generic error path).
+     *
      * @param array<string, mixed> $options the pipeline options (options['user'] names the user)
-     * @return array<string, mixed> The standard response array.
+     * @return array<string, mixed>|null The standard response array, or null when declined.
      */
-    public function compose(string $question, PipelineContext $ctx, array $options = []): array
+    public function compose(string $question, PipelineContext $ctx, array $options = []): ?array
     {
         // The turn's PII token map: values of earlier turns quoted in the recent
         // exchanges reach the model as their tokens and come back real.
@@ -60,16 +78,27 @@ class ConversationalReplyComposer
         ];
 
         $observer = PipelineObserverScope::for($ctx);
-        $observer->promptBuilt('composition', $messages);
+        $observer->promptBuilt(self::STAGE, $messages);
         try {
-            $reply = (string) $this->llm->chat($messages, ['temperature' => 0.3, 'max_tokens' => self::MAX_TOKENS]);
+            $verdict = $this->llm->chatJson($messages, [
+                'temperature' => 0.3,
+                'max_tokens' => self::MAX_TOKENS,
+                'json_schema' => self::replySchema(),
+            ]);
         } finally {
-            TokenUsage::report($observer, 'composition', $this->llm);
+            TokenUsage::report($observer, self::STAGE, $this->llm);
+        }
+
+        $verdict = is_object($verdict) ? (array) $verdict : (is_array($verdict) ? $verdict : []);
+        $reply = is_string($verdict['reply'] ?? null) ? trim($verdict['reply']) : '';
+        // Only an explicit true with a reply is conversation; anything else declines.
+        if (($verdict['conversational'] ?? null) !== true || $reply === '') {
+            return null;
         }
 
         // Links are attached by code, never written by the model (B5): any it wrote is text.
         $filter = new NarrativeLinkFilter(tokens: array_keys($masker->map()));
-        $answer = trim($masker->unmask($filter->apply(trim($reply))));
+        $answer = trim($masker->unmask($filter->apply($reply)));
 
         return [
             'question' => $question,
@@ -90,6 +119,28 @@ class ConversationalReplyComposer
         ];
     }
 
+    /**
+     * The verdict and the reply, under a strict schema (a provider without structured
+     * outputs ignores it): the verdict FIRST, so the reply is written knowing it.
+     *
+     * @return array{name: string, schema: array<string, mixed>}
+     */
+    private static function replySchema(): array
+    {
+        return [
+            'name' => 'conversational_reply',
+            'schema' => [
+                'type' => 'object',
+                'properties' => [
+                    'conversational' => ['type' => 'boolean'],
+                    'reply' => ['type' => 'string'],
+                ],
+                'required' => ['conversational', 'reply'],
+                'additionalProperties' => false,
+            ],
+        ];
+    }
+
     private function systemPrompt(): string
     {
         $name = AssistantIdentity::name();
@@ -97,9 +148,13 @@ class ConversationalReplyComposer
         $identity = AssistantIdentity::render();
 
         $rules = <<<PROMPT
-THIS MESSAGE is conversation with you, not a request for information: a greeting, thanks, small talk, or a question about you, the assistant. Nothing was looked up for it and nothing needs to be.
+YOUR TASK: nothing was looked up for the user's MESSAGE below. First decide whether it is CONVERSATION with you — a greeting, thanks, small talk, or a question about you, the assistant (who or what you are, how you are doing, what you can help with, which model powers you). Then reply if it is.
 
-Rules:
+Return a JSON object:
+- "conversational": true when the message is such conversation; false when it asks for any information or action — about the user's data, records, documents, rules or laws, the application or one of its pages, or anything to look up, show, explain, create, export or change.
+- "reply": when "conversational" is true, your reply to the message; when false, "".
+
+Reply rules:
 - Reply briefly and naturally — one to three short sentences — in the language of the user's message.
 - Never say or imply that you searched, checked, looked up, found or did not find anything (records, results, documents, information).
 - Never state anything about the user's data, records, documents, rules or the application's pages, and never invent any.
