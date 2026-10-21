@@ -141,7 +141,8 @@ abstract class AbstractChatSurface extends Form
             _Flex(
                 _Html('<span class="relative">' . $this->assistantAvatarHtml() . $statusDot . '</span>')->class('mr-3'),
                 _Rows(
-                    _Html('AI Assistant')->class('font-semibold text-gray-800'),
+                    // The assistant's own configured name — the one it introduces itself with.
+                    _Html(e(\Condoedge\Ai\Services\AssistantIdentity::name()))->class('font-semibold text-gray-800'),
                     _Html($statusText)->class('text-xs ' . $statusClass),
                 ),
             )->class('items-center'),

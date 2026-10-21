@@ -64,10 +64,11 @@
     "ai.settings.typing-pulse": "Pulsation",
     "ai.settings.typing-brain": "Cerveau pensant",
 
-    "ai.themes.green": "Theme vert",
-    "ai.themes.indigo": "Theme indigo",
+    "ai.themes.green": "Thème vert",
+    "ai.themes.indigo": "Thème indigo",
 
     "ai.chat.new-conversation": "Nouvelle conversation",
+    "ai.chat.welcome-message": "Posez-moi vos questions sur vos données. Je peux vous aider à trouver de l'information, à générer des rapports et à répondre à vos questions.",
     "ai.chat.search-placeholder": "Rechercher des conversations...",
     "ai.chat.filter-all": "Toutes",
     "ai.chat.filter-pinned": "Epinglees",

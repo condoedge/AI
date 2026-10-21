@@ -1590,9 +1590,12 @@ return [
         // - screen => navigates to the routed AiChatScreen full page (ai.chat.screen)
         'surface' => env('AI_CHAT_SURFACE', 'modal'),
 
-        // Welcome screen (read flat by UserChatSettings::welcomeTitle()/welcomeMessage())
-        'welcome_title' => env('AI_CHAT_WELCOME_TITLE', 'AI Assistant'),
-        'welcome_message' => env('AI_CHAT_WELCOME_MESSAGE', 'Ask me anything about your data. I can help you find information, generate reports, and answer questions.'),
+        // Welcome screen (read flat by UserChatSettings::welcomeTitle()/welcomeMessage()).
+        // Unset: the title is the assistant's own name (ai.identity.name) and the message the
+        // translated line `ai.chat.welcome-message`. A configured value goes through the
+        // translator, so a host language file can translate it.
+        'welcome_title' => env('AI_CHAT_WELCOME_TITLE'),
+        'welcome_message' => env('AI_CHAT_WELCOME_MESSAGE'),
 
         // Example questions shown on welcome screen
         'example_questions' => [

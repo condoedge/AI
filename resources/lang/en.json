@@ -68,6 +68,7 @@
     "ai.themes.indigo": "Indigo theme",
 
     "ai.chat.new-conversation": "New Conversation",
+    "ai.chat.welcome-message": "Ask me anything about your data. I can help you find information, generate reports, and answer questions.",
     "ai.chat.search-placeholder": "Search conversations...",
     "ai.chat.filter-all": "All",
     "ai.chat.filter-pinned": "Pinned",

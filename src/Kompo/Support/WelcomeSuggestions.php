@@ -40,7 +40,12 @@ final class WelcomeSuggestions
             $questions = self::sanitize($settings->exampleQuestions());
         }
 
-        return array_slice($questions, 0, max(0, $settings->maxSuggestions()));
+        // Host config strings go through the translator: a host language file translates
+        // them (the English string is the key); without a translation they show as written.
+        return array_map(
+            static fn (string $question): string => (string) __($question),
+            array_slice($questions, 0, max(0, $settings->maxSuggestions()))
+        );
     }
 
     /**

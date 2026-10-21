@@ -25,6 +25,7 @@ use Condoedge\Ai\Services\Query\EmptyResultInspector;
 use Condoedge\Ai\Services\Query\FanOutCollapse;
 use Condoedge\Ai\Services\Query\PreviousResultExport;
 use Condoedge\Ai\Services\Query\RecordParentEnricher;
+use Condoedge\Ai\Services\Response\ConversationalReplyComposer;
 use Condoedge\Ai\Services\Response\DigestResponseComposer;
 use Condoedge\Ai\Services\Response\ExportResponseComposer;
 use Condoedge\Ai\Services\Response\ResponseFileEnricher;
@@ -83,6 +84,9 @@ class AiManager
 
     private readonly DigestResponseComposer $digestComposer;
 
+    /** The ONE composition call of a conversational turn (small talk, questions about the assistant). */
+    private readonly ConversationalReplyComposer $conversationalComposer;
+
     /** Code-attached links/actions (actions plan B1–B4): the AI only narrates. */
     private readonly ActionAttacher $actionAttacher;
 
@@ -113,6 +117,8 @@ class AiManager
      *        call, only on turns where document search runs); null = no probes
      * @param ClarityChecker|null $clarityChecker Focused "is this question a fork?" call (one small
      *        LLM call, only on a first message that names no subject); null = never asks
+     * @param ConversationalReplyComposer|null $conversationalComposer The one composition call of a
+     *        conversational turn; null = one on the injected LLM
      */
     public function __construct(
         private readonly DataIngestionServiceInterface $ingestion,
@@ -136,8 +142,10 @@ class AiManager
         private readonly ?PassageSelector $passageSelector = null,
         private readonly ?\Condoedge\Ai\Services\Retrieval\DocumentMapTurn $documentMapTurn = null,
         private readonly ?\Condoedge\Ai\Services\Retrieval\DocumentScopeResolver $documentScopeResolver = null,
-        private readonly ?\Condoedge\Ai\Services\Retrieval\DocumentOwnerLabels $documentOwnerLabels = null
+        private readonly ?\Condoedge\Ai\Services\Retrieval\DocumentOwnerLabels $documentOwnerLabels = null,
+        ?ConversationalReplyComposer $conversationalComposer = null
     ) {
+        $this->conversationalComposer = $conversationalComposer ?? new ConversationalReplyComposer($llm);
         $this->actionAttacher = $actionAttacher ?? new ActionAttacher();
         $this->queryParameterizer = $queryParameterizer ?? new QueryParameterizer();
         $this->exportComposer = $exportComposer ?? new ExportResponseComposer();
@@ -920,6 +928,23 @@ class AiManager
             // silent and adds no retrieval/entity-selection bias when absent.
             if (!empty($options['page_context'])) {
                 $ctx->pageContext = $options['page_context'];
+            }
+
+            // CONVERSATIONAL TURN (2026-10-21): a greeting, thanks, small talk or a question
+            // about the assistant itself — QU said so AND named nothing to look up
+            // (QueryUnderstandingResult::isConversational(), structure only). Nothing is
+            // queried: no clarity check, document search, query generation, execution,
+            // follow-up writer or record enrichment — ONE composition call on the identity.
+            // A failed call takes the generic error path below; every other turn runs on.
+            if ($ctx->qu->isConversational()) {
+                $stage = 'composition';
+
+                return $this->observeStage(
+                    $observer,
+                    'composition',
+                    fn (): array => $this->conversationalComposer->compose($question, $ctx, $options),
+                    fn (array $r): array => $this->compositionTrace('conversational', $r)
+                );
             }
 
             // "Explain this page" — read-only page narration. When the user asks what the

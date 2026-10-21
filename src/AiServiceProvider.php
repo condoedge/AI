@@ -325,6 +325,14 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
+        // Conversational turns (small talk, questions about the assistant itself): the
+        // one composition call rides the response_generation role, like every answer.
+        $this->app->singleton(\Condoedge\Ai\Services\Response\ConversationalReplyComposer::class, function ($app) {
+            return new \Condoedge\Ai\Services\Response\ConversationalReplyComposer(
+                $app->make(LlmResolver::class)->forRole('response_generation')
+            );
+        });
+
         // Document-search probes (eval p15): ONE small focused call on the
         // query-understanding role's (small, fast) model, made by AiManager only on
         // turns where document search runs. Its whole domain input is the host's
@@ -485,7 +493,8 @@ class AiServiceProvider extends ServiceProvider
                 ),
                 documentOwnerLabels: new \Condoedge\Ai\Services\Retrieval\DocumentOwnerLabels(
                     $app->make(QueryExecutorInterface::class)
-                )
+                ),
+                conversationalComposer: $app->make(\Condoedge\Ai\Services\Response\ConversationalReplyComposer::class)
             );
         });
 

@@ -3,6 +3,7 @@
 namespace Condoedge\Ai\Kompo\Modals;
 
 use Condoedge\Ai\Kompo\AiChatPanel;
+use Condoedge\Ai\Kompo\Support\ThemedToggle;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
@@ -53,6 +54,9 @@ class ChatSettingsModal extends Modal
         $themeAllowUserOverrides = property_exists($factory, 'allowUserOverrides') ? $factory->allowUserOverrides : false;
 
         return _Rows(
+            // The theme colour of the toggles' checked state (no JS: see ThemedToggle).
+            ThemedToggle::styleElement($this->mainHexColor()),
+
             !$themeAllowUserOverrides ? null : _Rows(
                 $this->sectionHeader(__('ai.settings.theme'), __('ai.settings.theme-description')),
                 $this->themeSelector(),
@@ -156,8 +160,7 @@ class ChatSettingsModal extends Modal
                 _Html($label)->class('font-medium text-gray-700'),
                 _Html($description)->class('text-xs text-gray-400'),
             ),
-            _Toggle()->name($key)->checkColor($this->mainHexColor(), '#ECEFF3')
-                ->class('flex-shrink-0'),
+            ThemedToggle::make($key),
         )->class('p-3 rounded-xl hover:bg-gray-50 transition-all');
     }
 

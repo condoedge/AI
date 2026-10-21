@@ -76,7 +76,13 @@ class UserChatSettings extends AbstractChatSettings
      */
     public function welcomeTitle(): string
     {
-        return $this->get('welcome_title', 'AI Assistant');
+        // One name everywhere: unless a title is configured, the assistant's own name
+        // (config ai.identity.name) — the name it introduces itself with.
+        $title = $this->get('welcome_title', null);
+
+        return is_string($title) && trim($title) !== ''
+            ? (string) __($title)
+            : \Condoedge\Ai\Services\AssistantIdentity::name();
     }
 
     /**
@@ -86,7 +92,13 @@ class UserChatSettings extends AbstractChatSettings
      */
     public function welcomeMessage(): string
     {
-        return $this->get('welcome_message', 'Ask me anything about your data.');
+        // A configured message goes through the translator (a host language file may
+        // translate it); the default is a package line in every shipped language.
+        $message = $this->get('welcome_message', null);
+
+        return is_string($message) && trim($message) !== ''
+            ? (string) __($message)
+            : (string) __('ai.chat.welcome-message', ['name' => \Condoedge\Ai\Services\AssistantIdentity::name()]);
     }
 
     /**

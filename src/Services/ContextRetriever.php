@@ -257,6 +257,17 @@ class ContextRetriever implements ContextRetrieverInterface
             $ctx->qu = QueryUnderstandingResult::empty($question);
         }
 
+        // A CONVERSATIONAL turn (small talk, a question about the assistant itself — QU
+        // said so and named nothing to look up) is answered from the assistant's identity
+        // alone: no entity selection, few-shot search, schema or metadata is built for it
+        // (each an embedding / vector / graph call the turn never reads).
+        if ($ctx->qu->isConversational()) {
+            $this->logger->stopTimer('total');
+            $this->logger->info('context_retriever', 'Conversational turn: no context retrieved');
+
+            return $ctx;
+        }
+
         // STEP 2: Semantic context selection
         $conversationFocusedEntity = $options['conversation_context']['focused_entity'] ?? null;
 
