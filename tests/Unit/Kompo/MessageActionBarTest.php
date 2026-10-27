@@ -13,6 +13,7 @@ use Condoedge\Ai\Services\Response\ActionLinkHandler;
 use Condoedge\Ai\Services\Response\ContentLinkProcessor;
 use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
 use Condoedge\Ai\Services\UI\ChatThemeInterface;
+use Illuminate\Support\Facades\Crypt;
 use Mockery;
 use Orchestra\Testbench\TestCase;
 
@@ -98,6 +99,48 @@ class MessageActionBarTest extends TestCase
         };
 
         return json_encode($renderer->messageActionBar($message), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '';
+    }
+
+    /**
+     * The self methods a bar button calls (Kompo ships them encrypted) and its click action types.
+     *
+     * @param array<string, mixed> $bar
+     * @return array{methods: list<string>, actions: list<string>}
+     */
+    private function buttonCalls(array $bar, string $balloon): array
+    {
+        foreach ($bar['elements'] ?? [] as $element) {
+            if (($element['config']['attrs']['aria-label'] ?? null) !== $balloon) {
+                continue;
+            }
+            $methods = [];
+            $actions = [];
+            array_walk_recursive($element, function ($value, $key) use (&$methods, &$actions) {
+                if ($key === 'X-Kompo-Target' && is_string($value)) {
+                    $methods[] = Crypt::decryptString($value);
+                }
+                if ($key === 'actionType') {
+                    $actions[] = $value;
+                }
+            });
+
+            return ['methods' => $methods, 'actions' => $actions];
+        }
+        $this->fail("no button with the balloon {$balloon}");
+    }
+
+    /** @test */
+    public function not_helpful_records_the_rating_and_opens_the_optional_comment_and_helpful_does_not(): void
+    {
+        $bar = json_decode($this->bar('The answer.'), true);
+
+        $down = $this->buttonCalls($bar, 'ai.messages.not-helpful');
+        $this->assertEqualsCanonicalizing(['feedback', 'feedbackComment'], $down['methods']);
+        $this->assertContains('fillModalNew', $down['actions'], 'the comment opens in a modal');
+
+        $up = $this->buttonCalls($bar, 'ai.messages.helpful');
+        $this->assertSame(['feedback'], $up['methods']);
+        $this->assertNotContains('fillModalNew', $up['actions']);
     }
 
     /** @test */

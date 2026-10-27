@@ -8,11 +8,13 @@ use Condoedge\Ai\Kompo\Admin\Concerns\GuardsConversationInsights;
 use Condoedge\Ai\Kompo\Admin\Concerns\RendersInsightCells;
 use Condoedge\Ai\Services\Admin\ConversationInsights;
 use Condoedge\Ai\Services\Admin\InsightsRange;
+use Condoedge\Ai\Support\Audiences;
 use Condoedge\Utils\Kompo\Common\Form;
 
 /**
  * Admin page (route ai.admin.conversations): review the assistant's conversations and
- * the 👍 / 👎 feedback users give.
+ * the 👍 / 👎 feedback users give. While ai.audiences is configured, the KPIs are also
+ * split per asker audience.
  *
  * Read-only. Guarded by the Gate ability ConversationInsights::ABILITY — denied unless
  * the host grants it — on the route AND on every boot of this page and its children.
@@ -52,6 +54,8 @@ class AiConversationsAdminPage extends Form
             )->class('flex-wrap gap-4 mb-6'),
 
             $this->kpiGrid($kpis),
+
+            Audiences::configured() ? $this->audienceCards(app(ConversationInsights::class)->audienceKpis($this->range)) : null,
 
             _Rows(
                 _Tabs(
@@ -108,6 +112,28 @@ class AiConversationsAdminPage extends Form
                 __('ai.admin.kpi.tokens-hint', ['calls' => $int($k['llm_calls']), 'answers' => $int($k['traced_answers'])]),
             ),
         )->class('grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6');
+    }
+
+    /** @param list<array<string, mixed>> $rows ConversationInsights::audienceKpis() */
+    protected function audienceCards(array $rows)
+    {
+        $pct = fn (?float $v) => $v === null ? '—' : rtrim(rtrim(number_format($v, 1), '0'), '.') . ' %';
+
+        return _Rows(
+            _Html('ai.admin.audience.title')->class('mb-2 text-sm font-semibold text-gray-900'),
+            $rows === [] ? _Html('ai.admin.audience.none')->class('text-sm text-gray-500') : _Div(
+                ...array_map(fn (array $row) => _Rows(
+                    $this->text($row['audience'] ?? __('ai.admin.audience.unresolved'), 'text-xs font-medium uppercase tracking-wide text-gray-500'),
+                    $this->text(__('ai.admin.audience.counts', [
+                        'conversations' => number_format($row['conversations']),
+                        'answers' => number_format($row['answers']),
+                    ]), 'mt-1 text-sm font-semibold text-gray-900'),
+                    $this->text('👍 ' . number_format($row['positive']) . '  /  👎 ' . number_format($row['negative']), 'mt-1 text-sm text-gray-700'),
+                    $this->text(__('ai.admin.audience.no-sources', ['pct' => $pct($row['no_source_pct'])]), 'mt-1 text-xs text-gray-500'),
+                    $this->text(__('ai.admin.audience.latency', ['time' => $this->latency($row['latency_avg_ms'])]), 'text-xs text-gray-500'),
+                )->class('bg-white rounded-xl border border-gray-200 p-4 shadow-sm'), $rows)
+            )->class('grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4'),
+        )->class('mb-6');
     }
 
     protected function kpiCard(string $label, string $value, ?string $hint = null, string $tone = 'text-gray-900')

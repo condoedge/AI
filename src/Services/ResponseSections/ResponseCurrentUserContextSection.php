@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\ResponseSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Kompo\Support\WelcomeSuggestions;
 use Condoedge\Ai\Services\Response\PiiMasker;
+use Condoedge\Ai\Support\Audiences;
 
 /**
  * ResponseCurrentUserContextSection
@@ -66,6 +68,24 @@ class ResponseCurrentUserContextSection extends BaseResponseSection
         $output .= '- Current team ID: ' . ($currentTeam?->id ?? 'N/A') . "\n";
         $output .= '- Current team name: ' . ($teamName ?? 'N/A') . "\n\n";
 
+        // The host's audiences (ai.audiences): who this user is to the organisation. One
+        // that is not its staff (a buyer, a supplier) is not spoken to from inside it.
+        $role = Audiences::promptBlock($user);
+        if ($role !== '') {
+            $output .= $role . "\n\n";
+        }
+        // The tasks (ai.tasks) this user may start: only their button starts one, never the answer.
+        $tasks = WelcomeSuggestions::tasks($user);
+        if ($tasks !== []) {
+            $output .= 'TASKS THIS USER CAN START: "' . implode('", "', $tasks) . '". The assistant does one with the user only once they click '
+                . "its button, which comes with the answer when it applies; you do not run it, and never say a task was done.
+
+";
+        }
+        if (!Audiences::insiderVoice($user)) {
+            return $output;
+        }
+
         $output .= "INSIDER VOICE (how to speak to this user):\n";
         if ($teamName !== null && $teamName !== '') {
             $output .= "- The current user is a member of \"{$teamName}\". Answer from INSIDE their organization.\n";
@@ -82,7 +102,7 @@ class ResponseCurrentUserContextSection extends BaseResponseSection
      * The identity VALUES this section gives the model as words — the user's own name and the
      * current team's name, exactly as {@see format()} prints them (never the email, which is
      * PII-gated, nor an id). Code treats them as KNOWN when it judges whether a lead only
-     * restates (eval p20-A roster: "Here are the members of your team, Novo Gestion, along with
+     * restates (eval p20-A roster: "Here are the members of your team, Acme Gestion, along with
      * their roles:" — DataAnswerPlan::knownIdentity()). [] without an authenticated user.
      *
      * @return list<string>

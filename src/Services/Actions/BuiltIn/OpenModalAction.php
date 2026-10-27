@@ -15,7 +15,7 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
  * route/component is whatever the host wired on the rendering Query.
  *
  * Link grammar (advertised to the LLM):
- *   [Open form](action://open_modal?modal=editUnit&unit_id=123&amount=450)
+ *   [Open form](action://open_modal?modal=editOrder&order_id=123&amount=450)
  *
  * Params:
  *   - modal: the selfGet method name on the chat Query to open the modal (required).

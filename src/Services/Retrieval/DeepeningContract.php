@@ -12,7 +12,7 @@ use Condoedge\Ai\Support\ArticleLocator;
  * "Tell me more about X" retrieves the passage with the new rule next to the
  * passages the previous answer was built on, and the composer, shown both alike,
  * re-served the previous answer (eval p17-B rights t1: the passage holding the
- * contingency fund ranked 1–2 on every angle and the fund was never mentioned).
+ * late-payment penalty ranked 1–2 on every angle and was never mentioned).
  *
  * The contract is computed by code from the conversation memory — the passages
  * the previous answer cited (`last_referenced_files`: file, chunk, the articles it
@@ -204,7 +204,7 @@ final class DeepeningContract
     }
 
     /**
-     * "art. 1015, 1063–1066, 1071": ascending, three or more consecutive numbers
+     * "art. 4, 11–14, 19": ascending, three or more consecutive numbers
      * written as a run. '' for no article.
      *
      * @param array<int, int> $articles

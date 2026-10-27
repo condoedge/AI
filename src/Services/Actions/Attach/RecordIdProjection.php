@@ -75,7 +75,7 @@ final class RecordIdProjection
 
         $masked = self::mask($cypher);
 
-        // The UNION clause (never a `:Union` label or a `union_name` alias) / a CALL {} subquery.
+        // The UNION clause (never a label or alias named like it) / a CALL {} subquery.
         if (preg_match('/\sUNION(?:\s+ALL)?\s+(?:MATCH|OPTIONAL|WITH|UNWIND|CALL|RETURN)\b|' . self::KW . 'CALL\s*\{/i', $masked) === 1) {
             return $unchanged;
         }

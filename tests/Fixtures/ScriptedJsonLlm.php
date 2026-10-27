@@ -11,14 +11,15 @@ use Condoedge\Ai\Contracts\LlmProviderInterface;
  * every chatJson() call pops the next scripted reply — an array/object (returned
  * as decoded JSON) or a \Throwable (thrown, e.g. LlmInvalidJsonException) — and
  * records the messages it received. complete()/chat() pop the same queue and
- * must receive a string.
+ * must receive a string. A \Closure reply is called and its result used: a test
+ * runs another request in the middle of a call.
  */
 final class ScriptedJsonLlm implements LlmProviderInterface
 {
     /** @var array<int, array{method: string, messages: array, options: array}> */
     public array $calls = [];
 
-    /** @param list<array|object|string|\Throwable> $replies */
+    /** @param list<array|object|string|\Throwable|\Closure> $replies */
     public function __construct(private array $replies)
     {
     }
@@ -101,6 +102,8 @@ final class ScriptedJsonLlm implements LlmProviderInterface
             throw new \RuntimeException('ScriptedJsonLlm: no scripted reply left');
         }
 
-        return array_shift($this->replies);
+        $reply = array_shift($this->replies);
+
+        return $reply instanceof \Closure ? $reply() : $reply;
     }
 }

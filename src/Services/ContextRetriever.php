@@ -18,6 +18,9 @@ use Condoedge\Ai\Services\Retrieval\CalculationMatcher;
 use Condoedge\Ai\Services\Retrieval\EntityMetadataBuilder;
 use Condoedge\Ai\Services\Retrieval\EntitySelectionPruner;
 use Condoedge\Ai\Services\Retrieval\SchemaProjector;
+use Condoedge\Ai\Services\Security\AiSecurityService;
+use Condoedge\Ai\Services\Security\RowScope;
+use Condoedge\Ai\Support\Audiences;
 use Condoedge\Ai\Services\Retrieval\SimilarQuerySearcher;
 use Condoedge\Ai\Services\Schema\GraphSchemaCache;
 use Condoedge\Ai\Services\Schema\PropertyTypeSampler;
@@ -231,6 +234,7 @@ class ContextRetriever implements ContextRetrieverInterface
         // so entity-config sensible_columns apply too).
         $turnConversation = is_array($options['conversation_context'] ?? null) ? $options['conversation_context'] : [];
         $ctx->piiMasker = PiiMasker::forConversation($turnConversation);
+        $readable = $this->readableLabels($options);
 
         // STEP 1: Query Understanding (always runs if available) — unless the caller
         // already holds this turn's reading (options[UNDERSTOOD]: the second, full pass of
@@ -239,7 +243,12 @@ class ContextRetriever implements ContextRetrieverInterface
             $ctx->qu = $options[self::UNDERSTOOD];
         } elseif ($this->queryUnderstanding !== null) {
             try {
-                $entityCatalog = QueryUnderstandingService::buildEntityCatalog($this->entityConfigs);
+                $catalogConfigs = $readable === null ? $this->entityConfigs : array_filter(
+                    $this->entityConfigs,
+                    fn ($key) => $readable($this->labelFor((string) $key)),
+                    ARRAY_FILTER_USE_KEY
+                );
+                $entityCatalog = QueryUnderstandingService::buildEntityCatalog($catalogConfigs);
                 // QU judges follow_up_reference against the conversation
                 // (Task 1.22) — it must actually receive it.
                 $conversationContext = is_array($options['conversation_context'] ?? null)
@@ -285,12 +294,20 @@ class ContextRetriever implements ContextRetrieverInterface
             return $ctx;
         }
 
+        // Docs only (ai.query_generation.enabled = false): no query is generated, so no
+        // entity, few-shot or graph context is read (a host may have no graph store at all).
+        if (!config('ai.query_generation.enabled', true)) {
+            $this->logger->stopTimer('total');
+
+            return $ctx;
+        }
+
         // STEP 2: Semantic context selection
         $conversationFocusedEntity = $options['conversation_context']['focused_entity'] ?? null;
 
         // Page context is a SOFT PRIOR (never a hard filter): when the page/record the chat was
         // opened from names an entity type, seed it into selection the same way the conversation's
-        // focused entity is seeded, so pronoun/possessive resolution ("this unit") has an anchor.
+        // focused entity is seeded, so pronoun/possessive resolution ("this order") has an anchor.
         $pageEntityType = $options['page_context']['entity_type'] ?? null;
 
         // Use the Query-Understanding rewrite (when produced) as the retrieval query
@@ -304,12 +321,12 @@ class ContextRetriever implements ContextRetrieverInterface
         // re-thrown to STEP 4, which reports it — never fetched twice.
         $fullSchema = null;
         $schemaFailure = null;
-        $loadSchema = function () use (&$fullSchema, &$schemaFailure): array {
+        $loadSchema = function () use (&$fullSchema, &$schemaFailure, $readable): array {
             if ($schemaFailure !== null) {
                 throw $schemaFailure;
             }
             try {
-                return $fullSchema ??= $this->getGraphSchema();
+                return $fullSchema ??= $this->readableSchema($this->getGraphSchema(), $readable);
             } catch (\Exception $e) {
                 $schemaFailure = $e;
                 throw $e;
@@ -798,6 +815,34 @@ class ContextRetriever implements ContextRetrieverInterface
     private function pruningEnabled(): bool
     {
         return !function_exists('config') || (bool) config('ai.semantic_context.pruning', true);
+    }
+
+    /**
+     * The labels this asker may query, as a filter; null when nothing limits them (not
+     * narrowed below the team, no audience entity list).
+     *
+     * @return (\Closure(string): bool)|null
+     */
+    private function readableLabels(array $options): ?\Closure
+    {
+        $user = $options['user'] ?? auth()->user();
+        if (RowScope::idsFor($user) === null && Audiences::dataEntities($user) === null) {
+            return null;
+        }
+        $security = app(AiSecurityService::class);
+
+        return static fn (string $label): bool => $security->canRead($user, $label);
+    }
+
+    /** The schema without the labels the asker cannot read (relationship patterns follow). */
+    private function readableSchema(array $schema, ?\Closure $readable): array
+    {
+        if ($readable === null) {
+            return $schema;
+        }
+        $labels = array_values(array_filter((array) ($schema['labels'] ?? []), fn ($label) => is_string($label) && $readable($label)));
+
+        return $this->schemaProjector->filterByLabels($schema, $labels);
     }
 
     /**

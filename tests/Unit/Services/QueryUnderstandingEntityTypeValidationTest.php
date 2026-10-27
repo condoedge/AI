@@ -103,9 +103,10 @@ class QueryUnderstandingEntityTypeValidationTest extends TestCase
         $this->assertCount(2, $result->entityTypes);
     }
 
-    /** @test */
+    /** @test The host names its ambiguous labels (ai.domain.ambiguous_profile_labels; CondoEdge: Contact). */
     public function possessive_profile_lookup_does_not_force_ambiguous_contact_entity(): void
     {
+        config(['ai.domain.ambiguous_profile_labels' => ['Contact']]);
         $result = $this->analyzeWithLlmEntityTypes(
             ['Contact', 'Unit'],
             isPossessive: true,
@@ -114,6 +115,15 @@ class QueryUnderstandingEntityTypeValidationTest extends TestCase
 
         $this->assertNotContains('Contact', $result->entityTypes);
         $this->assertContains('Unit', $result->entityTypes);
+    }
+
+    /** @test */
+    public function with_no_ambiguous_labels_configured_a_possessive_lookup_keeps_every_entity(): void
+    {
+        config(['ai.domain.ambiguous_profile_labels' => []]);
+        $result = $this->analyzeWithLlmEntityTypes(['Contact', 'Unit'], isPossessive: true, intent: 'lookup');
+
+        $this->assertContains('Contact', $result->entityTypes);
     }
 
     /** @test */

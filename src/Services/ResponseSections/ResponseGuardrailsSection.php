@@ -53,6 +53,12 @@ class ResponseGuardrailsSection extends BaseResponseSection
             $lines[] = "   The domain of {$project} is: {$scope} Anything outside it is out-of-scope per rule 2.";
         }
 
+        // Docs only (ai.query_generation.enabled = false): nothing is ever looked up.
+        if (!config('ai.query_generation.enabled', true)) {
+            $lines[] = "3. You answer from the documents only and cannot see the user's own records (their lists, amounts, statuses). "
+                . "When asked for them, say where in the application they can see them, following the documents' steps and labels; never state a figure.";
+        }
+
         return implode("\n", $lines) . "\n\n";
     }
 }

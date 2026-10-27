@@ -19,7 +19,7 @@ use Condoedge\Ai\Support\StatedNumber;
  *
  *   citations   every [k] names an existing passage; literal "[N]" placeholders
  *               ("[N]", "[N] 2", "([N] 2)") are flagged; a sentence citing
- *               "art. 1069" must cite a passage that contains 1069; a
+ *               "art. 12" must cite a passage that contains 12; a
  *               document-grounded turn needs at least one valid marker.
  *   numbers     every stated quantity (StatedNumber::quantities) must be one of
  *               the turn's figures (real rows, plan facts/totals, counts, numbers
@@ -52,7 +52,7 @@ final class AnswerValidator
     /** A real citation marker — "[3]" but not a markdown link text "[3](…)". */
     private const MARKER = '/\[(\d{1,3})\](?!\()/';
 
-    /** "art. 1069" / "article 1069" / "articles 1069" — a numeric structural citation. */
+    /** "art. 12" / "article 12" / "articles 12" — a numeric structural citation. */
     private const ARTICLE = '/\bart(?:icle)?s?\.?\s*(\d{1,5})\b/iu';
 
     private const MARKDOWN_LINK = '/\[([^\]]*)\]\((entity|action):\/\/([^)\s]*)\)/i';
@@ -371,7 +371,7 @@ final class AnswerValidator
      *
      * MEASURED (docs/eval p20, every stored report): 147 distinct cited law answers, 68 of them
      * ending with an eligible uncited paragraph (67 distinct), each read and labelled. The share
-     * of the 10 CONCLUSIONS ("In summary, whether you can tear down the wall depends on…", "In
+     * of the 10 CONCLUSIONS ("In summary, whether you can cancel the contract depends on…", "In
      * summary, yes, you would be responsible…") runs from 4/11 = 0.36 to 0.75; the 24 platitudes
      * from 0.00 to 0.50; the 23 invitations from 0.00 to 0.71. The classes OVERLAP — a platitude
      * is written in the answer's own vocabulary too — so the threshold is set for the one error
@@ -390,7 +390,7 @@ final class AnswerValidator
 
     /**
      * A document-grounded answer WITHOUT its UNGROUNDED closing paragraph (eval p16–p20: "These
-     * rights and duties are designed to ensure a harmonious living environment…", "Understanding
+     * rights and duties are designed to ensure a smooth collaboration…", "Understanding
      * these obligations will help you…", "Next steps are attached below…" — in different words
      * every run, against the prompt's own ban). The grounding policy requires every claim of such
      * an answer to carry its passage marker, so the rule is one of STRUCTURE, never of wording:
@@ -403,11 +403,11 @@ final class AnswerValidator
      * The first paragraph can never qualify. A paragraph GROUNDED in the turn stays: it holds a
      * figure or an article number of the passages, a proper noun of the passages, a content word
      * the QUESTION asks about that no passage holds (the direct answer in the user's words —
-     * "…the previous owner's unpaid condo fees…" — or the honest "nothing here covers X"), or at
+     * "…the previous owner's unpaid invoices…" — or the honest "nothing here covers X"), or at
      * least CLOSING_GROUNDED_SHARE of its content words are the passages', the cited blocks' or
      * the question's. An uncited SUMMARY of the cited blocks is redundant but safe — on a yes/no
      * question it is the verdict (eval p20-A tear-down: the drop removed "In summary, you will
-     * likely need to confirm whether the wall is a common portion…", the only sentence shaped as
+     * likely need to confirm whether the clause applies to you…", the only sentence shaped as
      * an answer). A platitude brings words of its own.
      *
      * Replayed over the 67 stored paragraphs: 31 dropped, 36 kept (the former passage-only test
@@ -639,9 +639,9 @@ final class AnswerValidator
 
     /**
      * Annotated citations → the standard marker. The model sometimes cites as
-     * "[1, art. 1063]" or "[2; arts. 1064–1066]" (eval p16-B: a fully cited answer was
+     * "[1, art. 11]" or "[2; arts. 12–14]" (eval p16-B: a fully cited answer was
      * judged marker-less, retried, and shipped with no source links). The annotation is
-     * kept for the reader: "(art. 1063) [1]"; a list of markers "[1, 2]" becomes "[1][2]".
+     * kept for the reader: "(art. 11) [1]"; a list of markers "[1, 2]" becomes "[1][2]".
      * Only brackets that START with an existing passage number are touched.
      */
     public function normalizeAnnotatedCitations(string $text): string
@@ -774,7 +774,7 @@ final class AnswerValidator
     /**
      * Sentence-ish segments with byte offsets and their paragraph index: blank
      * lines separate paragraphs; line breaks and sentence ends followed by an
-     * uppercase/markup start separate segments ("art. 1069" never splits — a digit
+     * uppercase/markup start separate segments ("art. 12" never splits — a digit
      * follows its dot).
      *
      * @return list<array{0: string, 1: int, 2: int}>

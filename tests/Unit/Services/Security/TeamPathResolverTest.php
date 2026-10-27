@@ -60,6 +60,25 @@ class TeamPathResolverTest extends TestCase
     }
 
     /** @test */
+    public function an_entity_is_found_by_its_graph_label_when_it_differs_from_its_class_name(): void
+    {
+        config(['entities' => [
+            'App\Models\OrderDetail' => [
+                'graph' => ['label' => 'OrderLine', 'relationships' => [['type' => 'BELONGS_TO_ORDER', 'target_label' => 'Order']]],
+                'security' => ['team_path' => 'order.campaign.team_id', 'row_scope_path' => 'order.campaign.id'],
+            ],
+            'App\Models\Order' => [
+                'graph' => ['label' => 'Order', 'relationships' => [['type' => 'BELONGS_TO_CAMPAIGN', 'target_label' => 'Campaign']]],
+                'security' => ['team_path' => 'campaign.team_id'],
+            ],
+        ]]);
+
+        $chain = 'MATCH (l)-[:BELONGS_TO_ORDER]->(o:Order) MATCH (o)-[:BELONGS_TO_CAMPAIGN]->(c:Campaign) ';
+        $this->assertSame($chain . 'WHERE c.team_id IN $ai_team_ids', $this->resolver->ruleFor('OrderLine', 'l')['filter']);
+        $this->assertSame($chain . 'WHERE c.id IN $ai_row_scope_ids', $this->resolver->ruleFor('OrderLine', 'l', true)['filter']);
+    }
+
+    /** @test */
     public function resolves_relationship_path(): void
     {
         config(['entities.Person.security.team_path' => ['rel' => 'MEMBER_OF', 'target' => 'Team']]);
@@ -195,6 +214,59 @@ class TeamPathResolverTest extends TestCase
 
         $this->assertSame([], $this->resolver->scopeLabels('Orphan'));
         $this->assertSame([], $this->resolver->scopeLabels('Loose'));
+    }
+
+    /** @test */
+    public function a_row_rule_reads_row_scope_path_and_the_row_parameter(): void
+    {
+        config()->set('entities.Meeting.security', ['team_path' => 'team_id', 'row_scope_path' => 'union_id']);
+        config()->set('entities.Motion.security', ['team_path' => 'meeting.team_id', 'row_scope_path' => 'meeting.union_id']);
+        config()->set('entities.Motion.graph.relationships', [['type' => 'BELONGS_TO_MEETING', 'target_label' => 'Meeting']]);
+        config()->set('entities.Supplier.security', ['team_path' => 'team_id', 'row_scope_path' => ['rel' => 'UNIONS', 'target' => 'Union']]);
+
+        $direct = $this->resolver->ruleFor('Meeting', 'm', true);
+        $this->assertSame('WHERE m.union_id IN $ai_row_scope_ids', $direct['filter']);
+        $this->assertSame('$ai_row_scope_ids', $direct['param']);
+
+        $parent = $this->resolver->ruleFor('Motion', 'mo', true);
+        $this->assertSame('MATCH (mo)-[:BELONGS_TO_MEETING]->(m:Meeting) WHERE m.union_id IN $ai_row_scope_ids', $parent['filter']);
+        $this->assertSame('$ai_row_scope_ids', $parent['param']);
+
+        $relationship = $this->resolver->ruleFor('Supplier', 's', true);
+        $this->assertSame('MATCH (s)-[:UNIONS]->(t:Union) WHERE t.id IN $ai_row_scope_ids', $relationship['filter']);
+
+        $this->assertSame('$ai_team_ids', $this->resolver->ruleFor('Meeting', 'm')['param'], 'the team rule is unchanged');
+        $this->assertSame('WHERE m.team_id IN $ai_team_ids', $this->resolver->ruleFor('Meeting', 'm')['filter']);
+    }
+
+    /** @test */
+    public function an_entity_without_row_scope_path_has_no_row_rule_even_with_a_default_team_path(): void
+    {
+        config()->set('ai.security.default_team_path', 'auto');
+        config()->set('entities.Supplier.security', ['team_path' => 'team_id']);
+        config()->set('entities.Supplier.graph.relationships', [['type' => 'BELONGS_TO_TEAM', 'target_label' => 'Team', 'foreign_key' => 'team_id']]);
+        config()->set('entities.Auto.security', ['team_path' => 'team_id', 'row_scope_path' => 'auto']);
+        config()->set('entities.Auto.graph.relationships', [['type' => 'BELONGS_TO_TEAM', 'target_label' => 'Team', 'foreign_key' => 'team_id']]);
+
+        $this->assertNull($this->resolver->ruleFor('Supplier', 's', true));
+        $this->assertNull($this->resolver->ruleFor('Auto', 'a', true), "'auto' is not a row path");
+    }
+
+    /** @test */
+    public function scope_labels_include_the_row_rule_labels(): void
+    {
+        config()->set('entities.Motion.security', ['team_path' => 'team_id', 'row_scope_path' => 'meeting.union_id']);
+        config()->set('entities.Motion.graph.relationships', [['type' => 'BELONGS_TO_MEETING', 'target_label' => 'Meeting']]);
+
+        $this->assertSame(['Meeting'], $this->resolver->scopeLabels('Motion'));
+    }
+
+    /** @test */
+    public function scope_parameters_are_the_team_and_the_row_parameters(): void
+    {
+        $this->assertTrue(TeamPathResolver::isScopeParameter('$ai_team_ids'));
+        $this->assertTrue(TeamPathResolver::isScopeParameter('$ai_row_scope_ids'));
+        $this->assertFalse(TeamPathResolver::isScopeParameter('$ai_other'));
     }
 
     /** @test */

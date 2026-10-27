@@ -23,7 +23,7 @@ Route::middleware(['web', 'auth'])->group(function () {
 // ai.admin.middleware (['web', 'auth']), ai.admin.layout (the host's Blade layout —
 // without one Kompo returns the bare component), ai.admin.users_table,
 // ai.admin.user_name_column, ai.admin.user_team_column, ai.admin.teams_table,
-// ai.admin.team_name_column.
+// ai.admin.team_name_column, ai.admin.slow_answer_ms (20000: the "slow" answer filter).
 if (config('ai.admin.enabled', true)) {
 	Route::group(array_filter([
 		'middleware' => array_merge(

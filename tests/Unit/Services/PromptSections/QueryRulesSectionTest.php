@@ -6,7 +6,7 @@ namespace Condoedge\Ai\Tests\Unit\Services\PromptSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\PromptSections\QueryRulesSection;
-use PHPUnit\Framework\TestCase;
+use Condoedge\Ai\Tests\TestCase;
 
 /**
  * E1: QueryRulesSection rides in the SYSTEM message while the schema/entities/scopes it
@@ -14,7 +14,7 @@ use PHPUnit\Framework\TestCase;
  * blocks they depend on ("the GRAPH SCHEMA block") instead of using position words like
  * "above" / "the ... section", which are wrong once the role split moves the data away.
  *
- * Pure string behavior — no container needed.
+ * Its examples come from config (ai.domain.query_rules): the container is needed.
  */
 class QueryRulesSectionTest extends TestCase
 {
@@ -26,6 +26,7 @@ class QueryRulesSectionTest extends TestCase
     /** @test Actions plan B1: record rows carry their id so code can attach the record's link. */
     public function it_asks_record_queries_to_project_the_entity_id(): void
     {
+        config(['ai.domain.query_rules.record_id_example' => 'u.id AS unit_id']);
         $output = $this->format();
 
         $this->assertStringContainsString("ALSO return each record's id", $output);

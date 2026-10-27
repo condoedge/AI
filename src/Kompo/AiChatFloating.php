@@ -20,6 +20,40 @@ class AiChatFloating extends Form
 {
     use HasChatTheme, HasMethodsAsProperties;
 
+    /**
+     * The page the chat is opened from, without each view wiring it: the route the button
+     * is rendered on, kept in the store so the request that opens the chat carries it. A
+     * host's own page_context wins; a Kompo request (the one opening the chat) is no page.
+     * Opt-in: ai.chat.capture_page_route.
+     */
+    public function created()
+    {
+        if (!config('ai.chat.capture_page_route', false)) {
+            return;
+        }
+        $page = $this->prop('page_context');
+        if (is_array($page) && !empty($page['route'] ?? null)) {
+            return;
+        }
+        $request = request();
+        $route = $request->headers->has(\Kompo\Core\KompoInfo::$key) ? null : $request->route()?->getName();
+        if (is_string($route) && $route !== '') {
+            $this->store(['page_context' => (is_array($page) ? $page : []) + ['route' => $route, 'page_name' => self::pageName($route)]]);
+        }
+    }
+
+    /** The page's navigation label (ai.navigation.pages), as users read it; '' when the page is not listed. */
+    private static function pageName(string $route): string
+    {
+        foreach ((array) config('ai.navigation.pages', []) as $page) {
+            if (is_array($page) && ($page['route'] ?? null) === $route && is_string($page['label'] ?? null)) {
+                return (string) __($page['label']);
+            }
+        }
+
+        return '';
+    }
+
     public function render()
     {
         return _Rows(

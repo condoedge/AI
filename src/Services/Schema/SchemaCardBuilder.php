@@ -15,10 +15,10 @@ use Condoedge\Ai\Support\EnumLegend;
  * overlapping prose renderings of the schema (SchemaSection, RelationshipsSection,
  * DetectedEntitiesSection):
  *
- *   Invoice — A condo fee invoice ...  (aliases: invoices, cotisation, …)
+ *   Invoice — A customer invoice ...  (aliases: invoices, bill, …)
  *     props: id:Integer, status:String(numeric){1=Draft|2=Approved|…}, due_at:String(ISO date), …
- *     notes: customer_type: Customer type (polymorphic - Contact or Unit); [:CUSTOMER]: …
- *     out: (Invoice)-[:CUSTOMER]->(Unit), (Invoice)-[:BELONGS_TO_TEAM]->(Team)
+ *     notes: customer_type: Customer type (polymorphic - Contact or Account); [:CUSTOMER]: …
+ *     out: (Invoice)-[:CUSTOMER]->(Account), (Invoice)-[:BELONGS_TO_TEAM]->(Team)
  *     in: (InvoiceDetail)-[:INVOICE_DETAILS]->(Invoice)
  *     fk (no edge): approved_by → User.id
  *

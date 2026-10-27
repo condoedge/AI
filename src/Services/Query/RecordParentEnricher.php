@@ -18,8 +18,8 @@ use Condoedge\Ai\Services\Response\EntityIdIndex;
  *
  * A single-record lookup used to show only what the generator happened to project
  * (eval p18-B digest t1, "When was our last meeting then?": name, date and id — the
- * union the meeting belongs to was projected in 1 run of 4, so the answer could not
- * say WHICH condo association met, and with two displayable columns the record
+ * group the meeting belongs to was projected in 1 run of 4, so the answer could not
+ * say WHICH group met, and with two displayable columns the record
  * block never rendered). No prompt line fixed it over four runs; this does, by code:
  *
  * when a result is exactly ONE row that is a record of a configured entity and
@@ -28,7 +28,7 @@ use Condoedge\Ai\Services\Response\EntityIdIndex;
  * scoped executor, zero LLM calls:
  *
  *     MATCH (n:Meeting) WHERE n.id = $ai_record_id
- *     OPTIONAL MATCH (n)-[:BELONGS_TO_UNION]->(p0:Union)
+ *     OPTIONAL MATCH (n)-[:BELONGS_TO_GROUP]->(p0:Group)
  *     RETURN p0.name AS p0_0 LIMIT 1
  *
  * WHICH PARENTS — structure of the host's entity config only, no vocabulary:
@@ -52,15 +52,15 @@ use Condoedge\Ai\Services\Response\EntityIdIndex;
  *    name property, or a column prefixed by the parent's label holds text);
  *  - at most MAX_PARENTS parents, in declaration order.
  *
- * The added column is `<parent label>_name` (`union_name` → the header "Union
+ * The added column is `<parent label>_name` (`group_name` → the header "Group
  * Name"); two declared relationships to the same parent label are told apart by
  * their foreign key (`from_account_id` → `from_account_name`).
  *
- * ITS OWN DETAIL FIELDS (eval p19-B digest t1: the union was shown, the meeting's
+ * ITS OWN DETAIL FIELDS (eval p19-B digest t1: the group was shown, the meeting's
  * place — recorded — was not, because the generator did not project it). An entity
  * may declare which of its OWN properties are worth showing on a single record:
  *
- *     'metadata' => ['detail_properties' => ['start_date', 'place', 'president']],
+ *     'metadata' => ['detail_properties' => ['start_date', 'place', 'organizer']],
  *
  * Those the row does not already show come back in the SAME query by id
  * (`n.place AS place`) and become columns of the row, under the property's own
@@ -573,7 +573,7 @@ final class RecordParentEnricher
         return $fields === [] || in_array('id', $fields, true) ? 'id' : $fields[0];
     }
 
-    /** `ContactUnit` / `unionName` → `contact_unit` / `union_name` (identifier normalization). */
+    /** `OrderLine` / `groupName` → `order_line` / `group_name` (identifier normalization). */
     private static function snake(string $identifier): string
     {
         return strtolower((string) preg_replace('/(?<=[a-z0-9])(?=[A-Z])/', '_', $identifier));

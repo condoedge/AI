@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Kompo\Support;
 
 use Condoedge\Ai\Contracts\AiActionInterface;
+use Condoedge\Ai\DTOs\Tasks\TaskOutcome;
 use Condoedge\Ai\Kompo\Actions\ApprovalCard;
+use Condoedge\Ai\Kompo\Actions\TaskSummaryCard;
+use Condoedge\Ai\Kompo\MessagesQuery;
+use Condoedge\Ai\Models\AiTask;
 use Condoedge\Ai\Services\Actions\ActionDispatcher;
 use Condoedge\Ai\Services\Actions\ActionInvocation;
 use Condoedge\Ai\Services\Actions\AiActionRegistry;
@@ -13,11 +17,13 @@ use Condoedge\Ai\Services\Actions\BuiltIn\AskFollowUpAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\ExportExcelAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\ExportPdfAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\RecordedResultExport;
+use Condoedge\Ai\Services\Actions\BuiltIn\StartTaskAction;
 use Condoedge\Ai\Services\Actions\Results\AiActionResult;
 use Condoedge\Ai\Services\Response\ActionLinkHandler;
 use Condoedge\Ai\Services\Response\ActionResultPresenter;
 use Condoedge\Ai\Services\Response\ContentLinkProcessor;
 use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
+use Condoedge\Ai\Services\Tasks\TaskOrchestrator;
 use Condoedge\Ai\Services\UI\ChatThemeInterface;
 use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
 
@@ -33,10 +39,10 @@ use Condoedge\Ai\Services\UI\SafeMarkdownRenderer;
  * bar and the persisted-invocation/approval cards — all passed to the kit as $content.
  *
  * Kompo round-trip note: the action-bar links call selfPost('feedback'|'regenerate'),
- * copyToClipboard(...) and the edit link calls selfGet('editMessage'). Those method-name
+ * selfGet('feedbackComment') and the edit link calls selfGet('editMessage'). Those method-name
  * strings are resolved by Kompo against the owning MessagesQuery component when the booted
  * element tree is traversed — building the elements here does not change the request target,
- * so the public feedback/regenerate/editMessage methods stay on MessagesQuery.
+ * so the public feedback/feedbackComment/regenerate/editMessage methods stay on MessagesQuery.
  */
 class MessageBubbleRenderer
 {
@@ -55,6 +61,9 @@ class MessageBubbleRenderer
      * @var array<string, AiActionResult|null>
      */
     protected array $invocationResults = [];
+
+    /** @var array<string, AiTask|null> task rows by uuid, read once per request */
+    protected array $tasks = [];
 
     public function __construct(
         protected ChatThemeInterface $theme,
@@ -104,7 +113,7 @@ class MessageBubbleRenderer
             $isNew,
         );
 
-        if (!$this->settings->enableEdit()) {
+        if (!$this->settings->enableEdit() || $this->isTaskMessage($message)) {
             return $bubble;
         }
 
@@ -150,14 +159,24 @@ class MessageBubbleRenderer
             $linkContext
         );
 
+        [$progress, $summaryCard, $choices, $outcomeLinks] = $this->taskElements($message);
+        if ($progress !== null) {
+            $content[] = $progress;
+        }
+
         $content[] = _Html($this->renderMarkdown($processed['content']))
             ->class('prose prose-sm max-w-none [&_a]:font-medium [&_a]:underline [&_a]:underline-offset-2' . $contentRevealClass);
+
+        if ($summaryCard !== null) {
+            $content[] = $summaryCard;
+        }
 
         // Persisted native-turn invocations render beside the parsed links through the same
         // presenter, fingerprint-deduped so a link the model copied verbatim renders once.
         // Follow-up question chips are not page links: they get a block of their own below.
         [$invocationElements, $followUps] = $this->persistedInvocationElements($message, $linkContext);
-        $actionElements = array_merge($processed['elements'], $invocationElements);
+        $followUps = [...$followUps, ...$choices];
+        $actionElements = array_merge($processed['elements'], $invocationElements, $outcomeLinks);
 
         if (!empty($actionElements)) {
             // Action links arrive as bare _Link()s from config closures with no styling, so a
@@ -250,12 +269,14 @@ class MessageBubbleRenderer
                     ? 'bg-red-100 text-red-600'
                     : 'hover:bg-red-50 text-gray-400 hover:text-red-600'))
                 ->balloon(__('ai.messages.not-helpful'), 'up')
-                ->selfPost('feedback', ['id' => $message->id, 'type' => 'negative'])
-                ->alert('ai.messages.feedback-received')
-                ->refresh();
+                // Sibling interactions: the 👎 is saved even when the optional comment modal is dismissed.
+                ->onClick(function ($e) use ($message) {
+                    $e->selfPost('feedback', ['id' => $message->id, 'type' => 'negative'])->refresh();
+                    $e->selfGet('feedbackComment', ['id' => $message->id])->inModal();
+                });
         }
 
-        if ($this->settings->enableRegenerate()) {
+        if ($this->settings->enableRegenerate() && !$this->isTaskMessage($message)) {
             $dotColor = $this->theme->primarySolid();
             $regeneratingText = __('ai.messages.regenerating');
             $messageId = $message->id;
@@ -410,6 +431,111 @@ class MessageBubbleRenderer
         }
 
         return _Rows(...$followUps)->class('cdge-follow-ups mt-3 pt-2 border-t border-gray-100 space-y-2');
+    }
+
+    // =========================================================================
+    // Task messages (metadata.task, see TaskOrchestrator)
+    // =========================================================================
+
+    /** A message of a task (its question, summary or outcome, or the user's answer): no regenerate, no edit. */
+    protected function isTaskMessage($message): bool
+    {
+        return is_array($message->metadata['task'] ?? null);
+    }
+
+    /**
+     * The task part of an assistant message: the progress line and choice chips of the current
+     * question, the summary card, or the outcome's link and follow-up chips. Controls show only while
+     * the message still is the task's current state, so an older question or summary stays inert.
+     *
+     * @return array{0: mixed, 1: mixed, 2: array<int, mixed>, 3: array<int, mixed>} [progress line, summary card, choice chips, outcome links]
+     */
+    protected function taskElements($message): array
+    {
+        $task = $message->metadata['task'] ?? null;
+        $links = is_array($task) ? $this->outcomeLinks($task) : [];
+        if ($links !== []) {
+            return [null, null, [], $links];
+        }
+        if (!is_array($task) || !is_string($task['uuid'] ?? null)) {
+            return [null, null, [], []];
+        }
+        if (($task['status'] ?? null) === AiTask::STATUS_REVIEWING) {
+            return [null, new TaskSummaryCard(null, ['conversation_id' => $message->conversation_id ?? null, 'message_id' => $message->id]), [], []];
+        }
+        $live = $this->liveTask($message, $task);
+        if ($live === null || $live->status !== AiTask::STATUS_COLLECTING) {
+            return [null, null, [], []];
+        }
+
+        $progress = _Html(e(__('ai.tasks.progress', app(TaskOrchestrator::class)->progress($live, auth()->user()))))
+            ->class('cdge-task-progress mb-1 text-xs font-medium text-gray-400');
+        $choices = [];
+        foreach ((array) ($task['choices'] ?? []) as $choice) {
+            if (is_array($choice)) {
+                $choices[] = $this->taskChoiceChip($task, $choice);
+                continue;
+            }
+            $choice = is_string($choice) ? AskFollowUpAction::sanitize($choice) : '';
+            if ($choice !== '') {
+                $choices[] = $this->presenter->present(AiActionResult::followUp($choice, $choice), AskFollowUpAction::KEY);
+            }
+        }
+
+        return [$progress, null, array_values(array_filter($choices)), []];
+    }
+
+    /**
+     * A limit's link to the manual page (with or without a task) or a done task's outcome link, then
+     * the outcome's follow-ups: a task one renders only while this user may start it.
+     *
+     * @return array<int, mixed>
+     */
+    protected function outcomeLinks(array $task): array
+    {
+        $links = [];
+        $link = $task['link'] ?? $task['outcome']['link'] ?? null;
+        if (is_string($link['url'] ?? null) && is_string($link['label'] ?? null)) {
+            $links[] = _Link(e(__($link['label'])))->href($link['url']);
+        }
+        $user = auth()->user();
+        foreach (TaskOutcome::fromArray((array) ($task['outcome'] ?? []))->followUps as $item) {
+            if (isset($item['url'])) {
+                $links[] = _Link(e(__($item['label'])))->href($item['url']);
+            } elseif (StartTaskAction::invocation($item['task'], $user) !== null) {
+                $links[] = StartTaskAction::element($item['task'], (string) __($item['label']));
+            }
+        }
+
+        return $links;
+    }
+
+    /** A code-built choice ({label, field, value}): it posts the value, the orchestrator checks it is still asked. */
+    protected function taskChoiceChip(array $task, array $choice): mixed
+    {
+        if (!is_string($choice['label'] ?? null) || !is_string($choice['field'] ?? null) || !array_key_exists('value', $choice)) {
+            return null;
+        }
+
+        return _Link(e($choice['label']))->icon('chat-bubble-left-ellipsis')->class(ActionResultPresenter::FOLLOW_UP_CLASS)
+            ->selfPost('chooseTask', ['uuid' => $task['uuid'], 'version' => (int) ($task['version'] ?? 0),
+                'field' => $choice['field'], 'value' => json_encode($choice['value'])])
+            ->refresh(MessagesQuery::ID);
+    }
+
+    /** The message's task while it is still at the status and version the message shows, else null. */
+    protected function liveTask($message, array $task): ?AiTask
+    {
+        if (!TaskOrchestrator::configured()) {
+            return null;
+        }
+        $uuid = $task['uuid'];
+        if (!array_key_exists($uuid, $this->tasks)) {
+            $this->tasks[$uuid] = AiTask::where('uuid', $uuid)->where('conversation_id', $message->conversation_id ?? null)->first();
+        }
+        $live = $this->tasks[$uuid];
+
+        return $live !== null && $live->status === ($task['status'] ?? null) && $live->version === (int) ($task['version'] ?? 0) ? $live : null;
     }
 
     // =========================================================================

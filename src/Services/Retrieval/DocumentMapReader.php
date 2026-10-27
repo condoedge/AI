@@ -332,8 +332,8 @@ Fill the reply in this order:
 - "needs": the passages the answer must rely on, the most decisive first, each with its role. Only what the answer needs: usually 2 to 6, never more than 8. Use the ids exactly as printed in the map.
 TXT;
 
-        // DOCUMENTS OF DIFFERENT SCOPES (measured 2026-10-08 on a building's own
-        // declaration beside the general law): the reader sees both maps and must
+        // DOCUMENTS OF DIFFERENT SCOPES (measured 2026-10-08 on a record's own
+        // by-law beside the general law): the reader sees both maps and must
         // not take a passage of one for the other — nor answer from one alone when
         // each states a rule on the matter. Structural: whose document it is, never
         // which of the two prevails (that is for the documents to say).

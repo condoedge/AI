@@ -61,7 +61,7 @@ class QuestionAnalysisSection extends BaseResponseSection
     /** Styles that ask for just the answer; a "cite its passage" instruction contradicts them. */
     private const TERSE_STYLES = ['minimal', 'concise'];
 
-    /** An article number: digits, optionally dotted ("1064.1"). Nothing else is ever printed as a locator. */
+    /** An article number: digits, optionally dotted ("264.1"). Nothing else is ever printed as a locator. */
     private const ARTICLE_NUMBER = '/^\d{1,6}(\.\d{1,3}){0,2}$/';
 
     /** Up to this many article numbers are listed; a longer run is printed first–last. */
@@ -184,7 +184,7 @@ class QuestionAnalysisSection extends BaseResponseSection
     }
 
     /**
-     * "1063" · "1064.1, 1065" · a run of five or more as "1096–1100" (the wording of
+     * "263" · "264.1, 265" · a run of five or more as "296–300" (the wording of
      * the passage headers, FileContextSection).
      *
      * @param list<string> $articles

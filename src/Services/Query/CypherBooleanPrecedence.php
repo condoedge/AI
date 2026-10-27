@@ -13,10 +13,10 @@ use Condoedge\Ai\Services\Security\Token;
  *
  * The generator wrote
  *
- *   WHERE (unit branch) OR (contact branch) AND i.status IN […] AND year = '2026'
+ *   WHERE (account branch) OR (contact branch) AND i.status IN […] AND year = '2026'
  *
  * AND binds tighter than OR (and than XOR), so the status and year filters applied
- * to the contact branch only: for a real owner every unit invoice of every year
+ * to the contact branch only: for a real customer every account invoice of every year
  * would have been summed. Nothing rejects such a query — it is valid Cypher.
  *
  * This reports every predicate that mixes an OR / XOR with an AND at the SAME

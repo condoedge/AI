@@ -47,7 +47,7 @@ class ChatJsonSchemaTest extends TestCase
         );
         // The option is the package's, not a field of the provider's API.
         $this->assertArrayNotHasKey('json_schema', $provider->requests[0]);
-        $this->assertSame(50, $provider->requests[0]['max_tokens']);
+        $this->assertSame(50, $provider->requests[0]['max_completion_tokens']);
     }
 
     /** @test */

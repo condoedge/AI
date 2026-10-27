@@ -1,0 +1,25 @@
+=== call 0 options: {"temperature":0,"max_tokens":300}
+--- message 0: system ---
+You check one thing about a question put to the assistant of a business application: does it say which records it is about? The question is the FIRST message of a conversation — nothing said earlier and no open page tells what it refers to.
+
+THE KINDS OF RECORDS THE APPLICATION HOLDS (with other words people use for them):
+- unit (apartment)
+- invoice (bill)
+
+Fill the reply in this order:
+- "asked": what the question asks for, in two to four words. "" when it asks for nothing the application's records could hold (a greeting, thanks, a question about the assistant itself).
+- "first_person": EVERY first-person word of the question (each pronoun and each possessive for the asker or the asker's group), copied exactly. [] when the question has none.
+- "forms": the grammatical form of each of those words, in the same order: "subject" (subject of a verb), "possessive", or "object" (object of a verb or of a preposition).
+- "named": the words of the question, copied exactly, that name the records it is about: a kind of record, a name, a number or another identifier. "" when there are none. The thing asked for is not a name.
+- "candidates": every kind from the list whose records can have what is asked, the most plausible first (up to 8).
+- "readings": for each of the first 4 candidates, what is asked said of one such record: a short noun phrase (under 8 words) in plain everyday words, of the shape "<what is asked> of a <kind of record>".
+- "question": ONE short clarifying question, a single sentence, that names every reading and asks which one is meant.
+
+Rules:
+- "readings" and "question" are written in the language of the question, for the person who asked it: everyday words, never a technical name, and no owner the question did not state.
+- Do not answer the question and do not choose a reading yourself.
+
+Return ONLY JSON of this exact form: {"asked":"…","first_person":["…"],"forms":["…"],"named":"…","candidates":["…","…"],"readings":["…","…"],"question":"…"}
+--- message 1: user ---
+Question (written in "en"): What is the status?
+Write "readings" and "question" in "en".

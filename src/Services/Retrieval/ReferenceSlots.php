@@ -15,9 +15,9 @@ use Condoedge\Ai\Support\DocumentScopeLabel;
  * budget ranks every passage together by similarity — and a long own document
  * written in the user's words can take every slot.
  *
- * Measured live (2026-10-08, a building's declaration beside the general law):
- * on "the seller has not paid his charges — do I, the buyer, pay?" the five slots
- * went to the declaration and the general law's article on that very point,
+ * Measured live (2026-10-08, a customer's own contract beside a general policy):
+ * on "the seller has not paid his invoices — do I, the buyer, pay?" the five slots
+ * went to the contract and the general policy's article on that very point,
  * admitted by the search, never reached the answer; and the map reader, which
  * reads the documents of the selected passages, was shown one document only.
  *

@@ -38,7 +38,7 @@ class LlmResolver
         $config = $this->roleConfig[$role];
         $provider = $config['provider'] ?? config('ai.llm.default', 'openai');
         $baseConfig = config("ai.llm.{$provider}", []);
-        $mergedConfig = array_merge($baseConfig, array_filter($config, fn($v) => $v !== null));
+        $mergedConfig = array_merge($baseConfig, $this->overrides($config));
 
         $this->cache[$role] = match ($provider) {
             'openai' => new \Condoedge\Ai\LlmProviders\OpenAiLlmProvider($mergedConfig),
@@ -72,7 +72,7 @@ class LlmResolver
         $provider = $config['provider'] ?? config('ai.llm.default', 'openai');
         $merged = array_merge(
             (array) config("ai.llm.{$provider}", []),
-            array_filter($config, fn ($v) => $v !== null),
+            $this->overrides($config),
             ['circuit_breaker' => $breaker]
         );
 
@@ -87,6 +87,12 @@ class LlmResolver
         }
 
         return $this->cache[$key] = $isolated ?? $this->forRole($role);
+    }
+
+    /** A role's null value falls back to the base config, except `temperature => null`: send none. */
+    private function overrides(array $config): array
+    {
+        return array_filter($config, fn ($v, $k) => $v !== null || $k === 'temperature', ARRAY_FILTER_USE_BOTH);
     }
 
     public function default(): LlmProviderInterface

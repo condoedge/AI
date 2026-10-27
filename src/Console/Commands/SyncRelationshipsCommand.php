@@ -187,7 +187,8 @@ class SyncRelationshipsCommand extends Command
             $query->select($columns);
         }
 
-        $query->chunk($chunkSize, function ($entities) use (
+        // By key, not OFFSET: a row deleted meanwhile would make OFFSET skip another.
+        $query->chunkById($chunkSize, function ($entities) use (
             &$created,
             &$skipped,
             &$failed,

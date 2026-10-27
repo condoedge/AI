@@ -234,6 +234,52 @@ class GraphComputedPropertiesTest extends TestCase
         $this->assertNull($props['missing']);
     }
 
+    public function test_the_node_reads_the_entitys_graph_array_when_it_declares_one(): void
+    {
+        $entity = new class {
+            public function toArray(): array
+            {
+                throw new \RuntimeException('serializes the loaded relations: never read for the graph');
+            }
+
+            public function toGraphArray(): array
+            {
+                return ['id' => 1, 'name' => 'INV-1', 'team_id' => 3];
+            }
+        };
+
+        $config = new GraphConfig(label: 'Thing', properties: ['id', 'name']);
+
+        $this->assertSame(['id' => 1, 'name' => 'INV-1'], (new GraphPropertyMapper())->mapNodeProperties($entity, $config));
+        $this->assertSame(['id' => 1, 'name' => 'INV-1', 'team_id' => 3], GraphPropertyMapper::entityData($entity));
+    }
+
+    public function test_a_local_datetime_cast_writes_the_wall_clock_of_the_app_timezone(): void
+    {
+        config()->set('app.timezone', 'America/New_York');
+        $entity = new class {
+            public function toArray(): array
+            {
+                return ['id' => 1, 'utc' => '2026-10-01T01:30:00.000000Z', 'raw' => '2026-09-30 21:30:00', 'day' => '2026-09-30', 'none' => null];
+            }
+        };
+
+        $config = new GraphConfig(
+            label: 'Thing',
+            properties: ['id', 'utc', 'raw', 'day', 'none'],
+            computed: ['carbon' => fn () => Carbon::parse('2026-10-01 01:30:00', 'UTC')],
+            casts: ['utc' => 'local_datetime', 'raw' => 'local_datetime', 'day' => 'local_datetime', 'none' => 'local_datetime', 'carbon' => 'local_datetime'],
+        );
+
+        $props = (new GraphPropertyMapper())->mapNodeProperties($entity, $config);
+
+        $this->assertSame('2026-09-30T21:30:00', $props['utc'], 'a serialized UTC date reads as the local wall clock');
+        $this->assertSame('2026-09-30T21:30:00', $props['raw'], 'a raw database value is already local');
+        $this->assertSame('2026-09-30T00:00:00', $props['day']);
+        $this->assertNull($props['none']);
+        $this->assertSame('2026-09-30T21:30:00', $props['carbon']);
+    }
+
     public function test_cast_applies_to_computed_property_before_numeric_normalization(): void
     {
         $invoice = ComputedInvoice::find($this->seedInvoice()->id);
@@ -356,6 +402,26 @@ class GraphComputedPropertiesTest extends TestCase
         $this->assertSame(100.0, $byName['C']['due_amount']);
         $this->assertSame(0, $byName['C']['payment_count']);
         $this->assertSame('2', $byName['A']['status']);
+    }
+
+    public function test_ai_ingest_pages_by_key_so_a_row_deleted_meanwhile_does_not_skip_another(): void
+    {
+        $ids = [$this->seedInvoice('A')->id, $this->seedInvoice('B')->id, $this->seedInvoice('C')->id];
+
+        $received = [];
+        $batch = Mockery::mock(BatchDataIngestionService::class);
+        $batch->shouldReceive('ingestBatch')->andReturnUsing(function (array $entities) use (&$received, $ids) {
+            $received = array_merge($received, array_map(fn ($entity) => $entity->id, $entities));
+            ComputedInvoice::whereKey($ids[0])->delete(); // the app deletes a row while the ingest runs
+
+            return ['total' => count($entities), 'succeeded' => count($entities), 'partially_succeeded' => 0, 'failed' => 0, 'errors' => []];
+        });
+
+        $command = new IngestEntitiesCommand($batch, Mockery::mock(GraphStoreInterface::class)->shouldIgnoreMissing());
+        $command->setLaravel($this->app);
+        $command->run(new ArrayInput(['--model' => ComputedInvoice::class, '--chunk' => 1]), new BufferedOutput());
+
+        $this->assertSame($ids, $received);
     }
 
     public function test_ai_ingest_chunk_query_applies_graph_with(): void

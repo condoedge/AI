@@ -304,8 +304,8 @@ final class FanOutCollapse
     }
 
     /**
-     * Whether the query has a UNION clause — never a `:Union` label or a
-     * `union_name` alias (same rule as RecordIdProjection), never inside a
+     * Whether the query has a UNION clause — never a `:CreditUnion` label or a
+     * `union_count` alias (same rule as RecordIdProjection), never inside a
      * string or a comment. Unanalyzable text counts as a UNION (refuse).
      */
     public static function hasUnionClause(string $cypher): bool
@@ -757,7 +757,7 @@ final class FanOutCollapse
             return false;
         }
 
-        return $side !== '$' . TeamPathResolver::TEAM_IDS_PARAM;
+        return !TeamPathResolver::isScopeParameter($side);
     }
 
     /**

@@ -55,6 +55,7 @@ class AdminFeedbackTable extends Table
     {
         return [
             _Th('ai.admin.col.feedback'),
+            _Th('ai.admin.col.comment'),
             _Th('ai.admin.col.date'),
             _Th('ai.admin.col.user'),
             _Th('ai.admin.col.question'),
@@ -67,9 +68,14 @@ class AdminFeedbackTable extends Table
     public function render($row)
     {
         $summary = ConversationInsights::traceSummary($row->metadata ?? null, $row->execution_time_ms ?? null);
+        $rating = $this->feedbackDetails($row->metadata ?? null);
 
         return _TableRow(
-            $this->feedbackBadge($row->feedback ?? null),
+            _Rows(
+                $this->feedbackBadge($row->feedback ?? null),
+                $rating['at'] !== null ? $this->text($rating['at'], 'mt-1 whitespace-nowrap text-xs text-gray-500') : null,
+            ),
+            $this->text($this->excerpt($rating['comment'] ?? '', 200), 'text-sm text-gray-700')->style('min-width: 10rem; max-width: 18rem'),
             $this->text($this->dateTime($row->created_at ?? null), 'whitespace-nowrap text-xs text-gray-600'),
             _Rows(
                 $this->text($row->user_name ?? '—', 'text-sm font-medium text-gray-900'),

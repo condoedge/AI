@@ -86,7 +86,7 @@ class ResponseFileEnricher
         }
 
         $referencedFiles = [];
-        // The articles the answer names by number ("art. 1069"), once for the turn.
+        // The articles the answer names by number ("art. 12"), once for the turn.
         $named = array_map('intval', ArticleLocator::referencedArticles($response));
 
         foreach ($citationMarkers as $marker) {
@@ -110,7 +110,7 @@ class ResponseFileEnricher
      * WHOSE DOCUMENT the cited passage is:
      *  - `scope_label`: the words the user-facing citation shows — for an uploaded
      *    file the record it is filed on, by kind and name, with the record that
-     *    owns it ("unit A-101 — condo association Viva Tour 1"); for a project
+     *    owns it ("order 1042 — customer Northwind"); for a project
      *    file the fixed "General document" line (ai.documents.general);
      *  - `owner` / `ancestors`: the keys, for the NEXT turn — a follow-up on an
      *    answer drawn from one record's documents is about that record

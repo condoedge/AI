@@ -21,7 +21,7 @@ use Illuminate\Support\Facades\Log;
  * the search ranked too low to select, and reports which candidates a correct
  * answer still needs. The caller (AiManager) decides what to do with the report.
  *
- * Why (eval p16–p21, "can I tear down this wall?"): the article stating the general
+ * Why (eval p16–p21, "can I work remotely on Fridays?"): the article stating the general
  * rule the question falls under never came within reach of the search — cosine 0.28
  * for the question itself, rank 7–75 for every rewrite and probe of it. That is an
  * inference gap, not a vocabulary one: re-embedding the corpus with generated

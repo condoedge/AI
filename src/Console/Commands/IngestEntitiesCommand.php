@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Console\Commands;
 
 use Condoedge\Ai\Services\BatchDataIngestionService;
+use Condoedge\Ai\Contracts\ChunkStoreInterface;
 use Condoedge\Ai\Contracts\FileProcessorInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
@@ -44,7 +45,8 @@ class IngestEntitiesCommand extends Command
                             {--min-id= : Only ingest rows with primary key >= this value (manual range restriction)}
                             {--max-id= : Only ingest rows with primary key < this value (manual range restriction)}
                             {--dry-run : Show what would be ingested without actually ingesting}
-                            {--docs : Index physical documentation files from configured paths}';
+                            {--docs : Index physical documentation files from configured paths (unchanged files are skipped; --fresh re-embeds all)}
+                            {--prune : With --docs: remove the stored documentation files no longer on disk}';
 
     /**
      * The console command description.
@@ -130,6 +132,10 @@ class IngestEntitiesCommand extends Command
 
         $chunkSize = (int) $this->option('chunk');
 
+        if (!$this->option('dry-run')) {
+            $this->ensureIdIndexes($this->labelsOf($models));
+        }
+
         // Handle --from flag: skip models until we reach the specified one (inclusive)
         $fromModel = $this->option('from');
         if ($fromModel !== null) {
@@ -200,6 +206,41 @@ class IngestEntitiesCommand extends Command
         $this->comment('Ingestion complete!');
 
         return $totalFailed > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    /**
+     * Index (label, id) before writing: nodes are MERGEd and relationships MATCHed by id, and without the
+     * index every write scans its label, so the ingest slows down as the graph grows.
+     *
+     * @param string[] $labels
+     */
+    private function ensureIdIndexes(array $labels): void
+    {
+        foreach (array_unique($labels) as $label) {
+            $name = 'ai_' . strtolower((string) preg_replace('/[^A-Za-z0-9_]/', '_', $label)) . '_id';
+            $safeLabel = \Condoedge\Ai\GraphStore\CypherSanitizer::escapeLabel($label);
+
+            try {
+                $this->graphStore->query("CREATE INDEX {$name} IF NOT EXISTS FOR (n:{$safeLabel}) ON (n.id)");
+            } catch (\Throwable $e) {
+                $this->warn("  Could not index {$label}.id: {$e->getMessage()}");
+            }
+        }
+    }
+
+    /** @return string[] */
+    private function labelsOf(array $models): array
+    {
+        $labels = [];
+        foreach ($models as $modelClass) {
+            try {
+                $labels[] = (new $modelClass)->getGraphConfig()->label;
+            } catch (\Throwable $e) {
+                // An unconfigured model is reported where it is ingested.
+            }
+        }
+
+        return $labels;
     }
 
     /**
@@ -280,7 +321,8 @@ class IngestEntitiesCommand extends Command
         $failed = 0;
         $errors = [];
 
-        $query->chunk($chunkSize, function ($entities) use (&$ingested, &$partial, &$failed, &$errors, $progressBar) {
+        // By key, not OFFSET: a row deleted meanwhile would make OFFSET skip another, and each page rescans the table.
+        $query->chunkById($chunkSize, function ($entities) use (&$ingested, &$partial, &$failed, &$errors, $progressBar) {
             try {
                 $results = $this->ingestionService->ingestBatch($entities->all());
 
@@ -368,7 +410,7 @@ class IngestEntitiesCommand extends Command
         try {
             // A single `MATCH (n) DETACH DELETE n` holds the WHOLE graph's delete set in ONE
             // transaction — on a real dataset the server heap fills, GC thrashes, and the query
-            // never returns (observed: a 6h hang on the first full CondoEdge wipe). query() runs
+            // never returns (observed: a 6h hang on a host's first full wipe). query() runs
             // each call as its own auto-commit transaction, so loop small bounded batches
             // instead: relationships first (a node batch can still drag an unbounded number of
             // rels via DETACH), then nodes. Each iteration commits, so progress is real and
@@ -479,6 +521,7 @@ class IngestEntitiesCommand extends Command
                 $result = $fileProcessor->processFile($fileObject, [
                     'collection' => $collection,
                     'force' => $force,
+                    'skip_unchanged' => true,
                 ]);
 
                 if ($result->failed()) {
@@ -514,6 +557,36 @@ class IngestEntitiesCommand extends Command
             $this->warn("  Failed: {$results['failed']}");
         }
 
+        if ($this->option('prune')) {
+            $this->line('  Pruned: ' . $this->pruneMissingDocs($fileObjects, $collection));
+        }
+
         return $results['failed'] > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    /**
+     * Remove the stored project files (`physical:` ids) whose file is no longer among the
+     * configured paths. Only reached when the paths matched files: a pattern that matches
+     * nothing returns before this, so a misconfiguration never empties the collection.
+     */
+    private function pruneMissingDocs(array $fileObjects, string $collection): int
+    {
+        $store = app(ChunkStoreInterface::class);
+        if (!method_exists($store, 'storedFileIds')) {
+            $this->warn('  The chunk store cannot list its files: nothing pruned.');
+
+            return 0;
+        }
+
+        $onDisk = array_flip(array_map(static fn ($file) => (string) $file->id, $fileObjects));
+        $pruned = 0;
+        foreach ($store->storedFileIds($collection) as $fileId) {
+            if (str_starts_with((string) $fileId, 'physical:') && !isset($onDisk[(string) $fileId])) {
+                $store->deleteFileChunks($fileId, $collection);
+                $pruned++;
+            }
+        }
+
+        return $pruned;
     }
 }

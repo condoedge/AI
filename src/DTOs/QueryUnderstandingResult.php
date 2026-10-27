@@ -9,7 +9,7 @@ class QueryUnderstandingResult
     /** A clarifying question offers at most this many readings. */
     public const MAX_CANDIDATE_READINGS = 4;
 
-    /** $possessiveScope: the asker's OWN records ("my unit", "do I have…"). */
+    /** $possessiveScope: the asker's OWN records ("my orders", "do I have…"). */
     public const SCOPE_PERSONAL = 'personal';
 
     /** $possessiveScope: the records of the asker's GROUP ("our meetings", "we owe…"). */
@@ -20,7 +20,7 @@ class QueryUnderstandingResult
         public readonly array $entityTypes = [],
         /** @var string[] Person/contact names mentioned */
         public readonly array $personNames = [],
-        /** @var string[] Property concepts ("insurance", "parking") */
+        /** @var string[] Property concepts ("insurance", "shipping") */
         public readonly array $propertyConcepts = [],
         /** Rewritten query optimized for semantic search */
         public readonly string $searchQuery = '',
@@ -177,7 +177,7 @@ class QueryUnderstandingResult
         public readonly array $possessiveWords = [],
         /**
          * WHOSE data a possessive question is about: SCOPE_PERSONAL (the asker
-         * alone — "my unit", "do I have…"), SCOPE_COLLECTIVE (the asker's group or
+         * alone — "my orders", "do I have…"), SCOPE_COLLECTIVE (the asker's group or
          * organization — "our meetings", "we owe…"), or null: not possessive, or
          * possessive with a scope the model did not state. The scope is the
          * model's reading of the verified words (first-person singular / plural);
@@ -200,7 +200,7 @@ class QueryUnderstandingResult
     ) {}
 
     /**
-     * The question is about records linked to the asker IN PERSON ("my unit", "do I
+     * The question is about records linked to the asker IN PERSON ("my orders", "do I
      * have…"): the own-data path. A possessive question of unknown scope reads as
      * personal — what every possessive question was before the scope existed.
      */

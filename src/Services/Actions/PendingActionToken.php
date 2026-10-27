@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Actions;
 
+use Condoedge\Ai\Models\AiTask;
+
 /**
  * PendingActionToken
  *
@@ -27,6 +29,10 @@ namespace Condoedge\Ai\Services\Actions;
  *
  * This is intentionally dependency-light (no DB table) — it rides on existing message
  * metadata and Laravel's APP_KEY.
+ *
+ * A token issued for a task run (`issueForTask`) also binds the run's uuid, draft version
+ * and team (claims `task`, `v`, `tm`): it is stale as soon as the draft or the team changes.
+ * A token without these claims encodes exactly as before.
  */
 final class PendingActionToken
 {
@@ -48,7 +54,26 @@ final class PendingActionToken
         public readonly int|string|null $userId,
         public readonly int $issuedAt,
         public readonly string $nonce = '',
+        public readonly ?string $taskUuid = null,
+        public readonly ?int $taskVersion = null,
+        public readonly int|string|null $teamId = null,
     ) {
+    }
+
+    /** A token bound to a task run at its current draft version and team. */
+    public static function issueForTask(string $actionKey, int|string|null $userId, AiTask $task): self
+    {
+        return new self($actionKey, null, [], $userId, time(), self::newNonce(), $task->uuid, (int) $task->version, $task->team_id);
+    }
+
+    /** Whether the task is the one this token was issued for, still at the same draft version and team. */
+    public function bindsCurrent(?AiTask $task): bool
+    {
+        return $task !== null
+            && $this->taskUuid !== null
+            && $task->uuid === $this->taskUuid
+            && (int) $task->version === $this->taskVersion
+            && (string) $task->team_id === (string) $this->teamId;
     }
 
     /**
@@ -70,7 +95,7 @@ final class PendingActionToken
      */
     public function toPayload(): array
     {
-        return [
+        $payload = [
             'k' => $this->actionKey,
             'e' => $this->entityType,
             'i' => $this->input,
@@ -78,6 +103,10 @@ final class PendingActionToken
             't' => $this->issuedAt,
             'n' => $this->nonce,
         ];
+
+        return $this->taskUuid === null
+            ? $payload
+            : $payload + ['task' => $this->taskUuid, 'v' => $this->taskVersion, 'tm' => $this->teamId];
     }
 
     /**
@@ -142,6 +171,9 @@ final class PendingActionToken
             $payload['u'] ?? null,
             (int) $payload['t'],
             isset($payload['n']) ? (string) $payload['n'] : '',
+            isset($payload['task']) ? (string) $payload['task'] : null,
+            isset($payload['task']) ? (int) ($payload['v'] ?? 0) : null,
+            $payload['tm'] ?? null,
         );
 
         // Fail closed on an aged token even though its signature is intact.

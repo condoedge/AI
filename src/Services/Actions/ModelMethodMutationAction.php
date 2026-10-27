@@ -33,7 +33,7 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
  *   - authorizer($user, $model, array $input): bool — a host row-level callback.
  * Every declared gate must pass (AND). A generic CRUD policy ability ('update', 'delete', ...) is
  * NOT an authorization for a state transition on its own: CRUD policies routinely let the record's
- * owner through (a resident "updating" their own reservation is not a manager approving it). A
+ * owner through (a customer "updating" their own reservation is not a manager approving it). A
  * mutation declaring nothing, or only a generic CRUD ability, FAILS CLOSED — it never authorizes
  * and is never advertised, and {@see authorizationError()} says why (logged once). It deliberately
  * does not throw: the action is built while the host's config file loads, and a throw there would

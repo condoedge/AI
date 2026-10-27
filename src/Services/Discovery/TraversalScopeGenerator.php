@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Discovery;
 
+use Condoedge\Ai\Support\DomainProfile;
 use Illuminate\Support\Str;
 
 /**
@@ -11,7 +12,7 @@ use Illuminate\Support\Str;
  *
  * Generates traversal scopes on source entities based on relationships
  * to target entities with discriminator fields. For example, when PersonTeam
- * has a role_type field, this generates "volunteers", "scouts" scopes on Person.
+ * has a role_type field, this generates "admins", "members" scopes on Person.
  *
  * Usage:
  *   $generator = new TraversalScopeGenerator();
@@ -19,13 +20,22 @@ use Illuminate\Support\Str;
  *       'Person',
  *       'PersonTeam',
  *       'BELONGS_TO_PERSON',
- *       ['field' => 'role_type', 'values' => [3 => 'volunteers', 4 => 'scouts']]
+ *       ['field' => 'role_type', 'values' => [3 => 'admins', 4 => 'members']]
  *   );
  *
  * @package Condoedge\Ai\Services\Discovery
  */
 class TraversalScopeGenerator
 {
+    /** Scope names worded as roles ("Persons who are members"); the host adds its own (ai.domain.role_terms). */
+    private const ROLE_NAMES = ['admins', 'members', 'managers', 'staff', 'customers'];
+
+    /** @return list<string> */
+    public static function roleNames(): array
+    {
+        return array_values(array_unique(array_merge(self::ROLE_NAMES, DomainProfile::list('role_terms'))));
+    }
+
     /**
      * Known discriminator fields to look for in related models
      */
@@ -215,10 +225,7 @@ class TraversalScopeGenerator
         $readableName = str_replace('_', ' ', $scopeName);
 
         // Check if scope name is already plural and role-like
-        $roleNames = ['volunteers', 'scouts', 'leaders', 'admins', 'members',
-                      'managers', 'staff', 'customers', 'parents'];
-
-        if (in_array($scopeName, $roleNames)) {
+        if (in_array($scopeName, self::roleNames())) {
             return "{$pluralEntity} who are {$readableName}";
         }
 
@@ -239,10 +246,7 @@ class TraversalScopeGenerator
         $singularEntity = strtolower($sourceEntity);
 
         // Check if scope name is a role-like word
-        $roleNames = ['volunteers', 'scouts', 'leaders', 'admins', 'members',
-                      'managers', 'staff', 'customers', 'parents'];
-
-        $isRoleName = in_array($scopeName, $roleNames);
+        $isRoleName = in_array($scopeName, self::roleNames());
 
         if ($isRoleName) {
             return [

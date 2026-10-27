@@ -16,7 +16,7 @@ use Condoedge\Ai\Support\AliasNormalizer;
  *
  * Measured live: gpt-4o-mini mis-added rows even with a total column present
  * ($10,493.17 vs the real $11,493.17), said "10 shown" while listing 5, merged
- * three different units named "310", and only ever saw a 10-row pretty-JSON
+ * three different accounts named "310", and only ever saw a 10-row pretty-JSON
  * sample, so a complete list was impossible. The plan moves everything that is
  * arithmetic or enumeration OUT of the LLM:
  *
@@ -35,13 +35,13 @@ use Condoedge\Ai\Support\AliasNormalizer;
  *
  *   ONE row (eval p16-B digest t1): a RECORD — its fields are rendered by code at
  *   {{table}} as a "Field: value" block, so no fact depends on the model copying
- *   it (the union was dropped from "name, date, union" in several runs). Only a
+ *   it (the branch was dropped from "name, date, branch" in several runs). Only a
  *   row small enough for one sentence is stated by the model from FACTS: at most
  *   two columns, or up to three MEASURES (an aggregate row — "You owe $11,493.17
  *   across 4 open bills" never grows a table) — see statedInProse().
  *
  *   Eval p16-A (G1-G3): the block states how the rows GROUP by another node's column
- *   (groupingsOf: 37 board members over 9 unions were answered as one board); a result
+ *   (groupingsOf: 37 staff members over 9 branches were answered as one staff); a result
  *   that IS one set of homonyms gets ONE lead instruction and no sum across them
  *   (homonymLead / homonymsAreTheWholeResult); a column empty on every row is left out
  *   of the table, the record block and the summary (omittedColumns), named only by the
@@ -56,8 +56,8 @@ use Condoedge\Ai\Support\AliasNormalizer;
  *   when the total counts one the host gave a plural (recordKindOf / recordKind).
  *
  *   Eval p18 (the lead read its own instruction back: "There are 37 records covering 12
- *   different Union Names", "Unit 310 has three different records", "523 records in total",
- *   and "…the president is not specified in the available data" above the board's table): the
+ *   different Branch Names", "Account 310 has three different records", "523 records in total",
+ *   and "…the manager is not specified in the available data" above the staff table): the
  *   count, the grouping, the homonym statement and "not recorded" are FACTS code already
  *   knows, so CODE WRITES THEM — one short line right above the block ({@see facts()}), from
  *   lang templates (ai.response.facts_*) and the HOST's nouns for the entities involved
@@ -92,7 +92,7 @@ final class DataAnswerPlan
     /**
      * One row of at most this many columns is stated in prose whatever it holds: a lead
      * sentence carries a subject and one attribute. From the third field on the model
-     * dropped one (eval p13/p16-B "name, date, union" → union lost), so code lists them.
+     * dropped one (eval p13/p16-B "name, date, branch" → branch lost), so code lists them.
      */
     private const RECORD_PROSE_MAX_COLUMNS = 2;
 
@@ -173,7 +173,7 @@ final class DataAnswerPlan
     private array $tableRows = [];
 
     /**
-     * The NAME columns shown as one (eval p19-A board: "First Name | Last Name" for one person) —
+     * The NAME columns shown as one (eval p19-A staff:"First Name | Last Name" for one person) —
      * {@see TableRenderer::nameMerges()}: an entity's declared `metadata.name_properties`, all
      * projected from one node variable. {@see $tableRows} hold the merged column; every
      * analysis, header and note reads the rows the user sees.
@@ -262,7 +262,7 @@ final class DataAnswerPlan
     private array $emptyColumns = [];
 
     /**
-     * How the rows GROUP (G1, eval p16-A board): the text columns of ANOTHER node than the
+     * How the rows GROUP (G1, eval p16-A staff): the text columns of ANOTHER node than the
      * listed record whose few distinct values partition the rows — see {@see groupingsOf()}.
      *
      * @var list<array{column: string, groups: list<array{0: string, 1: int}>, blank: int}>
@@ -335,11 +335,11 @@ final class DataAnswerPlan
      * The user's IDENTITY values the composition prompt states (CURRENT USER CONTEXT: their own
      * name, their current team's name — ResponseCurrentUserContextSection::identityValues()).
      *
-     * Eval p20-A roster: "Here are the members of your team, Novo Gestion, along with their
+     * Eval p20-A roster: "Here are the members of your team, Acme Gestion, along with their
      * roles:" survived the restatement rule because "Gestion" is in neither the question nor the
      * facts line. The model was TOLD that name; repeating it adds nothing. {@see boundedLead()}
      * counts these words as known, beside the question's and the line's — a value of the rows
-     * ("…the Lead union manager of Novo Gestion.") still makes a lead an answer.
+     * ("…the Lead manager of Acme Gestion.") still makes a lead an answer.
      *
      * @param array<int, mixed> $values blank and non-string entries are ignored
      */
@@ -438,8 +438,8 @@ final class DataAnswerPlan
     {
         $lines = [];
 
-        // E3 (eval p11-A board): name what the rows ARE, so the model never disowns its
-        // own rows ("I couldn't find the board" above the board table).
+        // E3 (eval p11-A staff): name what the rows ARE, so the model never disowns its
+        // own rows ("I couldn't find the staff" above the staff table).
         if ($this->mode !== self::MODE_NONE && $this->fallback !== null) {
             // FALLBACK ROWS (eval p16-A meetings): the same framing the digest gives a
             // fallback section — its rows are recent history, never the asked-for items —
@@ -546,7 +546,7 @@ final class DataAnswerPlan
         }
 
         // (The line is quoted last: every value the summary masked holds its token by now.)
-        // p20-A unit-310: beside a code-written homonym statement, the lead's PLURAL subject.
+        // p20-A account-310: beside a code-written homonym statement, the lead's PLURAL subject.
         $subject = in_array('homonyms', $stated, true) ? (string) $this->homonymSubject(null) : '';
         $lines = array_merge($lines, $this->answerFormatLines(
             $tableMode,
@@ -580,7 +580,7 @@ final class DataAnswerPlan
      *
      * THE LEAD NEVER REPEATS THE BLOCK (eval p17: once the tail was dropped the padding moved
      * in FRONT of the placeholder — a 10-bullet list echoing the first ten table rows on three
-     * roster turns, a numbered list of the three unit-310 rows, beside "Do NOT list the rows"
+     * roster turns, a numbered list of the three account-310 rows, beside "Do NOT list the rows"
      * in the same prompt). A list or table the model wrote in the lead whose entries restate
      * the rows — they contain the rows' own label values ({@see rowEchoKeys()}) — is removed
      * ({@see NarrativeRowEcho}: structure only; a list that does not name the rows, or that
@@ -670,7 +670,7 @@ final class DataAnswerPlan
      *      restatement and is dropped: the line and the block are the answer. Known too: the
      *      HEADERS of the block shown right below, and — on a follow-up turn — the QUESTION IT
      *      FOLLOWS (eval p20-B resilience t1: "Here are the last login times for the members of
-     *      your team, Novo Gestion." after "…add their last login to it?" — "the", "of", "team"
+     *      your team, Acme Gestion." after "…add their last login to it?" — "the", "of", "team"
      *      are the roster question's words; the lead knew 5 of its 13 words, with them 8).
      *      Replayed on the 28 stored leads of eval p19–p21: that lead is the one whose fate
      *      changes. A lead holding a word of its own still stays — p21-B's "Here are the last
@@ -700,8 +700,8 @@ final class DataAnswerPlan
                 $this->leadTrimmed[] = ['rule' => 'restatement', 'text' => $this->masker->maskFreeText($lead)];
                 $lead = '';
             } elseif ($notes === [] && in_array('not_recorded', $facts['stated'], true) && !NarrativeRowEcho::namesAny($lead, $this->shownValues())) {
-                // 3. What is NOT recorded is the line's to say (iteration 5, board: "…is not
-                //    recorded in the available data." above 37 board members): beside it, a lead
+                // 3. What is NOT recorded is the line's to say (iteration 5, staff: "…is not
+                //    recorded in the available data." above 37 staff members): beside it, a lead
                 //    naming no value of the rows says nothing of the data and is dropped — unless a
                 //    note of the prompt asked the lead for a sentence of its own.
                 $this->leadTrimmed[] = ['rule' => 'not_recorded', 'text' => $this->masker->maskFreeText($lead)];
@@ -1010,7 +1010,7 @@ final class DataAnswerPlan
         }
 
         // Coded values the host declares a legend for read as their LABEL in the answer
-        // ("manager" → "Union manager", a status code → its name), in the question's
+        // ("manager" → "Branch manager", a status code → its name), in the question's
         // language — eval p16: rosters printed raw role keys. Columns are never dropped here.
         try {
             $data = CodedColumns::labelled(
@@ -1240,7 +1240,7 @@ final class DataAnswerPlan
     }
 
     /**
-     * $rows with a split name shown as ONE column (R2, eval p19-A board) — and the merge
+     * $rows with a split name shown as ONE column (R2, eval p19-A staff) — and the merge
      * remembered ({@see $nameMerges}): the merged column belongs to the variable its parts are
      * projected from ({@see $columnOwners}), so the facts line and the notes still know whose
      * name it is. Fallback rows are another query's: never merged. Never breaks a turn.
@@ -1327,7 +1327,7 @@ final class DataAnswerPlan
      *     not fold (anchor_total below the row total) is counted in rows — no kind;
      *   - else the rows carry their records (RecordResolver, the chips' source of truth):
      *     every row one record of the SAME label, all different — the row count is that
-     *     kind's count (37 board contacts).
+     *     kind's count (37 staff contacts).
      *
      * Fallback rows are another query's (no kind). Null = unknown: the neutral wording stands.
      *
@@ -1363,9 +1363,9 @@ final class DataAnswerPlan
     private const AGGREGATE_CALL = '/\b(?:count|sum|avg|min|max|collect|stdev|stdevp|percentilecont|percentiledisc)\s*\(/i';
 
     /**
-     * THE KIND THE QUESTION COUNTS (eval p18-A board). "Who is on our board of directors?" is
-     * answered by rows carrying CONTACT ids — 37 contacts — while the question (QU: BoardMember)
-     * counts board seats. The rows are counted as the asked kind when that is PROVEN, never
+     * THE KIND THE QUESTION COUNTS (eval p18-A staff). "Who is on our sales staff?" is
+     * answered by rows carrying CONTACT ids — 37 contacts — while the question (QU: StaffMember)
+     * counts staff positions. The rows are counted as the asked kind when that is PROVEN, never
      * guessed: the first kind QU names that is either the resolved one (it stays) or a
      * {@see toOneOwners() to-one owner} of it for which the host declares a plural.
      *
@@ -1524,7 +1524,7 @@ final class DataAnswerPlan
 
     /**
      * The entity (node label) a table column belongs to: the label of the node variable the
-     * query projects it from (`un.name AS union_name` → Union). Null for an expression, an
+     * query projects it from (`br.name AS branch_name` → Branch). Null for an expression, an
      * aggregate, a nested table's column or fallback rows — nothing is read from the column's
      * name.
      */
@@ -1546,9 +1546,9 @@ final class DataAnswerPlan
      * THE FACTS LINE (eval p18): what code states itself right above the table / record block,
      * so the model is never asked to say it. One short line of up to two sentences:
      *
-     *   - "3 different units named 310 — one per union."  ({@see homonymFact()}) — or —
-     *     "37 board members across 12 unions." / "523 members."  ({@see countFact()});
-     *   - "Not recorded: board role."  ({@see notRecordedFact()}).
+     *   - "3 different accounts named 310 — one per branch."  ({@see homonymFact()}) — or —
+     *     "37 staff members across 12 branches." / "523 members."  ({@see countFact()});
+     *   - "Not recorded: staff role."  ({@see notRecordedFact()}).
      *
      * Wording is the package's lang templates (ai.response.facts_*); every noun is the HOST's
      * ({@see noun()}), every field name the block's own header. A part whose noun the host did
@@ -1659,13 +1659,13 @@ final class DataAnswerPlan
     }
 
     /**
-     * The namesakes as a PLURAL SUBJECT — "the 3 units named 310" — from the very facts of the
+     * The namesakes as a PLURAL SUBJECT — "the 3 accounts named 310" — from the very facts of the
      * homonym statement ({@see homonymParts()}) and a lang template of its own
      * (ai.response.facts_homonyms_subject), in the answer's language. Null wherever the
      * statement itself is not code's, or the template is missing in that language.
      *
-     * Eval p20-A unit-310 t0 / t1: the lead read "Unit 310 currently owes $0.00 across all
-     * unions." right above "3 different units named 310 — one per union." — one unit, where the
+     * Eval p20-A account-310 t0 / t1: the lead read "Account 310 currently owes $0.00 across all
+     * branches." right above "3 different accounts named 310 — one per branch." — one, where the
      * line says three. The prompt gives the model this subject ({@see answerFormatLines()}).
      */
     private function homonymSubject(?string $locale): ?string
@@ -1834,7 +1834,7 @@ final class DataAnswerPlan
      *     aggregate's result or declared money: those are a row's figures, shared by many)
      *     and not a coarse grouping (a value repeated on GROUP_MIN_AVERAGE_ROWS rows or more
      *     on average is a parent the rows are spread over, or the one name every row shares —
-     *     "310" in three unions: it identifies no row, and a list naming it is a per-group
+     *     "310" in three branches: it identifies no row, and a list naming it is a per-group
      *     summary, not a row list);
      *   - ONE RECORD: its "rows" are its fields — every displayed scalar value, as the block
      *     and the prompt show it.
@@ -1899,7 +1899,7 @@ final class DataAnswerPlan
      * Whether a one-row result is small enough for the MODEL to state (FACTS, prose, no
      * code-rendered block) — the only place a fact still depends on being copied:
      *
-     *   - at most RECORD_PROSE_MAX_COLUMNS columns, whatever they hold ("Unit 310 owes
+     *   - at most RECORD_PROSE_MAX_COLUMNS columns, whatever they hold ("Account 310 owes
      *     $1,250.50"; "the last meeting was X on <date>"): no loss was ever observed;
      *   - at most SINGLE_VALUE_MAX_COLUMNS columns that are ALL measures — an aggregate
      *     row, whose numbers are the answer itself ("You owe $11,493.17 across 4 open
@@ -1965,8 +1965,8 @@ final class DataAnswerPlan
     /**
      * Homonym groups by record IDENTITY (eval p10-A): the raw rows still carry the record
      * ids (RecordIdProjection) that the table drops, and RecordResolver — the chips' single
-     * source of truth — tells "unit 310 in three unions" (three ids) from four units of ONE
-     * union (union id 8 on every row), which values alone cannot. Labels come from the
+     * source of truth — tells "account 310 in three branches" (three ids) from four accounts of
+     * ONE branch (branch id 8 on every row), which values alone cannot. Labels come from the
      * cypher's node patterns (every node with an id is a record here, openable or not), the
      * preference from QU. Unknown identity (some row without an attributable id, or rows not
      * 1:1 with the table) leaves $identityHomonyms null: the value-only fallback runs.
@@ -2019,19 +2019,19 @@ final class DataAnswerPlan
     }
 
     /**
-     * How the rows GROUP (G1, eval p16-A board: 37 board members over 9 unions answered as
-     * "the members of your board" — the 10-row summary showed three unions and nothing said
+     * How the rows GROUP (G1, eval p16-A staff: 37 staff members over 9 branches answered as
+     * "the members of your staff" — the 10-row summary showed three branches and nothing said
      * the rows belong to several). A grouping column is, structurally:
      *
      *   - projected from ANOTHER node variable than the listed record's
-     *     ({@see TableRenderer::columnVariables()} — `un.name` beside Contact rows): a
+     *     ({@see TableRenderer::columnVariables()} — `br.name` beside Contact rows): a
      *     parent / group. The record's OWN repeated attribute (a shared family name) and a
      *     computed expression (no single owner) never qualify — and nothing is read from the
      *     column's name;
      *   - TEXT on every row that has it — never a number, a date / time (a per-row fact),
      *     an aggregate's result, declared money or a masked identifying value;
      *   - COARSE: at least two distinct values, and GROUP_MIN_AVERAGE_ROWS rows per value on
-     *     average (one value per row — "unit 310" in three unions — is the homonym note's
+     *     average (one value per row — "account 310" in three branches — is the homonym note's
      *     case, not a grouping).
      *
      * The listed record is RecordResolver's (the chips' source of truth); its variable is
@@ -2104,7 +2104,7 @@ final class DataAnswerPlan
 
     /**
      * The node variable of the listed record: the only variable bound to its label in the
-     * cypher, else (two variables of one label — a unit and its parent unit) the one every
+     * cypher, else (two variables of one label — a task and its parent task) the one every
      * record's name column is projected from. Null when it cannot be told.
      *
      * @param array<int, array<string, mixed>> $records
@@ -2436,7 +2436,7 @@ final class DataAnswerPlan
 
     /**
      * Homonym notes. When the homonym group IS the whole (fully visible) result —
-     * "what does unit 310 owe?" matched in three unions — the narrative must lead
+     * "what does account 310 owe?" matched in three branches — the narrative must lead
      * with it. In a longer list the homonyms are incidental: the table already lists
      * them separately, so the model is only told never to merge them (live 2026-09-30:
      * demanding per-record figures for homonyms outside the 10-row summary made the
@@ -2461,7 +2461,7 @@ final class DataAnswerPlan
         // Detection runs on the real rows; only the values PRINTED in a note are
         // masked (never a token minted for every table row — review minor).
         $lead = $this->homonymLead($summaryRows, $tableMode);
-        // p18-A unit-310 ("Unit 310 has three different records"): the statement is CODE's
+        // p18-A account-310 ("Account 310 has three different records"): the statement is CODE's
         // when the facts line prints it — the note then informs and forbids the merge only.
         $printed = in_array('homonyms', $stated, true);
         $lines = [];
@@ -2509,7 +2509,7 @@ final class DataAnswerPlan
     }
 
     /**
-     * Each grouping as the lead states it — "9 different Union Name" ("at least 9 …" when
+     * Each grouping as the lead states it — "9 different Branch Name" ("at least 9 …" when
      * only part of the result was retrieved).
      *
      * @return list<string>
@@ -2535,8 +2535,8 @@ final class DataAnswerPlan
      * was retrieved the groups are a lower bound and carry no counts (a partial count would
      * read as a total).
      *
-     * When the facts line prints the grouping ($stated has 'groups', eval p18-A board: "12
-     * different Union Names" read back from this note), the coarsest grouping is worded with
+     * When the facts line prints the grouping ($stated has 'groups', eval p18-A staff: "12
+     * different Branch Names" read back from this note), the coarsest grouping is worded with
      * the host's noun for its entity — the words the user reads right above the table.
      *
      * @param list<string> $stated the parts of the facts line code prints ({@see facts()})
@@ -2591,7 +2591,7 @@ final class DataAnswerPlan
      *   - a STORED field (projected from a node): the data does not record it — said
      *     plainly, never "could not find" (E3). Since the table no longer shows the column
      *     (G3) this line is the only place it is named, and it closes the WHICH-ONE reading
-     *     (eval p16-A board "…and who is the president?" over an all-empty role column): no
+     *     (eval p16-A staff "…and who is the manager?" over an all-empty role column): no
      *     row can be singled out by a column that holds nothing — by the column's own
      *     header, never by what the question called it;
      *   - an AGGREGATE's result (`min(i.due_at) AS oldest_due` with nothing due — the
@@ -2599,8 +2599,8 @@ final class DataAnswerPlan
      *     the data, not a field the data fails to record.
      *
      * When the facts line prints the stored ones ($stated has 'not_recorded', eval p18-A
-     * board: "The information about the board of directors and the president is not specified
-     * in the available data" above 25 board members), the note only informs: that line IS the
+     * staff: "The information about the sales staff and its manager is not specified
+     * in the available data" above 25 staff members), the note only informs: that line IS the
      * answer to any part of the question about them.
      *
      * @param list<string> $stated the parts of the facts line code prints ({@see facts()})
@@ -2671,10 +2671,10 @@ final class DataAnswerPlan
      * @param list<string> $stated the parts of the facts line code prints above the block
      *        ({@see facts()}): the model is asked for none of them and told not to restate them
      * @param string $printedLine that line's EXACT text (PII-masked), quoted to the model so its
-     *        lead can neither restate nor contradict it (eval p19: "…the president is available
-     *        in the records" right above "Not recorded: Board role."); '' = none printed
+     *        lead can neither restate nor contradict it (eval p19: "…the manager is available
+     *        in the records" right above "Not recorded: Staff role."); '' = none printed
      * @param string $homonymSubject the namesakes as a plural subject, in the answer's language and
-     *        PII-masked ("the 3 units named 310" — {@see homonymSubject()}); '' = no code-written
+     *        PII-masked ("the 3 accounts named 310" — {@see homonymSubject()}); '' = no code-written
      *        homonym statement
      * @return array<int, string>
      */
@@ -2759,7 +2759,7 @@ final class DataAnswerPlan
             ];
         }
 
-        // p18 (A board / unit-310, B resilience t1): the count, the grouping, the homonym
+        // p18 (A staff / account-310, B resilience t1): the count, the grouping, the homonym
         // statement and "not recorded" came back in THIS instruction's words. What the facts
         // line prints is no longer asked of the model: its lead is one sentence that answers.
         $codeCount = in_array('count', $stated, true);
@@ -2790,8 +2790,8 @@ final class DataAnswerPlan
                 . ' — do NOT restate any of it (no count, no grouping, no "not recorded" sentence of your own) and never '
                 . 'contradict it: what that line states is settled, also for any part of the question it answers. Your '
                 . 'sentence only adds what the question asks for beyond it.';
-            // p20-A unit-310 t0 / t1 ("Unit 310 currently owes $0.00 across all unions." above
-            // "3 different units named 310 — one per union."): the lead's SUBJECT is handed to
+            // p20-A account-310 t0 / t1 ("Account 310 currently owes $0.00 across all branches."
+            // above "3 different accounts named 310 — one per branch."): the lead's SUBJECT goes to
             // the model, plural, in the answer's language — a positive form to write, where
             // "never merge them" alone left the singular in place.
             if ($homonymSubject !== '' && in_array('homonyms', $stated, true)) {

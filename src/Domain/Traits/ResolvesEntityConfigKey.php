@@ -39,6 +39,13 @@ trait ResolvesEntityConfigKey
             }
         }
 
+        // A graph label that differs from its class name (OrderDetail stored as OrderLine).
+        foreach ($entityConfigs as $fullName => $config) {
+            if (is_array($config) && strcasecmp((string) ($config['graph']['label'] ?? ''), $shortName) === 0) {
+                return $fullName;
+            }
+        }
+
         return null;
     }
 

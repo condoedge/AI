@@ -8,7 +8,7 @@ namespace Condoedge\Ai\Support;
  * THE structural parse of an enum legend declared in an entity-config property
  * description, e.g. "Status (1=Draft, 2=Approved, 10=Voided)",
  * "Priority flag (-2=Low, -1=Regular, 1=High)" or — a property that stores STRING
- * keys — "Role key (lead=Lead union manager, manager=Union manager)".
+ * keys — "Role key (lead=Lead branch manager, manager=Branch manager)".
  *
  * Shared by the schema cards (inline `{code=label}` legends for the query generator)
  * and the answer tables (code cells shown as their label, p12 H3 / p16 E7). Purely

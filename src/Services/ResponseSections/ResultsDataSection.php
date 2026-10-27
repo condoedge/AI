@@ -166,7 +166,7 @@ class ResultsDataSection extends BaseResponseSection
         }
 
         $masked = PiiMasker::for($context)->maskRows($rows);
-        $today = $this->today();
+        $today = self::today();
         $renderer = new TableRenderer();
         $plan = DataAnswerPlan::for($context);
 
@@ -219,7 +219,7 @@ class ResultsDataSection extends BaseResponseSection
     }
 
     /** Today's date (app timezone; Carbon test-now aware). */
-    private function today(): string
+    public static function today(): string
     {
         try {
             if (function_exists('now')) {

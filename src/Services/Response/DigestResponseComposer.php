@@ -8,6 +8,7 @@ use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\DTOs\Digest\DigestSourceResult;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\Actions\Attach\AttachedActions;
+use Condoedge\Ai\Support\Audiences;
 use Condoedge\Ai\Support\PipelineObserverScope;
 use Condoedge\Ai\Support\TokenUsage;
 
@@ -98,8 +99,9 @@ class DigestResponseComposer
 
         $sections = $this->sections($sources);
 
+        $role = Audiences::promptBlock($this->authenticatedUser());
         $messages = [
-            ['role' => 'system', 'content' => $this->systemPrompt($ctx, $exportFormat, $attached)],
+            ['role' => 'system', 'content' => $this->systemPrompt($ctx, $exportFormat, $attached) . ($role !== '' ? "\n\n" . $role : '')],
             ['role' => 'user', 'content' => $this->masker->maskText($this->userPrompt($question, $sources, $sections, $exportFormat))],
         ];
 
@@ -551,6 +553,15 @@ class DigestResponseComposer
     // Prompt (framing only)
     // =========================================================================
 
+    private function authenticatedUser(): mixed
+    {
+        try {
+            return function_exists('auth') && auth()->check() ? auth()->user() : null;
+        } catch (\Throwable) {
+            return null; // no auth context (console/queue)
+        }
+    }
+
     private function systemPrompt(PipelineContext $ctx, ?string $exportFormat, ?AttachedActions $attached): string
     {
         $language = $ctx->qu->language !== ''
@@ -653,8 +664,8 @@ PROMPT;
 
         // A PARTIAL section (more exist than the table shows) hands the model its TRUE
         // TOTAL only — never the number of rows on screen. Eval p17-B digest t0: given
-        // "5 shown of 189 in total — speak of the 189" the model wrote "5 units have
-        // expired insurance out of 189 total" in five sections of one answer (and the
+        // "5 shown of 189 in total — speak of the 189" the model wrote "5 contracts have
+        // expired out of 189 total" in five sections of one answer (and the
         // right sentence on the byte-identical prompt of the run before). The
         // "Showing 5 of 189." line is code's ({@see self::sectionBlock()}), so the
         // model has no use for the shown count; the rows it sees are named a sample.

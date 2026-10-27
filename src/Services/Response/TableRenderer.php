@@ -944,7 +944,7 @@ final class TableRenderer
     /**
      * Columns whose every non-null value is numeric and at least one is a DECIMAL
      * (a float, or a numeric string with a fraction part). Integers — ids, years,
-     * counts, unit numbers — and numeric-looking strings without a fraction never
+     * counts, order numbers — and numeric-looking strings without a fraction never
      * qualify. Run it on prepared (redacted) rows so id columns are gone.
      *
      * @param array<int, array<string, mixed>> $rows
@@ -1000,7 +1000,7 @@ final class TableRenderer
      *   - complete result: it EQUALS that column's sum (±0.01);
      *   - truncated result: it is ≥ the sum of the visible rows of that column AND
      *     that column is declared money (the grand total of a money column).
-     * A constant fee (condo_fee 350) or rate (tax_rate 0.15) is never a total.
+     * A constant fee (monthly_fee 350) or rate (tax_rate 0.15) is never a total.
      *
      * @param array<int, array<string, mixed>> $rows
      * @param array<int, string> $moneyColumns
@@ -1056,9 +1056,9 @@ final class TableRenderer
     /**
      * Homonym groups: ≥2 rows sharing a value in a text column while differing in
      * another text column that is COARSER (fewer distinct values across the
-     * table — a parent attribute such as the union of a unit), or when the group
-     * is the whole result ("unit 310" matched in three unions). A parent column
-     * that repeats because it has many children (union → units) is therefore
+     * table — a parent attribute such as the team of a project), or when the group
+     * is the whole result ("project 310" matched in three teams). A parent column
+     * that repeats because it has many children (team → projects) is therefore
      * not reported: its children are the finer column.
      *
      * VALUE-ONLY fallback: by values alone a parent repeated beside each child mirrors real
@@ -1143,7 +1143,7 @@ final class TableRenderer
                     if (count($values) < 2) {
                         continue;
                     }
-                    // Whole-result exception ("unit 310" in three unions) only for a
+                    // Whole-result exception ("project 310" in three teams) only for a
                     // SMALL group: 100 members sharing role 'contact' is not a homonym.
                     $coarser = $distinct[$other] <= $distinct[$name]
                         || (count($group) === count($rows) && count($group) <= self::WHOLE_RESULT_HOMONYM_MAX);
@@ -1224,7 +1224,7 @@ final class TableRenderer
         $columns = $this->columns($rows);
         $headers = $this->headers($columns, $labels, $variableLabels, $projections, $headerLocale);
         // omit_columns: named AFTER the headers were told apart over the full column set, so
-        // dropping a column never renames another ("Contact Name" stays, beside no "Union Name").
+        // dropping a column never renames another ("Contact Name" stays, beside no "Team Name").
         $omit = is_array($options['omit_columns'] ?? null)
             ? array_intersect($columns, array_filter($options['omit_columns'], 'is_string'))
             : [];

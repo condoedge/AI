@@ -11,9 +11,9 @@ use Condoedge\Ai\Support\AliasNormalizer;
 /**
  * QueriedKinds — the kinds of records a query LOOKED FOR (eval p18-B rights t2).
  *
- * An empty own-data answer said "I checked … in invoices, union records, and fund records":
- * the kinds were Query Understanding's guess (Invoice, Union, Fund) while the query that ran
- * summed the invoices of the user's units. What was checked is what the executed query READS:
+ * An empty own-data answer said "I checked … in invoices, project records, and fund records":
+ * the kinds were Query Understanding's guess (Invoice, Project, Fund) while the query that ran
+ * summed the invoices of the user's orders. What was checked is what the executed query READS:
  *
  *   - the node variables its final RETURN projects from (`RETURN sum(i.total_amount)` → the
  *     label of `i`), in RETURN order;
@@ -78,7 +78,7 @@ final class QueriedKinds
     /**
      * {@see labels()} as the host names them, for a prompt written in the schema's language:
      * the declared plural (`metadata.display_name_plural`), else the display name
-     * (`metadata.display_name`), else the label as words ("BoardMember" → "board member").
+     * (`metadata.display_name`), else the label as words ("TeamMember" → "team member").
      *
      * @return list<string>
      */

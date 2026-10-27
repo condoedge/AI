@@ -304,6 +304,7 @@ class QueryUnderstandingPossessiveWordsTest extends TestCase
     /** @test The own-profile entity rule reads the DERIVED value, not the model's boolean. */
     public function the_own_profile_rule_follows_the_verified_value(): void
     {
+        config(['ai.domain.ambiguous_profile_labels' => ['Contact']]); // CondoEdge's value
         $catalog = QueryUnderstandingService::buildEntityCatalog([
             'App\\Models\\Contact' => ['graph' => ['label' => 'Contact'], 'metadata' => []],
             'App\\Models\\Unit' => ['graph' => ['label' => 'Unit'], 'metadata' => []],

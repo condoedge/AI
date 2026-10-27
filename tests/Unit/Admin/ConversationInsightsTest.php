@@ -203,6 +203,33 @@ class ConversationInsightsTest extends TestCase
     }
 
     /** @test */
+    public function the_conversations_table_filters_regenerated_unsourced_and_slow_answers(): void
+    {
+        $this->assertSame(['Units question'], $this->conversationTitles(['answers' => 'regenerated']), 'a2 only: regenerated = false is not');
+        $this->assertSame(['Bills', 'Units question'], $this->conversationTitles(['answers' => 'no_sources']), 'only a8 cites a document');
+        $this->assertSame([], $this->conversationTitles(['answers' => 'slow']), 'nothing above the default 20 s');
+
+        config(['ai.admin.slow_answer_ms' => 2500]);
+        $this->assertSame(['Digest <b>bold</b>', 'Units question'], $this->conversationTitles(['answers' => 'slow']), 'a2 3 s, a8 4 s');
+        $this->assertSame(['Bills', 'Digest <b>bold</b>', 'Units question'], $this->conversationTitles(['answers' => 'nope']));
+    }
+
+    /** @test */
+    public function kpis_per_audience_count_answers_ratings_unsourced_share_and_average_latency(): void
+    {
+        $rows = $this->insights->audienceKpis($this->range());
+
+        $this->assertSame([
+            ['audience' => 'members', 'conversations' => 1, 'answers' => 2, 'positive' => 1, 'negative' => 1, 'no_sources' => 2, 'no_source_pct' => 100.0, 'latency_avg_ms' => 2000.0],
+            ['audience' => 'staff', 'conversations' => 1, 'answers' => 1, 'positive' => 0, 'negative' => 0, 'no_sources' => 0, 'no_source_pct' => 0.0, 'latency_avg_ms' => 4000.0],
+            // a3 (no stamp) and a4 (stamped, unresolved): latency 2000 (execution_time_ms) and 500.
+            ['audience' => null, 'conversations' => 1, 'answers' => 2, 'positive' => 0, 'negative' => 0, 'no_sources' => 2, 'no_source_pct' => 100.0, 'latency_avg_ms' => 1250.0],
+        ], $rows);
+
+        $this->assertSame([], $this->insights->audienceKpis($this->range(null, '2025-01-01', '2025-01-31')));
+    }
+
+    /** @test */
     public function the_conversations_table_carries_counts_user_team_and_last_activity(): void
     {
         $row = $this->insights->conversationsQuery($this->range(), ['text' => 'units'])->first();

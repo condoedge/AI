@@ -163,7 +163,7 @@ final class ScopeAcceptanceGate
         // filter); a false-positive would be a leak, which this avoids by
         // construction.
         return $rule['type'] === 'direct'
-            && $this->hasDirectPredicate($tokens, $start, $end, $binding->alias, (string) $rule['column']);
+            && $this->hasDirectPredicate($tokens, $start, $end, $binding->alias, (string) $rule['column'], $rule['param'] ?? '$' . TeamPathResolver::TEAM_IDS_PARAM);
     }
 
     /**
@@ -187,7 +187,7 @@ final class ScopeAcceptanceGate
      *
      * @param list<Token> $tokens
      */
-    private function hasDirectPredicate(array $tokens, int $start, int $end, string $alias, string $column): bool
+    private function hasDirectPredicate(array $tokens, int $start, int $end, string $alias, string $column, string $scopeParam): bool
     {
         if (!isset($tokens[$end])) {
             return false; // no anchor token → cannot establish the part's depth
@@ -237,7 +237,7 @@ final class ScopeAcceptanceGate
             foreach ($conjunctStarts as $k => $cs) {
                 $ce = $conjunctStarts[$k + 1] ?? null;
                 $conjunctEnd = $ce !== null ? $ce - 1 : $predEnd; // the AND / predicate end
-                if ($conjunctEnd - $cs === 5 && $this->isAliasColumnInParam($tokens, $cs, $conjunctEnd, $alias, $column)) {
+                if ($conjunctEnd - $cs === 5 && $this->isAliasColumnInParam($tokens, $cs, $conjunctEnd, $alias, $column, $scopeParam)) {
                     return true;
                 }
             }
@@ -279,11 +279,11 @@ final class ScopeAcceptanceGate
     }
 
     /**
-     * Whether tokens at $i form `<alias> . <column> IN $ai_team_ids`.
+     * Whether tokens at $i form `<alias> . <column> IN <$scopeParam>` (the rule's parameter).
      *
      * @param list<Token> $tokens
      */
-    private function isAliasColumnInParam(array $tokens, int $i, int $end, string $alias, string $column): bool
+    private function isAliasColumnInParam(array $tokens, int $i, int $end, string $alias, string $column, string $scopeParam): bool
     {
         // EXACT (case-sensitive) identifier compares: Cypher variables, property
         // keys and parameters are case-sensitive — a strcasecmp let
@@ -295,16 +295,16 @@ final class ScopeAcceptanceGate
             && $tokens[$i + 1]->isPunct('.')
             && $tokens[$i + 2]->type === CypherLexer::T_WORD
             && $tokens[$i + 2]->value === $column
-            && $this->isInTeamIdsParam($tokens, $i + 3, $end);
+            && $this->isInScopeParam($tokens, $i + 3, $end, $scopeParam);
     }
 
     /**
-     * Whether tokens starting at $i are `IN $ai_team_ids` (the bound parameter form,
+     * Whether tokens starting at $i are `IN <$expected>` (the bound parameter form,
      * NOT an inline `IN [ ... ]`).
      *
      * @param list<Token> $tokens
      */
-    private function isInTeamIdsParam(array $tokens, int $i, int $end): bool
+    private function isInScopeParam(array $tokens, int $i, int $end, string $expected): bool
     {
         if ($i + 1 >= $end) {
             return false;
@@ -316,6 +316,6 @@ final class ScopeAcceptanceGate
         $param = $tokens[$i + 1];
         // Parameters are case-sensitive: `$AI_TEAM_IDS` is a DIFFERENT parameter.
         return $param->type === CypherLexer::T_WORD
-            && $param->value === '$' . TeamPathResolver::TEAM_IDS_PARAM;
+            && $param->value === $expected;
     }
 }

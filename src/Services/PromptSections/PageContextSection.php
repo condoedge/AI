@@ -11,7 +11,7 @@ use Condoedge\Ai\DTOs\PipelineContext;
  *
  * Tells the model "which page/record the user opened the chat from": the record's label,
  * type and id, the current screen/route, and any visible filters. This is a SOFT PRIOR for
- * pronoun/possessive resolution ("this unit", "here") — never a hard filter.
+ * pronoun/possessive resolution ("this order", "here") — never a hard filter.
  *
  * Token-lean: shouldInclude() is false whenever no page context is present, so the section
  * emits ZERO tokens for every chat that was not opened from a page. Host-supplied strings are
@@ -64,7 +64,12 @@ class PageContextSection extends BasePromptSection
             $lines[] = $viewing;
         }
 
-        if ($route !== null && $route !== '') {
+        // A page the chat captured itself is named by its label, never by its route.
+        if (array_key_exists('page_name', $page) && is_string($page['page_name'])) {
+            if ($page['page_name'] !== '') {
+                $lines[] = "Current screen: {$page['page_name']}.";
+            }
+        } elseif ($route !== null && $route !== '') {
             $lines[] = "Current screen (route): {$route}.";
         }
 

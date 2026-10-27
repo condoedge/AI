@@ -11,6 +11,7 @@ use Condoedge\Ai\Exceptions\LlmInvalidJsonException;
 use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
 use Condoedge\Ai\Support\AiLogger;
 use Condoedge\Ai\Support\AliasNormalizer;
+use Condoedge\Ai\Support\DomainProfile;
 use Condoedge\Ai\Support\GuardedPipelineObserver;
 use Condoedge\Ai\Support\PipelineObserverScope;
 use Condoedge\Ai\Support\TokenUsage;
@@ -28,7 +29,7 @@ use Condoedge\Ai\Support\UntrustedLabel;
  * - The user's intent (count, list, lookup, aggregate, etc.)
  *
  * This layer runs BEFORE SemanticContextSelector and helps resolve ambiguous
- * references like "John Smith" -> Person entity, "rent" -> financial property,
+ * references like "John Smith" -> Person entity, "balance" -> financial property,
  * "volunteers" -> PersonTeam with role filter.
  */
 class QueryUnderstandingService
@@ -365,6 +366,22 @@ class QueryUnderstandingService
         // them unrelated keys shifted (a French "factures" question went from Invoice to Bill).
         $digestKeyDoc = $this->digestRequestInstruction();
 
+        // The examples are the host's (ai.domain.understanding), used verbatim: see the note above.
+        $implicitEntityExample = DomainProfile::text('understanding.implicit_entity_example');
+        $propertyConceptExamples = DomainProfile::text('understanding.property_concept_examples');
+        $possessiveExamples = DomainProfile::text('understanding.possessive_examples');
+        $clarifiedQuestion = DomainProfile::text('understanding.clarified_example.question');
+        $clarifiedAnswer = DomainProfile::text('understanding.clarified_example.clarified');
+        $noOwnerQuestion = DomainProfile::text('understanding.no_owner_example.question');
+        $noOwnerAnswer = DomainProfile::text('understanding.no_owner_example.clarified');
+        $knowledgeQuestion = DomainProfile::text('understanding.knowledge_example.question');
+        $knowledgeAnswer = DomainProfile::text('understanding.knowledge_example.clarified');
+        // Starts with the file's own line break, like the line it replaces.
+        $knowledgeExample = $knowledgeQuestion === '' || $knowledgeAnswer === '' ? '' : <<<LINE
+
+But also it could have a base significance. let's say the user asks "{$knowledgeQuestion}" the clarified question might be "{$knowledgeAnswer}"
+LINE;
+
         $system = <<<PROMPT
 You are a query understanding assistant for a graph database system. Your job is to analyze a natural language question and extract structured information to help find the right data.
 
@@ -372,18 +389,17 @@ AVAILABLE ENTITY TYPES:
 {$catalogText}
 
 TASK: Given the user's question, return a JSON object with exactly these keys:
-- "entity_types": array of entity label strings from the list above that are relevant to the question. Include entities that are explicitly mentioned AND entities that are implicitly needed (e.g., if asking about "rent payments", include both the payment entity and the unit/property entity).
+- "entity_types": array of entity label strings from the list above that are relevant to the question. Include entities that are explicitly mentioned AND entities that are implicitly needed (e.g., {$implicitEntityExample}).
 - "person_names": array of person/contact name strings mentioned in the question (e.g., "John Smith", "Maria"). Empty array if no names mentioned.
-- "property_concepts": array of SHORT single-word or two-word property concept strings (e.g., "insurance", "email", "balance", "birthday", "parking"). Keep each concept as short as possible — one word preferred. These are abstract data concepts that may be stored as properties on entities, NOT entity types themselves.
+- "property_concepts": array of SHORT single-word or two-word property concept strings (e.g., {$propertyConceptExamples}). Keep each concept as short as possible — one word preferred. These are abstract data concepts that may be stored as properties on entities, NOT entity types themselves.
 - "search_query": a rewritten version of the question optimized for semantic search against entity descriptions. Remove filler words, expand abbreviations, use domain terminology. It is the SUBJECT of the request only — never include delivery or format words (export, download, excel, pdf, file, document-as-artifact): "can I get an excel with the team members' contact info" → "team members contact information".
 - "subject_label": a short human title (2 to 6 words) of that same subject, written in the SAME language as the question, with the same exclusion of delivery/format words; used as a document title.
-- "possessive_words": array of the words of the question, copied EXACTLY as written, that show the user is asking about THEIR OWN data or THEIR OWN GROUP's data (as in "my unit", "my invoices", "do I have", "am I", etc.): each first-person possessive and each first-person pronoun, singular or plural, in any language. [] when the question has none.
+- "possessive_words": array of the words of the question, copied EXACTLY as written, that show the user is asking about THEIR OWN data or THEIR OWN GROUP's data (as in {$possessiveExamples}, etc.): each first-person possessive and each first-person pronoun, singular or plural, in any language. [] when the question has none.
 - "possessive_forms": the grammatical form of each of those words, in the same order: "subject" (subject of a verb), "possessive", or "object" (object of a verb or of a preposition).
 - "possessive_scope": "personal" when the "subject" and "possessive" words are first-person SINGULAR (the user alone), "collective" when they are first-person PLURAL (the user's group or organization), null when there is no "subject" or "possessive" word (none at all, or only "object" ones).
 - "intent": one of: "count", "list", "lookup", "aggregate", "compare", "file_listing", "page_explanation", "other". Use "file_listing" when the user asks to see or list the documents/files available to them (e.g. "which files do I have access to?", "show my documents", "list the files I can see"). Never "file_listing" when the user asks to RECEIVE records or a result AS a file (that is the data request's own intent, with export_format set). Use "page_explanation" when the user asks what the current page/screen is or what they can do on it (e.g. "what is this page?", "what can I do here?", "explain this screen") — they want a description of the page itself, not a data lookup.
 - "question_type": one of "data_query" (needs database/graph lookup), "knowledge_query" (needs file/document content — rules, regulations, policies, "can I do X?"), "hybrid" (needs both data and documents)
-- "clarified_question": "Usually the concrete asking of the user hides a more abstract context and intent. If the question is "How many parking spaces do I have?" the clarified_question might be "How many parking space entities are related to the person entity representing me in the graph?" This is meant to clarify the underlying data relationships and intent in a way that can help with debugging and prompt engineering. Keep it concise. Never add an owner the question does not state: "Show me the parking spaces" names no owner (the one who receives the answer is not an owner), so it stays "Which parking space entities exist in the graph?" — the user or the user's group appears in the clarified question ONLY when "possessive_scope" is not null.
-But also it could have a base significance. let's say the user asks "Can i tear down a wall in my apartment?" the clarified question might be "What are the rules and regulations regarding modifying a residential unit in my building, more specifically tearing down a wall, and how do they apply to me as a tenant?"
+- "clarified_question": "Usually the concrete asking of the user hides a more abstract context and intent. If the question is "{$clarifiedQuestion}" the clarified_question might be "{$clarifiedAnswer}" This is meant to clarify the underlying data relationships and intent in a way that can help with debugging and prompt engineering. Keep it concise. Never add an owner the question does not state: "{$noOwnerQuestion}" names no owner (the one who receives the answer is not an owner), so it stays "{$noOwnerAnswer}" — the user or the user's group appears in the clarified question ONLY when "possessive_scope" is not null.{$knowledgeExample}
 - "search_tags": array of 5 to 10 keyword tags for searching documents and files. Include: (1) literal terms from the question, (2) domain synonyms that would appear in the relevant documents, (3) the broader category or domain the question belongs to, (4) related technical terms, and (5) if the project's documents are multilingual, translations of the key terms into the other language(s). Think: what words would appear in a document, rule, or regulation that answers this question? Never use the name or title of a document, code, statute or corpus as a tag (even when the user names it): every passage of that document shares its name, so such a tag matches the title page instead of the passage that answers.
 - "export_format": "pdf", "excel", or null. Set a format ONLY when the user is asking to receive the information as a downloadable document or spreadsheet file — an artifact they can save or open outside the chat — regardless of how they phrase that request. Judge the intent semantically, not by specific wording. Use "excel" for spreadsheet/workbook-style files and "pdf" for document-style files. Use null when the user just wants an answer in the chat, or merely mentions a file/document as the SUBJECT of the question rather than asking to receive one.
 - "language": the two-letter ISO 639-1 code of the language the question is written in.
@@ -1075,26 +1091,9 @@ PROMPT;
      */
     private function ownProfileAmbiguousEntityLabels(): array
     {
-        $labels = $this->config['own_profile_ambiguous_entity_labels']
-            ?? (function_exists('config') ? config('ai.query_understanding.own_profile_ambiguous_entity_labels', ['Contact']) : ['Contact']);
+        $labels = array_filter(array_map('trim', DomainProfile::list('ambiguous_profile_labels')), static fn (string $label) => $label !== '');
 
-        if (!is_array($labels)) {
-            return [];
-        }
-
-        $normalized = [];
-        foreach ($labels as $label) {
-            if (!is_string($label)) {
-                continue;
-            }
-
-            $label = trim($label);
-            if ($label !== '') {
-                $normalized[] = $label;
-            }
-        }
-
-        return array_values(array_unique($normalized));
+        return array_values(array_unique($labels));
     }
 
     /**

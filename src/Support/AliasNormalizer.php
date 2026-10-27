@@ -149,7 +149,7 @@ final class AliasNormalizer
      *
      * Among the spellings of one word the most natural is kept, at the position of
      * the first: accented over accent-less, then no underscore over underscore,
-     * then spaced over glued ("unit owner" over "unitowner"); the first one on a tie.
+     * then spaced over glued ("order line" over "orderline"); the first one on a tie.
      *
      * @param iterable<mixed> $aliases non-string / blank entries are ignored
      * @return list<string>

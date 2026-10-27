@@ -13,9 +13,9 @@ use Condoedge\Ai\Support\FileLink;
  * host's entity configuration already declares about its File entity
  * ({@see RecordAncestry}).
  *
- *   owner     = the file's morph parent (`unit:309`); else the first record it
- *               declares it belongs to (`union:14`); else null — a file of the
- *               tenant as a whole;
+ *   owner     = the file's morph parent (`order:309`); else the first record it
+ *               declares it belongs to (`customer:14`); else null — a file of the
+ *               team as a whole;
  *   ancestors = the records that own that record, most specific first: the
  *               parent's own belongs-to records (one read of the parent row),
  *               then the file's own. A file owned through its own foreign key

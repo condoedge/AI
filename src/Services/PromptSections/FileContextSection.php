@@ -18,8 +18,8 @@ use Condoedge\Ai\Support\UntrustedLabel;
  * answered without a query while data questions are still answered from the graph.
  *
  * It used to ship up to 5 x 6000 chars of document text, citation instructions and
- * a hardcoded "team or building-specific rules override general laws" line (wrong
- * for mandatory CCQ provisions) — all removed.
+ * a hardcoded "team or record-specific rules override general laws" line (wrong
+ * for mandatory legal provisions) — all removed.
  *
  * Priority: 45 (before similar_queries at 50).
  */

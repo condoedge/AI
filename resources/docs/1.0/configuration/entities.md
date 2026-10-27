@@ -245,8 +245,8 @@ read:
 
 A record is then named by every declared part the query returned, joined with a space in the
 declared order, whatever order or alias the query projected them in (`c.first_name,
-c.last_name` → "Amélie Quirion"). Without the declaration the chip reads "Amélie" and two
-different people called Julien count as the same name. List only the parts of the name, not
+c.last_name` → "Jane Smith"). Without the declaration the chip reads "Jane" and two
+different people called John count as the same name. List only the parts of the name, not
 other text properties such as a company or an email. Optional: an entity that declares
 nothing keeps the first-own-text-column rule.
 
@@ -260,7 +260,7 @@ single record:
 
 ```php
 'metadata' => [
-    'detail_properties' => ['start_date', 'place', 'president'],
+    'detail_properties' => ['start_date', 'place', 'organizer'],
 ],
 ```
 

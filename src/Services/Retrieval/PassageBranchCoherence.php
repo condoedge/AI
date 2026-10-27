@@ -9,8 +9,8 @@ namespace Condoedge\Ai\Services\Retrieval;
  * are confusable.
  *
  * A structured document can give a section the SAME TITLE in two of its parts: a
- * law titles a division "rights and obligations of co-owners" in both its
- * undivided and its divided chapter. The leaf heading is what a plain question
+ * law titles a division "rights and obligations of members" in both its
+ * first and its second chapter. The leaf heading is what a plain question
  * embeds closest to, so a question about one part retrieves passages of both, and
  * the answer then serves a rule of the other part as if it applied (eval p17-B
  * rights t0 — the full heading path on the passage header did not prevent it).

@@ -14,7 +14,7 @@ use Condoedge\Ai\Services\Actions\Results\AiActionResult;
  * Near-zero config: each points at a host route that exists in a standard Laravel/Jetstream
  * app — `profile.show` and `teams.show` (current team) — configurable under
  * `ai.attached_actions.identity.{profile|team}.route`. A host that already ships its own
- * generic action for the page (CondoEdge: `team_settings`) names it under
+ * generic action for the page (e.g. `team_settings`) names it under
  * `...identity.team.action` instead, and the attacher uses that action (no duplicate).
  *
  * Authorized only for an authenticated user when the route exists — a missing route never

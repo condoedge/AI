@@ -378,7 +378,7 @@ class RelationshipDiscoverer
 
         if ($relation instanceof MorphMany || $relation instanceof MorphOne) {
             // Polymorphic one-to-many / one-to-one
-            // e.g., Unit->invoices() returns morphMany(Invoice::class, 'customer')
+            // e.g., Customer->invoices() returns morphMany(Invoice::class, 'customer')
             // Produces: ['type' => 'INVOICES', 'target_label' => 'Invoice', 'foreign_key' => 'customer_id', 'morph' => 'customer']
             $morphName = $relation->getMorphType(); // e.g. 'customer_type'
             $morphBaseName = Str::beforeLast($morphName, '_type'); // e.g. 'customer'
@@ -396,7 +396,7 @@ class RelationshipDiscoverer
 
         if ($relation instanceof MorphToMany) {
             // Polymorphic many-to-many
-            // e.g., Unit->tags() returns morphToMany(Tag::class, 'taggable')
+            // e.g., Product->tags() returns morphToMany(Tag::class, 'taggable')
             // Produces: ['type' => 'TAGS', 'target_label' => 'Tag', 'foreign_key' => 'taggable_id', 'morph' => 'taggable']
             $morphName = $relation->getMorphType(); // e.g. 'taggable_type'
             $morphBaseName = Str::beforeLast($morphName, '_type'); // e.g. 'taggable'

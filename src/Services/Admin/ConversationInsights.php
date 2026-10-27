@@ -6,6 +6,10 @@ namespace Condoedge\Ai\Services\Admin;
 
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
+use Condoedge\Ai\Models\AiTask;
+use Condoedge\Ai\Models\AiTaskEvent;
+use Condoedge\Ai\Services\Tasks\TaskOrchestrator;
+use Condoedge\Ai\Services\Tasks\TaskStore;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Collection;
@@ -19,8 +23,8 @@ use Illuminate\Support\Facades\Schema;
  * VISIBLE CORPUS (every method): conversations that are not soft-deleted (the owner
  * deleted them) and not produced by the eval harness (metadata.eval = true). Dates are
  * MESSAGE dates: a conversation is "in the range" when one of its messages is, and
- * feedback (stored on the answer as metadata.feedback = positive | negative, with no
- * timestamp of its own) is dated by its answer.
+ * feedback (stored on the answer as metadata.feedback = positive | negative, with
+ * metadata.feedback_at and, after a 👎, an optional metadata.feedback_comment) is dated by its answer.
  *
  * Users / teams come from the host tables (config ai.admin.users_table — default the
  * auth user model's table —, ai.admin.user_team_column = current_team_id,
@@ -38,6 +42,7 @@ class ConversationInsights
 
     public const FEEDBACK_FILTERS = ['all', 'positive', 'negative'];
     public const CONVERSATION_FEEDBACK_FILTERS = ['', 'any', 'positive', 'negative', 'none'];
+    public const ANSWER_FILTERS = ['', 'regenerated', 'no_sources', 'slow'];
 
     private ConnectionInterface $db;
     private InsightsSql $sql;
@@ -114,6 +119,58 @@ class ConversationInsights
             'llm_calls' => $int($row->llm_calls ?? 0),
             'traced_answers' => $int($row->traced_answers ?? 0),
         ] + $latency;
+    }
+
+    /**
+     * The answers of the range per asker audience (metadata.audience.key; null = unresolved or
+     * unstamped, listed last), in one grouped query.
+     *
+     * @return list<array{audience:?string, conversations:int, answers:int, positive:int, negative:int,
+     *   no_sources:int, no_source_pct:?float, latency_avg_ms:?float}>
+     */
+    public function audienceKpis(InsightsRange $range): array
+    {
+        $key = $this->sql->audienceKey('m');
+        $fb = $this->sql->feedback('m');
+        $noSources = $this->sql->noSources('m');
+        $latency = $this->sql->latency('m');
+
+        $rows = $this->messagesInRange($range)
+            ->where('m.role', 'assistant')
+            ->selectRaw(implode("\n    , ", [
+                "{$key} AS audience",
+                'COUNT(DISTINCT m.conversation_id) AS conversations',
+                'COUNT(*) AS answers',
+                "SUM(CASE WHEN {$fb} = 'positive' THEN 1 ELSE 0 END) AS positive",
+                "SUM(CASE WHEN {$fb} = 'negative' THEN 1 ELSE 0 END) AS negative",
+                "SUM(CASE WHEN {$noSources} THEN 1 ELSE 0 END) AS no_sources",
+                "AVG({$latency}) AS latency_avg_ms",
+            ]))
+            ->groupByRaw($key)
+            ->get();
+
+        $int = static fn ($v): int => (int) round((float) ($v ?? 0));
+
+        return $rows
+            ->map(fn ($row) => [
+                'audience' => is_string($row->audience) && $row->audience !== '' ? $row->audience : null,
+                'conversations' => $int($row->conversations),
+                'answers' => $int($row->answers),
+                'positive' => $int($row->positive),
+                'negative' => $int($row->negative),
+                'no_sources' => $int($row->no_sources),
+                'no_source_pct' => $int($row->answers) > 0 ? round(100 * $int($row->no_sources) / $int($row->answers), 1) : null,
+                'latency_avg_ms' => $row->latency_avg_ms !== null ? round((float) $row->latency_avg_ms, 1) : null,
+            ])
+            ->sortBy(fn (array $row) => [$row['audience'] === null ? 1 : 0, (string) $row['audience']])
+            ->values()
+            ->all();
+    }
+
+    /** An answer above this latency (ms) is slow: config ai.admin.slow_answer_ms. */
+    public static function slowAnswerMs(): int
+    {
+        return max(1, (int) config('ai.admin.slow_answer_ms', 20000));
     }
 
     /**
@@ -194,7 +251,9 @@ class ConversationInsights
      * Conversations with at least one message in the range.
      *
      * Filters: user (name / email contains), team (id), feedback ('' | any | positive |
-     * negative | none), text (title or any message contains; LIKE wildcards literal).
+     * negative | none), answers ('' | regenerated | no_sources | slow: an answer of the
+     * conversation is), text (title or any message contains; LIKE wildcards literal), tasks
+     * ('1': ran a task; only while ai.tasks is configured).
      * Row: id, uuid, title, created_at, user_name, team_name, messages_count,
      * positive_count, negative_count, last_activity.
      */
@@ -237,6 +296,24 @@ class ConversationInsights
             'none' => $query->whereNotExists($rated(['positive', 'negative'])),
             default => null,
         };
+
+        $answered = fn (string $condition, array $bindings = []) => fn (Builder $q) => $q->from("{$this->messages} as ma")
+            ->selectRaw('1')
+            ->whereColumn('ma.conversation_id', 'c.id')
+            ->where('ma.role', 'assistant')
+            ->whereRaw($condition, $bindings);
+        match ((string) ($filters['answers'] ?? '')) {
+            'regenerated' => $query->whereExists($answered($this->sql->regenerated('ma'))),
+            'no_sources' => $query->whereExists($answered($this->sql->noSources('ma'))),
+            'slow' => $query->whereExists($answered($this->sql->latency('ma') . ' > ?', [self::slowAnswerMs()])),
+            default => null,
+        };
+
+        if (($filters['tasks'] ?? '') === '1' && TaskOrchestrator::configured()) {
+            $query->whereExists(fn (Builder $q) => $q->from((new AiTask())->getTable() . ' as tk')
+                ->selectRaw('1')
+                ->whereColumn('tk.conversation_id', 'c.id'));
+        }
 
         $text = trim((string) ($filters['text'] ?? ''));
         if ($text !== '') {
@@ -318,6 +395,28 @@ class ConversationInsights
             ->get(['id', 'role', 'content', 'metadata', 'execution_time_ms', 'created_at']);
 
         return ['conversation' => $conversation, 'messages' => $messages];
+    }
+
+    /**
+     * The tasks a conversation ran, oldest first, each with its audit events and whether
+     * their hash chain still holds. Empty while ai.tasks is not configured.
+     *
+     * @return list<array{task: AiTask, events: Collection<int, AiTaskEvent>, chain_ok: bool}>
+     */
+    public function taskTimeline(int $conversationId): array
+    {
+        if (!TaskOrchestrator::configured()) {
+            return [];
+        }
+
+        $store = new TaskStore();
+
+        return AiTask::where('conversation_id', $conversationId)->orderBy('id')->get()
+            ->map(fn (AiTask $task) => [
+                'task' => $task,
+                'events' => $task->events()->orderBy('id')->get(),
+                'chain_ok' => $store->verifyChain($task),
+            ])->all();
     }
 
     // =========================================================================

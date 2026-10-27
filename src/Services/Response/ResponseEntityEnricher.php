@@ -73,7 +73,7 @@ class ResponseEntityEnricher
             // 90c W6: per-row chips only for actions THIS user survives authorize() on.
             // A1/A2: mutating actions additionally pass the FULL row gate (capability + row
             // authorization + precondition) for THIS row — a rejected reservation is never
-            // offered an "approve" chip, a resident never gets one at all.
+            // offered an "approve" chip, a customer never gets one at all.
             $user = $this->currentUser();
             $actions = $this->rowAuthorizedActions(
                 $entityLabel,

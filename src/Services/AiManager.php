@@ -34,6 +34,7 @@ use Condoedge\Ai\Services\Retrieval\DocumentProbeWriter;
 use Condoedge\Ai\Services\Retrieval\PassageSelector;
 use Condoedge\Ai\Services\Schema\GraphSchemaCache;
 use Condoedge\Ai\Services\Understanding\ClarityChecker;
+use Condoedge\Ai\Support\Audiences;
 use Condoedge\Ai\Support\PipelineObserverScope;
 
 /**
@@ -93,7 +94,7 @@ class AiManager
     /** What an empty result means (scope, ownership count, host fallback) — built on first use. */
     private ?EmptyResultInspector $emptyResultInspector = null;
 
-    /** Names the parents of a single-record result (the union of a meeting) — built on first use. */
+    /** Names the parents of a single-record result (the project of a task) — built on first use. */
     private ?RecordParentEnricher $recordParentEnricher = null;
 
     /**
@@ -631,8 +632,8 @@ class AiManager
      * is such a reference, its variable is the anchor. Otherwise (first item is an
      * expression) the first candidate whose label is a QU target entity type wins,
      * else the first candidate. That is a heuristic — the grain the question is
-     * about is not always the first column (e.g. `RETURN u.number, p.amount` for a
-     * payments list would count units) — so the counted label is always stamped
+     * about is not always the first column (e.g. `RETURN c.number, p.amount` for a
+     * payments list would count customers) — so the counted label is always stamped
      * (anchor_label) and the prompt names it, and the prompt line is emitted only
      * on a real fan-out (anchor_total < rows).
      *
@@ -676,9 +677,9 @@ class AiManager
         }
         $masked = FanOutCollapse::mask($cypher);
 
-        // The UNION clause only — never a `:Union` label or a `union_name` alias
-        // (same rule as RecordIdProjection; CondoEdge's Union label used to make
-        // every union-scoped list skip the anchor count).
+        // The UNION clause only — never a label or alias that merely holds the word
+        // (same rule as RecordIdProjection; a host label of that name used to make
+        // every list scoped by it skip the anchor count).
         if (FanOutCollapse::hasUnionClause($cypher)) {
             return null;
         }
@@ -1008,11 +1009,18 @@ class AiManager
             // Follow-up question chips of a document-grounded answer: ONE small focused call
             // AFTER composition (its own 'follow_ups' stage), merged into the turn's chips.
             // Decoration only — never throws; data turns and abstentions make no call.
-            return $this->actionAttacher->withAnswerFollowUps(
-                $this->buildFinalResponse($question, $ctx, $options),
+            // Then its page buttons, picked from the pages setup offers (ai.navigation.pages).
+            $response = $this->actionAttacher->withNavigation(
+                $this->actionAttacher->withAnswerFollowUps($this->buildFinalResponse($question, $ctx, $options), $ctx, $options),
                 $ctx,
                 $options
             );
+            // Text the caller adds under the answer follows the question's language, as the answer does.
+            if ($ctx->qu->language !== '') {
+                $response['metadata']['question_language'] = $ctx->qu->language;
+            }
+
+            return $response;
 
         } catch (\Throwable $e) {
             \Log::error('Error answering question: ' . $e->getMessage());
@@ -1104,7 +1112,7 @@ class AiManager
         // path: when enumeration yielded nothing, the promised fall-through to
         // semantic retrieval must not be blocked because QU also stamped the
         // listing turn with a skippable question_type (e.g. data_query).
-        if (!$isFileListing && $this->shouldSkipFileSearchFor($ctx)) {
+        if (!$isFileListing && $this->shouldSkipFileSearchFor($ctx, $user)) {
             $trace['skipped'] = 'question_type';
             return $ctx;
         }
@@ -1271,7 +1279,7 @@ class AiManager
         }
 
         // EXACT-ARTICLE angle (Phase 7.2): when the question (or QU's rewrite of it)
-        // names an article by number ("art. 1069", "1070.1."), add one angle that
+        // names an article by number ("art. 269", "270.1."), add one angle that
         // filters the chunks by their article metadata. It is a structural match
         // the user asked for by number, so no relevance floor applies; the merge
         // below makes the named article lead its file. Numeric-reference grammar
@@ -1606,11 +1614,11 @@ class AiManager
      * Why the question's first-ranked passage and not "some passage of the turn"
      * (the deepening contract's own test). Measured live 2026-10-07, both after an
      * overview of the user's rights and duties:
-     *  - "Tell me more about my duty to contribute to common expenses" — Query
+     *  - "Tell me more about my duty to pay the annual fees" — Query
      *    Understanding does not call it a follow-up (2 of 2); its own wording ranks
      *    first the article on contributions, which the overview had cited;
-     *  - "Can I tear down the wall between my kitchen and living room?" — a new
-     *    question; its own wording ranks first the article on walls, which the
+     *  - "Can I cancel an order after it has shipped?" — a new
+     *    question; its own wording ranks first the article on that, which the
      *    overview had not cited, while another of its passages overlaps what the
      *    overview cited. Judged on that overlap, the benchmark question lost its
      *    reader on every later turn of a conversation.
@@ -1692,12 +1700,12 @@ class AiManager
      * ({@see \Condoedge\Ai\Services\Retrieval\DocumentOwnerLabels}: one scoped
      * lookup per key, the turn's own authority) and the passage gets its
      * `scope_label` — {kind, name} of its owner and, when it has one, of its
-     * least specific ancestor (`root_kind`, `root_name`: the building of a unit).
+     * least specific ancestor (`root_kind`, `root_name`: the customer of an order).
      * A project passage gets nothing: the prompt marks it general by its source.
      *
      * UNKNOWN SCOPE: when the uploaded passages belong to MORE THAN ONE top-level
      * record, those records are handed to the prompt ($roots) — the answer keeps
-     * them apart instead of merging two buildings' rules into one.
+     * them apart instead of merging two customers' rules into one.
      *
      * Trace (observation only): how many uploaded passages the turn shows; that
      * a KNOWN scope found none (`uploads: none_in_scope` — the search was not
@@ -2132,8 +2140,13 @@ class AiManager
      * always force file search back on. Called BEFORE the fan-out and the
      * recall floor, so a skipped turn can never receive chunks at all.
      */
-    private function shouldSkipFileSearchFor(PipelineContext $ctx): bool
+    private function shouldSkipFileSearchFor(PipelineContext $ctx, mixed $user): bool
     {
+        // Docs only: the documents are every turn's only source.
+        if (!$this->queryGenerationEnabled($user)) {
+            return false;
+        }
+
         $skipTypes = config('ai.file_context.skip_for_question_types', ['data_query']);
         if (!is_array($skipTypes) || $skipTypes === []) {
             return false;
@@ -2706,7 +2719,7 @@ class AiManager
         if (count($order) > $maxReferences) {
             // ONE SLOT PER KIND OF DOCUMENT: when the candidates come from a general
             // document and from a record's own, the budget keeps at least one passage
-            // of each (ReferenceSlots — live, a building's own document took all five
+            // of each (ReferenceSlots — live, a record's own document took all five
             // slots and the general law's article on the very point never reached
             // the answer). A named article is never the one given up.
             $top = \Condoedge\Ai\Services\Retrieval\ReferenceSlots::reserveOnePerKind(
@@ -3008,12 +3021,12 @@ class AiManager
      * NO CHUNK TWICE (eval p18-B rights t0). The window rule keeps two passages of a
      * file when their chunks are more than context_window apart — but every snippet
      * is its chunk ± context_window, so passages three or four chunks apart still
-     * SHARE chunks: chunks 58, 61 and 64 printed art. 1064–1065 in [1] and [2] and
-     * art. 1067–1068 in [2] and [3], a fifth of the prompt's passage text, and the
+     * SHARE chunks: chunks 58, 61 and 64 printed art. 264–265 in [1] and [2] and
+     * art. 267–268 in [2] and [3], a fifth of the prompt's passage text, and the
      * answer repeated exactly those articles.
      *
      * 1. MERGE. Kept passages whose snippets share a chunk (transitively) become ONE
-     *    passage: their chunks, each once, in reading order — "art. 1062–1069" — at
+     *    passage: their chunks, each once, in reading order — "art. 262–269" — at
      *    the place of the best-ranked of them, counted as one slot. What a snippet is
      *    made of is the provider's own word (the reference's `snippet_chunks` map,
      *    FileContextProvider::PASSAGE_CHUNKS), never an assumption about the window;
@@ -3645,6 +3658,26 @@ class AiManager
             return $ctx;
         }
 
+        // Docs only (ai.query_generation.enabled = false, or an audience that reads no data): no query.
+        if (!$this->queryGenerationEnabled($options['user'] ?? null)) {
+            $ctx->queryResult = $hasFileContext
+                ? new QueryGenerationResult(
+                    explanation: 'Docs only — answered from documents.',
+                    confidence: 1.0,
+                    metadata: ['source' => 'file_context', 'question_type' => $ctx->qu->questionType],
+                )
+                : new QueryGenerationResult(
+                    explanation: 'Docs only — no document found.',
+                    metadata: ['generation_skipped' => 'docs_only'],
+                );
+            $ctx->executionResult = QueryExecutionResult::empty();
+            $this->emitStage($ctx->observer, $hasFileContext ? 'knowledge_query' : 'docs_only', [
+                'files' => count($ctx->fileContext['relevant_files'] ?? []),
+            ]);
+
+            return $ctx;
+        }
+
         // Skip Cypher for knowledge queries ONLY when documents were actually
         // retrieved — those documents are the grounding. With no document context
         // we must NOT claim "answered from documents" at confidence 1.0; fall
@@ -3764,7 +3797,7 @@ class AiManager
         [$queryResult, $executionResult] = $this->resolveEmptyResult($ctx, $queryResult, $executionResult, $execOptions);
 
         // Eval p18-B digest t1: ONE record is shown with the parent it belongs to (the
-        // union of a meeting), whatever the generator happened to project.
+        // group of a meeting), whatever the generator happened to project.
         $executionResult = $this->enrichSingleRecord($ctx, $queryResult, $executionResult, $execOptions);
 
         $executionResult = $this->enrichResultsWithEntityActions($executionResult);
@@ -3802,8 +3835,8 @@ class AiManager
      * Each collected cell is capped at ai.query_execution.collapse_cell_limit
      * values (default 10; a longer one ends with "…", fan_out_cells_truncated).
      * Known limit: a list whose subject is NOT the first column (`RETURN
-     * u.number, p.amount` for a payments list) would be grouped per unit; the
-     * pin rule covers the common single-unit case. Disable with
+     * c.number, p.amount` for a payments list) would be grouped per customer; the
+     * pin rule covers the common single-customer case. Disable with
      * ai.query_execution.collapse_fan_out=false. Any failure keeps the original.
      *
      * @return array{0: QueryGenerationResult, 1: QueryExecutionResult}
@@ -3930,11 +3963,11 @@ class AiManager
      *    and the action attacher reads it for the own-data door.
      *
      *  - OWN-DATA query: ONE count of the ownership path the query traverses (does
-     *    the user have ANY unit?) → metadata `ownership_check`
+     *    the user own ANY record?) → metadata `ownership_check`
      *    {entity, display_name, count}, stated by the abstention as the reason.
      *    The same holds for the ONE-ROW shape of an empty own-data result — a global
      *    aggregate over nothing (`RETURN sum(…)` → 0, live 2026-10-06: "your
-     *    contribution is $0.00" for a user who owns no unit): when the count proves
+     *    contribution is $0.00" for a user who owns no record): when the count proves
      *    there was nothing to total, the row is not served as a figure — the result
      *    becomes that empty own-data result (the row kept as metadata
      *    `aggregate_over_nothing`). A team-wide zero total, or an owner's real zero,
@@ -4093,8 +4126,8 @@ class AiManager
     /**
      * SINGLE RECORD (eval p18-B digest t1, "When was our last meeting then?" — 0.55 in
      * four runs). A one-record lookup showed only what the generator happened to
-     * project: the union a meeting belongs to in 1 run of 4, so the answer could not
-     * say which condo association met, and with two displayable columns the
+     * project: the group a meeting belongs to in 1 run of 4, so the answer could not
+     * say which group met, and with two displayable columns the
      * code-rendered record block never fired. No prompt line fixed it.
      *
      * When the turn's result is exactly ONE row that is a record of a configured
@@ -4104,7 +4137,7 @@ class AiManager
      * tenant scoping, read-only, the turn's rate_limit_batch — zero LLM calls) — and,
      * from the same query, the record's own DETAIL fields its entity declares
      * (`metadata.detail_properties`: a meeting's place) that the query did not project.
-     * The added columns (`place`, `union_name`) are ordinary result columns from then on:
+     * The added columns (`place`, `group_name`) are ordinary result columns from then on:
      * the answer plan, the record block, the chips and the conversation's result sample
      * see them.
      *
@@ -4386,6 +4419,12 @@ class AiManager
         );
     }
 
+    /** False in docs-only mode (ai.query_generation.enabled) and for an asker whose audience lists no data entity. */
+    private function queryGenerationEnabled(mixed $user): bool
+    {
+        return (bool) config('ai.query_generation.enabled', true) && Audiences::dataEntities($user) !== [];
+    }
+
     /**
      * Whether this turn carries the AUGMENTATION ANCHOR: a QU-judged follow-up
      * on a previous DATA result whose query the conversation snapshot recorded.
@@ -4545,6 +4584,10 @@ class AiManager
             $preferCurrent = $sameGrain && $extends;
             if ($preferCurrent) {
                 $grainColumns = $shared;
+            }
+            // Other records (gold t8: tasks shown, then "export the members list"): the request is about this result.
+            if ($shared === [] && $this->otherAnchor($ctx, $previous)) {
+                $preferCurrent = true;
             }
             if ($sameGrain || ($extends && $this->sharedValuesOverlap($previous['rows'], $ctx->executionResult->data, $shared))) {
                 $requestedFields = $currentColumns;
@@ -4761,11 +4804,13 @@ class AiManager
                         'checked_scope' => $emptyScope,
                         'checked_own_data' => $emptyScope === EmptyResultInspector::SCOPE_OWN,
                         // WHY an own-data result is empty: the ownership count (eval p16-B
-                        // rights t2 — "you have no unit linked", stated as a fact).
+                        // rights t2 — "you have no record linked", stated as a fact).
                         'ownership_check' => is_array($ctx->executionResult->metadata['ownership_check'] ?? null)
                             ? $ctx->executionResult->metadata['ownership_check']
                             : null,
-                    ],
+                    ]
+                    // Docs only: nothing was looked up — no document answers, no record was checked.
+                    + (($ctx->queryResult->metadata['generation_skipped'] ?? null) === 'docs_only' ? ['docs_only' => true] : []),
             );
         } else {
             $source = $ctx->queryResult->metadata['source'] ?? null;
@@ -5227,6 +5272,32 @@ class AiManager
     private const SAME_POPULATION_MIN_OVERLAP = 5;
 
     /**
+     * Whether the request is about other records than the previous result: this turn's result anchors on
+     * another record type (companion count or final RETURN) AND the entity types QU read in the request
+     * leave the previous one out. "Export it" names nothing, so a re-anchored query never wins on its own.
+     *
+     * @param array{rows: array<int, mixed>, meta: array<string, mixed>} $previous
+     */
+    private function otherAnchor(PipelineContext $ctx, array $previous): bool
+    {
+        if ($ctx->qu->entityTypes === []) {
+            return false;
+        }
+        $fresh = $ctx->executionResult->metadata['anchor_label'] ?? null;
+        if ((!is_string($fresh) || $fresh === '') && $ctx->queryResult->hasCypher()) {
+            $fresh = $this->projectionAnchor((string) $ctx->queryResult->cypher)['label'] ?? null;
+        }
+        $last = $ctx->conversationContext['last_cypher_query'] ?? null;
+        $before = $previous['meta']['anchor_label'] ?? null;
+        if ((!is_string($before) || $before === '') && is_string($last)) {
+            $before = $this->projectionAnchor($last)['label'] ?? null;
+        }
+
+        return is_string($fresh) && is_string($before) && $fresh !== '' && $before !== '' && $fresh !== $before
+            && !in_array($before, $ctx->qu->entityTypes, true);
+    }
+
+    /**
      * Whether at least one previous row's non-empty shared-column value tuple
      * appears among the current rows' tuples (same normalization as
      * sharedValuesContained). Disclosure only (requested fields), never a source
@@ -5468,6 +5539,12 @@ class AiManager
         // export follow-ups came back intent=file_listing, enumeration answered with
         // 50 files and no query ran.
         if ($ctx->qu->followUpReference && !empty($ctx->conversationContext['last_result_sample'] ?? [])) {
+            return false;
+        }
+
+        // Asking to RECEIVE something as a file is not asking which files one has; QU stamps both
+        // file_listing (live 2026-10-26: every new export request), and the listing hid the documents.
+        if ($ctx->qu->exportFormat !== null) {
             return false;
         }
 
@@ -5754,6 +5831,9 @@ class AiManager
             ];
             if (is_numeric($file['chunk_relevance'] ?? null)) {
                 $entry['chunk_relevance'] = (float) $file['chunk_relevance'];
+            }
+            if (is_array($file['audience'] ?? null)) {
+                $entry['audience'] = $file['audience'];
             }
             // Which search angles picked the passage (the user's wording among them or not).
             if (is_array($file['angle_groups'] ?? null)) {

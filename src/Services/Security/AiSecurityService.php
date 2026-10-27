@@ -6,11 +6,16 @@ namespace Condoedge\Ai\Services\Security;
 
 use Condoedge\Ai\Contracts\AiAuthAdapterInterface;
 use Condoedge\Ai\Exceptions\SecurityException;
+use Condoedge\Ai\Support\Audiences;
 use Illuminate\Support\Facades\Log;
 
 /**
  * Main security service for AI queries.
  * Orchestrates permission checking and team filter generation.
+ *
+ * Below the team, two optional limits: an audience may list the entities it reads
+ * (ai.audiences.map.<key>.data_entities), and a user the host narrows (RowScope) gets each
+ * entity's row rule instead of its team rule — entities without a row_scope_path are refused.
  */
 class AiSecurityService
 {
@@ -43,7 +48,11 @@ class AiSecurityService
      * @param mixed $user User model
      * @param string $entity Entity name
      * @param string $alias Cypher alias
-     * @return array{filter: string|null, parameters: array<string, mixed>}
+     *
+     * `rule` is the {@see TeamPathResolver::ruleFor()} template the filter was built from
+     * (the row rule for a narrowed user), so the acceptance gate verifies that same rule.
+     *
+     * @return array{filter: string|null, parameters: array<string, mixed>, rule?: array|null}
      * @throws SecurityException When access denied
      */
     public function getTeamFilterWithParameters($user, string $entity, string $alias): array
@@ -54,10 +63,18 @@ class AiSecurityService
             return $none;
         }
 
+        if (!$this->audienceAllows($user, $entity)) {
+            $this->logDeniedAccess($user, $entity, 'audience');
+            throw new SecurityException("You do not have permission to query {$entity} data");
+        }
+
+        $rowIds = RowScope::idsFor($user);
+
         if ($this->authAdapter->checkIfPermissionsExist($user, $entity) === false) {
             $action = config('ai.security.on_permission_unexistent', 'deny');
 
-            if ($action === 'deny') {
+            // The bypass would read the entity unfiltered: never for a narrowed user.
+            if ($action === 'deny' || $rowIds !== null) {
                 throw new SecurityException(
                     "Cannot verify permissions for {$entity} data"
                 );
@@ -76,6 +93,10 @@ class AiSecurityService
             );
         }
 
+        if ($rowIds !== null && $this->pathResolver->ruleFor($entity, $alias) !== null) {
+            return $this->rowScoped($user, $entity, $alias, $teamIds, $rowIds);
+        }
+
         $resolved = $this->pathResolver->resolve($entity, $alias, $teamIds);
 
         if ($resolved === null) {
@@ -85,7 +106,29 @@ class AiSecurityService
         return [
             'filter' => $resolved['filter'],
             'parameters' => $resolved['parameters'] ?? [],
+            'rule' => $this->pathResolver->ruleFor($entity, $alias),
         ];
+    }
+
+    /**
+     * Whether the user may read the entity at all (audience list, row path when narrowed);
+     * the team permission is still checked at query time. Used to keep labels out of the prompt.
+     */
+    public function canRead($user, string $entity): bool
+    {
+        if (!$this->authAdapter->isEnabled()) {
+            return true;
+        }
+        if (!$this->audienceAllows($user, $entity)) {
+            return false;
+        }
+
+        $rowIds = RowScope::idsFor($user);
+        if ($rowIds === null || $this->pathResolver->ruleFor($entity, 'n') === null) {
+            return true;
+        }
+
+        return $rowIds !== [] && $this->pathResolver->ruleFor($entity, 'n', true) !== null;
     }
 
     /**
@@ -93,6 +136,11 @@ class AiSecurityService
      */
     public function shouldSkipTeamFilterForCount($user, string $entity): bool
     {
+        // A global count would cross the row scope or the audience list.
+        if (RowScope::idsFor($user) !== null || Audiences::dataEntities($user) !== null) {
+            return false;
+        }
+
         if (!$this->authAdapter->isEnabled()) {
             return true;
         }
@@ -110,6 +158,32 @@ class AiSecurityService
         }
 
         return $this->authAdapter->getTeamsWithPermission($user, $entity);
+    }
+
+    /** The row rule for a narrowed user; the team ids stay bound so a generated team predicate still runs. */
+    private function rowScoped($user, string $entity, string $alias, array $teamIds, array $rowIds): array
+    {
+        $rule = $this->pathResolver->ruleFor($entity, $alias, true);
+        if ($rule === null || $rowIds === []) {
+            $this->logDeniedAccess($user, $entity, $rule === null ? 'no_row_scope_path' : 'empty_row_scope');
+            throw new SecurityException("You do not have permission to query {$entity} data");
+        }
+
+        return [
+            'filter' => $rule['filter'],
+            'parameters' => [
+                TeamPathResolver::TEAM_IDS_PARAM => array_values(array_map('intval', array_filter($teamIds, 'is_numeric'))),
+                TeamPathResolver::ROW_SCOPE_IDS_PARAM => $rowIds,
+            ],
+            'rule' => $rule,
+        ];
+    }
+
+    private function audienceAllows($user, string $entity): bool
+    {
+        $entities = Audiences::dataEntities($user);
+
+        return $entities === null || in_array($entity, $entities, true);
     }
 
     /**

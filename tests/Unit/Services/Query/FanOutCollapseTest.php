@@ -167,6 +167,7 @@ class FanOutCollapseTest extends TestCase
         // A join condition against another variable, or a set membership, is not a pin.
         $this->assertFalse(FanOutCollapse::isPinned(self::ROSTER_CONTACTS, 'u'));
         $this->assertFalse(FanOutCollapse::isPinned('MATCH (u:User) WHERE u.team_id IN $ai_team_ids RETURN u.name', 'u'));
+        $this->assertFalse(FanOutCollapse::isPinned('MATCH (u:Unit) WHERE u.union_id IN $ai_row_scope_ids RETURN u.name', 'u'));
         // Another variable pinned is not the anchor pinned.
         $this->assertFalse(FanOutCollapse::isPinned(self::ROSTER_CONTACTS, 'tr'));
         $this->assertTrue(FanOutCollapse::isPinned(self::ROSTER_CONTACTS, 't'));

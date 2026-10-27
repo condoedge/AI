@@ -17,6 +17,10 @@ trait HasAvatars
 
     protected function assistantAvatarHtml(): string
     {
+        if ($image = $this->assistantImageHtml('w-9 h-9 shadow-sm ring-2 ring-white')) {
+            return '<span class="relative">' . $image . '</span>';
+        }
+
         $gradient = $this->getAvatarGradient();
         return '<span class="relative"><span class="w-9 h-9 rounded-full bg-gradient-to-br ' . $gradient . ' text-white flex items-center justify-center shadow-sm ring-2 ring-white"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" /></svg></span></span>';
     }
@@ -24,7 +28,23 @@ trait HasAvatars
     protected function welcomeAvatarHtml(): string
     {
         $gradient = $this->getAvatarGradient();
+
+        if ($image = $this->assistantImageHtml('relative w-24 h-24 shadow-2xl ring-4 ring-white/50')) {
+            return '<div class="relative"><div class="absolute inset-0 rounded-full bg-gradient-to-r ' . $gradient . ' opacity-30 blur-xl animate-pulse"></div>' . $image . '</div>';
+        }
+
         return '<div class="relative"><div class="absolute inset-0 rounded-full bg-gradient-to-r ' . $gradient . ' opacity-30 blur-xl animate-pulse"></div><div class="relative w-24 h-24 rounded-full bg-gradient-to-br ' . $gradient . ' flex items-center justify-center shadow-2xl ring-4 ring-white/50"><svg class="w-12 h-12 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" /></svg></div></div>';
+    }
+
+    /** The configured picture (`ai.chat.assistant_avatar`, a public path or a URL); null keeps the sparkle. */
+    protected function assistantImageHtml(string $class): ?string
+    {
+        $path = config('ai.chat.assistant_avatar');
+        if (!is_string($path) || $path === '') {
+            return null;
+        }
+
+        return '<img src="' . e(asset($path)) . '" alt="' . e((string) config('ai.identity.name', '')) . '" class="rounded-full object-cover flex-shrink-0 ' . $class . '">';
     }
 
     protected function getAvatarGradient(): string

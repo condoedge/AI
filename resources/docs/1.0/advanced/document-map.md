@@ -6,7 +6,7 @@ Lets the assistant reason from a user's concrete situation to the rules that gov
 
 ## Overview
 
-A passage is retrieved by the words it shares with the question. A rule is often worded nothing like the situation it settles: "Can I tear down the wall between my kitchen and living room?" shares no word with the article that says a co-owner disposes freely of a private portion, the one that presumes walls between portions common, or the one that sets the majority for works on common portions. With the whole chapter in the prompt the answer still missed them: the gap is reasoning, not text.
+A passage is retrieved by the words it shares with the question. A rule is often worded nothing like the situation it settles: "Can I work from home every Friday?" shares no word with the article that says an employee sets their own schedule within core hours, the one that presumes work is done on the premises, or the one that says who approves a standing exception. With the whole chapter in the prompt the answer still missed them: the gap is reasoning, not text.
 
 The document map closes it in two steps:
 
@@ -50,7 +50,7 @@ When a turn planned for the reader falls back, the plain angles are not searched
 
 ### Scope
 
-A code that states similar rules for different regimes ("undivided co-ownership", "divided co-ownership") answers from the wrong chapter when nothing says which one governs your users. For a document with three or more heading levels and at least two top-level parts, ONE call on the accurate model reads a summary of each part against `ai.project.description` and says `in`, `out` or `unclear` per part.
+A code that states similar rules for different regimes ("full-time employees", "contractors") answers from the wrong chapter when nothing says which one governs your users. For a document with three or more heading levels and at least two top-level parts, ONE call on the accurate model reads a summary of each part against `ai.project.description` and says `in`, `out` or `unclear` per part.
 
 - Chunks of a part judged `out` are not returned by the document search and are not stitched into a neighbouring passage. A question that names an article by number still gets that article.
 - It fails open: one `unclear` part, a reply that would hide every part, or no project description filters nothing.

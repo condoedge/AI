@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Discovery;
 
+use Condoedge\Ai\Support\DomainProfile;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
 
@@ -14,11 +15,12 @@ use Illuminate\Support\Str;
  * query matching. Creates singular, plural, and common business term
  * variations to improve entity recognition in natural language queries.
  * Also reads Laravel translation files to add French aliases automatically.
+ * The host's own vocabulary comes from ai.domain.aliases.
  *
  * Usage:
  *   $generator = new AliasGenerator();
  *   $aliases = $generator->generate($customer);
- *   // ['customer', 'customers', 'client', 'buyer', 'unité', ...]
+ *   // ['customer', 'customers', 'client', 'buyer', ...]
  *
  * @package Condoedge\Ai\Services\Discovery
  */
@@ -34,8 +36,8 @@ class AliasGenerator
     /**
      * Common business term mappings
      *
-     * Maps entity names to their common business synonyms,
-     * including French translations and condo management domain terms.
+     * Maps entity names to their common business synonyms. A host entry in
+     * ai.domain.aliases for the same word replaces it.
      */
     private const BUSINESS_TERMS = [
         'customer' => ['client', 'buyer', 'patron', 'account'],
@@ -55,42 +57,6 @@ class AliasGenerator
         'team' => ['group', 'department', 'division'],
         'role' => ['position', 'title', 'function'],
         'permission' => ['right', 'privilege'],
-
-        // Condo management domain terms (bilingual EN/FR)
-        'union' => ['copropriete', 'copropriété', 'syndicat', 'condo', 'condominium', 'HOA', 'strata'],
-        'unit' => ['unité', 'unite', 'fraction', 'lot', 'logement', 'apartment', 'apt', 'suite'],
-        'building' => ['immeuble', 'bâtiment', 'batiment', 'édifice', 'edifice'],
-        'contact' => ['résident', 'resident', 'propriétaire', 'owner', 'tenant', 'locataire', 'occupant'],
-        'invoice' => ['facture', 'cotisation', 'contribution', 'assessment', 'bill', 'statement', 'receipt'],
-        'bill' => ['facture fournisseur', 'dépense', 'expense'],
-        'supplier' => ['fournisseur', 'vendor', 'contractor', 'entrepreneur', 'prestataire'],
-        'task' => ['tâche', 'tache', 'to-do', 'action item', 'suivi'],
-        'meeting' => ['réunion', 'reunion', 'assemblée', 'assemblee', 'assemblée générale', 'AGM'],
-        'budget' => ['budget', 'prévision', 'prevision'],
-        'fund' => ['fonds', 'reserve fund', 'fonds de prévoyance', 'contingency fund'],
-        'account' => ['compte', 'ledger', 'GL account'],
-        'transaction' => ['transaction', 'paiement', 'payment', 'deposit', 'dépôt'],
-        'entry' => ['écriture', 'ecriture', 'journal entry'],
-        'tax' => ['taxe', 'TPS', 'TVQ', 'GST', 'QST'],
-        'event' => ['événement', 'evenement', 'activité', 'activite'],
-        'reservation' => ['réservation', 'booking'],
-        'resource' => ['ressource', 'common area', 'aire commune', 'amenity'],
-        'announcement' => ['annonce', 'avis', 'notice'],
-        'discussion' => ['discussion', 'forum', 'sujet'],
-        'maintenance' => ['entretien', 'maintenance'],
-        'work_order' => ['bon de travail', 'demande de service', 'service request'],
-        'project' => ['projet', 'capital project'],
-        'component' => ['composante', 'équipement', 'equipement', 'equipment'],
-        'pet' => ['animal', 'animal de compagnie'],
-        'vehicle' => ['véhicule', 'vehicule', 'voiture', 'car'],
-        'vote' => ['vote', 'scrutin', 'ballot'],
-        'motion' => ['résolution', 'resolution', 'proposition'],
-        'file' => ['fichier', 'document', 'pièce jointe', 'attachment', 'upload'],
-        'folder' => ['dossier', 'répertoire'],
-        'note' => ['note', 'commentaire', 'comment'],
-        'comment' => ['note', 'commentaire', 'remark', 'feedback'],
-        'access' => ['accès', 'acces', 'clé', 'cle', 'fob', 'télécommande', 'telecommande'],
-        'visit' => ['visite', 'visiteur', 'visitor'],
     ];
 
     /**
@@ -191,20 +157,21 @@ class AliasGenerator
         $plural = Str::plural($word);
 
         $terms = [];
+        $vocabulary = array_merge(self::BUSINESS_TERMS, DomainProfile::map('aliases'));
 
         // Check if we have business terms for singular form
-        if (isset(self::BUSINESS_TERMS[$singular])) {
-            $terms = array_merge($terms, self::BUSINESS_TERMS[$singular]);
+        if (isset($vocabulary[$singular])) {
+            $terms = array_merge($terms, $vocabulary[$singular]);
 
             // Add pluralized versions of business terms
-            foreach (self::BUSINESS_TERMS[$singular] as $term) {
+            foreach ($vocabulary[$singular] as $term) {
                 $terms[] = Str::plural($term);
             }
         }
 
         // Check if we have business terms for plural form
-        if (isset(self::BUSINESS_TERMS[$plural])) {
-            $terms = array_merge($terms, self::BUSINESS_TERMS[$plural]);
+        if (isset($vocabulary[$plural])) {
+            $terms = array_merge($terms, $vocabulary[$plural]);
         }
 
         return array_unique($terms);
@@ -217,7 +184,7 @@ class AliasGenerator
      * then generates inflections (singular/plural, with and without accents)
      * for all found translations.
      *
-     * @param string $label The StudlyCase entity label (e.g., "Unit", "Building")
+     * @param string $label The StudlyCase entity label (e.g., "Order", "Customer")
      * @return array French translation aliases
      */
     public function fromTranslations(string $label): array
@@ -230,7 +197,7 @@ class AliasGenerator
 
         $aliases = [];
 
-        // Try singular form as-is (e.g., "Unit")
+        // Try singular form as-is (e.g., "Order")
         $singular = Str::singular($label);
         $plural = Str::plural($label);
 

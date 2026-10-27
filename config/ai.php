@@ -35,6 +35,155 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Domain Profile
+    |--------------------------------------------------------------------------
+    |
+    | The host's domain, in one place: the examples the package's prompts show
+    | the model, written in the host's own vocabulary. Read only through
+    | Condoedge\Ai\Support\DomainProfile. Each value is used verbatim.
+    |
+    | - understanding: the examples of the query understanding prompt (every turn).
+    | - query_rules:   the examples of the query generation rules (every data turn).
+    | - ambiguous_profile_labels: labels QU drops from "my ..." lookups.
+    | - aliases, discovery: the ai:discover vocabulary and prompt examples.
+    |
+    */
+    'domain' => [
+        'understanding' => [
+            'implicit_entity_example' => 'if asking about "order payments", include both the payment entity and the customer entity',
+            'property_concept_examples' => '"email", "balance", "birthday", "address", "status"',
+            'possessive_examples' => '"my orders", "my invoices", "do I have", "am I"',
+            'clarified_example' => [
+                'question' => 'How many orders do I have?',
+                'clarified' => 'How many order entities are related to the person entity representing me in the graph?',
+            ],
+            'no_owner_example' => [
+                'question' => 'Show me the orders',
+                'clarified' => 'Which order entities exist in the graph?',
+            ],
+            // Leave question or clarified empty to drop the example's line.
+            'knowledge_example' => [
+                'question' => 'Can I return an item after 30 days?',
+                'clarified' => 'What are the return policy rules for an item returned after 30 days, and how do they apply to me as a customer?',
+            ],
+        ],
+        'query_rules' => [
+            'join_example' => 'JOIN Customer for Order',
+            'record_examples' => 'order, customer, product, member',
+            'record_id_example' => 'o.id AS order_id',
+            'row_grain_examples' => 'members, orders, invoices',
+        ],
+        // Entity labels that can be mistaken for own-profile wording ("my information"): on a
+        // possessive lookup they are dropped from QU's entity types unless the request is a
+        // list/count/aggregate or names a person. [] disables it.
+        'ambiguous_profile_labels' => [],
+        // ai:discover's synonyms per entity word, beside the package's generic business terms
+        // (AliasGenerator); a host entry for a word replaces the generic one.
+        'aliases' => [],
+        // ai:discover words a relationship scope named after one of these as a role ("People
+        // who are volunteers"), beside the generic admins/members/managers/staff/customers.
+        'role_terms' => [],
+        // The ai:discover / ai:enhance prompts (dev-time). An empty app_brief describes the
+        // app from project.description.
+        'discovery' => [
+            'app_brief' => '',
+            'persona_examples' => 'admin vs member vs customer',
+            'possessive_path_example' => '"my orders" = User→Customer→Order',
+            'possessive_alias_examples' => '"my order", "mes commandes"',
+            'question_examples' => '["How many orders do we have?", "Show me my orders", "Combien de commandes avons-nous?", "Which orders are unpaid?", "List the orders of customer X"]',
+            'relationship_examples' => '{"CUSTOMER": "The customer who placed this order", "HAS_ORDER_LINES": "Products in this order via the OrderLine junction table (product, quantity, price)"}',
+            'junction_example' => 'OrderLine links Order↔Product',
+            'possessive_chain_example' => 'User→Customer→Order (for orders), User→Customer (for contact info)',
+        ],
+        // How the answer names the corpus when the answer is not in it (e.g. "Acme's help articles").
+        'response' => [
+            'documents_name' => 'the available documents',
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Audiences (who is asking)
+    |--------------------------------------------------------------------------
+    |
+    | Optional. The host's resolver (a class implementing
+    | Condoedge\Ai\Contracts\AudienceResolverInterface) names the audience a user
+    | belongs to — a key of `map` — and their role in it. Read only through
+    | Condoedge\Ai\Support\Audiences. Per audience:
+    | - documents:         the document audiences (frontmatter `audience`) it may read;
+    |                      documents with no audience are read by everyone. Enforced by
+    |                      the document search, never left to the model.
+    | - insider_voice:     answer from inside the user's organisation (default true).
+    | - prompt:            how to frame answers for them; {role} is the resolved role.
+    | - example_questions: its own welcome suggestions.
+    |
+    | Without a resolver nothing is filtered and no prompt changes.
+    |
+    */
+    'audiences' => [
+        'resolver' => null,
+        'map' => [],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Navigation pages (buttons under document answers)
+    |--------------------------------------------------------------------------
+    |
+    | Optional. The pages a document-grounded answer may offer as buttons — declared
+    | here, never read from documents. Per page: route (a named route with no required
+    | parameter), label, description (what the page is for: the model picks by it),
+    | audiences (keys of ai.audiences.map; none = all) and authorize — REQUIRED,
+    | fn ($user): bool; a page without it is never offered. Code keeps the pages the user
+    | may open now; one small call (llm role `navigation`) picks at most `max` of them.
+    |
+    | A page may also list sections — [id => ['label' => <translation key>, 'conditional'
+    | => 0|1]] — the parts of the page a button can land on: the model may pick one of the
+    | chosen page's ids (preferring those not conditional, i.e. always present) and the
+    | button opens route?section=<id>, labelled "Page › Section". Landing on the id is the
+    | host's job. Without sections the call is unchanged.
+    |
+    | A page may name a task ('task' => <ai.tasks definition key>): when the page is picked
+    | and the user may start that task, its start chip comes before the page's button.
+    |
+    */
+    'navigation' => [
+        'max' => 2,
+        'pages' => [],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Tasks (a conversation that ends in one confirmed write)
+    |--------------------------------------------------------------------------
+    |
+    | Optional, off by default. A task definition is a host class implementing
+    | Condoedge\Ai\Contracts\TaskDefinitionInterface: its fields, who may start it,
+    | its checks, its summary and its single write. While a conversation has an
+    | active task, the chat turn goes to the TaskOrchestrator (one small call, llm
+    | role `task_orchestrator`) instead of the question pipeline; the write runs
+    | only after the user confirms the summary. Every step is audited in
+    | ai_task_events. An answer whose chips start a task says so in one line (the
+    | definition's TaskOfferInterface sentence, else `ai.tasks.offer`); the user's
+    | next message may start it (one small call, llm role `task_offer`). A question
+    | about something else during a task is answered normally while the task waits.
+    |
+    | - enabled:     1 to let a conversation run tasks.
+    | - definitions: the definition classes, e.g. [App\Ai\Tasks\BookRoomTask::class].
+    | - welcome:     the task keys whose start chips the welcome screen shows, in order;
+    |                [] shows every task the user may start.
+    |
+    | Off, or on without a definition, nothing changes: no turn looks for a task.
+    |
+    */
+    'tasks' => [
+        'enabled' => env('AI_TASKS_ENABLED', false),
+        'definitions' => [],
+        'welcome' => [],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Assistant Identity (model-agnostic, white-label)
     |--------------------------------------------------------------------------
     |
@@ -263,6 +412,10 @@ return [
         // 'bypass' = allow without filtering
         'on_missing_team_path' => 'deny',
 
+        // A class implementing RowScopeResolverInterface: narrows some users below their team (entities declare
+        // security.row_scope_path). Empty = nobody is narrowed.
+        'row_scope_resolver' => env('AI_ROW_SCOPE_RESOLVER'),
+
         // SECURITY TOGGLE (default true): constrain query generation to the
         // tenant-scopeable Cypher subset (explicit labelled bindings, per-branch UNION
         // scoping, no CALL {} subqueries...) so the execution security boundary can
@@ -392,6 +545,9 @@ return [
             'port' => env('QDRANT_PORT', 6333),
             'api_key' => env('QDRANT_API_KEY', null), // Optional for cloud instances
             'timeout' => env('QDRANT_TIMEOUT', 30),
+            // Two hosts on one Qdrant: every collection this host names lives under this
+            // prefix (the package's fixed names included). '' = names as they are.
+            'collection_prefix' => env('QDRANT_COLLECTION_PREFIX', ''),
         ],
     ],
 
@@ -430,11 +586,13 @@ return [
     | - query_understanding: Pre-processes questions (fast model recommended)
     | - query_generation: Generates Cypher queries (needs reasoning power)
     | - response_generation: Generates natural language answers (fast model OK)
-    | - follow_up_writer, document_scope, document_map_reader: focused calls that
-    |   fall back to one of the roles above when not configured (see below)
+    | - follow_up_writer, document_scope, document_map_reader, task_orchestrator, task_offer: focused
+    |   calls that fall back to one of the roles above when not configured (see below)
     |
     */
     'llm_roles' => [
+        // A role's 'temperature' => null sends no temperature (models that only take the default).
+        // A role's 'reasoning_effort' => 'none'|'low'|... is sent as is (OpenAI); unset, not sent.
         // 'query_understanding' => ['model' => 'gpt-4o-mini', 'temperature' => 0.0],
         // 'query_generation' => null,  // uses default
         // 'response_generation' => ['model' => 'gpt-4o-mini'],
@@ -451,6 +609,11 @@ return [
         //                              // question against the documents' map. Uses the
         //                              // query_understanding model (the accurate one picked no
         //                              // better at five times the cost of a turn).
+        // 'task_orchestrator' => null,  // a task turn (ai.tasks): reads the answer, phrases the
+        //                              // next question. Uses the query_understanding model.
+        // 'task_offer' => null,        // the message right after an answer that offered a task:
+        //                              // does it take the offer up? Uses the task_orchestrator
+        //                              // model, else the query_understanding one.
     ],
 
     /*
@@ -529,6 +692,9 @@ return [
     |--------------------------------------------------------------------------
     */
     'query_generation' => [
+        // false = docs only: no turn generates or runs a query; every question is answered
+        // from the documents (a data question with where to see the data), or from nothing.
+        'enabled' => env('AI_QUERY_GENERATION_ENABLED', true),
         'allow_write_operations' => env('AI_ALLOW_WRITE_OPS', false),
         'max_retries' => env('AI_QUERY_MAX_RETRIES', 3),
         'temperature' => env('AI_QUERY_TEMPERATURE', 0.1), // Low for consistency
@@ -576,7 +742,7 @@ return [
         //  - the abstention states the scope of the query that RAN (the user's own records
         //    vs the whole team's), read from the query itself;
         //  - an own-data query (anchored on the user through ai.user_entity_paths) gets ONE
-        //    count of the ownership path it traverses, so the answer says WHY ("no unit is
+        //    count of the ownership path it traverses, so the answer says WHY ("no order is
         //    linked to your account") — +1 execution;
         //  - otherwise, when exactly ONE ai.attention_sources entry declares the query's
         //    entity and carries a fallback_cypher + fallback_label, that source's own query
@@ -588,7 +754,7 @@ return [
         // exactly one record of a configured entity and carries that record's id, the row
         // gains the name of each many-to-one parent the entity config declares — a
         // graph.relationships entry with a foreign_key among the entity's own properties
-        // (Meeting.union_id → Union): `union_name`. The parent's name is its
+        // (Task.project_id → Project): `project_name`. The parent's name is its
         // metadata.name_properties, else its `name`. Identity labels
         // (response_generation.identity_labels), non-askable entities and parents the query
         // already names are skipped; at most 3 parents. Zero config.
@@ -716,8 +882,8 @@ return [
         // individual checks; the former guards' metadata flags are still emitted.
         //
         // Citations (structural): every [k] must name an existing passage, literal
-        // "[N]" placeholders are normalized/stripped, an "art. 1069" claim must cite
-        // the passage containing 1069, and a document-grounded knowledge turn needs
+        // "[N]" placeholders are normalized/stripped, an "art. 269" claim must cite
+        // the passage containing 269, and a document-grounded knowledge turn needs
         // at least one valid marker (citation_enforcement = recovered|failed).
         // Off for terse styles whose contract forbids markers.
         'citation_enforcement' => env('AI_RESPONSE_CITATION_ENFORCEMENT', true),
@@ -886,8 +1052,8 @@ return [
 
         // Search the scopes (business concepts) of the Query-Understanding entity types
         // directly (one extra filtered vector search) and rank them ahead of cross-entity
-        // scope hits, so a generic "… for this condo" example on an unrelated entity
-        // cannot crowd out the seed's own concept (e.g. the current-board scope).
+        // scope hits, so a generic "… for this team" example on an unrelated entity
+        // cannot crowd out the seed's own concept (e.g. the active-members scope).
         'seed_scope_search' => (bool) env('AI_SEMANTIC_CONTEXT_SEED_SCOPE_SEARCH', true),
     ],
 
@@ -907,17 +1073,16 @@ return [
     | - relationships: Relationship types involved (auto-included in context)
     |
     | Example:
-    |   'Unit' => [
-    |       'description' => 'User units via Contact and ContactUnit',
-    |       'cypher' => 'MATCH (c:Contact {user_id: $userId})-[:CONTACT_UNITS]->(cu:ContactUnit)-[:UNIT]->(n:Unit) WHERE cu.sold_at IS NULL',
-    |       'entities' => ['Contact', 'ContactUnit', 'Unit'],
-    |       'relationships' => ['CONTACT_UNITS', 'UNIT'],
+    |   'Order' => [
+    |       'description' => 'User orders via Customer',
+    |       'cypher' => 'MATCH (c:Customer {user_id: $userId})-[:PLACED]->(n:Order) WHERE n.cancelled_at IS NULL',
+    |       'entities' => ['Customer', 'Order'],
+    |       'relationships' => ['PLACED'],
     |   ],
     |
     */
     'user_entity_paths' => [
         // Override in your app's config/ai.php to define paths
-        // See CondoEdge config for examples
     ],
 
     /*
@@ -946,11 +1111,7 @@ return [
         // Temperature for QU LLM call (0.0 = deterministic)
         'temperature' => (float) env('AI_QUERY_UNDERSTANDING_TEMPERATURE', 0.0),
 
-        // Entity labels that can be mistaken for own-profile wording. When QU marks
-        // a request as possessive lookup/other, these labels are not force-injected
-        // unless the request is clearly a list/count/aggregate/contact-record ask.
-        // Override per host app, or set [] to disable.
-        'own_profile_ambiguous_entity_labels' => ['Contact'],
+        // Entity labels mistaken for own-profile wording: ai.domain.ambiguous_profile_labels.
     ],
 
     /*
@@ -1129,7 +1290,7 @@ return [
         'log_errors' => env('AI_FILE_LOG_ERRORS', true),
 
         // Structure-aware chunking (markdown headings + line-start article
-        // markers such as "**1069.**", "1070.1.", "Article 12"): one article or
+        // markers such as "**269.**", "270.1.", "Article 12"): one article or
         // heading section per chunk. Consecutive tiny articles (under the same
         // heading) / sections merge until a chunk reaches min_chunk_chars; an
         // article or section above max_chunk_chars is split within itself on
@@ -1178,12 +1339,22 @@ return [
         // database file_chunks collection.
         'physical_collection' => 'documentation_chunks',
 
+        // A markdown document's YAML frontmatter is its metadata, not its text: it is
+        // removed before chunking. The package reads title, audience, pages, breadcrumb,
+        // keywords, related and slug (default: the file name); `keys` maps each to the
+        // name the host's documents use (e.g. 'title' => 'titre'). The breadcrumb leads
+        // every embedded text; keywords join it only with embed_keywords.
+        'frontmatter' => [
+            'keys' => [],
+            'embed_keywords' => false,
+        ],
+
         // UPLOADED files are LINKED to the record they are filed on; PROJECT
         // files (the physical collection above) are GLOBAL.
         //
         // The link needs no configuration: at processing time every chunk of an
-        // uploaded file gets the key of its owner record (`unit:309`) and of the
-        // records that own it (`union:14`), derived from the File entity's morph
+        // uploaded file gets the key of its owner record (`order:309`) and of the
+        // records that own it (`customer:14`), derived from the File entity's morph
         // parent and declared belongs-to relationships (config/entities). Chunks
         // stored before the keys existed: `php artisan ai:files:link`.
         //
@@ -1195,7 +1366,7 @@ return [
         // scope.current — the ONE thing a host may declare: where the user's
         // CURRENT record lives, as `entity kind => attribute of the user`
         // (plain strings: `config:cache` keeps working), e.g.
-        //     'current' => ['union' => 'current_union_id'],
+        //     'current' => ['project' => 'current_project_id'],
         // A question is searched inside the record it is about — the page it was
         // asked on, the record the conversation is about, the files the previous
         // answer cited — and, when none of those tells, inside this one. Empty:
@@ -1605,13 +1776,21 @@ return [
             'Give me a summary',
         ],
 
-        // Per-entity-type welcome examples for page-context awareness. When the chat is opened
-        // from a page whose page_context.entity_type matches a key here, these suggestions
+        // Per-page welcome examples for page-context awareness, keyed by page_context.entity_type,
+        // else by its route name. When the chat is opened from a matching page, these suggestions
         // replace the global example_questions on the welcome screen (config-only, no LLM call).
-        // Falls back to example_questions above when the type is absent.
-        // e.g. 'Unit' => ['Show this unit\'s payment history', 'Who are the owners of this unit?'],
+        // e.g. 'Order' => ['Show this order\'s payment history', 'Who placed this order?'],
+        //      'orders.index' => ['How do I refund an order?'],
         'page_examples' => [
         ],
+
+        // The floating chat button records the route it is rendered on as the page context
+        // (when the host passes none), so every page is known without per-view wiring.
+        'capture_page_route' => env('AI_CHAT_CAPTURE_PAGE_ROUTE', false),
+
+        // Citation links and "Referenced files" cards under answers. Off when users cannot open the
+        // cited files (e.g. help articles indexed from the host's source tree).
+        'show_file_references' => env('AI_CHAT_SHOW_FILE_REFERENCES', true),
 
         // Host-provided "Explain this page" narration, keyed by page_context.entity_type
         // (falling back to the route name when a screen carries only a route). When the
@@ -1619,7 +1798,7 @@ return [
         // page is / what they can do, the assistant narrates from this text WITHOUT running
         // a graph query (so it never lands in the "no results" path). Empty = feature off:
         // a page-explanation question is then answered as an ordinary turn, unchanged.
-        // e.g. 'Unit' => 'This page shows a single unit — its owners, balance and payment history. From here you can review payments and download an account statement.',
+        // e.g. 'Order' => 'This page shows a single order — its customer, balance and payment history. From here you can review payments and download an invoice.',
         'page_descriptions' => [
         ],
 
@@ -1650,6 +1829,8 @@ return [
         // UI Features
         'show_timestamps' => env('AI_CHAT_SHOW_TIMESTAMPS', false),
         'show_avatars' => env('AI_CHAT_SHOW_AVATARS', true),
+        // The assistant's picture: a public path (e.g. 'images/assistant.png') or a URL; null keeps the sparkle icon.
+        'assistant_avatar' => env('AI_CHAT_ASSISTANT_AVATAR'),
         'show_typing' => env('AI_CHAT_SHOW_TYPING', true),
         'show_suggestions' => env('AI_CHAT_SHOW_SUGGESTIONS', true),
         'max_suggestions' => env('AI_CHAT_MAX_SUGGESTIONS', 3),
@@ -1795,7 +1976,7 @@ return [
     |                              max_follow_ups)
     |
     | Placement attributes on generic actions (declarative, closure-free):
-    |   'entity' => 'Unit' | ['Invoice', 'Unit'],  'kind' => 'list'|'create'|'report'
+    |   'entity' => 'Order' | ['Invoice', 'Order'],  'kind' => 'list'|'create'|'report'
     |
     */
     'attached_actions' => [
@@ -1843,7 +2024,7 @@ return [
             // generic action to use INSTEAD of the built-in (no duplicate page link).
             'profile' => ['route' => 'profile.show', 'action' => null],
             // related: keys of generic actions that are the pages of the CURRENT team's
-            // own portfolio (its units, meetings, reports…). Attached beside the team link
+            // own portfolio (its projects, meetings, reports…). Attached beside the team link
             // only on the answer that is the current team's own single record, each for
             // who may open it, at most max_next_steps. [] (default): none.
             'team' => ['route' => 'teams.show', 'parameter' => 'team', 'action' => null, 'related' => []],
@@ -1897,7 +2078,7 @@ return [
         // Authorization is MANDATORY and must be EXPLICIT: gate on the SAME capability the app's
         // own UI requires for this transition (`permission:` — it also decides who the action is
         // advertised to), never on the generic CRUD policy ability alone ('update' typically lets
-        // the record OWNER through — a resident could approve their own booking). A mutation with
+        // the record OWNER through — a customer could approve their own booking). A mutation with
         // no authorization, or only a generic CRUD `ability:`, fails closed. Declare the state the
         // transition applies to as a `precondition:` (re-checked at proposal, approval and write):
         // 'Reservation' => [
@@ -1931,7 +2112,7 @@ return [
     |     'label' => 'Display Label',
     | ],
     |
-    | Placement for code-attached chips (ai.attached_actions): 'entity' => 'Unit' (or a list)
+    | Placement for code-attached chips (ai.attached_actions): 'entity' => 'Order' (or a list)
     | + 'kind' => 'list' | 'create' | 'report' marks this page as that entity's list page,
     | create form or report. The closure's $text receives the chip label.
     |

@@ -154,7 +154,7 @@ class SetupCommand extends Command
             'command' => 'ai:process-files',
         ];
 
-        // Files processed from now on are linked to their record (owner / building) as they are
+        // Files processed from now on are linked to their record (owner / parent) as they are
         // stored; chunks indexed before that carry no link and are filtered by nothing. Payload
         // only (no re-embedding) and idempotent: a re-run writes nothing.
         $steps[] = [

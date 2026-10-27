@@ -692,7 +692,7 @@ class QdrantChunkStore implements ChunkStoreInterface, ChunkMapStoreInterface, C
                 continue;
             }
 
-            if (str_contains(strtolower($storedFilename), $needle)) {
+            if (str_contains(strtolower($storedFilename), $needle) && $this->audienceAllows($filters, (array) ($point['payload'] ?? []))) {
                 $matching[] = $point;
             }
         }
@@ -790,7 +790,39 @@ class QdrantChunkStore implements ChunkStoreInterface, ChunkMapStoreInterface, C
             ];
         }
 
+        if (($audience = $this->audienceClause($filters)) !== null) {
+            $must[] = $audience;
+        }
+
         return empty($must) ? [] : ['must' => $must];
+    }
+
+    /**
+     * The asker's readable documents (`audiences`, {@see \Condoedge\Ai\Support\Audiences}):
+     * a chunk written for one of them, or for everyone (no audience). Null without the filter.
+     */
+    private function audienceClause(array $filters): ?array
+    {
+        if (!isset($filters['audiences']) || !is_array($filters['audiences'])) {
+            return null;
+        }
+        $audiences = array_values(array_filter($filters['audiences'], 'is_string'));
+        $common = ['is_empty' => ['key' => 'metadata.audience']];
+
+        return $audiences === []
+            ? $common
+            : ['should' => [['key' => 'metadata.audience', 'match' => ['any' => $audiences]], $common]];
+    }
+
+    /** The same rule as {@see audienceClause()}, on a payload already fetched. */
+    private function audienceAllows(array $filters, array $payload): bool
+    {
+        if (!isset($filters['audiences']) || !is_array($filters['audiences'])) {
+            return true;
+        }
+        $written = array_filter((array) ($payload['metadata']['audience'] ?? []), 'is_string');
+
+        return $written === [] || array_intersect($written, $filters['audiences']) !== [];
     }
 
     /**
@@ -881,6 +913,11 @@ class QdrantChunkStore implements ChunkStoreInterface, ChunkMapStoreInterface, C
     public function hasFileChunks(int|string $fileId, ?string $collection = null): bool
     {
         $target = $this->resolveCollection($collection);
+
+        // The first ingest into a new collection: it holds nothing yet (storeChunks creates it).
+        if (!$this->vectorStore->collectionExists($target)) {
+            return false;
+        }
 
         $count = $this->vectorStore->count($target, [
             'file_id' => $fileId
@@ -1095,10 +1132,10 @@ class QdrantChunkStore implements ChunkStoreInterface, ChunkMapStoreInterface, C
 
         // SCOPE of the question (uploaded files only — the caller never passes it
         // for the project collection): the chunk's `owner` is the focus record or
-        // one of the records that own it (a document of the building applies to
-        // its units), or the focus owns the chunk's owner (a question about the
-        // building includes the documents filed on its units) — never a sibling's.
-        // A chunk of no record (a document of the tenant as a whole) stays
+        // one of the records that own it (a document of the project applies to
+        // its tasks), or the focus owns the chunk's owner (a question about the
+        // project includes the documents filed on its tasks) — never a sibling's.
+        // A chunk of no record (a document of the team as a whole) stays
         // eligible. Beside the ACL above, never instead of it.
         $focus = is_array($filters['scope'] ?? null) ? ($filters['scope']['focus'] ?? null) : null;
         if (is_string($focus) && $focus !== '') {
@@ -1111,6 +1148,15 @@ class QdrantChunkStore implements ChunkStoreInterface, ChunkMapStoreInterface, C
                 ['key' => FileLink::ANCESTORS, 'match' => ['value' => $focus]],
                 ['is_empty' => ['key' => FileLink::OWNER]],
             ]];
+        }
+
+        if (($audience = $this->audienceClause($filters)) !== null) {
+            $must[] = $audience;
+        }
+
+        // Only these articles (the frontmatter slug, else the file name): a task's grounding.
+        if (!empty($filters['slugs']) && is_array($filters['slugs'])) {
+            $must[] = ['key' => 'metadata.slug', 'match' => ['any' => array_values(array_map('strval', $filters['slugs']))]];
         }
 
         // Exact-article angle (Phase 7.2): chunks whose structural metadata

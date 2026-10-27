@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Kompo;
 
+use Carbon\Carbon;
 use Condoedge\Ai\Kompo\Support\ConversationActions;
 use Condoedge\Ai\Models\AiConversation;
 use Illuminate\Contracts\Auth\Authenticatable;
@@ -103,6 +104,75 @@ class ConversationActionsTest extends TestCase
         // Intruder cannot — the message is untouched.
         $this->assertFalse($this->actions->recordFeedback($conversation->id, $message->id, 'negative', $this->intruder));
         $this->assertSame('positive', $message->fresh()->metadata['feedback']);
+    }
+
+    /** @test */
+    public function record_feedback_stamps_the_time_of_every_rating(): void
+    {
+        $conversation = AiConversation::create(['user_id' => $this->owner->id]);
+        $message = $conversation->messages()->create(['role' => 'assistant', 'content' => 'answer']);
+
+        Carbon::setTestNow(Carbon::parse('2026-10-24 09:15:00'));
+        $this->actions->recordFeedback($conversation->id, $message->id, 'negative', $this->owner);
+        $this->assertSame('2026-10-24 09:15:00', Carbon::parse($message->fresh()->metadata['feedback_at'])->format('Y-m-d H:i:s'));
+
+        Carbon::setTestNow(Carbon::parse('2026-10-24 10:00:00'));
+        $this->actions->recordFeedback($conversation->id, $message->id, 'positive', $this->owner);
+        $this->assertSame('2026-10-24 10:00:00', Carbon::parse($message->fresh()->metadata['feedback_at'])->format('Y-m-d H:i:s'));
+        Carbon::setTestNow();
+    }
+
+    /** @test */
+    public function a_comment_is_kept_only_on_a_negative_rating_trimmed_and_capped(): void
+    {
+        $conversation = AiConversation::create(['user_id' => $this->owner->id]);
+        $message = $conversation->messages()->create(['role' => 'assistant', 'content' => 'answer']);
+
+        // No rating yet, or a positive one: nothing to comment on.
+        $this->assertFalse($this->actions->recordFeedbackComment($conversation->id, $message->id, 'too early', $this->owner));
+        $this->actions->recordFeedback($conversation->id, $message->id, 'positive', $this->owner);
+        $this->assertFalse($this->actions->recordFeedbackComment($conversation->id, $message->id, 'nice', $this->owner));
+        $this->assertArrayNotHasKey('feedback_comment', $message->fresh()->metadata);
+
+        $this->actions->recordFeedback($conversation->id, $message->id, 'negative', $this->owner);
+        $this->assertTrue($this->actions->recordFeedbackComment($conversation->id, $message->id, "  Wrong menu path.  ", $this->owner));
+        $this->assertSame('Wrong menu path.', $message->fresh()->metadata['feedback_comment']);
+        $this->assertSame('negative', $message->fresh()->metadata['feedback']);
+
+        $this->actions->recordFeedbackComment($conversation->id, $message->id, str_repeat('é', 900), $this->owner);
+        $this->assertSame(ConversationActions::FEEDBACK_COMMENT_MAX, mb_strlen($message->fresh()->metadata['feedback_comment']));
+
+        // An empty comment removes it; the rating stays.
+        $this->actions->recordFeedbackComment($conversation->id, $message->id, '   ', $this->owner);
+        $this->assertArrayNotHasKey('feedback_comment', $message->fresh()->metadata);
+        $this->assertSame('negative', $message->fresh()->metadata['feedback']);
+    }
+
+    /** @test */
+    public function changing_a_negative_rating_to_positive_clears_the_comment(): void
+    {
+        $conversation = AiConversation::create(['user_id' => $this->owner->id]);
+        $message = $conversation->messages()->create(['role' => 'assistant', 'content' => 'answer']);
+
+        $this->actions->recordFeedback($conversation->id, $message->id, 'negative', $this->owner);
+        $this->actions->recordFeedbackComment($conversation->id, $message->id, 'Not my question.', $this->owner);
+        // Rating 👎 again keeps the comment (the button re-opens it pre-filled).
+        $this->actions->recordFeedback($conversation->id, $message->id, 'negative', $this->owner);
+        $this->assertSame('Not my question.', $message->fresh()->metadata['feedback_comment']);
+
+        $this->actions->recordFeedback($conversation->id, $message->id, 'positive', $this->owner);
+        $this->assertArrayNotHasKey('feedback_comment', $message->fresh()->metadata);
+    }
+
+    /** @test */
+    public function a_comment_is_a_no_op_for_a_non_owner(): void
+    {
+        $conversation = AiConversation::create(['user_id' => $this->owner->id]);
+        $message = $conversation->messages()->create(['role' => 'assistant', 'content' => 'answer']);
+        $this->actions->recordFeedback($conversation->id, $message->id, 'negative', $this->owner);
+
+        $this->assertFalse($this->actions->recordFeedbackComment($conversation->id, $message->id, 'injected', $this->intruder));
+        $this->assertArrayNotHasKey('feedback_comment', $message->fresh()->metadata);
     }
 
     /** @test */

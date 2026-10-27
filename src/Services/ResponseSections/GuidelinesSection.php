@@ -159,7 +159,7 @@ class GuidelinesSection extends BaseResponseSection
         // (A positional "START WITH THE DIRECT ANSWER … the answer ENDS on the last point" line for
         // document answers was tried after eval p20 and REVERTED after p21: on a byte-identical
         // passage block the buyer answer stopped at its verdict and dropped the statement of
-        // common expenses every earlier run gave, and the tear-down answer opened with a flat
+        // fees owed every earlier run gave, and another answer opened with a flat
         // "No" no passage supports. A verdict asked for first is given WITHOUT its condition.)
         $passages = empty($context->fileContext['enumeration']) ? count((array) ($context->fileContext['relevant_files'] ?? [])) : 0;
         $output .= "- Start with a direct answer to the question when the data supports one\n";
@@ -191,7 +191,8 @@ class GuidelinesSection extends BaseResponseSection
                 . \Condoedge\Ai\Services\Response\AnswerValidator::choices($passages),
             default => ', citing it with its passage number in square brackets when file content is provided',
         };
-        $output .= "- For claims about laws, regulations, policies, or document contents: state only what the retrieved file content actually supports{$citeClause}. If the available documents do not contain the answer, say it could not be found in the available documents — never answer such questions from general knowledge.\n";
+        $documents = \Condoedge\Ai\Support\DomainProfile::text('response.documents_name') ?: 'the available documents';
+        $output .= "- For claims about laws, regulations, policies, or document contents: state only what the retrieved file content actually supports{$citeClause}. If {$documents} do not contain the answer, say it could not be found in {$documents} — never answer such questions from general knowledge.\n";
 
         // G7 (no generic closer, ~9 of 20 graded turns ended "feel free to ask") →
         // actions plan B3: next steps are BUTTONS code attaches under the answer (list

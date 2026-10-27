@@ -35,9 +35,9 @@ use Condoedge\Ai\Services\Security\Scope\ScopePlan;
  *
  * OPTIONAL MATCH (null-tolerant scoping, AiQueryLog 674):
  *   • A binding introduced by OPTIONAL MATCH may be null. A mandatory
- *     `MATCH (i)-[:REL]->(s:Union) WHERE s.team_id IN $ai_team_ids` on a null
+ *     `MATCH (i)-[:REL]->(s:Project) WHERE s.team_id IN $ai_team_ids` on a null
  *     variable eliminates EVERY row, so its relationship scope is emitted as
- *     `(i IS NULL OR EXISTS { MATCH (i)-[:REL]->(ai_sN:Union) WHERE … })` and a
+ *     `(i IS NULL OR EXISTS { MATCH (i)-[:REL]->(ai_sN:Project) WHERE … })` and a
  *     direct scope as `(i IS NULL OR i.team_id IN $ai_team_ids)` — spliced into
  *     the WHERE of the OPTIONAL MATCH clause that BINDS i (AND-merged, existing
  *     predicate parenthesized, or a fresh WHERE right after its pattern). There
@@ -60,13 +60,13 @@ use Condoedge\Ai\Services\Security\Scope\ScopePlan;
  * KNOWN REDUNDANCY (documented, intentional): injection is all-or-nothing per
  * scope — when the acceptance gate rejects the query (any ONE binding not
  * self-scoped), the injector re-scopes EVERY binding, including ones the
- * generator already scoped (e.g. a query carrying `(u)-[:UNION]->(u1:Union)
- * WHERE u1.team_id IN $ai_team_ids` still receives a fresh
- * `MATCH (u)-[:UNION]->(ai_sN:Union) …` block). Recognizing semantically
+ * generator already scoped (e.g. a query carrying `(t)-[:PROJECT]->(p1:Project)
+ * WHERE p1.team_id IN $ai_team_ids` still receives a fresh
+ * `MATCH (t)-[:PROJECT]->(ai_sN:Project) …` block). Recognizing semantically
  * equivalent existing scoping would require predicate-level equivalence
  * analysis; the redundant AND-ed filter can never widen results (defence in
  * depth), though a duplicate relationship MATCH can multiply rows when a node
- * has several team edges (not the case for the 1:1 CondoEdge paths).
+ * has several team edges (not the case for 1:1 scope paths).
  *
  * Returns null on any residual ambiguity (a clause it cannot place, an empty
  * filter) OR when the resulting rewrite is not structurally valid, so the caller

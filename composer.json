@@ -22,6 +22,7 @@
         "laudis/neo4j-php-client": "^3.4",
         "phpoffice/phpword": "^1.4",
         "smalot/pdfparser": "^2.12",
+        "symfony/yaml": "^6.0|^7.0",
         "thiagoalessio/tesseract_ocr": "^2.13"
     },
     "require-dev": {

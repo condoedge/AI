@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\PromptSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Services\Security\RowScope;
 use Condoedge\Ai\Services\Security\TeamPathResolver;
 
 /**
@@ -21,6 +22,9 @@ use Condoedge\Ai\Services\Security\TeamPathResolver;
  * SYSTEM role, priority 76 (right after query_rules/75, before question/80). Emits
  * nothing when team security is off, when the subset rules are disabled, or when no
  * schema label is tenant-scoped — so unscoped deployments are unaffected.
+ *
+ * For a user the host narrows below the team (RowScope) it renders the row rules
+ * ($ai_row_scope_ids) instead, and only for labels that have one.
  */
 class TenantScopingRulesSection extends BasePromptSection
 {
@@ -47,7 +51,7 @@ class TenantScopingRulesSection extends BasePromptSection
             return false;
         }
 
-        return $this->scopedLabelRules($context) !== [];
+        return $this->scopedLabelRules($context, $options)['lines'] !== [];
     }
 
     public function format(string $question, PipelineContext $context, array $options = []): string
@@ -56,15 +60,17 @@ class TenantScopingRulesSection extends BasePromptSection
             return '';
         }
 
-        $rules = $this->scopedLabelRules($context);
+        ['lines' => $rules, 'param' => $param, 'row_scoped' => $rowScoped] = $this->scopedLabelRules($context, $options);
         if ($rules === []) {
             return '';
         }
 
         $lines = [];
-        $lines[] = 'TENANT SCOPING — every query MUST keep results within the user\'s teams.';
+        $lines[] = $rowScoped
+            ? 'TENANT SCOPING — every query MUST keep results within the records this user may see.'
+            : 'TENANT SCOPING — every query MUST keep results within the user\'s teams.';
         $lines[] = 'For each labelled node you MATCH and use, add its team filter EXACTLY as shown,';
-        $lines[] = 'using the SAME bound parameter $ai_team_ids:';
+        $lines[] = "using the SAME bound parameter {$param}:";
 
         foreach ($rules as $line) {
             $lines[] = '  ' . $line;
@@ -72,13 +78,13 @@ class TenantScopingRulesSection extends BasePromptSection
 
         $lines[] = 'Rules:';
         $lines[] = '  - Apply the filter to the node\'s OWN variable; reuse the variable, do not rebind it.';
-        $lines[] = '  - $ai_team_ids is provided automatically — never inline team ids as a list.';
+        $lines[] = "  - {$param} is provided automatically — never inline team ids as a list.";
         $lines[] = '  - Combine multiple node filters with AND in a single WHERE per query part.';
         // Tenant-specific UNION rules only; the generic "same column aliases" rule is in
         // QueryRulesSection so it ships even with scoping off (review M-3).
         $lines[] = 'UNION RULES (critical):';
         $lines[] = '  - Treat each UNION branch as a complete, independent query: MATCH its own';
-        $lines[] = '    labelled nodes AND add their $ai_team_ids filter INSIDE that branch.';
+        $lines[] = "    labelled nodes AND add their {$param} filter INSIDE that branch.";
         $lines[] = '  - Express team scoping as a WHERE predicate whenever possible; if a relationship';
         $lines[] = '    MATCH is required, place it before the branch\'s RETURN and do NOT add the';
         $lines[] = '    helper node to the RETURN.';
@@ -90,13 +96,16 @@ class TenantScopingRulesSection extends BasePromptSection
      * One instruction line per tenant-scoped label present in the schema. Empty when
      * no label is tenant-scoped.
      *
-     * @return list<string>
+     * @return array{lines: list<string>, param: string, row_scoped: bool}
      */
-    private function scopedLabelRules(PipelineContext $context): array
+    private function scopedLabelRules(PipelineContext $context, array $options = []): array
     {
+        $rowScoped = RowScope::idsFor($options['user'] ?? auth()->user()) !== null;
+        $param = '$' . ($rowScoped ? TeamPathResolver::ROW_SCOPE_IDS_PARAM : TeamPathResolver::TEAM_IDS_PARAM);
+
         $labels = $context->graphSchema['labels'] ?? [];
         if (!is_array($labels) || $labels === []) {
-            return [];
+            return ['lines' => [], 'param' => $param, 'row_scoped' => $rowScoped];
         }
 
         $lines = [];
@@ -109,7 +118,7 @@ class TenantScopingRulesSection extends BasePromptSection
             $seen[$label] = true;
 
             $alias = $this->aliasFor($label);
-            $rule = $this->resolver->ruleFor($label, $alias);
+            $rule = $this->resolver->ruleFor($label, $alias, $rowScoped);
 
             if ($rule === null) {
                 continue; // not tenant-scoped → no instruction
@@ -118,7 +127,7 @@ class TenantScopingRulesSection extends BasePromptSection
             $lines[] = sprintf('- (%s:%s) → %s', $alias, $label, $rule['filter']);
         }
 
-        return $lines;
+        return ['lines' => $lines, 'param' => $param, 'row_scoped' => $rowScoped];
     }
 
     /**

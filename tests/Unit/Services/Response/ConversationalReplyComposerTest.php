@@ -115,6 +115,14 @@ class ConversationalReplyComposerTest extends TestCase
         $this->assertStringContainsString('Acme Helper', $system);
     }
 
+    /** @test Eval coolecto part-fu-share t2: "Et je peux l'envoyer par texto aussi?" was judged conversation and answered ungrounded. */
+    public function a_follow_up_asking_more_about_the_recent_conversation_is_not_conversation(): void
+    {
+        $this->composer()->compose('Can I send it by text too?', $this->ctx('Can I send it by text too?'));
+
+        $this->assertStringContainsString('also when it is a short follow-up on the recent conversation that you could answer from it', $this->system());
+    }
+
     /** @test The scope it may describe is the host's own description of the project — nothing hardcoded. */
     public function what_it_can_do_comes_from_the_project_config_only(): void
     {

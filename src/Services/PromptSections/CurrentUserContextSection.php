@@ -58,7 +58,7 @@ class CurrentUserContextSection extends BasePromptSection
             }
         }
 
-        // PERSONAL possession ("my unit", "do I have…") gets the user's ownership paths.
+        // PERSONAL possession ("my orders", "do I have…") gets the user's ownership paths.
         // COLLECTIVE possession ("our meetings", "we owe") is the TEAM's data: it gets only
         // the team-scope guidance — handing it the personal paths made the generator answer
         // "no meetings linked to you" for "When is our next meeting?" (eval p16). The
@@ -202,7 +202,7 @@ class CurrentUserContextSection extends BasePromptSection
     /**
      * The labels whose ownership paths may render: the selected labels minus those the
      * entity-selection pruner kept only to join or scope the seeds (identity / tenant /
-     * closure / ownership) — a label on BoardMember's path is not what "my X" asks for.
+     * closure / ownership) — a label on StaffMember's path is not what "my X" asks for.
      *
      * @param array<string, true>|null $selected
      * @return array<string, true>|null

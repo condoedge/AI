@@ -14,11 +14,12 @@ use Illuminate\Support\Facades\Schema;
  * A small, fully known corpus for the conversation-insights admin page tests.
  *
  * "Now" is frozen at 2026-10-21 12:00. In the default 30-day range:
- *   A  Alice (team via her current team 10 "Les Jardins")  q1 a1(negative, 1000 ms, 100 tok / 2 calls, data)
- *                                                           q2 a2(positive, 3000 ms, 300 tok / 3 calls, knowledge_query)
- *   B  Bob (conversation team 20 "Tour B")                  q3 a3(metadata.error, no trace, execution_time_ms 2000)
- *                                                           q4 a4(branch error, 500 ms, 50 tok / 1 call, 1 stage error)
- *   F  Carol (team via her current team 10)                 q8(<script>) a8(<img onerror>, 4000 ms, 400 tok / 4 calls, digest, 2 files)
+ *   A  Alice (team via her current team 10 "Les Jardins")  q1 a1(negative + comment at 12:05, 1000 ms, 100 tok / 2 calls, data, audience members)
+ *                                                           q2 a2(positive, 3000 ms, 300 tok / 3 calls, knowledge_query, REGENERATED, members)
+ *   B  Bob (conversation team 20 "Tour B")                  q3 a3(metadata.error, no trace, execution_time_ms 2000, no audience stamp)
+ *                                                           q4 a4(branch error, 500 ms, 50 tok / 1 call, 1 stage error, audience unresolved)
+ *   F  Carol (team via her current team 10)                 q8(<script>) a8(<img onerror>, 4000 ms, 400 tok / 4 calls, digest, 2 files, staff)
+ * Only a8 cites documents (referenced_files).
  * Outside it / excluded:
  *   C  Carol, 60 days ago                                   q5 a5(positive, 700 ms)
  *   D  Alice, an EVAL conversation (metadata.eval = true)   q6 a6(negative)
@@ -70,12 +71,18 @@ trait AdminInsightsSeed
         $this->messages['q1'] = $this->message('A', 'user', 'How many units?', $now->copy()->subDays(2));
         $this->messages['a1'] = $this->message('A', 'assistant', 'There are 12 units.', $now->copy()->subDays(2)->addMinute(), [
             'feedback' => 'negative',
+            'feedback_at' => $now->copy()->subDays(2)->addMinutes(5)->toIso8601String(),
+            'feedback_comment' => 'Wrong <b>count</b>',
             'trace' => $this->trace(1000, 100, 2, 'data'),
+            'regenerated' => false,
+            'audience' => ['key' => 'members', 'role' => 'owner'],
         ]);
         $this->messages['q2'] = $this->message('A', 'user', 'And owners?', $now->copy()->subDays(2)->addMinutes(2));
         $this->messages['a2'] = $this->message('A', 'assistant', 'Owners are listed in the registry.', $now->copy()->subDays(2)->addMinutes(3), [
             'feedback' => 'positive',
             'trace' => $this->trace(3000, 300, 3, 'knowledge_query'),
+            'regenerated' => true,
+            'audience' => ['key' => 'members', 'role' => 'owner'],
         ]);
 
         // B — Bob, team on the conversation.
@@ -89,6 +96,7 @@ trait AdminInsightsSeed
             'trace' => $this->trace(500, 50, 1, 'error', [
                 ['stage' => 'execution', 'class' => 'RuntimeException', 'message' => 'boom'],
             ]),
+            'audience' => ['key' => null, 'role' => null],
         ]);
 
         // C — old (outside 30 days, inside 90).
@@ -121,6 +129,7 @@ trait AdminInsightsSeed
         $this->messages['q8'] = $this->message('F', 'user', '<script>alert(1)</script> hello', $now->copy()->subDay());
         $this->messages['a8'] = $this->message('F', 'assistant', '<img src=x onerror=alert(2)> digest', $now->copy()->subDay()->addMinute(), [
             'trace' => $this->trace(4000, 400, 4, 'digest'),
+            'audience' => ['key' => 'staff', 'role' => 'manager'],
             'referenced_files' => [
                 ['id' => 7, 'name' => 'minutes-2026.pdf', 'passage' => 'secret passage text'],
                 ['id' => 'physical:docs/rules.md', 'name' => 'rules.md'],

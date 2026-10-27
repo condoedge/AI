@@ -39,6 +39,11 @@ class FileCitationHandler extends AbstractContentLinkHandler
     {
         $this->resetMetadata();
 
+        // Hosts whose users cannot open the cited files show no citation link (the markers are still stripped).
+        if (!config('ai.chat.show_file_references', true)) {
+            return [];
+        }
+
         return parent::createElements($content, $context);
     }
 
@@ -120,6 +125,12 @@ class FileCitationHandler extends AbstractContentLinkHandler
     public function resetMetadata(): void
     {
         $this->citationMetadata = [];
+    }
+
+    /** A run of markers ("[2], [3] ,[4]") goes with its separators and the space before it. */
+    public function stripLinks(string $content): string
+    {
+        return preg_replace('/\s*\[\d+\](?:\s*[,;]?\s*\[\d+\])*/u', '', $content) ?? $content;
     }
 
     protected function getStripReplacement(array $match): string

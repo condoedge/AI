@@ -11,6 +11,7 @@ use Condoedge\Ai\Services\FileSearchService;
 use Condoedge\Ai\DTOs\FileChunk;
 use Condoedge\Ai\Services\Retrieval\DocumentScope;
 use Condoedge\Ai\Services\Retrieval\FileReferenceOrder;
+use Condoedge\Ai\Support\Audiences;
 use Condoedge\Ai\Support\DocumentMap;
 use Condoedge\Ai\Support\DocumentTitle;
 use Condoedge\Ai\Support\PipelineObserverScope;
@@ -65,7 +66,7 @@ class FileContextProvider
      * snippet is exactly those texts joined by SNIPPET_SEPARATOR). For the caller
      * that MERGES passages of one file: two passages whose windows overlap can then
      * be joined into one, each chunk printed once (eval p18-B rights t0: art.
-     * 1064–1065 and 1067–1068 each reached the prompt twice). The map repeats the
+     * 12–13 and 15–16 each reached the prompt twice). The map repeats the
      * snippet's text, so it is emitted only when asked for and the caller strips it
      * before the references leave the retrieval layer.
      */
@@ -184,7 +185,7 @@ class FileContextProvider
                 $results = $this->searchService->searchByFilename($filename, [
                     'limit' => $maxReferences,
                     'include_relationships' => false,
-                ]);
+                ] + $this->audienceOptions($user));
                 $filenameResults = array_merge($filenameResults, $results);
             } catch (\Throwable $e) {
                 Log::debug('FileContextProvider: filename sub-search failed, continuing', [
@@ -227,7 +228,7 @@ class FileContextProvider
             if ($aclFileIds !== null) {
                 $searchOptions['acl_file_ids'] = $aclFileIds;
             }
-            $searchOptions += $this->scopeOptions($options, $memo);
+            $searchOptions += $this->scopeOptions($options, $memo) + $this->audienceOptions($user);
 
             $contentResults = $this->searchService->searchByContent($enhancedQuery, $searchOptions);
         } catch (\Throwable $e) {
@@ -483,7 +484,7 @@ class FileContextProvider
             // list gets the same value, and angles cannot be compared by it. Carried
             // into the cross-angle merge it ranked a file's chunks by "how dominant
             // the file was in that angle" instead of by their own similarity (every
-            // CCQ chunk traced as 0.5560599). Its job — cutting this angle's pool
+            // chunk of one by-law traced as 0.5560599). Its job — cutting this angle's pool
             // above — is done; every collection is searched with the SAME query
             // embedding, so cosine is comparable across collections from here on.
 
@@ -743,7 +744,7 @@ class FileContextProvider
             if ($aclFileIds !== null) {
                 $searchOptions['acl_file_ids'] = $aclFileIds;
             }
-            $searchOptions += $this->scopeOptions($options, $memo);
+            $searchOptions += $this->scopeOptions($options, $memo) + $this->audienceOptions($user);
 
             // One ranking per query and turn: the vote from under the floor and the
             // passage selection both ask for the question's.
@@ -950,6 +951,11 @@ class FileContextProvider
         if (isset($metadata['page']) && is_numeric($metadata['page'])) {
             $locator['page'] = (int) $metadata['page'];
         }
+        // Whose document it is (ai.audiences); the trace reads it, no prompt does.
+        $audience = array_values(array_filter((array) ($metadata['audience'] ?? []), static fn ($a) => is_string($a) && $a !== ''));
+        if ($audience !== []) {
+            $locator['audience'] = $audience;
+        }
         if ($metadata !== [] && is_object($chunk) && isset($chunk->content)) {
             $locator['passage'] = (string) $chunk->content;
         }
@@ -966,11 +972,11 @@ class FileContextProvider
 
     /**
      * Where the passage sits in its document: the chunk's FULL heading path
-     * ("CHAPTER II — UNDIVIDED CO-OWNERSHIP › DIVISION II — RIGHTS AND OBLIGATIONS OF
-     * CO-OWNERS"), not its last heading alone. A leaf heading is not unique within a
-     * document — the CCQ titles a division "RIGHTS AND OBLIGATIONS OF CO-OWNERS" in both
-     * the undivided and the divided chapter — so the leaf alone presented an indivision
-     * article as condo law (eval p16-B rights t1). Legacy chunks without a path keep
+     * ("CHAPTER II — MEMBERS › DIVISION II — RIGHTS AND OBLIGATIONS OF MEMBERS"), not
+     * its last heading alone. A leaf heading is not unique within a document — a by-law
+     * may title a division "RIGHTS AND OBLIGATIONS" in two different chapters — so the
+     * leaf alone presented an article of one chapter as the other's rule (eval p16-B
+     * rights t1). Legacy chunks without a path keep
      * their section title.
      *
      * @param array<string, mixed> $metadata
@@ -1081,6 +1087,17 @@ class FileContextProvider
     private static function userMemoKey(mixed $user): string
     {
         return is_object($user) ? 'object#' . spl_object_id($user) : 'value#' . md5(serialize($user));
+    }
+
+    /**
+     * The documents this user may read, for every search of the turn: code decides, never
+     * the model ({@see Audiences}). [] without ai.audiences — the search is then unchanged.
+     */
+    private function audienceOptions(mixed $user): array
+    {
+        $audiences = Audiences::documents($user);
+
+        return $audiences !== null ? ['audiences' => $audiences] : [];
     }
 
     /**

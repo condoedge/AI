@@ -1,0 +1,141 @@
+=== call 0 options: {"temperature":0.1,"max_tokens":4000}
+--- message 0: system ---
+You are an expert at configuring AI-powered natural language query systems for Laravel applications. You analyze source code deeply and generate configuration that helps an LLM convert user questions into Neo4j Cypher queries.
+
+You will receive:
+1. A model's discovered configuration (properties, relationships, scopes)
+2. The model's PHP source code and related files (Kompo forms/tables, migrations, routes)
+3. Sample data and field statistics
+
+Generate a JSON object with these keys:
+- "description": A rich 2-3 sentence description explaining what this entity is, how it relates to other entities, and CRITICAL: include relationship direction hints for Neo4j traversal. Mention key JOINs needed to get human-readable data. IMPORTANT: Document the user-to-entity path for possessive queries ("my unit" = User→Contact→ContactUnit→Unit). Note which entities are link/junction tables vs. real entities.
+- "aliases": Array of 10-15 aliases in both English and French. Include singular, plural, common abbreviations, domain-specific terms from UI labels, and possessive forms where applicable ("my unit", "mes unités").
+- "examples": Array of 5-8 natural language questions users would ask about this entity. These are entity-level questions (not scope-specific). Mix English and French. Include counts, lists, possessive, and relationship questions. E.g., ["How many units do we have?", "Show me my unit", "Combien d'unités avons-nous?", "Which units have pets?", "List units in building X"].
+- "common_properties": Object mapping property names to descriptions. For enum fields, ALWAYS document the values: "status: Status (1=Draft, 2=Approved, 3=Sent)". For date fields stored as strings, note: "stored as string, compare with string operators". For FK fields, explain what they point to and how they link entities.
+- "scopes": Object of scope definitions. For each scope, include: specification_type, concept, cypher_pattern (MUST use correct Neo4j syntax — dates as strings use toString(date())), filter, and 3-5 examples as natural questions users would ask in BOTH English and French.
+- "relationship_descriptions": Object mapping relationship type names to plain-English descriptions of what the relationship means. E.g., {"BUILDING": "The building this unit is located in", "HAS_CONTACT_UNITS": "Contacts linked to this unit via the ContactUnit junction table (owners, renters, occupants)"}. Focus on business meaning, not technical details.
+- "security_notes": Notes about team_path issues. Check: Is team_id always null? Should security traverse through a relationship instead? Document the correct team resolution path. Also note if this entity is a junction table (e.g., ContactUnit links Contact↔Unit) that shouldn't be queried directly by users but is critical for traversal.
+
+Rules:
+- Read the Kompo form labels to understand what users call each field
+- Read the model's enum/constant methods to document exact values
+- Read relationships to understand Neo4j direction (belongsTo = outgoing from child)
+- Scope cypher_patterns MUST use valid Neo4j syntax: string dates use toString(date()), integers are NOT quoted
+- Aliases should include terms from Kompo form labels and route names
+- For relationship descriptions, always specify: "To find X from Y, traverse (Y)-[:REL]->(Z)-[:REL]->(X)"
+- For "my ..." queries, document the full chain: User→Contact→ContactUnit→Unit (for unit), User→Contact (for contact info), etc.
+- Return ONLY valid JSON
+--- message 1: user ---
+# Entity: Unit (App\Models\Unit)
+
+## Discovered Configuration
+```json
+{
+    "graph": {
+        "label": "Unit",
+        "relationships": [
+            {
+                "type": "BUILDING",
+                "target_label": "Building"
+            }
+        ]
+    },
+    "metadata": {
+        "aliases": [
+            "unit",
+            "units"
+        ],
+        "scopes": {
+            "vacant": []
+        }
+    }
+}
+```
+
+
+=== call 1 options: {"temperature":0.7,"max_tokens":500}
+--- message 0: system ---
+You generate realistic test questions for a condo management AI assistant. Return ONLY a JSON array of strings.
+--- message 1: user ---
+Generate 5 test questions for the entity "Unit" (aliases: unit, units).
+Relationships:  → 
+Scopes: vacant
+Round 1: Focus on different question types each round.
+
+Round 1: Basic queries — counts, lists, simple filters. MUST include one possessive query ("my Unit", "mes ...") to verify user→entity linking works. MUST include one team-scoped query to verify team security works.
+Round 2: Relationship traversals — "who belongs to ...", "give me the X of Y", cross-entity queries. Test that the entity links correctly to related entities. Include a question that requires following a chain of 2+ relationships.
+Round 3: Creative/edge cases — bilingual (French), aggregations, negation ("which X have no Y"), multi-hop traversals. Test the hardest scenarios that real users would ask.
+
+IMPORTANT: Every round MUST include at least:
+- 1 possessive query ("my ...", "mes ...") — tests user→entity path
+- 1 query referencing a related entity — tests relationship linking
+- Mix English and French
+
+Return a JSON array of 5 question strings. Return ONLY the JSON array.
+=== call 2 options: {"temperature":0.1,"max_tokens":4000}
+--- message 0: system ---
+You are an expert at configuring AI-powered natural language query systems for Laravel applications. You analyze source code deeply and generate configuration that helps an LLM convert user questions into Neo4j Cypher queries.
+
+You will receive:
+1. A model's discovered configuration (properties, relationships, scopes)
+2. The model's PHP source code and related files (Kompo forms/tables, migrations, routes)
+3. Sample data and field statistics
+
+Generate a JSON object with these keys:
+- "description": A rich 2-3 sentence description explaining what this entity is, how it relates to other entities, and CRITICAL: include relationship direction hints for Neo4j traversal. Mention key JOINs needed to get human-readable data. IMPORTANT: Document the user-to-entity path for possessive queries ("my unit" = User→Contact→ContactUnit→Unit). Note which entities are link/junction tables vs. real entities.
+- "aliases": Array of 10-15 aliases in both English and French. Include singular, plural, common abbreviations, domain-specific terms from UI labels, and possessive forms where applicable ("my unit", "mes unités").
+- "examples": Array of 5-8 natural language questions users would ask about this entity. These are entity-level questions (not scope-specific). Mix English and French. Include counts, lists, possessive, and relationship questions. E.g., ["How many units do we have?", "Show me my unit", "Combien d'unités avons-nous?", "Which units have pets?", "List units in building X"].
+- "common_properties": Object mapping property names to descriptions. For enum fields, ALWAYS document the values: "status: Status (1=Draft, 2=Approved, 3=Sent)". For date fields stored as strings, note: "stored as string, compare with string operators". For FK fields, explain what they point to and how they link entities.
+- "scopes": Object of scope definitions. For each scope, include: specification_type, concept, cypher_pattern (MUST use correct Neo4j syntax — dates as strings use toString(date())), filter, and 3-5 examples as natural questions users would ask in BOTH English and French.
+- "relationship_descriptions": Object mapping relationship type names to plain-English descriptions of what the relationship means. E.g., {"BUILDING": "The building this unit is located in", "HAS_CONTACT_UNITS": "Contacts linked to this unit via the ContactUnit junction table (owners, renters, occupants)"}. Focus on business meaning, not technical details.
+- "security_notes": Notes about team_path issues. Check: Is team_id always null? Should security traverse through a relationship instead? Document the correct team resolution path. Also note if this entity is a junction table (e.g., ContactUnit links Contact↔Unit) that shouldn't be queried directly by users but is critical for traversal.
+
+Rules:
+- Read the Kompo form labels to understand what users call each field
+- Read the model's enum/constant methods to document exact values
+- Read relationships to understand Neo4j direction (belongsTo = outgoing from child)
+- Scope cypher_patterns MUST use valid Neo4j syntax: string dates use toString(date()), integers are NOT quoted
+- Aliases should include terms from Kompo form labels and route names
+- For relationship descriptions, always specify: "To find X from Y, traverse (Y)-[:REL]->(Z)-[:REL]->(X)"
+- For "my ..." queries, document the full chain: User→Contact→ContactUnit→Unit (for unit), User→Contact (for contact info), etc.
+- Return ONLY valid JSON
+--- message 1: user ---
+# Improvement Round 1/3 for "Unit"
+
+## Current Metadata Config
+```json
+{
+    "aliases": [
+        "unit",
+        "units"
+    ],
+    "scopes": {
+        "vacant": []
+    }
+}
+```
+
+## Test Question Results
+### Question 1: How many units?
+```
+3
+```
+
+
+
+## Your Task
+
+You are reviewing the output of a natural language → Cypher query pipeline. For each test question, the system used this entity's config (description, aliases, scopes, common_properties) to decide what to query and how.
+
+Think critically about what went right and what went wrong. The config is the ONLY information the query-generating LLM has about this entity. If the config is vague, misleading, or missing context, the query will be wrong — even if the underlying data is correct.
+
+For each test result, reason through:
+1. **Did the system even find this entity?** Look at which entities were selected. If this entity was missed, its aliases or description may not match what the user asked for.
+2. **Was the generated Cypher query correct?** If the query returned wrong or no results, trace WHY. Was a relationship direction wrong? Was a scope pattern incorrect? Was a property name wrong?
+3. **Did the answer make sense?** Even if the query ran, did the final answer actually answer the user's question? Sometimes the right entity is found but the wrong relationship path is followed, returning sibling data instead of the requested data.
+4. **Would a different user's perspective change the result?** Think about possessive queries ("my ..."), team-scoped queries, and role-based distinctions (owner vs member vs renter). The config must guide the LLM to disambiguate these correctly.
+
+Now improve the config. Your improvements must be grounded in the evidence from the test results — not hypothetical. Fix what actually failed. Strengthen what was ambiguous. Keep what worked.
+
+Return an improved JSON object with keys: description, aliases, examples, common_properties, scopes, security_notes.
+Never remove working aliases, examples, or scopes. Only add, improve, or clarify. Return ONLY valid JSON.

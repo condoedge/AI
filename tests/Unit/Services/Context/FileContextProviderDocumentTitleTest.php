@@ -128,6 +128,18 @@ class FileContextProviderDocumentTitleTest extends TestCase
     }
 
     /** @test */
+    public function a_reference_carries_its_chunks_audience_for_the_trace(): void
+    {
+        $this->lawMetadata = ['audience' => ['organisateur']];
+        $this->hits = ['q' => [self::LAW => [6], self::SCAN => [5]]];
+
+        $byName = array_column($this->provider()->searchRelevantFiles('q', null), null, 'filename');
+
+        $this->assertSame(['organisateur'], $byName['ccq.md']['audience']);
+        $this->assertArrayNotHasKey('audience', $byName['scan-0042.pdf']);
+    }
+
+    /** @test */
     public function a_reference_carries_the_first_top_level_heading_of_its_documents_first_chunk(): void
     {
         $this->hits = ['q' => [self::LAW => [6], self::SCAN => [5]]];

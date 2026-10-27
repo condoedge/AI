@@ -12,7 +12,7 @@ use Condoedge\Ai\Services\Security\TeamPathResolver;
  *
  * Decides WHICH graph labels reach the query-generation prompt (one schema card
  * each). The former selection unioned every vector hit with every configured
- * neighbour of every hit (a hub like Union or User fanned out to 15–30 labels),
+ * neighbour of every hit (a hub like Team or User fanned out to 15–30 labels),
  * so the schema block — and the prompt — grew with the graph, not the question.
  *
  * Pruning is structural, in tiers (a label keeps the FIRST tier it qualifies for,
@@ -30,8 +30,8 @@ use Condoedge\Ai\Services\Security\TeamPathResolver;
  *   (vector)     — ONLY when nothing seeded the selection (no seed, scope or
  *                  calculation label): the top-K direct vector hits (already
  *                  threshold-filtered by the selector) become the seeds.
- *   3. tenant    — the labels a seed's tenant-scoping rule traverses (e.g. Unit
- *                  is scoped through Union), so the model can emit the rule. Ahead
+ *   3. tenant    — the labels a seed's tenant-scoping rule traverses (e.g. Task
+ *                  is scoped through Project), so the model can emit the rule. Ahead
  *                  of identity; the hops of identity / closure / ownership labels
  *                  are added too, so EVERY selected label can be scoped.
  *   4. identity  — the identity labels (User/Team), ONLY when QU judged the

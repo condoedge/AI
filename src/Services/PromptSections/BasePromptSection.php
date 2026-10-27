@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Services\PromptSections;
 
 use Condoedge\Ai\Contracts\PromptSectionInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Support\Spotlight;
 
 /**
  * BasePromptSection
@@ -84,25 +85,6 @@ abstract class BasePromptSection implements PromptSectionInterface
      */
     protected function spotlight(string $text, string $tag, array $attributes = []): string
     {
-        $attrString = '';
-        foreach ($attributes as $key => $value) {
-            $attrString .= ' ' . $key . '=' . $value;
-        }
-
-        return "<{$tag}{$attrString}>\n" . $this->neutralizeDelimiterTags($text, $tag) . "\n</{$tag}>";
-    }
-
-    /**
-     * Neutralize any forged delimiter tag (open or close) for $tag inside untrusted
-     * content. Matching is case-insensitive and tolerant of whitespace inside the
-     * tag (e.g. `</user_question >`, `< USER_QUESTION>`) so a crafted variant cannot
-     * break out of the spotlight wrapper. The leading `<` is escaped to `<\` so the
-     * model still sees the text but it can no longer act as a delimiter.
-     */
-    private function neutralizeDelimiterTags(string $text, string $tag): string
-    {
-        $pattern = '/<(\s*\/?\s*' . preg_quote($tag, '/') . '\s*)>/i';
-
-        return preg_replace($pattern, '<\\\\$1>', $text);
+        return Spotlight::wrap($text, $tag, $attributes);
     }
 }

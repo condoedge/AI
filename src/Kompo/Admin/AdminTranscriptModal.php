@@ -6,16 +6,22 @@ namespace Condoedge\Ai\Kompo\Admin;
 
 use Condoedge\Ai\Kompo\Admin\Concerns\GuardsConversationInsights;
 use Condoedge\Ai\Kompo\Admin\Concerns\RendersInsightCells;
+use Condoedge\Ai\Kompo\Support\ConversationLimitBanner;
+use Condoedge\Ai\Models\AiTaskEvent;
 use Condoedge\Ai\Services\Admin\ConversationInsights;
+use Condoedge\Ai\Services\Admin\EvalCase;
+use Condoedge\Ai\Services\Tasks\TaskOrchestrator;
 use Condoedge\Utils\Kompo\Common\Modal;
 
 /**
  * READ-ONLY transcript of one conversation for the admin insights page: every message
- * in order (role, time, escaped content, feedback mark) and, per answer, a compact
- * trace summary (route, LLM calls, tokens, latency, errors, cited file names).
+ * in order (role, time, escaped content, feedback mark with its time and comment) and, per answer, a compact
+ * trace summary (route, LLM calls, tokens, latency, errors, cited file names). Then each
+ * task the conversation ran: its audit timeline and whether the hash chain holds.
  *
- * Found by uuid only, inside the visible corpus (not deleted, not eval). No submit, no
- * action: the modal has no buttons and the component no write method.
+ * Found by uuid only, inside the visible corpus (not deleted, not eval). No submit and no
+ * write method: its one link copies the conversation as an anonymised eval case (EvalCase)
+ * to the clipboard.
  */
 class AdminTranscriptModal extends Modal
 {
@@ -31,6 +37,7 @@ class AdminTranscriptModal extends Modal
     public $preventSubmit = true;
 
     protected ?array $transcript = null;
+    protected array $tasks = [];
     protected ?int $highlight = null;
 
     public function created()
@@ -40,6 +47,9 @@ class AdminTranscriptModal extends Modal
         $this->transcript = is_string($uuid) && $uuid !== ''
             ? app(ConversationInsights::class)->transcript($uuid)
             : null;
+        $this->tasks = $this->transcript !== null
+            ? app(ConversationInsights::class)->taskTimeline((int) $this->transcript['conversation']->id)
+            : [];
     }
 
     public function body()
@@ -58,12 +68,55 @@ class AdminTranscriptModal extends Modal
                     $conversation->team_name ?? null,
                     $this->dateTime($conversation->created_at ?? null),
                 ])), 'text-xs text-gray-500'),
-                _Html('ai.admin.read-only')->class('mt-1 text-xs italic text-gray-400'),
+                _FlexBetween(
+                    _Html('ai.admin.read-only')->class('text-xs italic text-gray-400'),
+                    _Link('ai.admin.copy-eval-case')
+                        ->class('text-xs font-medium text-indigo-700 hover:underline')
+                        ->onClick(fn ($e) => $e->run(ConversationLimitBanner::copyResumeJs(
+                            EvalCase::fromTranscript($conversation, $this->transcript['messages'])
+                        )) && $e->alert('ai.admin.eval-case-copied')),
+                )->class('mt-1 gap-2'),
             )->class('mb-4 border-b border-gray-200 pb-3'),
             _Rows(
                 ...$this->transcript['messages']->map(fn ($message) => $this->messageBlock($message))->all()
             )->class('space-y-3'),
+            ...array_map(fn (array $timeline) => $this->taskBlock($timeline), $this->tasks),
         );
+    }
+
+    /** @param array{task: \Condoedge\Ai\Models\AiTask, events: \Illuminate\Support\Collection, chain_ok: bool} $timeline */
+    protected function taskBlock(array $timeline)
+    {
+        $task = $timeline['task'];
+
+        return _Rows(
+            _FlexBetween(
+                $this->text(__('ai.admin.task.title', ['definition' => $task->definition_key, 'status' => $task->status]), 'text-sm font-semibold text-gray-900'),
+                $timeline['chain_ok']
+                    ? _Html('ai.admin.task.chain-ok')->class('text-xs font-semibold text-green-700')
+                    : _Html('ai.admin.task.chain-broken')->class('text-xs font-semibold text-red-700'),
+            )->class('mb-2'),
+            _Rows(...$timeline['events']->map(fn (AiTaskEvent $event) => $this->taskEventLine($event))->all())->class('space-y-1'),
+        )->class('mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3');
+    }
+
+    /** time · kind (reason) · field: before → after · actor. Personal values were audited as "provided". */
+    protected function taskEventLine(AiTaskEvent $event)
+    {
+        $value = fn (mixed $v) => match (true) {
+            $v === null => '',
+            $v === TaskOrchestrator::PROVIDED => __('ai.admin.task.provided'),
+            is_scalar($v) => (string) $v,
+            default => (string) json_encode($v, JSON_UNESCAPED_UNICODE),
+        };
+        $reason = is_string($event->payload['reason'] ?? null) ? ' (' . $event->payload['reason'] . ')' : '';
+
+        return $this->text(implode(' · ', array_filter([
+            $this->dateTime($event->at),
+            $event->kind . $reason,
+            $event->field !== null ? $event->field . ': ' . trim($value($event->value_before) . ' → ' . $value($event->value_after)) : null,
+            $event->actor_user_id !== null ? __('ai.admin.task.actor', ['id' => $event->actor_user_id]) : null,
+        ])), 'text-xs text-gray-700 break-words');
     }
 
     protected function messageBlock($message)
@@ -71,6 +124,7 @@ class AdminTranscriptModal extends Modal
         $isAnswer = $message->role === 'assistant';
         $metadata = is_array($message->metadata) ? $message->metadata : [];
         $feedback = $metadata['feedback'] ?? null;
+        $rating = $this->feedbackDetails($metadata);
         $highlighted = $this->highlight !== null && (int) $message->id === $this->highlight;
 
         $roleKey = 'ai.admin.role.' . (in_array($message->role, ['user', 'assistant', 'system'], true) ? $message->role : 'system');
@@ -80,10 +134,14 @@ class AdminTranscriptModal extends Modal
                 _Html($roleKey)->class('text-xs font-semibold uppercase tracking-wide ' . ($isAnswer ? 'text-indigo-700' : 'text-gray-700')),
                 _Flex(
                     $isAnswer ? $this->feedbackBadge(is_string($feedback) ? $feedback : null) : null,
+                    $isAnswer && $rating['at'] !== null ? $this->text(__('ai.admin.feedback.rated-at', ['time' => $rating['at']]), 'text-xs text-gray-400') : null,
                     $this->text($this->dateTime($message->created_at), 'text-xs text-gray-400'),
                 )->class('items-center gap-2'),
             )->class('mb-1'),
             $this->text((string) $message->content, 'whitespace-pre-wrap break-words text-sm text-gray-900'),
+            $isAnswer && $rating['comment'] !== null
+                ? $this->text(__('ai.admin.feedback.comment', ['comment' => $rating['comment']]), 'mt-2 rounded bg-red-50 px-2 py-1 text-xs text-red-800 whitespace-pre-wrap break-words')
+                : null,
             $isAnswer ? $this->traceLine(ConversationInsights::traceSummary($metadata, $message->execution_time_ms)) : null,
         )->id('ai-admin-message-' . (int) $message->id)
             ->class('rounded-lg border p-3 ' . ($highlighted

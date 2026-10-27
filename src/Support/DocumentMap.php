@@ -380,7 +380,7 @@ final class DocumentMap
      * after the first hold sub-clauses whose subject stands in the first one
      * ("the administrators must:" … "31.10 keep the insurance in force"): read
      * alone, a later piece no longer says who its clauses bind. Measured on a
-     * scanned declaration: the gists of such pieces named the wrong persons, and
+     * scanned by-law: the gists of such pieces named the wrong persons, and
      * one of them drew a wrong rule into an answer.
      *
      * Purely structural: the piece numbered 1 of the same article under the same

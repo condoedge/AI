@@ -288,6 +288,38 @@ class AiManagerFileSearchSkipTest extends TestCase
         $this->assertNotNull($ctx->queryResult->cypher ?? null, 'The data query must run');
     }
 
+    /**
+     * @test
+     * Live CondoEdge 2026-10-26: every new export request ("I need an Excel of the owners, how do I generate it?",
+     * "export it to Excel") came back intent=file_listing; the file list replaced the document search, so the
+     * help article on generating that export was never read. Asking to RECEIVE something as a file is not
+     * asking which files one has.
+     */
+    public function a_request_to_receive_a_file_is_never_a_file_listing(): void
+    {
+        config(['ai.file_context.enumeration.enabled' => true]);
+        config(['ai.file_context.enumeration.intents' => ['file_listing']]);
+        config(['ai.file_context.skip_for_question_types' => []]);
+
+        $ctx = new PipelineContext();
+        $ctx->question = 'I need an Excel file with the names and addresses of all owners, how do I generate it?';
+        $ctx->qu = new QueryUnderstandingResult(
+            searchQuery: 'owners names addresses excel',
+            intent: 'file_listing',
+            questionType: 'data_query',
+            exportFormat: 'excel',
+        );
+        $ctx->similarQueries = [];
+        $ctx->graphSchema = ['labels' => ['User']];
+
+        $this->mockFileContextProvider->shouldNotReceive('getFileEnumerationContext');
+
+        $this->runTurn($ctx);
+
+        $this->assertFalse((bool) ($ctx->fileContext['enumeration'] ?? false), 'No file listing for a file request');
+        $this->assertGreaterThan(0, $this->searchCalls, 'The documents are searched as on any other turn');
+    }
+
     /** @test */
     public function an_empty_enumeration_on_a_listing_turn_falls_through_to_semantic_retrieval_despite_the_skip(): void
     {

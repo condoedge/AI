@@ -412,7 +412,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
         array $llmOptions,
         PipelineObserverInterface $observer
     ): array {
-        // "[1, art. 1063]" is a citation: normalize it to the standard marker BEFORE judging,
+        // "[1, art. 12]" is a citation: normalize it to the standard marker BEFORE judging,
         // so a cited answer is never retried as marker-less and its source links resolve.
         $draft = $validator->normalizeAnnotatedCitations($draft);
         $first = $validator->validate($draft);
@@ -760,9 +760,9 @@ class ResponseGenerator implements ResponseGeneratorInterface
 
     /**
      * Every figure in a nested value: numbers, numeric strings, the quantities
-     * stated inside strings ("Unit 310", "11 493,17 $") and — evidence is a
-     * superset — every bare digit run, so a line-start article number ("1069. A
-     * co-owner…") or a date part the answer restates is never "unsupported".
+     * stated inside strings ("Order 310", "11 493,17 $") and — evidence is a
+     * superset — every bare digit run, so a line-start article number ("2104. A
+     * member…") or a date part the answer restates is never "unsupported".
      *
      * @return list<float>
      */
@@ -1001,22 +1001,28 @@ class ResponseGenerator implements ResponseGeneratorInterface
         // query-less DATA turn that merely carries chips (an empty result's list/create) is
         // an honest abstention (eval p14 review).
         $navigation = !$attached->isEmpty() && is_string($options['navigation_target'] ?? null);
+        // Docs only (ai.query_generation.enabled = false): nothing was looked up.
+        $docsOnly = !$navigation && ($options['docs_only'] ?? false) === true;
 
-        $prompt .= $navigation
-            ? "This request needs no data lookup: it asks to open or reach a page of the app. The matching "
+        $prompt .= match (true) {
+            $navigation => "This request needs no data lookup: it asks to open or reach a page of the app. The matching "
                 . "page(s) are attached as buttons below your answer. In one or two sentences, tell the user it "
-                . "is attached below, naming it. Do NOT say that nothing was found, and do not end with an offer.\n\n"
-            : "No matching records were found for this question. Briefly and helpfully tell the "
+                . "is attached below, naming it. Do NOT say that nothing was found, and do not end with an offer.\n\n",
+            $docsOnly => "None of the documents answers this question. Say so briefly and plainly, without guessing an "
+                . "answer, a figure or a place in the application. Do NOT end with a bare invitation like \"feel free to ask\" "
+                . "or an offer (\"let me know\", \"would you like…\").\n\n",
+            default => "No matching records were found for this question. Briefly and helpfully tell the "
                 . "user that no results were found. Do NOT end with a bare invitation like \"feel free to ask\" "
-                . "or an offer (\"let me know\", \"would you like…\").\n\n";
+                . "or an offer (\"let me know\", \"would you like…\").\n\n",
+        };
 
         // WHAT WAS CHECKED (Task 1.27 c, live rights t2): a bare "no results were
         // found" tells the user nothing. The subject is QU's STRUCTURED field threaded by
         // AiManager — no word lists — and the model names the record kinds in plain words.
         //
         // The KINDS are the EXECUTED query's (eval p18-B rights t2: "I checked … in invoices,
-        // union records, and fund records" — QU's Invoice / Union / Fund — while the query
-        // summed the invoices of the user's units): the entities its projections read
+        // team records, and fund records" — QU's Invoice / Team / Fund — while the query
+        // summed the invoices of the user's accounts): the entities its projections read
         // (QueriedKinds), by the host's own word for them. QU's kinds stand only when no
         // query ran or nothing can be read from it.
         //
@@ -1039,14 +1045,14 @@ class ResponseGenerator implements ResponseGeneratorInterface
         // line of their own right below the model's answer ({@see checkedLine()}), in the
         // host's plurals and the answer's language. The model is told, so it does not restate
         // them. Null wherever a fact or a word is missing: the model's instruction stands.
-        $checkedLine = $navigation ? null : $this->checkedLine($cypherQuery, $scope, $ownership, $this->questionLocale($options));
+        $checkedLine = $navigation || $docsOnly ? null : $this->checkedLine($cypherQuery, $scope, $ownership, $this->questionLocale($options));
         $printed = $checkedLine === null
             ? ''
             : 'The system itself prints, on a line right below your answer, what was checked: "' . str_replace('"', "'", $checkedLine)
                 . '" — do NOT restate it: do not list the record kinds and do not say again that they were checked.';
 
         $checkedKinds = [];
-        if ($subject !== '' && !$navigation) {
+        if ($subject !== '' && !$navigation && !$docsOnly) {
             $types = QueriedKinds::names($cypherQuery);
             if ($types === []) {
                 $types = array_values(array_filter((array) ($options['checked_entity_types'] ?? []), 'is_string'));
@@ -1071,7 +1077,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
 
         // WHY an own-data result is empty (eval p16-B rights t2): AiManager counted, through
         // the scoped executor, the records of the entity the question hangs on (the host's
-        // ownership path — e.g. the user's units). A FACT, stated as the reason; the display
+        // ownership path — e.g. the user's accounts). A FACT, stated as the reason; the display
         // name is the host's. Only for a query that was anchored on the user.
         $kind = trim((string) ($ownership['display_name'] ?? ''));
         if ($ownData && !$navigation && $kind !== '' && is_int($ownership['count'] ?? null)) {
@@ -1280,7 +1286,7 @@ class ResponseGenerator implements ResponseGeneratorInterface
 
     /**
      * WHAT WAS CHECKED, as a line code prints below an empty answer (eval p20-B rights t2) —
-     * "Checked: invoices, unions for your units — nothing matched your question." Built ONLY from
+     * "Checked: invoices, teams for your accounts — nothing matched your question." Built ONLY from
      * what is established, and null as soon as one piece is missing:
      *
      *   - the KINDS: the entities the EXECUTED query's projections read ({@see QueriedKinds::labels()}

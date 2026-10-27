@@ -504,9 +504,8 @@ class CypherScopeAdapter
 
         if ($type === 'relationship') {
             // Check for role-like scope names
-            $roleNames = ['volunteers', 'scouts', 'leaders', 'admins', 'members', 'managers', 'staff', 'customers'];
-            if (in_array($scopeName, $roleNames)) {
-                // e.g., "People who are volunteers" or just "Volunteers"
+            if (in_array($scopeName, TraversalScopeGenerator::roleNames())) {
+                // e.g., "People who are members" or just "Members"
                 return "{$pluralEntity} who are {$lowerReadable}";
             }
 
@@ -535,11 +534,10 @@ class CypherScopeAdapter
         $lowerEntity = strtolower(Str::plural($entityName));
         $singularEntity = strtolower($entityName);
 
-        // For relationship-based scopes like "volunteers", the scope name IS the role
-        // so we want "Show volunteers" not "Show volunteers people"
+        // For relationship-based scopes like "members", the scope name IS the role
+        // so we want "Show members" not "Show members people"
         if ($scopeType === 'relationship_traversal') {
-            // Check if scope name is a role-like word (ends with 's' or is a noun)
-            $isRoleName = in_array($scopeName, ['volunteers', 'scouts', 'leaders', 'admins', 'members', 'managers']);
+            $isRoleName = in_array($scopeName, TraversalScopeGenerator::roleNames());
 
             if ($isRoleName) {
                 return [

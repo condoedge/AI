@@ -155,7 +155,7 @@ class SemanticContextSelector
                     if ($result->scopeKey && $result->entityName) {
                         // Keep the best hit per scope key: results arrive score-descending,
                         // and a later, weaker hit of the same key on ANOTHER entity used to
-                        // overwrite it (BoardMember.for_union 0.74 → Component.for_union 0.52).
+                        // overwrite it (Member.for_team 0.74 → Component.for_team 0.52).
                         if (!isset($selectedScopes[$result->scopeKey])
                             || $selectedScopes[$result->scopeKey]->score < $result->score) {
                             $selectedScopes[$result->scopeKey] = new SelectedScope(
@@ -223,7 +223,7 @@ class SemanticContextSelector
         // SEED SCOPES (Task 5.10): the business concepts of the entities Query
         // Understanding named are searched directly (scope points of those entities
         // only) and ranked ahead of cross-entity hits — a generic phrasing ("… for this
-        // condo") on an unrelated entity must not crowd out the seed's own concept.
+        // team") on an unrelated entity must not crowd out the seed's own concept.
         $seedEntities = $this->seedEntityKeys($options, $entityConfigs);
         if ($seedEntities !== [] && (bool) config('ai.semantic_context.seed_scope_search', true)) {
             $selectedScopes = $this->withSeedScopes(
@@ -746,7 +746,7 @@ class SemanticContextSelector
 
     /**
      * Expand context with entities from user_entity_paths when possessive language is detected.
-     * This ensures that when a user asks "my unit", the Contact, ContactUnit entities
+     * This ensures that when a user asks "my orders", the Contact, Customer entities
      * needed for the traversal are included in the context.
      */
     private function expandThroughUserEntityPaths(

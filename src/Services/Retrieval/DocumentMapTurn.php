@@ -330,8 +330,8 @@ final class DocumentMapTurn
                 'file_id' => $fileId,
                 // The file's NAME only — not the document's own title its passages carry
                 // (`document_title`): measured live 2026-10-07, the title on this header
-                // moved the reader's picks on the tear-down question in 3 runs of 6 (the
-                // approval rule, art. 1097, was no longer named), against 12 of 12 stable
+                // moved the reader's picks on one benchmark question in 3 runs of 6 (the
+                // approval rule, art. 297, was no longer named), against 12 of 12 stable
                 // runs without it. The reader picks passages; the composer names sources.
                 'name' => basename((string) ($file['filename'] ?? $chunks[0]->fileName)),
                 'collection' => $collection,
@@ -374,8 +374,8 @@ final class DocumentMapTurn
         // THE SAFETY RULE: the reader runs only when EVERY admitted file carries a
         // usable map. It reads maps only — beside an unmapped file it read the
         // mapped one alone, opened its gate on a rule of that document and the
-        // answer was built on it (live: the general law served as the building's
-        // own declaration, which sat unmapped beside it). One unmapped file, or
+        // answer was built on it (live: the general law served as the record's
+        // own by-law, which sat unmapped beside it). One unmapped file, or
         // one whose chunks cannot be had, and the turn is not a map turn.
         if ($unmapped !== []) {
             return $this->notAMapTurn('unmapped_file');
@@ -402,7 +402,7 @@ final class DocumentMapTurn
         // Each document is cut on its own, and the map never exceeds the ids the
         // reader has ({@see DocumentMapReader::MAX_CHUNKS}).
         //
-        // Measured 2026-10-08, 12 questions × 2 runs on a declaration (104 lines)
+        // Measured 2026-10-08, 12 questions × 2 runs on a by-law (104 lines)
         // beside the law (90 in scope): one budget of 150 (the law cut to ~45
         // lines), one of 250 and one per document named the same deciding chunks
         // (34, 34 and 33 of 62) at 11.3k / 13.5k / 13.5k reader tokens and the same
@@ -491,8 +491,8 @@ final class DocumentMapTurn
         // the rules the reader named in the document of the record the question is
         // about are stated first (by role), then those of the general document (by
         // role) — two sources, both KEPT, each in one block, in a fixed order.
-        // Measured live on "what does the declaration say about …": by role alone
-        // the general law's article led as THE general rule and the building's own
+        // Measured live on "what does the by-law say about …": by role alone
+        // the general law's article led as THE general rule and the record's own
         // clause followed as a classification. Structural (whose document it is);
         // which of the two prevails is for the documents to say.
         $order = array_flip(DocumentMapReader::ROLES);
@@ -996,7 +996,7 @@ final class DocumentMapTurn
     /**
      * The articles a chunk defines, as NUMBERS ({@see ArticleLocator}: the clause
      * numbers its lines start with, else its chunk metadata) — what the passage
-     * headers print as "art. 1063". [] for a chunk that defines none: it is then
+     * headers print as "art. 263". [] for a chunk that defines none: it is then
      * announced by its role and passage number alone, never by a heading.
      *
      * @return list<int>

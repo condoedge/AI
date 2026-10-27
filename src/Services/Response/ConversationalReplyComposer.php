@@ -7,6 +7,7 @@ namespace Condoedge\Ai\Services\Response;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\AssistantIdentity;
+use Condoedge\Ai\Support\Audiences;
 use Condoedge\Ai\Support\PipelineObserverScope;
 use Condoedge\Ai\Support\TokenUsage;
 
@@ -39,6 +40,10 @@ use Condoedge\Ai\Support\TokenUsage;
  * Measured before (2026-10-21, user 13): "How are you?" ran clarity check, document
  * probes, query generation and execution and answered "No results were found for that
  * question." (16.5k tokens, 24 s); "Comment ça va ?" ran the knowledge path (23k tokens).
+ *
+ * The verdict rides its own role (ai.llm_roles.conversational_reply) when one is set. Measured
+ * 2026-10-25 on a host's help articles: 4o-mini, 4o and luna judged 4 of 5 how-to questions
+ * conversation despite the prompt; a reasoning model judged all 10 recorded verdicts right.
  */
 class ConversationalReplyComposer
 {
@@ -54,8 +59,9 @@ class ConversationalReplyComposer
     /** A short reply: a few sentences at most. */
     private const MAX_TOKENS = 300;
 
-    public function __construct(private readonly LlmProviderInterface $llm)
-    {
+    public function __construct(
+        private readonly LlmProviderInterface $llm,
+    ) {
     }
 
     /**
@@ -148,7 +154,7 @@ class ConversationalReplyComposer
         $identity = AssistantIdentity::render();
 
         $rules = <<<PROMPT
-YOUR TASK: nothing was looked up for the user's MESSAGE below. First decide whether it is CONVERSATION with you — a greeting, thanks, small talk, or a question about you, the assistant (who or what you are, how you are doing, what you can help with, which model powers you). Then reply if it is.
+YOUR TASK: nothing was looked up for the user's MESSAGE below. First decide whether it is CONVERSATION with you — a greeting, thanks, small talk, or a question about you, the assistant (who or what you are, how you are doing, what you can help with, which model powers you). A question about the application or about what the user can do in it is never conversation — also when it is a short follow-up on the recent conversation that you could answer from it. Then reply if it is.
 
 Return a JSON object:
 - "conversational": true when the message is such conversation; false when it asks for any information or action — about the user's data, records, documents, rules or laws, the application or one of its pages, or anything to look up, show, explain, create, export or change.
@@ -200,9 +206,13 @@ PROMPT;
     {
         $blocks = [];
 
-        $name = $this->userName($options);
+        $user = $this->askingUser($options);
+        $name = $this->userName($user);
         if ($name !== null) {
             $blocks[] = "THE USER: {$name} (address them by name only when it is natural).";
+        }
+        if (($role = Audiences::promptBlock($user)) !== '') {
+            $blocks[] = $role;
         }
 
         $recent = $this->recentMessages($ctx->conversationContext['recent_exchanges'] ?? [], $question);
@@ -226,7 +236,8 @@ PROMPT;
      *
      * @param array<string, mixed> $options
      */
-    private function userName(array $options): ?string
+    /** The turn's user: the one passed in the options, else the authenticated one. */
+    private function askingUser(array $options): mixed
     {
         $user = $options['user'] ?? null;
         if (is_array($user)) {
@@ -240,6 +251,11 @@ PROMPT;
             }
         }
 
+        return $user;
+    }
+
+    private function userName(mixed $user): ?string
+    {
         try {
             $name = is_object($user) ? ($user->name ?? null) : null;
         } catch (\Throwable $e) {

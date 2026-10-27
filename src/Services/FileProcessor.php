@@ -14,6 +14,7 @@ use Condoedge\Ai\Jobs\BuildDocumentMapJob;
 use Condoedge\Ai\Support\DocumentMap;
 use Condoedge\Ai\Support\DocumentTitle;
 use Condoedge\Ai\Support\FileLink;
+use Condoedge\Ai\Support\Frontmatter;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Support\Facades\Log;
 
@@ -28,6 +29,9 @@ use Illuminate\Support\Facades\Log;
  */
 class FileProcessor implements FileProcessorInterface
 {
+    /** Formats whose YAML frontmatter is read as the document's metadata ({@see Frontmatter}). */
+    private const FRONTMATTER_EXTENSIONS = ['md', 'markdown', 'mdown', 'mdx'];
+
     /**
      * @param FileExtractorRegistry $extractorRegistry
      * @param FileChunkerInterface $chunker
@@ -58,12 +62,26 @@ class FileProcessor implements FileProcessorInterface
             // collection.
             $collection = $options['collection'] ?? null;
 
+            // `skip_unchanged` (the docs ingest): a stored file whose bytes did not change is
+            // a skip, not a failure; a changed one is replaced. Chunks stored before hashes
+            // existed count as unchanged — `force` re-embeds them once.
+            $sourceHash = ($options['skip_unchanged'] ?? false) ? $this->sourceHash($file) : null;
             if (!($options['force'] ?? false) && $this->isProcessed($file, $collection)) {
-                return ProcessingResult::failure(
-                    $file->id,
-                    "File already processed. Use 'force' option to reprocess.",
-                    microtime(true) - $startTime
-                );
+                if ($sourceHash === null) {
+                    return ProcessingResult::failure(
+                        $file->id,
+                        "File already processed. Use 'force' option to reprocess.",
+                        microtime(true) - $startTime
+                    );
+                }
+                $storedHash = $this->storedSourceHash($file->id, $collection);
+                if ($storedHash === null || $storedHash === $sourceHash) {
+                    return ProcessingResult::success($file->id, 0, 0, microtime(true) - $startTime, [
+                        'skipped' => true,
+                        'reason' => $storedHash === null ? 'stored before content hashes' : 'unchanged',
+                    ]);
+                }
+                $options['force'] = true;
             }
 
             $filePath = $this->getFilePath($file);
@@ -86,8 +104,15 @@ class FileProcessor implements FileProcessorInterface
                 );
             }
 
-            // Step 1: Extract text
+            // Step 1: Extract text; a markdown frontmatter is the document's metadata, not its text.
             $text = $this->extractorRegistry->extract($filePath);
+            [$frontmatter, $text] = in_array(strtolower($extension), self::FRONTMATTER_EXTENSIONS, true)
+                ? Frontmatter::split($text)
+                : [[], $text];
+            $documentMetadata = Frontmatter::metadata($frontmatter, (string) $file->name);
+            if ($sourceHash !== null) {
+                $documentMetadata['source_hash'] = $sourceHash;
+            }
 
             if (empty(trim($text))) {
                 return ProcessingResult::failure(
@@ -139,6 +164,11 @@ class FileProcessor implements FileProcessorInterface
                 );
             }
 
+            $embedPrefix = $this->embedPrefix($documentMetadata);
+            if ($embedPrefix !== '') {
+                $embedTexts = array_map(static fn (string $embedText) => $embedPrefix . $embedText, $embedTexts);
+            }
+
             // The record an UPLOADED file is filed on — resolved once per file,
             // before anything is paid for or stored: a file whose owner cannot be
             // resolved is not stored as a file of nobody.
@@ -155,7 +185,8 @@ class FileProcessor implements FileProcessorInterface
                 $text,
                 $chunkMetadata,
                 $pageBreaks,
-                $owner
+                $owner,
+                $documentMetadata
             );
 
             // A forced (re-)ingest REPLACES the file's points — and with them the
@@ -378,18 +409,21 @@ class FileProcessor implements FileProcessorInterface
         string $fullText,
         array $chunkMetadata = [],
         array $pageBreaks = [],
-        ?array $owner = null
+        ?array $owner = null,
+        array $documentMetadata = []
     ): array {
         $this->assertEmbeddingsAlignWithChunks($textChunks, $embeddings);
 
         $fileChunks = [];
         $totalChunks = count($textChunks);
 
-        // The document's OWN TITLE — the first top-level heading of its first chunk,
-        // none when it has no such heading — stamped on every chunk: a passage deep
-        // in the document then names its document without a read of the first chunk.
-        $title = DocumentTitle::fromFirstChunk((string) ($textChunks[0] ?? ''));
-        $titled = $title !== '' ? [DocumentTitle::METADATA_KEY => $title] : [];
+        // The document's OWN TITLE — its frontmatter title, else the first top-level
+        // heading of its first chunk, none when it has no such heading — stamped on every
+        // chunk: a passage deep in the document then names its document without a read of
+        // the first chunk. The rest of its frontmatter rides along.
+        $title = $documentMetadata['title'] ?? DocumentTitle::fromFirstChunk((string) ($textChunks[0] ?? ''));
+        $titled = ($title !== '' ? [DocumentTitle::METADATA_KEY => $title] : [])
+            + array_diff_key($documentMetadata, ['title' => true]);
 
         // Moving character cursor over the source. Chunks overlap and the
         // chunker may renormalize whitespace between joined units, so positions
@@ -425,6 +459,43 @@ class FileProcessor implements FileProcessorInterface
         }
 
         return $fileChunks;
+    }
+
+    /** The sha1 of the file's bytes with CRLF read as LF (a git autocrlf checkout); null when it cannot be read. */
+    private function sourceHash(object $file): ?string
+    {
+        try {
+            $bytes = @file_get_contents($this->getFilePath($file));
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return is_string($bytes) ? sha1(str_replace("\r\n", "\n", $bytes)) : null;
+    }
+
+    /** The bytes hash stamped on a stored file's chunks; null when they carry none. */
+    private function storedSourceHash(int|string $fileId, ?string $collection): ?string
+    {
+        $hash = ($this->chunkStore->getFileChunks($fileId, $collection)[0] ?? null)?->metadata['source_hash'] ?? null;
+
+        return is_string($hash) && $hash !== '' ? $hash : null;
+    }
+
+    /**
+     * What every embedded text of a document starts with: its frontmatter breadcrumb, and its
+     * keywords when the host asks for them (ai.file_context.frontmatter.embed_keywords). '' without.
+     */
+    private function embedPrefix(array $documentMetadata): string
+    {
+        $lines = [];
+        if (($documentMetadata['breadcrumb'] ?? '') !== '') {
+            $lines[] = $documentMetadata['breadcrumb'];
+        }
+        if (($documentMetadata['keywords'] ?? []) !== [] && $this->configValue('ai.file_context.frontmatter.embed_keywords')) {
+            $lines[] = implode(', ', $documentMetadata['keywords']);
+        }
+
+        return $lines === [] ? '' : implode("\n", $lines) . "\n";
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Discovery;
 
 use Condoedge\Ai\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Support\DomainProfile;
 
 /**
  * Enhances auto-discovered entity configs using LLM analysis.
@@ -121,7 +122,7 @@ Return a JSON array of 5 question strings. Return ONLY the JSON array.
 PROMPT;
 
         $questions = $this->llmChatJson([
-            ['role' => 'system', 'content' => 'You generate realistic test questions for a condo management AI assistant. Return ONLY a JSON array of strings.'],
+            ['role' => 'system', 'content' => 'You generate realistic test questions for ' . $this->appBrief() . '. Return ONLY a JSON array of strings.'],
             ['role' => 'user', 'content' => $prompt],
         ], [
             'temperature' => 0.7,
@@ -156,6 +157,7 @@ PROMPT;
         }
 
         $configJson = json_encode($currentConfig['metadata'] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        $personaExamples = DomainProfile::text('discovery.persona_examples');
 
         $prompt = <<<PROMPT
 # Improvement Round {$round}/{$totalRounds} for "{$label}"
@@ -178,7 +180,7 @@ For each test result, reason through:
 1. **Did the system even find this entity?** Look at which entities were selected. If this entity was missed, its aliases or description may not match what the user asked for.
 2. **Was the generated Cypher query correct?** If the query returned wrong or no results, trace WHY. Was a relationship direction wrong? Was a scope pattern incorrect? Was a property name wrong?
 3. **Did the answer make sense?** Even if the query ran, did the final answer actually answer the user's question? Sometimes the right entity is found but the wrong relationship path is followed, returning sibling data instead of the requested data.
-4. **Would a different user's perspective change the result?** Think about possessive queries ("my ..."), team-scoped queries, and role-based distinctions (owner vs member vs renter). The config must guide the LLM to disambiguate these correctly.
+4. **Would a different user's perspective change the result?** Think about possessive queries ("my ..."), team-scoped queries, and role-based distinctions ({$personaExamples}). The config must guide the LLM to disambiguate these correctly.
 
 Now improve the config. Your improvements must be grounded in the evidence from the test results — not hypothetical. Fix what actually failed. Strengthen what was ambiguous. Keep what worked.
 
@@ -197,9 +199,24 @@ PROMPT;
         return $this->mergeEnhanced($currentConfig, $improved);
     }
 
+    /** What the generated questions are for: the host's brief, else its project description. */
+    private function appBrief(): string
+    {
+        $brief = DomainProfile::text('discovery.app_brief');
+
+        return $brief !== '' ? $brief : 'an AI assistant for this application: ' . rtrim(trim((string) config('ai.project.description', '')), '.');
+    }
+
     private function systemPrompt(): string
     {
-        return <<<'PROMPT'
+        $possessivePath = DomainProfile::text('discovery.possessive_path_example');
+        $possessiveAliases = DomainProfile::text('discovery.possessive_alias_examples');
+        $questionExamples = DomainProfile::text('discovery.question_examples');
+        $relationshipExamples = DomainProfile::text('discovery.relationship_examples');
+        $junctionExample = DomainProfile::text('discovery.junction_example');
+        $possessiveChain = DomainProfile::text('discovery.possessive_chain_example');
+
+        return <<<PROMPT
 You are an expert at configuring AI-powered natural language query systems for Laravel applications. You analyze source code deeply and generate configuration that helps an LLM convert user questions into Neo4j Cypher queries.
 
 You will receive:
@@ -208,13 +225,13 @@ You will receive:
 3. Sample data and field statistics
 
 Generate a JSON object with these keys:
-- "description": A rich 2-3 sentence description explaining what this entity is, how it relates to other entities, and CRITICAL: include relationship direction hints for Neo4j traversal. Mention key JOINs needed to get human-readable data. IMPORTANT: Document the user-to-entity path for possessive queries ("my unit" = User→Contact→ContactUnit→Unit). Note which entities are link/junction tables vs. real entities.
-- "aliases": Array of 10-15 aliases in both English and French. Include singular, plural, common abbreviations, domain-specific terms from UI labels, and possessive forms where applicable ("my unit", "mes unités").
-- "examples": Array of 5-8 natural language questions users would ask about this entity. These are entity-level questions (not scope-specific). Mix English and French. Include counts, lists, possessive, and relationship questions. E.g., ["How many units do we have?", "Show me my unit", "Combien d'unités avons-nous?", "Which units have pets?", "List units in building X"].
+- "description": A rich 2-3 sentence description explaining what this entity is, how it relates to other entities, and CRITICAL: include relationship direction hints for Neo4j traversal. Mention key JOINs needed to get human-readable data. IMPORTANT: Document the user-to-entity path for possessive queries ({$possessivePath}). Note which entities are link/junction tables vs. real entities.
+- "aliases": Array of 10-15 aliases in both English and French. Include singular, plural, common abbreviations, domain-specific terms from UI labels, and possessive forms where applicable ({$possessiveAliases}).
+- "examples": Array of 5-8 natural language questions users would ask about this entity. These are entity-level questions (not scope-specific). Mix English and French. Include counts, lists, possessive, and relationship questions. E.g., {$questionExamples}.
 - "common_properties": Object mapping property names to descriptions. For enum fields, ALWAYS document the values: "status: Status (1=Draft, 2=Approved, 3=Sent)". For date fields stored as strings, note: "stored as string, compare with string operators". For FK fields, explain what they point to and how they link entities.
 - "scopes": Object of scope definitions. For each scope, include: specification_type, concept, cypher_pattern (MUST use correct Neo4j syntax — dates as strings use toString(date())), filter, and 3-5 examples as natural questions users would ask in BOTH English and French.
-- "relationship_descriptions": Object mapping relationship type names to plain-English descriptions of what the relationship means. E.g., {"BUILDING": "The building this unit is located in", "HAS_CONTACT_UNITS": "Contacts linked to this unit via the ContactUnit junction table (owners, renters, occupants)"}. Focus on business meaning, not technical details.
-- "security_notes": Notes about team_path issues. Check: Is team_id always null? Should security traverse through a relationship instead? Document the correct team resolution path. Also note if this entity is a junction table (e.g., ContactUnit links Contact↔Unit) that shouldn't be queried directly by users but is critical for traversal.
+- "relationship_descriptions": Object mapping relationship type names to plain-English descriptions of what the relationship means. E.g., {$relationshipExamples}. Focus on business meaning, not technical details.
+- "security_notes": Notes about team_path issues. Check: Is team_id always null? Should security traverse through a relationship instead? Document the correct team resolution path. Also note if this entity is a junction table (e.g., {$junctionExample}) that shouldn't be queried directly by users but is critical for traversal.
 
 Rules:
 - Read the Kompo form labels to understand what users call each field
@@ -223,7 +240,7 @@ Rules:
 - Scope cypher_patterns MUST use valid Neo4j syntax: string dates use toString(date()), integers are NOT quoted
 - Aliases should include terms from Kompo form labels and route names
 - For relationship descriptions, always specify: "To find X from Y, traverse (Y)-[:REL]->(Z)-[:REL]->(X)"
-- For "my ..." queries, document the full chain: User→Contact→ContactUnit→Unit (for unit), User→Contact (for contact info), etc.
+- For "my ..." queries, document the full chain: {$possessiveChain}, etc.
 - Return ONLY valid JSON
 PROMPT;
     }

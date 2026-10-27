@@ -21,6 +21,22 @@ class OpenAiLlmProvider extends AbstractHttpLlmProvider
     private const MAX_TOKENS = 128000;
     private const CHARS_PER_TOKEN = 4;
 
+    /** Thinking tokens added to the reply budget of a reasoning role (only the tokens used are billed). */
+    public const REASONING_ALLOWANCE = 8000;
+
+    /** Config `temperature => null`: no temperature is sent, whatever the caller passes. */
+    private bool $sendsTemperature;
+
+    /** Config `reasoning_effort` ('none', 'low', ...): sent as is; unset, not sent. */
+    private ?string $reasoningEffort;
+
+    public function __construct(array $config)
+    {
+        parent::__construct($config);
+        $this->sendsTemperature = !array_key_exists('temperature', $config) || $config['temperature'] !== null;
+        $this->reasoningEffort = $config['reasoning_effort'] ?? null;
+    }
+
     public function getProvider(): string
     {
         return 'openai';
@@ -43,12 +59,22 @@ class OpenAiLlmProvider extends AbstractHttpLlmProvider
 
     protected function shapeRequest(array $messages, array $options): array
     {
-        $request = [
-            'model' => $this->model,
-            'messages' => $messages,
-            'temperature' => $options['temperature'] ?? $this->temperature,
-            'max_tokens' => $options['max_tokens'] ?? $this->maxResponseTokens,
-        ];
+        $request = ['model' => $this->model, 'messages' => $messages];
+
+        if ($this->sendsTemperature) {
+            $request['temperature'] = $options['temperature'] ?? $this->temperature;
+        }
+
+        // The GPT-5.x models refuse `max_tokens`; every chat model takes this one.
+        $request['max_completion_tokens'] = $options['max_tokens'] ?? $this->maxResponseTokens;
+
+        if ($this->reasoningEffort !== null) {
+            $request['reasoning_effort'] = $this->reasoningEffort;
+            // The cap counts hidden reasoning too: the caller's budget stays the reply's.
+            if ($this->reasoningEffort !== 'none') {
+                $request['max_completion_tokens'] += self::REASONING_ALLOWANCE;
+            }
+        }
 
         if (isset($options['response_format'])) {
             $request['response_format'] = $options['response_format'];

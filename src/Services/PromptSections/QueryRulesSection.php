@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\PromptSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
+use Condoedge\Ai\Support\DomainProfile;
 
 /**
  * QueryRulesSection
@@ -94,7 +95,7 @@ class QueryRulesSection extends BasePromptSection
     }
 
     /**
-     * Matches the graph as ingested (Task 5.8, verified live on CondoEdge 2026-09-30):
+     * Matches the graph as ingested (Task 5.8, verified live on a host graph 2026-09-30):
      * date columns are ISO-8601 strings with a time part ('2021-07-05T04:00:00.000000Z',
      * valueType STRING); `due_at < datetime()` matched 0 of 6006 invoices while
      * `due_at < toString(date())` matched them. The cards tag such properties
@@ -131,7 +132,7 @@ class QueryRulesSection extends BasePromptSection
                "   - Before filtering on a status/role/type field, use the {code=meaning} enum legend on the GRAPH SCHEMA card, written in the property's type (Integer → 2, String(numeric) → '2')\n" .
                "   - Apply filters exactly as specified in scope definitions\n" .
                "   - Use DISTINCT when specified to avoid duplicates\n" .
-               "   - When returning entity data, JOIN to related entities to get human-readable names (e.g., JOIN Contact for BoardMember)\n\n";
+               "   - When returning entity data, JOIN to related entities to get human-readable names (e.g., " . DomainProfile::text('query_rules.join_example') . ")\n\n";
     }
 
     private function formatFieldProjection(): string
@@ -145,7 +146,7 @@ class QueryRulesSection extends BasePromptSection
                "   - When the rows are records, return that human-readable identifying column even when the question asks only for its date or amount (\"when was the last X\" returns X's name with its date) — an id alone identifies nothing to the user\n" .
                // Actions plan B1: the record chips under the answer are attached by code
                // from the rows' ids — a record row without its id gets no link.
-               "   - When the rows are records — one row per unit, supplier, meeting, member…, including per-record aggregates (WITH u, sum(...)) — ALSO return each record's id (e.g. u.id AS unit_id): the system uses it to attach the record's link and never shows it. Omit it only for a single overall total or count.\n" .
+               "   - When the rows are records — one row per " . DomainProfile::text('query_rules.record_examples') . "…, including per-record aggregates (WITH u, sum(...)) — ALSO return each record's id (e.g. " . DomainProfile::text('query_rules.record_id_example') . "): the system uses it to attach the record's link and never shows it. Omit it only for a single overall total or count.\n" .
                "   - A request to see/include an attribute is a projection requirement, not just a filter\n" .
                "   - PRECEDENCE: REQUESTED ATTRIBUTES OVERRIDE any column list suggested in an entity description — descriptions offer default columns, the user's requested attributes always win, joining to related entities when the attribute of the listed records lives there — but an attribute no property holds for the listed records is omitted (not recorded), never taken from another entity's field\n" .
                // Eval p9 (2026-10-01): "with contact info" projected every scalar
@@ -153,7 +154,7 @@ class QueryRulesSection extends BasePromptSection
                "   - Return the identifying column(s) plus the columns the question asks for — never every property of a joined entity\n" .
                // Eval p9 (2026-10-01): User -> Contact -> ContactDirectory OPTIONAL
                // MATCHes fanned 523 members out to 530 / 1352 rows.
-               "   - ROW GRAIN: return ONE row per record of the entity being listed (the members, units, invoices… the question enumerates). When a joined entity can match SEVERAL times per record (a one-to-many relationship), aggregate it per record instead of returning one row per match: WITH r, collect(DISTINCT x.value) AS values for a list of values, or WITH r, head(collect(x)) AS x for one related record. Never let a join duplicate the listed records or inflate their count\n\n";
+               "   - ROW GRAIN: return ONE row per record of the entity being listed (the " . DomainProfile::text('query_rules.row_grain_examples') . "… the question enumerates). When a joined entity can match SEVERAL times per record (a one-to-many relationship), aggregate it per record instead of returning one row per match: WITH r, collect(DISTINCT x.value) AS values for a list of values, or WITH r, head(collect(x)) AS x for one related record. Never let a join duplicate the listed records or inflate their count\n\n";
     }
 
     private function formatBestPractices(): string

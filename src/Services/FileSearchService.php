@@ -69,6 +69,7 @@ class FileSearchService
      *   - file_types: Filter by extensions (e.g., ['pdf', 'docx'])
      *   - file_id: Search within specific file
      *   - include_relationships: Load Neo4j relationships (default: false)
+     *   - slugs: only the articles with these slugs (chunk metadata.slug)
      * @return array
      */
     public function searchByContent(string $query, array $options = []): array
@@ -87,9 +88,16 @@ class FileSearchService
             $filters['min_score'] = $options['min_score'];
         }
         // Exact-article angle (Phase 7.2): a payload filter on the chunk's article
-        // numbers, applied to every collection (a team's declaration has articles too).
+        // numbers, applied to every collection (a team's by-laws have articles too).
         if (!empty($options['article_numbers']) && is_array($options['article_numbers'])) {
             $filters['article_numbers'] = array_values(array_map('strval', $options['article_numbers']));
+        }
+        // The documents the asker may read ({@see \Condoedge\Ai\Support\Audiences}), on every collection.
+        if (is_array($options['audiences'] ?? null)) {
+            $filters['audiences'] = $options['audiences'];
+        }
+        if (!empty($options['slugs']) && is_array($options['slugs'])) {
+            $filters['slugs'] = array_values($options['slugs']);
         }
 
         // ACL as a PRE-filter (Phase 7.3): the caller's accessible DB file ids
@@ -187,7 +195,7 @@ class FileSearchService
         foreach ($fileGroups as $compositeKey => $groupChunks) {
             // PREAMBLE (Phase 7.1b): title / table-of-contents / heading-only chunks
             // (chunk metadata is_preamble) match any query naming the document
-            // ("Quebec Civil Code") and used to win the file's slot with the chunk
+            // ("Members' Policy Handbook") and used to win the file's slot with the chunk
             // that answers nothing. They never set the file's relevance or best
             // chunk while the file has any content chunk in the results.
             $contentChunks = collect($groupChunks)->reject(fn ($r) => self::isPreambleChunk($r['chunk']))->values();
@@ -299,8 +307,8 @@ class FileSearchService
      * The store returns one candidate per (text, owner): the same text filed on
      * two records is two candidates, and stays two there — whose document it is
      * differs. For the TURN it is one passage: shown once per owner it took the
-     * slots of the other documents (measured on a declaration filed on two units
-     * of one building: no passage of the law on the questions that needed both).
+     * slots of the other documents (measured on a by-law filed on two projects
+     * of one team: no passage of the policy on the questions that needed both).
      * It is kept ONCE — the copy with the lowest file id, so every angle of a
      * turn names the same file — at the best score, with the other owners it is
      * filed on (`co_owners`: each {owner, ancestors}), which the answer's header
@@ -463,6 +471,9 @@ class FileSearchService
         }
         if (isset($options['file_id'])) {
             $filters['file_id'] = $options['file_id'];
+        }
+        if (is_array($options['audiences'] ?? null)) {
+            $filters['audiences'] = $options['audiences'];
         }
 
         // Search chunk store by filename (primary collection), then union any

@@ -13,7 +13,7 @@ use Condoedge\Ai\Support\FileLink;
 /**
  * DocumentOwnerLabels — WHOSE DOCUMENT a passage is, in words.
  *
- * An uploaded file is linked to a record by a key (`unit:873`,
+ * An uploaded file is linked to a record by a key (`order:873`,
  * {@see FileLink}). A key is never shown: each one is turned into
  *
  *   kind  the entity's display name (`metadata.display_name`, said in the

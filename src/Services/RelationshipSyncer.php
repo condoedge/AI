@@ -53,7 +53,7 @@ class RelationshipSyncer
      */
     public function createRelationships(Nodeable $entity, GraphConfig $config): int
     {
-        $data = $entity->toArray();
+        $data = GraphPropertyMapper::entityData($entity);
         $count = 0;
         $skipped = 0;
 
@@ -220,7 +220,7 @@ class RelationshipSyncer
 
                 $entityId = $entity->getId();
                 $graphConfig = $entity->getGraphConfig();
-                $data = $entity->toArray();
+                $data = GraphPropertyMapper::entityData($entity);
 
                 // Check if source node exists
                 $sourceExists = $this->graphStore->nodeExists($graphConfig->label, $entityId);

@@ -107,6 +107,15 @@ class FileCitationHandlerTest extends TestCase
         $this->assertEmpty($this->handler->getCitationMetadata());
     }
 
+    public function test_stripping_a_run_of_citations_leaves_no_separators()
+    {
+        $this->assertSame(
+            'They describe how to create campaigns and choose types.',
+            $this->handler->stripLinks('They describe how to create campaigns [1] and choose types [2], [3], [4] ,[5].')
+        );
+        $this->assertSame('See the guide for details.', $this->handler->stripLinks('See the guide [1] for details.'));
+    }
+
     public function test_createElements_auto_resets_metadata()
     {
         $content1 = 'See [1] for details.';

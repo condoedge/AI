@@ -12,7 +12,7 @@ namespace Condoedge\Ai\Services;
  * generation, and the chat service) so the assistant presents ONE consistent,
  * project-branded persona and never discloses the underlying LLM model/vendor.
  *
- * Nothing here is provider-specific or condo-specific: everything is config-driven.
+ * Nothing here is provider-specific or domain-specific: everything is config-driven.
  */
 class AssistantIdentity
 {

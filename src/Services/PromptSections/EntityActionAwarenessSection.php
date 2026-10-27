@@ -164,7 +164,7 @@ class EntityActionAwarenessSection extends BasePromptSection
 
     /**
      * The registry's relevance-scoped actions, minus the MUTATING ones the current principal may not
-     * be offered (security A1/A2) — a resident's query-side prompt never lists a staff-only write.
+     * be offered (security A1/A2) — a customer's query-side prompt never lists a staff-only write.
      *
      * @param string[] $resultTypes
      * @return array{entity: array<string, AiActionInterface[]>, generic: AiActionInterface[]}

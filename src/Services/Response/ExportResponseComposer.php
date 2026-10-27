@@ -354,7 +354,7 @@ class ExportResponseComposer
      * ai.export.document_row_limit; a PDF document is further capped by
      * ai.export.pdf_document_row_limit (unset = the document limit). The PDF
      * renderer (dompdf) lays the whole table out in memory and grows faster than
-     * linearly — measured on CondoEdge (3 columns): 523 rows ~10.6 s / 104 MB peak,
+     * linearly — measured on a host (3 columns): 523 rows ~10.6 s / 104 MB peak,
      * 1000 rows ~28 s / 194 MB — while the .xlsx writer handles 2000 rows in
      * ~1 s / ~24 MB. A host can thus cover a full roster in Excel without
      * exposing the PDF path to the same row count.
@@ -432,7 +432,7 @@ class ExportResponseComposer
         $totalRows = max((int) ($sourceMeta['total_rows'] ?? $rowCount), $rowCount);
         $documentRows = array_slice($redactedRows, 0, self::documentRowLimit($format));
         // THE FILE SHOWS WHAT THE SCREEN SHOWED (eval p17: A roster-excel, B resilience t3,
-        // B french t1 — the chat table read "Union manager" / "Gestionnaire", the .xlsx held
+        // B french t1 — the chat table read "Account manager" / "Gestionnaire", the .xlsx held
         // `manager` / `contact`): coded values the host declares a legend for are written as
         // their LABEL, in the answer's language — the same mapping, over the same source
         // query, as the chat table (DataAnswerPlan::build), a fan-out-collapsed "a; b" cell
@@ -447,7 +447,7 @@ class ExportResponseComposer
                 // display nicety only: the raw values stand
             }
         }
-        // …MONEY INCLUDED (eval p18-A "Create a PDF of this" after the unit-310 table: the chat
+        // …MONEY INCLUDED (eval p18-A "Create a PDF of this" after the order-310 table: the chat
         // table read "$0.00", the PDF a raw `0`). A column the source query projects from a
         // DECLARED money property (MoneyColumns — the chat table's own rule) is written as
         // money, in the answer's locale. Only in a PDF: it is rendered from the document as
@@ -552,7 +552,7 @@ class ExportResponseComposer
 
         // THE SENTENCE STATES WHAT THE FILE HOLDS (eval p20: "I prepared the Excel file with the
         // available information." above a complete 523-row file — a hedge, and no row count —
-        // on A roster-excel / unit-310 PDF and B resilience t3 / cold-roster / french t1).
+        // on A roster-excel / order-310 PDF and B resilience t3 / cold-roster / french t1).
         // One code-written sentence, by the three cases the counts establish: the WHOLE result
         // ("with all 523 members" — the host's noun when the rows are proven to be that many
         // records of one kind, else "rows"); a file CUT at the document limit or built from a
@@ -926,7 +926,7 @@ class ExportResponseComposer
         $entityLabel = $entity !== null ? $this->humanizeHeader($entity) : '';
 
         if ($entityLabel !== '' && $subject !== '') {
-            // Avoid "Unit — ... unit ..." stutter when the question already names the entity.
+            // Avoid "Order — ... order ..." stutter when the question already names the entity.
             if (stripos($subject, $entityLabel) !== false) {
                 return $subject;
             }

@@ -8,9 +8,9 @@ namespace Condoedge\Ai\Support;
  * ArticleLocator — the ONE parser of the articles a passage DEFINES.
  *
  * A passage defines an article when a line STARTS with its clause number
- * ("1069. A person who acquires…", "**1070.1.** It must be possible…") or with an
- * "Article 12" heading. In-text mentions ("in accordance with article 1070") and
- * amendment-history lines ("*1991, c. 64, a. 1069*") are cross-references, not
+ * ("2104. A member who joins…", "**2105.1.** It must be possible…") or with an
+ * "Article 12" heading. In-text mentions ("in accordance with article 2105") and
+ * amendment-history lines ("*2019, c. 12, a. 2104*") are cross-references, not
  * definitions. Continuation chunks with no line-start number fall back to the
  * chunk metadata `article_no` / `article_range` (Phase 7 chunking).
  *
@@ -48,7 +48,7 @@ final class ArticleLocator
 
     /**
      * Articles a retrieved reference covers: what its snippet defines, else its
-     * chunk metadata (`article_no`, `article_range` as "1068-1070", [1068, 1070]
+     * chunk metadata (`article_no`, `article_range` as "2103-2105", [2103, 2105]
      * or {from, to}; top-level or under `metadata`). Empty = unknown.
      *
      * @return list<int>
@@ -79,9 +79,9 @@ final class ArticleLocator
 
     /**
      * The article a single LINE starts (Phase 7 chunk boundaries), with its
-     * sub-article number kept ("1070.1") — the form stored in chunk metadata
+     * sub-article number kept ("2105.1") — the form stored in chunk metadata
      * `article_no`. Same line-start grammar as definedArticles(): a 3+ digit clause
-     * number ("**1069.** …", "1064.1. …") or an "Article 12" / "Art. 12" heading.
+     * number ("**2104.** …", "2101.1. …") or an "Article 12" / "Art. 12" heading.
      */
     public static function lineArticle(string $line): ?string
     {
@@ -98,16 +98,18 @@ final class ArticleLocator
     /**
      * Article numbers a TEXT references — a question (exact-article retrieval angle) or
      * an answer (the articles it cites) — in order of appearance, unique, as strings
-     * ("1069", "1070.1"). Numeric-reference grammar only:
+     * ("2104", "2105.1"). Numeric-reference grammar only:
      *  - an "art"/"art."/"article(s)" marker followed by one or more numbers separated
-     *    by PUNCTUATION: comma, semicolon, ampersand, slash ("arts. 1068, 1069",
-     *    "art. 1064; 1068"). A word is never a separator — it ends the list — so no
-     *    vocabulary is involved ("articles 1064 and 1068" names 1064);
+     *    by PUNCTUATION: comma, semicolon, ampersand, slash ("arts. 2103, 2104",
+     *    "art. 2101; 2103"). A word is never a separator — it ends the list — so no
+     *    vocabulary is involved ("articles 2101 and 2103" names 2101);
      *  - in such a list, a dash between two whole numbers that ascend by at most
      *    MAX_REFERENCE_RANGE is a RANGE and names every article between its bounds
-     *    ("art. 1063–1066" = 1063, 1064, 1065, 1066). A descending pair, a sub-article
+     *    ("art. 2100–2103" = 2100, 2101, 2102, 2103). A descending pair, a sub-article
      *    bound or a wider span keeps the two numbers written;
-     *  - or a bare 4-digit clause number written in clause form ("1070.1." / "1069.").
+     *  - or a bare 4-digit clause number written in clause form: a sub-article anywhere
+     *    ("2105.1."), a whole number only at the start of a line ("2104. The board…"),
+     *    since a whole one ending a sentence is a year as often ("amended in 2024.").
      * A bare number without one of these forms is a quantity, not a reference.
      *
      * @return list<string>
@@ -123,15 +125,17 @@ final class ArticleLocator
                 $found = [...$found, ...self::listedArticles($list, $number, $separator)];
             }
         }
-        if (preg_match_all('/(?<![\d.])(\d{4}(?:\.\d+)?)\.(?=\s|$)/u', $text, $m)) {
-            $found = [...$found, ...$m[1]];
+        if (preg_match_all('/(?<![\d.])(\d{4}\.\d+)\.(?=\s|$)|^[ \t]*(\d{4})\.(?=\s|$)/mu', $text, $m)) {
+            foreach (array_keys($m[0]) as $i) {
+                $found[] = $m[1][$i] !== '' ? $m[1][$i] : $m[2][$i];
+            }
         }
 
         return array_values(array_unique($found));
     }
 
     /**
-     * The numbers of one reference list ("1015, 1063–1065; 1071"), a short ascending
+     * The numbers of one reference list ("2015, 2100–2102; 2108"), a short ascending
      * range of whole numbers expanded to its members.
      *
      * @return list<string>
@@ -167,7 +171,7 @@ final class ArticleLocator
     /** @return array{0: ?int, 1: ?int} */
     private static function bounds(mixed $range): array
     {
-        // Bounds may carry a sub-article suffix ("1064.1–1065", "1074–1074.1"):
+        // Bounds may carry a sub-article suffix ("2101.1–2102", "2110–2110.1"):
         // anchor on whole numbers (never a digit right after a dot) and keep the
         // base article number of each bound.
         if (is_string($range) && preg_match('/(?<![\d.])(\d{1,5})(?:\.\d+)*\s*[-–—]\s*(\d{1,5})(?:\.\d+)*/u', $range, $m) === 1) {

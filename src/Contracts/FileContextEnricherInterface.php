@@ -9,8 +9,8 @@ namespace Condoedge\Ai\Contracts;
  * Implementations can add priority tiers, team-based ordering,
  * metadata annotations, or custom scoring to file search results.
  *
- * Example: CondoEdge adds priority tiers where team-specific rule files
- * rank above provincial law files, and annotates each file with its
+ * Example: a host adds priority tiers where team-specific rule files
+ * rank above general reference files, and annotates each file with its
  * authority level.
  */
 interface FileContextEnricherInterface

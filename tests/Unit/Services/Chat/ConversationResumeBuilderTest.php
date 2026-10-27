@@ -238,7 +238,7 @@ class ConversationResumeBuilderTest extends TestCase
 
         $resume = $this->builder->build($conversation);
 
-        $this->assertStringContainsString('Dernier resultat affiche: 1 ligne; colonnes: solde', $resume);
+        $this->assertStringContainsString('Dernier résultat affiché: 1 ligne; colonnes: solde', $resume);
         $this->assertStringNotContainsString('1 lignes', $resume);
     }
 
@@ -267,14 +267,14 @@ class ConversationResumeBuilderTest extends TestCase
 
         $resume = $this->builder->build($this->richConversation());
 
-        $this->assertStringContainsString('Resume d\'une conversation precedente', $resume);
+        $this->assertStringContainsString('Résumé d\'une conversation précédente', $resume);
         $this->assertStringContainsString('Sujet: active members', $resume);
         $this->assertStringContainsString(
-            'Dernier resultat affiche: 42 lignes sur active members; colonnes: name, email, role',
+            'Dernier résultat affiché: 42 lignes sur active members; colonnes: name, email, role',
             $resume
         );
-        $this->assertStringContainsString('Derniere reponse:', $resume);
-        $this->assertStringContainsString('Questions recentes:', $resume);
+        $this->assertStringContainsString('Dernière réponse:', $resume);
+        $this->assertStringContainsString('Questions récentes:', $resume);
 
         // English labels must not leak through.
         $this->assertStringNotContainsString('Subject:', $resume);

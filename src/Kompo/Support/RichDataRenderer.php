@@ -117,7 +117,7 @@ class RichDataRenderer
 
     public function renderFileReferences(array $files)
     {
-        if (empty($files)) {
+        if (empty($files) || !config('ai.chat.show_file_references', true)) {
             return null;
         }
 

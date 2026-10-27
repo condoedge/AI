@@ -12,6 +12,7 @@ use Condoedge\Ai\Services\Actions\BuiltIn\IdentityLinkAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\LinkAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\OpenModalAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\RenderTableAction;
+use Condoedge\Ai\Services\Actions\BuiltIn\StartTaskAction;
 
 /**
  * AiActionRegistry
@@ -21,8 +22,8 @@ use Condoedge\Ai\Services\Actions\BuiltIn\RenderTableAction;
  *     each wrapped in a {@see ConfigAiAction} adapter (backward-compatible),
  *   - Built-in generative-UI actions (open_modal, render_table, link, export_excel,
  *     export_pdf) that projects get for free,
- *   - The package's internal built-in (ask_follow_up — the follow-up question chip):
- *     resolvable, never listed,
+ *   - The package's internal built-ins (ask_follow_up — the follow-up question chip;
+ *     start_task — a task's start chip): resolvable, never listed,
  *   - Any explicitly-registered {@see AiActionInterface} instances/classes.
  *
  * SAFE DEFAULTS: config keys may be entirely absent — the registry never throws. Missing
@@ -105,7 +106,7 @@ class AiActionRegistry
             }
         }
 
-        foreach ([new AskFollowUpAction()] as $action) {
+        foreach ([new AskFollowUpAction(), new StartTaskAction()] as $action) {
             $this->internal[$action->key()] = $action;
         }
     }

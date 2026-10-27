@@ -156,7 +156,7 @@ final class RecordAncestry
 
     /**
      * The keys ordered MOST SPECIFIC FIRST: a record that is itself owned by
-     * other records of the list comes before them (a wing before its building),
+     * other records of the list comes before them (an order before its customer),
      * whatever order the host declared the relationships in. One read per key
      * (memoized) — and none at all for a list of fewer than two.
      *
@@ -182,7 +182,7 @@ final class RecordAncestry
         return $keys;
     }
 
-    /** The entity label a key's kind names (`Unit` of `unit:309`); null when none does. */
+    /** The entity label a key's kind names (`Order` of `order:309`); null when none does. */
     public function labelOfKey(string $key): ?string
     {
         $kind = FileLink::kindOf($key);

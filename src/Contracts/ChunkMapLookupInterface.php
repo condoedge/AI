@@ -9,7 +9,7 @@ namespace Condoedge\Ai\Contracts;
  * a collection, by the hash of the TEXT they were written from.
  *
  * Why: a gist describes text, not a file. The same document uploaded N times
- * (measured on the host: one declaration filed 36 times) is N × the same
+ * (measured on the host: one by-law filed 36 times) is N × the same
  * chunks; with this lookup the map builder pays for each distinct text once and
  * writes the record onto the copies as a payload-only update.
  *

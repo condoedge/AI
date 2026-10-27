@@ -12,7 +12,7 @@ namespace Condoedge\Ai\Services\Query;
  * host config alone — never from the question's words, never from Query
  * Understanding's possessive judgment (eval p16 A#3 / B#1: "our next meeting" ran
  * a TEAM-scoped query and the abstention still said "nothing linked to you";
- * "my contribution" for a user who owns no unit said "no matching records"
+ * "my contribution" for a user who owns no order said "no matching records"
  * instead of the reason):
  *
  *  1. Is it ANCHORED ON THE USER? ({@see anchorIn()}) — it binds one of the
@@ -26,7 +26,7 @@ namespace Condoedge\Ai\Services\Query;
  *     SHALLOWEST configured path the executed query traverses whole (every node
  *     label of the path is in the query, and the path's own anchor is the one the
  *     query binds), the user's profile row itself excluded. For "my contribution"
- *     (Contact → ContactUnit → Unit → Invoice) that is the user's Units: when the
+ *     (Contact → Customer → Order → Invoice) that is the user's Orders: when the
  *     user has none, that — not "no invoice matched" — is why nothing came back.
  *     Returned as a ready count query (the configured path + `RETURN
  *     count(DISTINCT <target>) AS total`), to run through the scoped executor.

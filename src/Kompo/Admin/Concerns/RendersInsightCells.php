@@ -63,6 +63,24 @@ trait RendersInsightCells
         };
     }
 
+    /**
+     * When a rating was given and the comment after a 👎 (metadata.feedback_at / feedback_comment).
+     *
+     * @param array<string, mixed>|string|null $metadata
+     * @return array{at: ?string, comment: ?string}
+     */
+    protected function feedbackDetails(array|string|null $metadata): array
+    {
+        $metadata = is_string($metadata) ? json_decode($metadata, true) : $metadata;
+        $at = $metadata['feedback_at'] ?? null;
+        $comment = $metadata['feedback_comment'] ?? null;
+
+        return [
+            'at' => is_string($at) && $at !== '' ? $this->dateTime($at) : null,
+            'comment' => is_string($comment) && trim($comment) !== '' ? $comment : null,
+        ];
+    }
+
     protected function routeBadge(?string $route, bool $isError = false): \Kompo\Html
     {
         $key = 'ai.admin.route.' . (string) $route;

@@ -83,6 +83,23 @@ class LlmResolverTest extends TestCase
         $this->assertSame('llm_index', $plain->circuitBreakerName());
     }
 
+    public function test_a_role_null_temperature_reaches_the_provider_instead_of_the_base_one(): void
+    {
+        config()->set('ai.llm.default', 'openai');
+        config()->set('ai.llm.openai', ['api_key' => 'sk-base', 'model' => 'gpt-4o', 'temperature' => 0.3]);
+
+        $role = ['model' => 'gpt-5.5', 'temperature' => null, 'reasoning_effort' => 'none'];
+        $resolver = new LlmResolver($this->defaultProvider(), ['query_generation' => $role]);
+
+        foreach ([$resolver->forRole('query_generation'), $resolver->isolated('query_generation', 'llm_index')] as $provider) {
+            $shape = new \ReflectionMethod($provider, 'shapeRequest');
+            $request = $shape->invoke($provider, [['role' => 'user', 'content' => 'q']], ['temperature' => 0.0]);
+
+            $this->assertArrayNotHasKey('temperature', $request);
+            $this->assertSame('none', $request['reasoning_effort']);
+        }
+    }
+
     public function test_a_provider_the_resolver_cannot_rebuild_is_shared_rather_than_lost(): void
     {
         // A host bound its own provider class: there is no configuration to build a second one from.

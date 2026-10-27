@@ -77,8 +77,8 @@ use Illuminate\Support\Facades\Log;
  * the preconditions do not consult them.
  *
  * KINDS A USER CAN OPEN (eval p18-A, 2026-10-06): every configured entity used to
- * be offered, link tables included — "…balance of an account, of a union, or of
- * a contact unit?". A reading is only worth offering when the application shows
+ * be offered, link tables included — "…balance of an account, of a team, or of
+ * an order line?". A reading is only worth offering when the application shows
  * such records somewhere, so a kind is listed (and counted) when the host exposes
  * a page for it: a record action (`ai.entity_actions`) or a generic action
  * declared for it (`ai.generic_actions` `entity`, with or without a placement
@@ -361,7 +361,7 @@ final class ClarityChecker
      *
      * Only kinds a user can open or list: the askable entities the host exposes a
      * page for ({@see self::openableLabels()}). A link table or a detail row has
-     * none — nobody asks for "the balance of a contact unit". When the host places
+     * none — nobody asks for "the balance of an order line". When the host places
      * no page on any of its kinds, every askable kind is kept: the feature must
      * work for a host that configured no action at all.
      *
@@ -529,7 +529,7 @@ final class ClarityChecker
         // instruction said — "may be what is asked", "further readings, they do not tell
         // which kind", "not part of the question", "never a kind a figure is about" — a
         // quantity in sight decided the model's "candidates": "Show me the balance." with
-        // the one-unit quantity came back with the single candidate "unit" (the same
+        // the one-order quantity came back with the single candidate "order" (the same
         // reading twice, or no fork at all in French), where the kinds-only prompt lists
         // four kinds. What held: the kinds a quantity is already about ({@see
         // self::covered()}) are left out of the list, so the candidates are the OTHER
@@ -741,8 +741,8 @@ final class ClarityChecker
     /**
      * The kinds of records the named quantities are already about: a kind whose
      * name or synonym is a word (or a run of adjacent words) of a quantity's label
-     * or description, in any spelling. "Outstanding balance of one unit" covers
-     * the kind "unit": offered next to it, "the balance of a unit" would be the
+     * or description, in any spelling. "Outstanding balance of one order" covers
+     * the kind "order": offered next to it, "the balance of an order" would be the
      * same reading twice. Structural — the host's own words on both sides.
      *
      * @param list<array{name: string, synonyms: list<string>, keys: array<string, true>}> $kinds
@@ -757,7 +757,7 @@ final class ClarityChecker
 
         $mentioned = [];
         foreach ($quantities as $quantity) {
-            // Words only: "union/team (receivables…)" names the union AND the team.
+            // Words only: "project/team (receivables…)" names the project AND the team.
             $tokens = AliasNormalizer::tokens((string) preg_replace('/[^\p{L}\p{N}]+/u', ' ', $quantity['text']));
             foreach (array_keys($tokens) as $start) {
                 foreach (range(1, self::MAX_KIND_WORDS) as $length) {

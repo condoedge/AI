@@ -181,7 +181,7 @@ MD;
 
         $result = $this->processor->processFile($file);
 
-        $this->assertTrue($result->success);
+        $this->assertTrue($result->success, (string) $result->error);
         $this->assertGreaterThan(0, $result->chunksCreated);
     }
 

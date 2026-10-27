@@ -21,7 +21,7 @@ use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
  * - [text](entity://EntityType/id/action_key)
  * - [text](entity://EntityType/id/action_key?field=default&other=2)
  * - [text](action://action_key)
- * - [text](action://action_key?unit_id=123&amount=450)
+ * - [text](action://action_key?order_id=123&amount=450)
  *
  * Params are parsed from the query string into an assoc array, then FILTERED against the
  * resolved action's inputSchema() — unknown/forbidden params are DROPPED. Read-only actions

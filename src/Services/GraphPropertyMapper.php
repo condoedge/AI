@@ -33,8 +33,11 @@ use Illuminate\Support\Str;
  */
 class GraphPropertyMapper
 {
-    /** Graph types accepted by `graph.casts`. */
-    public const CAST_TYPES = ['string', 'int', 'float', 'bool', 'date'];
+    /**
+     * Graph types accepted by `graph.casts`. 'local_datetime' writes the wall clock of the app's
+     * timezone (2026-09-30T21:30:00), so a period filter matches the app's own date filters.
+     */
+    public const CAST_TYPES = ['string', 'int', 'float', 'bool', 'date', 'local_datetime'];
 
     /** Eloquent-style spellings accepted as aliases of CAST_TYPES. */
     public const CAST_ALIASES = [
@@ -61,7 +64,7 @@ class GraphPropertyMapper
     {
         $this->loadGraphRelations($entity, $config);
 
-        $data = method_exists($entity, 'toArray') ? $entity->toArray() : [];
+        $data = self::entityData($entity);
         $properties = $this->extractProperties($data, $config->properties, $entity);
 
         // Raw (un-normalized) computed values: a cast is applied to the raw value so
@@ -100,6 +103,19 @@ class GraphPropertyMapper
         }
 
         return $properties;
+    }
+
+    /**
+     * The entity's data as the graph reads it: its toGraphArray() when it declares one (a model whose
+     * toArray() also serializes loaded relations, kept for the app), else its toArray().
+     */
+    public static function entityData(object $entity): array
+    {
+        if (method_exists($entity, 'toGraphArray')) {
+            return $entity->toGraphArray();
+        }
+
+        return method_exists($entity, 'toArray') ? $entity->toArray() : [];
     }
 
     /**
@@ -305,6 +321,16 @@ class GraphPropertyMapper
                 }
                 if (is_string($value) && trim($value) !== '') {
                     return $this->serializeDate(Carbon::parse($value), $entity);
+                }
+                break;
+
+            case 'local_datetime':
+                $timezone = (string) config('app.timezone', 'UTC');
+                if ($value instanceof \DateTimeInterface) {
+                    return Carbon::instance($value)->setTimezone($timezone)->format('Y-m-d\TH:i:s');
+                }
+                if (is_string($value) && trim($value) !== '') {
+                    return Carbon::parse($value, $timezone)->setTimezone($timezone)->format('Y-m-d\TH:i:s');
                 }
                 break;
 

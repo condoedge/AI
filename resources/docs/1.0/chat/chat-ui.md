@@ -99,7 +99,7 @@ public function openChat()
 {
     return new AiChatModal(null, [
         'page_context' => [
-            'entity_type' => 'Unit',
+            'entity_type' => 'Order',
             'entity_id' => $this->model->id,
         ],
     ]);
@@ -132,7 +132,7 @@ All chat defaults live under `config('ai.chat')` in `config/ai.php`, each backed
 
     // Per-entity-type welcome examples, keyed by page_context.entity_type
     'page_examples' => [
-        // 'Unit' => ['Show this unit\'s payment history', 'Who owns this unit?'],
+        // 'Order' => ['Show this order\'s payment history', 'Who placed this order?'],
     ],
 
     // Conversation history sent to the LLM

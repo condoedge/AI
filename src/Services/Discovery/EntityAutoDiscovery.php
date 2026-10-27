@@ -766,8 +766,8 @@ class EntityAutoDiscovery
      *
      * Advertisement-time gate (90c W6): the response prompt used to advertise every
      * generic action and let the renderer strip unauthorized links afterwards — the
-     * user then saw the stripped offer as dead text (e.g. "Owners registry" shown to
-     * a board member who fails its staff gate). Generic actions take no row, so
+     * user then saw the stripped offer as dead text (e.g. "Payroll report" shown to
+     * a member who fails its staff gate). Generic actions take no row, so
      * authorize($user, []) is exactly the check the renderer applies; advertising only
      * what survives it keeps prompt and render consistent. An authorize() that throws
      * is not advertisable — fail closed.

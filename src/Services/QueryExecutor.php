@@ -145,9 +145,9 @@ class QueryExecutor implements QueryExecutorInterface
         // parameters. SECURITY-DERIVED KEYS WIN (Task 1.26c): a caller passing its
         // own `ai_team_ids` (e.g. via executeQuery(…, $parameters)) previously
         // overrode the security value and widened the tenant scope. The reserved
-        // team-ids key is never caller-controlled — dropped even when the
+        // scope keys are never caller-controlled — dropped even when the
         // security layer set none (unfiltered / bypass paths).
-        unset($parameters[TeamPathResolver::TEAM_IDS_PARAM]);
+        unset($parameters[TeamPathResolver::TEAM_IDS_PARAM], $parameters[TeamPathResolver::ROW_SCOPE_IDS_PARAM]);
         if (!empty($securityResult['parameters'])) {
             $parameters = array_merge($parameters, $securityResult['parameters']);
         }
@@ -707,7 +707,7 @@ class QueryExecutor implements QueryExecutorInterface
         $unfiltered = ['query' => $cypherQuery, 'filter_applied' => false, 'parameters' => []];
 
         // NOTE (Task 1.26c): the former `$options['skip_security']` bypass was
-        // REMOVED — nothing in the package or in CondoEdge set it, and an options
+        // REMOVED — nothing in the package or in a host set it, and an options
         // array built by pipeline code must never be able to switch tenant
         // scoping off. Security is disabled only via config('ai.security.enabled').
 
@@ -857,7 +857,8 @@ class QueryExecutor implements QueryExecutorInterface
                 return null; // not tenant-scoped for this binding
             }
 
-            $rule = $teamPathResolver->ruleFor($binding->label, $binding->alias);
+            // The service's rule wins: it is the row rule for a narrowed user.
+            $rule = $resolved['rule'] ?? $teamPathResolver->ruleFor($binding->label, $binding->alias);
 
             // Filtered, but no verifiable template (the resolver and the security
             // service disagree, or the path is non-templatable here): never accept
@@ -897,6 +898,12 @@ class QueryExecutor implements QueryExecutorInterface
         $injected = $this->securityFilterInjector()->inject($cypherQuery, $plan, $filterFor);
 
         if ($injected === null) {
+            // Neo4j would reject the generated query itself: a generation error the repair round can fix, never run.
+            $defect = $this->structuralValidator()->diagnose($cypherQuery);
+            if ($defect !== null) {
+                throw new QueryExecutionException("Neo4j query error: [Neo.ClientError.Statement.SyntaxError] {$defect}");
+            }
+
             // The plan was scopeable but a binding could not be safely rewritten, or
             // the rewrite was not structurally valid (defence-in-depth gate). Never
             // run it unfiltered AND never ship a malformed query to Neo4j. Degrade

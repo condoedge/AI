@@ -105,7 +105,7 @@ class ConversationResumeBuilder
 
         $columns = implode(', ', array_map('strval', array_keys($firstRow)));
 
-        // trans_choice, not __(): single-row results are common ("unit 101's balance") and
+        // trans_choice, not __(): single-row results are common ("account 101's balance") and
         // the keys carry {1}/[2,*] pipe variants so EN/FR both stay grammatical.
         if ($subject !== null) {
             return trans_choice('ai.chat.resume-last-result', $count, [

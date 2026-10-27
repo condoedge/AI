@@ -87,4 +87,28 @@ final class InsightsSql
     {
         return $this->str("{$alias}.metadata", '$.feedback');
     }
+
+    /** The asker's audience stamped on the answer (metadata.audience.key); NULL when unresolved or unstamped. */
+    public function audienceKey(string $alias = 'm'): string
+    {
+        // MySQL unquotes a JSON null to the string 'null': only a JSON string is a key.
+        return $this->sqlite()
+            ? "json_extract({$alias}.metadata, '$.audience.key')"
+            : "(CASE WHEN JSON_TYPE(JSON_EXTRACT({$alias}.metadata, '$.audience.key')) = 'STRING' "
+                . "THEN JSON_UNQUOTE(JSON_EXTRACT({$alias}.metadata, '$.audience.key')) END)";
+    }
+
+    /** The answer cites no document (metadata.referenced_files absent or empty); retrieving none implies citing none. */
+    public function noSources(string $alias = 'm'): string
+    {
+        return $this->sqlite()
+            ? "(COALESCE(json_array_length({$alias}.metadata, '$.referenced_files'), 0) = 0)"
+            : "(COALESCE(JSON_LENGTH({$alias}.metadata, '$.referenced_files'), 0) = 0)";
+    }
+
+    /** A regenerated answer (metadata.regenerated = true): an implicit 👎 on the answer it replaced. */
+    public function regenerated(string $alias = 'm'): string
+    {
+        return $this->truthy("{$alias}.metadata", '$.regenerated');
+    }
 }

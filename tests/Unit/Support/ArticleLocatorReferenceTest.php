@@ -106,4 +106,13 @@ class ArticleLocatorReferenceTest extends TestCase
         $this->assertSame([], ArticleLocator::referencedArticles('I have 1069 dollars of arrears'));
         $this->assertSame([], ArticleLocator::referencedArticles('Tell me about the artist 1069 collection'));
     }
+
+    /** @test A year ending a sentence is not a clause number; a clause written as a code writes it does. */
+    public function a_year_at_the_end_of_a_sentence_is_not_an_article(): void
+    {
+        $this->assertSame([], ArticleLocator::referencedArticles('The by-laws were amended in 2024.'));
+        $this->assertSame([], ArticleLocator::referencedArticles("Fees rose in 2023. They fell in 2024.\nNothing else."));
+        $this->assertSame(['1069'], ArticleLocator::referencedArticles("The code says:\n1069. The syndicate may borrow."));
+        $this->assertSame(['1070.1'], ArticleLocator::referencedArticles('Explain 1070.1. please'));
+    }
 }

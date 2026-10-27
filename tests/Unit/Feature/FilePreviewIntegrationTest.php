@@ -196,7 +196,7 @@ class FilePreviewIntegrationTest extends TestCase
         $result = $this->processor->processForDirectRendering($content, ['files' => $files]);
 
         // Citation markers should be stripped from content
-        $this->assertEquals('According to , the report shows  important findings.', $result['content']);
+        $this->assertEquals('According to, the report shows important findings.', $result['content']);
     }
 
     /**

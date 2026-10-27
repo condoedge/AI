@@ -21,24 +21,24 @@ use Condoedge\Ai\Services\Response\TableRenderer;
  *     alphanumeric-lowercased name equals the prefix (identifier normalization).
  *
  * Only labels in $actionLabels (entities the user can open) count. When a row carries
- * several records (a unit AND its union) the record is what the user ASKED about: a
+ * several records (an account AND its branch) the record is what the user ASKED about: a
  * declared row label first; then, over many rows, the first QU-named label whose id
  * VARIES (an id repeated on every row is a parent, never the row's record), else the
  * varying id source with the most distinct ids; a single row: QU order, then row order
  * ({@see choose()}).
  *
  * The record's NAME comes from its OWN columns (projected from the same node variable —
- * `u.name AS unit_name` beside `u.id AS unit_id` — or prefixed by its label): the
+ * `a.name AS account_name` beside `a.id AS account_id` — or prefixed by its label): the
  * properties its entity config declares as its name (`metadata.name_properties`, e.g.
  * Contact: first_name + last_name), joined in the declared order — else its first non-id
  * text column — else the row's first text column belonging to no other record
  * ({@see ownName()}). A nameless record carries the row's other named record as `context`.
  * Homonyms (different records, same name) get a DISAMBIGUATOR from another node's column
- * first — three units named "310" differ by their union — never a date/time value or an
+ * first — three accounts named "310" differ by their branch — never a date/time value or an
  * aggregate's per-row result ({@see disambiguate()}).
  *
  * Records of a multi-record result also carry their GROUP: the value of the coarser column
- * of ANOTHER node that the rows name beside them (each board member's union) — what a
+ * of ANOTHER node that the rows name beside them (each staff member's branch) — what a
  * capped chip list is spread over ({@see grouped()}).
  */
 final class RecordResolver
@@ -98,7 +98,7 @@ final class RecordResolver
     /**
      * The record behind each row (row index => record); rows without an attributable
      * id of an openable label are absent. `context` is another record on the same row,
-     * named, for a record that has no name of its own ("Invoice PDF — Unit 301").
+     * named, for a record that has no name of its own ("Invoice PDF — Account 301").
      *
      * `name_columns` are the columns the name was read from (several for a split name,
      * `name_column` being the first); `group` is the record's coarser parent value, when the
@@ -124,9 +124,9 @@ final class RecordResolver
      * insensitive) with ≥2 DISTINCT ids, and the column that tells them apart
      * ({@see disambiguatorColumn()} — another node's column first, never a date/time value
      * nor an aggregate's per-row result). Every record a row carries counts — the row's own
-     * and the other nodes it names by their own columns — so "unit 310" in three unions is
+     * and the other nodes it names by their own columns — so "account 310" in three branches is
      * found whichever id column comes first, while a parent repeated beside each of its
-     * children (one union id on every unit row) is ONE record, never a homonym. A group
+     * children (one branch id on every account row) is ONE record, never a homonym. A group
      * with no usable disambiguator is left out.
      *
      * Null when record identity is unknown — some row carries no attributable id — so the
@@ -151,7 +151,7 @@ final class RecordResolver
         }
 
         // Every named record on every row: the row's record, then the other records it
-        // names by their OWN columns (a union's name beside its unit).
+        // names by their OWN columns (a branch's name beside its account).
         $entries = [];
         foreach ($records as $index => $record) {
             $entries[] = ['index' => $index, 'record' => $record, 'var' => $variables[$index]];
@@ -256,7 +256,7 @@ final class RecordResolver
         }
 
         // The result's GRAIN (eval p9 F7): distinct ids per id SOURCE (node variable, else
-        // column) — two Contact columns (owner_id, tenant_id) are two sources, never summed.
+        // column) — two Contact columns (buyer_id, seller_id) are two sources, never summed.
         $distinct = [];
         foreach ($candidates as $found) {
             foreach ($found as $candidate) {
@@ -314,7 +314,7 @@ final class RecordResolver
      *   1. a row's declared label (`_label` / `entity_type`: the digest source's entity);
      *   2. multi-row result: among the candidates whose id VARIES across the result, the
      *      first in QU entity-type order; none QU-named → the one with the most distinct
-     *      ids. An id CONSTANT over many rows (the union beside each of its units) is a
+     *      ids. An id CONSTANT over many rows (the branch beside each of its accounts) is a
      *      parent, never the per-row record;
      *   3. single row, or nothing varies: QU order, else the first id column.
      *
@@ -452,13 +452,13 @@ final class RecordResolver
     /**
      * Homonyms — two DIFFERENT records sharing a name (case/space-insensitive) — get a
      * DISAMBIGUATOR: the first text column whose values differ inside the group, ranked
-     *   1. a column of ANOTHER node (the union of a unit) before an unattributed one,
-     *      and the record's own attributes ("310 — occupied") last;
+     *   1. a column of ANOTHER node (the branch of an account) before an unattributed one,
+     *      and the record's own attributes ("310 — closed") last;
      *   2. the coarser column (fewer distinct values across the result — the parent);
      *   3. column order.
      * Never a date / time value nor an aggregate's per-row result (`min(i.due_at) AS
      * oldest_due`): per-row facts by nature, never an identity (eval p9 F7). One record
-     * repeated over several rows (a union beside each of its units) is no homonym.
+     * repeated over several rows (a branch beside each of its accounts) is no homonym.
      *
      * @param array<int, array<string, mixed>> $records
      * @param array<int, ?string> $variables row index => the record's node variable
@@ -490,7 +490,7 @@ final class RecordResolver
     }
 
     /**
-     * The records' GROUP (eval p16-A board: five chips, all from the first of eight unions):
+     * The records' GROUP (eval p16-A staff: five chips, all from the first of eight branches):
      * the value of the column that says which PARENT each record belongs to, so a capped chip
      * list can be spread over the parents instead of spent on the first one.
      *
@@ -501,8 +501,8 @@ final class RecordResolver
      *      disambiguators);
      *   3. COARSER than the records: at least two values, fewer values than records;
      *   4. a parent, not a child: most records carry ONE value over all their rows. The
-     *      contacts listed beside each union vary inside one union; a person sitting on two
-     *      boards is the tolerated exception, not the rule.
+     *      contacts listed beside each branch vary inside one branch; a person working in two
+     *      branches is the tolerated exception, not the rule.
      * The coarsest such column wins, then column order. No such column → no group.
      *
      * @param array<int, array<string, mixed>> $records
@@ -690,12 +690,12 @@ final class RecordResolver
      * An entity whose name is SPLIT over several properties declares them
      * (`metadata.name_properties`, e.g. Contact: ['first_name', 'last_name']): the record is
      * named by every declared part the row carries, joined in the DECLARED order whatever
-     * order or alias the query projected them in (eval p16-A board: `c.first_name,
+     * order or alias the query projected them in (eval p16-A staff: `c.first_name,
      * c.last_name` named five contacts "Amélie", "Mauricio"… and made two different Juliens
      * homonyms). A declared part the row lacks is left out.
      *
      * Otherwise — nothing declared, or none of the declared parts projected — the first own
-     * column (text before integers — a unit "310" may be stored as an int; an amount never
+     * column (text before integers — an account "310" may be stored as an int; an amount never
      * outranks a name).
      *
      * @param array<string, mixed> $row
@@ -787,7 +787,7 @@ final class RecordResolver
         return self::snake(substr($column, strlen($label)));
     }
 
-    /** `ContactUnit` / `FirstName` → `contact_unit` / `first_name` (identifier normalization). */
+    /** `OrderLine` / `FirstName` → `order_line` / `first_name` (identifier normalization). */
     private static function snake(string $identifier): string
     {
         return strtolower((string) preg_replace('/(?<=[a-z0-9])(?=[A-Z])/', '_', $identifier));
@@ -795,7 +795,7 @@ final class RecordResolver
 
     /**
      * Whether a column is the candidate's own attribute: projected from its node variable,
-     * or (unprojected) prefixed by its label (`unit_name` → Unit, identifier normalization).
+     * or (unprojected) prefixed by its label (`account_name` → Account, identifier normalization).
      *
      * @param array<string, mixed> $candidate
      */
@@ -811,7 +811,7 @@ final class RecordResolver
 
     /**
      * The record's display name: its own column, else the row's first text value that
-     * belongs to NO other record on the row (never the unit's name on an invoice chip).
+     * belongs to NO other record on the row (never the account's name on an invoice chip).
      *
      * @param array<string, mixed> $row
      * @param array<string, mixed> $chosen
@@ -846,7 +846,7 @@ final class RecordResolver
         return [null, null, []];
     }
 
-    /** The action label an unprojected column is prefixed by (`unit_name`, `unitName`), if any. */
+    /** The action label an unprojected column is prefixed by (`order_name`, `orderName`), if any. */
     private function columnLabel(string $column): ?string
     {
         $best = null;

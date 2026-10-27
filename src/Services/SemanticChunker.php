@@ -53,7 +53,7 @@ class SemanticChunker implements StructuredChunkerInterface
      * Structure-aware chunking defaults (Phase 7.1). Consecutive tiny articles /
      * sections merge until a chunk reaches MIN; an article or section larger than
      * MAX is split within itself (each part keeps the same metadata). The largest
-     * CCQ co-ownership article is ~1500 chars, so MAX keeps every article whole.
+     * corpus article measured is ~1500 chars, so MAX keeps every article whole.
      */
     private const DEFAULT_MIN_CHUNK_CHARS = 200;
     private const DEFAULT_MAX_CHUNK_CHARS = 2000;
@@ -319,7 +319,7 @@ class SemanticChunker implements StructuredChunkerInterface
 
     /**
      * The text that is EMBEDDED: the chunk prefixed with its heading path and
-     * article ("A > B — art. 1069:"), so retrieval sees where the passage sits
+     * article ("A > B — art. 12:"), so retrieval sees where the passage sits
      * even though the stored text is just the article.
      */
     private function embeddingText(string $text, array $metadata): string

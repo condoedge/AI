@@ -10,7 +10,7 @@ use Condoedge\Ai\Support\AliasNormalizer;
  * NarrativeRowEcho — model-written LIST and TABLE blocks that restate the rows the system
  * renders right after the narrative (eval p17: a 10-bullet list repeating the first ten
  * table rows on A roster / B resilience t0 / B french t0, a numbered list of the three
- * unit-310 rows — against "Do NOT list the rows" in the same prompt, in different words
+ * order-310 rows — against "Do NOT list the rows" in the same prompt, in different words
  * every run).
  *
  * Decided by STRUCTURE only, never by wording:
@@ -40,7 +40,7 @@ final class NarrativeRowEcho
     /** Share of a block's items that must name a rendered row. */
     public const ECHO_RATIO = 0.6;
 
-    /** A single entry may be the answer itself ("the president is …"). */
+    /** A single entry may be the answer itself ("the manager is …"). */
     private const MIN_ITEMS = 2;
 
     /** A key shorter than this matches too easily ("1", "A"). */
@@ -113,7 +113,7 @@ final class NarrativeRowEcho
      * A boundary is terminal punctuation followed by whitespace and an upper-case letter, or a
      * blank line. Never cut — by SHAPE, no abbreviation list:
      *   - inside a decimal or "art. 12" (no upper-case letter follows);
-     *   - after an initial ("J. Rousseau"), a dotted token ("A.G.A.", an email) or a short
+     *   - after an initial ("J. Rousseau"), a dotted token ("U.S.A.", an email) or a short
      *     capitalized token ("St.", "Inc.", "Yes."): that period may not end a sentence — the
      *     next boundary is used instead;
      *   - before the kept text holds MIN_SENTENCE_WORDS words (an opener is not the answer).
@@ -152,7 +152,7 @@ final class NarrativeRowEcho
      * The SENTENCES of a text, in order — split only where {@see firstSentence()} would cut:
      * at its safe boundaries (same shapes, no abbreviation list), and never before the piece
      * holds MIN_SENTENCE_WORDS words, so an opener stays with the sentence it opens ("Yes.",
-     * a clause number "1069." before its rule). Where no boundary is safe the text is ONE
+     * a clause number "2104." before its rule). Where no boundary is safe the text is ONE
      * sentence: a consumer that keeps whole sentences then keeps more, never half of one.
      *
      * For a text that must be shortened without being cut inside a sentence (the excerpts of
@@ -214,7 +214,7 @@ final class NarrativeRowEcho
     /**
      * Whether a period closing $before can end a sentence, by the SHAPE of the token it
      * closes: not a single letter (an initial), not a token that holds a letter and another
-     * period ("A.G.A", "e.g", an email address), not a capitalized token of at most four
+     * period ("U.S.A", "e.g", an email address), not a capitalized token of at most four
      * letters ("St", "Dr", "Inc", "Ltd", "No" — and "Yes" / "Oui", openers the next sentence
      * completes). Any other token — a word, a number, an amount — ends it.
      */
@@ -240,7 +240,7 @@ final class NarrativeRowEcho
      * figures kept whole), $references being the question and the system line:
      *   - the lead has at least one CONTENT word (a figure, or CONTENT_WORD_LETTERS letters) and
      *     EVERY one of them is in the references — a value, a name or a figure of its own
-     *     ("…Lead union manager", "Amélie Quirion", "$1,211.48", "anything") is an answer;
+     *     ("…Lead manager", "Jane Doe", "$1,211.48", "anything") is an answer;
      *   - and at least RESTATEMENT_SHARE of all its distinct words are — a short answer made of
      *     the question's words around a small word that carries it ("No member has a role.")
      *     is not one.

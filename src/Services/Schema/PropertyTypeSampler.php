@@ -12,7 +12,7 @@ use Condoedge\Ai\GraphStore\CypherSanitizer;
  *
  * Property value types for the schema cards, probed on a small sample of each
  * label's nodes and cached per label through GraphSchemaCache (flushed on ingest).
- * Deliberately NOT `db.schema.nodeTypeProperties()`: on the CondoEdge graph
+ * Deliberately NOT `db.schema.nodeTypeProperties()`: on a host graph
  * (Neo4j 5.26, ~115 labels) that procedure took ~50 s.
  *
  * VALUES NEVER LEAVE NEO4J (Task 1.7 invariant: retrieval must not ship example

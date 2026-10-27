@@ -206,6 +206,45 @@ class AiManagerRecordedResultExportTest extends TestCase
         $this->assertArrayHasKey('phone', $result['metadata']['response']['export_document_rows'][0]);
     }
 
+    /**
+     * @test Gold context-degradation t8: after a task list, "back to the very first thing — export that members
+     * list with their emails" generated the members query, yet the file was the 6 tasks of the previous turn.
+     * A fresh result about OTHER records (another anchor, no shared column) is what the export is about.
+     */
+    public function a_follow_up_export_about_other_records_exports_its_own_result(): void
+    {
+        $tasks = 'MATCH (tk:Task) WHERE tk.team_id = 3 AND tk.urgent = 1 RETURN tk.title AS title, tk.id AS task_id LIMIT 100';
+        $members = 'MATCH (t:Team) WHERE t.id = 3 MATCH (u:User) WHERE u.current_team_id = t.id RETURN u.name AS user_name, u.email AS email, u.id AS user_id LIMIT 100';
+        $this->exportTurn(['searchQuery' => 'team members emails', 'subjectLabel' => 'Team Members', 'entityTypes' => ['Team', 'User']]);
+        $this->mockQueryGenerator->shouldReceive('generate')->once()
+            ->andReturn(new QueryGenerationResult(cypher: $members, explanation: '', confidence: 0.9));
+        $this->mockQueryExecutor->shouldReceive('execute')->andReturnUsing(function ($query) {
+            $query = (string) $query;
+            $rows = str_contains($query, ':Task')
+                ? [['title' => 'Fix the roof', 'task_id' => 1], ['title' => 'Paint', 'task_id' => 2]]
+                : [['user_name' => 'Ann', 'email' => 'ann@x.test', 'user_id' => 7], ['user_name' => 'Bob', 'email' => 'bob@x.test', 'user_id' => 8]];
+
+            return $query === '' ? QueryExecutionResult::empty() : new QueryExecutionResult(success: true, data: $rows, metadata: ['security_filter_applied' => true]);
+        });
+        $this->mockQueryExecutor->shouldReceive('executeCount')->andReturn(2);
+
+        $result = $this->manager->answerQuestion('Now back to the very first thing — export that members list with their emails to Excel.', [
+            'user' => (object) ['id' => 13],
+            'store_examples' => false,
+            'conversation_context' => [
+                'last_cypher_query' => $tasks,
+                'last_result_count' => 2,
+                'last_result_sample' => [['title' => 'Fix the roof', 'task_id' => 1], ['title' => 'Paint', 'task_id' => 2]],
+                'last_subject' => 'Urgent Tasks',
+                'focused_entity' => 'Task',
+            ],
+        ]);
+
+        $response = $result['metadata']['response'];
+        $this->assertSame('current_result', $response['export_source']);
+        $this->assertSame('ann@x.test', $response['export_document_rows'][0]['email']);
+    }
+
     /** @test */
     public function the_skip_can_be_switched_off(): void
     {

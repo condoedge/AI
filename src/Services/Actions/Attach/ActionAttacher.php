@@ -15,6 +15,7 @@ use Condoedge\Ai\Services\Actions\BuiltIn\ExportExcelAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\ExportPdfAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\IdentityLinkAction;
 use Condoedge\Ai\Services\Actions\BuiltIn\RecordedResultExport;
+use Condoedge\Ai\Services\Actions\BuiltIn\StartTaskAction;
 use Condoedge\Ai\Services\Chat\Exporter\RecordedQueryRerun;
 use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
 use Condoedge\Ai\Services\Query\UserOwnershipPaths;
@@ -33,10 +34,10 @@ use Illuminate\Support\Facades\Log;
  * columns, permissions — never the question's words:
  *
  *   B1 record chips   one chip per result record (its primary "open" action), labelled with
- *                     the record's name + homonym disambiguator ("Unit 310 — Carré Soho
- *                     Phase 3"); at most `max_record_chips` — spread over the records'
- *                     groups when they have several (one board member per union, each
- *                     labelled with its union) — then "+N more" → the list page of the
+ *                     the record's name + homonym disambiguator ("Account 310 — North
+ *                     Branch"); at most `max_record_chips` — spread over the records'
+ *                     groups when they have several (one staff member per branch, each
+ *                     labelled with its branch) — then "+N more" → the list page of the
  *                     result's SUBJECT ({@see listTarget()}), or no such chip when the
  *                     subject has none. Never for a single-row count/aggregate answer.
  *   B2 identity       my_profile when QU judged the question about the user's own (user)
@@ -104,7 +105,8 @@ class ActionAttacher
      */
     public function __construct(
         private ?AiActionRegistry $registry = null,
-        private readonly ?FollowUpWriter $followUpWriter = null
+        private readonly ?FollowUpWriter $followUpWriter = null,
+        private readonly ?NavigationPages $navigationPages = null
     ) {
     }
 
@@ -258,6 +260,73 @@ class ActionAttacher
             }
 
             return AttachedActions::none();
+        }
+    }
+
+    /**
+     * Page buttons of a document-grounded answer (ai.navigation.pages, {@see NavigationPages}):
+     * the pages setup offers this user, of which the model picks at most `max`, each one a
+     * `link` chip by route name, with `?section=` and "Page › Section" when one was picked.
+     * Same gates as the follow-ups: documents retrieved, a real answer, no export, no
+     * navigation ask, the turn's own chips. Never throws.
+     *
+     * @param array<string, mixed> $response
+     * @param array<string, mixed> $options pipeline options (user)
+     * @return array<string, mixed>
+     */
+    public function withNavigation(array $response, PipelineContext $ctx, array $options = []): array
+    {
+        try {
+            $metadata = is_array($response['metadata']['response'] ?? null) ? $response['metadata']['response'] : null;
+            $answer = is_string($response['answer'] ?? null) ? $response['answer'] : '';
+            $attached = $ctx->attachedActions ?? AttachedActions::none();
+            if ($this->navigationPages === null || $metadata === null || trim($answer) === '' || $this->unanswered($metadata)
+                || $ctx->qu->exportFormat !== null || trim((string) $ctx->qu->navigationTarget) !== ''
+                || empty($ctx->fileContext['relevant_files']) || !empty($ctx->fileContext['enumeration'])
+                || ($metadata['invocations'] ?? []) !== $attached->invocations()) {
+                return $response;
+            }
+            $user = $this->user($options);
+            $pages = NavigationPages::offeredTo($user);
+            if ($pages === [] || $this->allowedGeneric('link', $user) === null) {
+                return $response;
+            }
+
+            $observer = GuardedPipelineObserver::wrap($ctx->observer);
+            $observer->stageStarted(NavigationPages::STAGE);
+            $start = hrtime(true);
+            $picked = $this->navigationPages->pick((string) ($response['question'] ?? $ctx->question), $answer, $pages, $ctx->qu->language, $observer);
+            $observer->stageFinished(NavigationPages::STAGE, ['offered' => array_keys($pages), 'picked' => array_keys($picked)], round((hrtime(true) - $start) / 1e6, 3));
+
+            $chips = [];
+            foreach ($picked as $key => $section) {
+                // A page naming tasks the user may start gets their start chips first.
+                foreach ($pages[$key]['task'] ?? [] as $taskKey) {
+                    if (($task = StartTaskAction::invocation($taskKey, $user)) !== null) {
+                        $chips[] = $this->chip(AttachedActions::ROLE_NEXT, $task);
+                    }
+                }
+                $chips[] = $this->chip(AttachedActions::ROLE_NEXT, new ActionInvocation('link', null, null, $section === null
+                    ? ['route' => $pages[$key]['route'], 'style' => 'button']
+                    : ['route' => $pages[$key]['route'], 'params' => ['section' => $section], 'style' => 'button'],
+                    $section === null ? $pages[$key]['label'] : $pages[$key]['label'] . ' › ' . $pages[$key]['sections'][$section]['label']));
+            }
+            if ($chips === []) {
+                return $response;
+            }
+
+            $ctx->attachedActions = $attached->with($this->dedupe($chips));
+            $response['metadata']['response'] = $ctx->attachedActions->applyTo($metadata);
+
+            return $response;
+        } catch (\Throwable $e) {
+            try {
+                Log::warning('Page buttons failed — continuing without them: ' . $e->getMessage());
+            } catch (\Throwable) {
+                // Logging is best effort.
+            }
+
+            return $response;
         }
     }
 
@@ -524,7 +593,7 @@ class ActionAttacher
         }
 
         // One chip per DISTINCT record, capped after the collapse: rows repeating a record
-        // (several board members of one union, when only the union is openable) must not
+        // (several staff members of one branch, when only the branch is openable) must not
         // spend the cap on copies and end as one arbitrary chip (eval p9 F7). Inline refs
         // below still map every row to its record.
         $distinct = [];
@@ -544,7 +613,7 @@ class ActionAttacher
 
         if ($withMore && count($distinct) > $max) {
             // Rows never retrieved count as more records only when one row IS one record:
-            // a fan-out (20 board-member rows over 8 unions) has a ROW total, not a record
+            // a fan-out (20 staff-member rows over 8 branches) has a ROW total, not a record
             // total, so only the distinct records not shown are counted.
             $total = $this->resultTotal($ctx, count($rows));
             $fanOut = count($distinct) < count($invocations);
@@ -578,11 +647,11 @@ class ActionAttacher
      * Everything fits → every record, in row order, labelled as is.
      *
      * More records than the cap AND the records belong to several GROUPS (the coarser
-     * column of another node the rows name beside them — each board member's union,
+     * column of another node the rows name beside them — each staff member's branch,
      * {@see RecordResolver::grouped()}): the cap is taken in turn from each group, in the
      * rows' own group order — as forDigest() does across sections — and every chip names its
-     * group ("Amélie Quirion — 825 de Bruxelles"). Eval p16-A board: rows ordered by union
-     * spent all five chips on the first of eight unions.
+     * group ("Jane Doe — 12 Main Street"). Eval p16-A: rows ordered by group
+     * spent all five chips on the first of eight groups.
      *
      * @param list<ActionInvocation> $distinct one invocation per distinct record, in row order
      * @param list<int> $firstRow the row index each distinct record first appears on
@@ -630,9 +699,9 @@ class ActionAttacher
     }
 
     /**
-     * "310" → "Unit 310"; "Carré Soho" stays as-is; + " — <disambiguator>" for homonyms; a
+     * "310" → "Account 310"; "Northwind" stays as-is; + " — <disambiguator>" for homonyms; a
      * nameless record → its action label + " — <the row's other record>" ("Invoice PDF —
-     * Unit 301"), never N identical chips. $withGroup (chips spread over groups): a record
+     * Account 301"), never N identical chips. $withGroup (chips spread over groups): a record
      * no disambiguator already places gets " — <its group>".
      *
      * @param array{label: string, name: ?string, disambiguator: ?string, group?: ?string, context?: array{label: string, name: string}|null} $record
@@ -660,7 +729,7 @@ class ActionAttacher
         return $text;
     }
 
-    /** A bare number/code gets its entity's display name ("Unit 310"); a real name stays. */
+    /** A bare number/code gets its entity's display name ("Account 310"); a real name stays. */
     private function named(string $label, string $name): string
     {
         return preg_match('/\p{L}{2,}/u', $name) === 1 ? $name : $this->displayName($label) . ' ' . $name;
@@ -739,7 +808,7 @@ class ActionAttacher
         //   - possessive + the user label, or QU's navigation_target = own_profile (the
         //     LLM judged an ask to open / link their own profile, in any language);
         //   - the user's own row (8-A self-reference detection) when it IS the result (the
-        //     only row) — never a manager who merely appears in a list of residents or in
+        //     only row) — never a manager who merely appears in a list of customers or in
         //     their own team's roster, and never a record of something else that names the
         //     user in one of its fields ({@see isOwnRecord()}).
         //   - possessive counts only when the user label is QU's FIRST (primary) entity type:
@@ -776,7 +845,7 @@ class ActionAttacher
      * information about my team?": the answer showed the team's record with its settings
      * link and nothing of what the team manages). A host lists them under
      * `ai.attached_actions.identity.team.related` — keys of its own generic actions, the
-     * pages of the CURRENT team's portfolio (its units, meetings, receivables…). They are
+     * pages of the CURRENT team's portfolio (its projects, meetings, receivables…). They are
      * pages without a record id, so they are offered only where they mean what they show:
      * on the answer that IS the current team's own record ({@see isOwnTeamRecord()}).
      *
@@ -839,13 +908,13 @@ class ActionAttacher
      * contact their linked identity record; {@see UserOwnershipPaths::anchors()}).
      *
      * A record of anything else that merely NAMES the user in one of its fields is not that
-     * (eval p20: a meeting whose president is the user, a team whose contact e-mail is the
+     * (eval p20: a meeting whose organizer is the user, a team whose contact e-mail is the
      * user's — each attached "My profile" to an answer about a meeting / a team). WHOSE
      * column a value sits in is read from structure only:
      *   - a column the single-record enrichment added (execution metadata `record_enriched`,
      *     this turn's rows only): a parent's name is the parent's, a detail field is the
      *     enriched record's;
-     *   - else the query's own projection (`m.president AS president` → Meeting);
+     *   - else the query's own projection (`m.organizer AS organizer` → Meeting);
      *   - a column no node of the query owns decides nothing — no link.
      * Rows that came with NO query at all cannot be attributed: the value alone decides, as
      * before.
@@ -1023,9 +1092,9 @@ class ActionAttacher
             }
             // OWN DATA — a question about records linked to the user ("my contribution"):
             // nothing linked is the answer, never an invitation to create one (eval p9 F4:
-            // "New invoice" for a manager who owns no unit). The subject entity is still the
+            // "New invoice" for a manager who owns no account). The subject entity is still the
             // first one with a page: suppressing its create form never falls through to a
-            // secondary entity's list (Invoice → never "Units").
+            // secondary entity's list (Invoice → never "Accounts").
             //
             // Own data is first what the EXECUTED query says (eval p16-B rights t2): AiManager
             // stamps an empty result's scope from the query's user anchor (execution metadata
@@ -1036,7 +1105,7 @@ class ActionAttacher
             //
             // ONE DOOR for an own-data empty: the subject's list page, else its REPORT. With
             // the create form suppressed, a subject that has no list page (Invoice: create +
-            // report only) used to attach nothing at all — the manager who owns no unit was
+            // report only) used to attach nothing at all — the manager who owns no account was
             // left without the receivables report, the page where the figure they asked
             // about lives. Still only the first subject with a page, still only a page the
             // user may open.
@@ -1140,7 +1209,7 @@ class ActionAttacher
     /**
      * The list page for "the rest of this result" — the "+N more" chip and the truncated
      * list's door. A list page is offered for what the question is ABOUT, never for an
-     * entity the rows merely link to (eval p16-A board: 37 board members, "+32 more" opened
+     * entity the rows merely link to (eval p16-A staff: 37 staff members, "+32 more" opened
      * the directory of EVERY contact because the openable record on each row is its contact).
      *
      * The subject is QU's entity types (a follow-up naming none: the recorded result's —
@@ -1148,10 +1217,10 @@ class ActionAttacher
      *   1. QU named nothing this result holds → structure decides, as before: the records'
      *      label, then ($anyLabel — the truncated list) the query's labels in order;
      *   2. a subject QU named BEFORE the records' own type (or instead of it) is a CHILD of
-     *      the records' entity ({@see belongsTo()}: a board member holds the key of its
+     *      the records' entity ({@see belongsTo()}: a staff member holds the key of its
      *      contact) → each row is one of THAT subject's records, the openable record only
      *      the parent it is named by: the subject's list page, or nothing;
-     *   3. the records ARE a subject (units for a question about units and their invoices) →
+     *   3. the records ARE a subject (customers for a question about customers and their invoices) →
      *      their list page; none configured → nothing;
      *   4. the records are not what the question is about (or there are none): "+N more"
      *      would not open more of THESE records → nothing; the truncated list ($anyLabel)
@@ -1206,7 +1275,7 @@ class ActionAttacher
     /**
      * Whether each $child record BELONGS TO one $parent record: the child's entity config
      * declares a relationship to the parent's label through a foreign key that is one of the
-     * child's OWN properties (BoardMember.contact_id → Contact). A hasMany / morphMany
+     * child's OWN properties (StaffMember.contact_id → Contact). A hasMany / morphMany
      * declared with the other table's key, a pivot and an inverse declaration are not that.
      * Structural (the host's declared relationships) — unknown entities are never children.
      */
@@ -1387,7 +1456,8 @@ class ActionAttacher
 
     /**
      * First occurrence wins — by invocation fingerprint, and a parameterless generic action
-     * once (a "+N more" list chip and a truncation list chip are the same door). A
+     * once (a "+N more" list chip and a truncation list chip are the same door); a task's start
+     * chip is its task, so two tasks are two chips. A
      * follow-up chip IS its question: two questions are two chips, and the same question
      * in another casing or punctuation is one.
      *
@@ -1402,7 +1472,7 @@ class ActionAttacher
             $invocation = $chip['invocation'];
             $key = match (true) {
                 $chip['role'] === AttachedActions::ROLE_FOLLOW_UP => 'ask:' . self::comparable((string) ($invocation->params['question'] ?? $invocation->text)),
-                $invocation->entityType === null => 'generic:' . $invocation->key,
+                $invocation->entityType === null && $invocation->key !== StartTaskAction::KEY => 'generic:' . $invocation->key,
                 default => $invocation->fingerprint(),
             };
             if (isset($seen[$key])) {

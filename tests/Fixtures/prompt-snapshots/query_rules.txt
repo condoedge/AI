@@ -1,0 +1,65 @@
+=== call 0 options: []
+--- message 0: system ---
+
+=== QUERY GENERATION RULES ===
+
+When generating Cypher queries, you MUST follow these rules:
+
+1. SCHEMA COMPLIANCE:
+   - Use only labels and relationships from the GRAPH SCHEMA block
+   - Use only properties that exist in the GRAPH SCHEMA block
+   - CRITICAL: Use the EXACT relationship directions shown (arrows matter!)
+   - CRITICAL: Respect each property's stored type as shown on its GRAPH SCHEMA card (name:Type)
+
+2. DATA TYPE RULES:
+   - Follow each property's type on its GRAPH SCHEMA card.
+   - When the card shows String(ISO date) (an ISO-8601 string, e.g. '<datetime>.000000Z'): compare as strings, never against date()/datetime() values — a string compared with datetime() matches nothing. For relative dates (today, now, overdue, upcoming, past) compare with toString(date()), e.g. x.due_at < toString(date()) — that is a day boundary: an item due today counts as NOT yet overdue. To match a whole day compare substring(x.due_at, 0, 10) = '2024-01-15'
+   - A Date/DateTime-typed property compares with date()/datetime() directly (e.g. x.due_at < date())
+   - NEVER hardcode today's date — use date()/toString(date())
+   - A String(numeric) property holds digit strings: compare it with a quoted value (x.code = '2'), not a number
+   - EXCEPTION: If the DETECTED BUSINESS CONCEPTS block provides a CYPHER PATTERN, use that pattern EXACTLY as written
+
+3. RELATIONSHIP DIRECTION RULES:
+   - ALWAYS check the relationship direction in the schema
+   - (a)-[:REL]->(b) means relationship goes FROM a TO b
+   - (a)<-[:REL]-(b) means relationship goes FROM b TO a
+   - Do NOT infer relationship traversals from *_id properties, Eloquent relation names, natural-language phrases, or configured foreign_key metadata
+   - Use a relationship traversal only when the exact source label, relationship type, target label, and direction are listed in the out/in edges of a GRAPH SCHEMA card or in a DETECTED BUSINESS CONCEPTS block CYPHER PATTERN
+   - If a node exposes a scalar foreign-key property such as current_team_id, team_id, or user_id and the exact edge is not listed on its GRAPH SCHEMA card (see the card's fk (no edge) line), filter on that property with WHERE instead of traversing an invented edge
+   - Getting the direction wrong will return zero results!
+
+4. BUSINESS RULES:
+   - CRITICAL: If the DETECTED BUSINESS CONCEPTS block has a CYPHER PATTERN, you MUST use it in your WHERE clause
+   - Before filtering on a status/role/type field, use the {code=meaning} enum legend on the GRAPH SCHEMA card, written in the property's type (Integer → 2, String(numeric) → '2')
+   - Apply filters exactly as specified in scope definitions
+   - Use DISTINCT when specified to avoid duplicates
+   - When returning entity data, JOIN to related entities to get human-readable names (e.g., JOIN Contact for BoardMember)
+
+5. FIELD PROJECTION:
+   - If the REQUESTED ATTRIBUTES block lists data concepts, each mapped property MUST appear in the RETURN clause as an output column
+   - RETURN requested attributes as columns in addition to a human-readable identifying column (the record's name, title or number, as listed on its GRAPH SCHEMA card) — do NOT only use them in a WHERE filter
+   - When the rows are records, return that human-readable identifying column even when the question asks only for its date or amount ("when was the last X" returns X's name with its date) — an id alone identifies nothing to the user
+   - When the rows are records — one row per unit, supplier, meeting, member…, including per-record aggregates (WITH u, sum(...)) — ALSO return each record's id (e.g. u.id AS unit_id): the system uses it to attach the record's link and never shows it. Omit it only for a single overall total or count.
+   - A request to see/include an attribute is a projection requirement, not just a filter
+   - PRECEDENCE: REQUESTED ATTRIBUTES OVERRIDE any column list suggested in an entity description — descriptions offer default columns, the user's requested attributes always win, joining to related entities when the attribute of the listed records lives there — but an attribute no property holds for the listed records is omitted (not recorded), never taken from another entity's field
+   - Return the identifying column(s) plus the columns the question asks for — never every property of a joined entity
+   - ROW GRAIN: return ONE row per record of the entity being listed (the members, units, invoices… the question enumerates). When a joined entity can match SEVERAL times per record (a one-to-many relationship), aggregate it per record instead of returning one row per match: WITH r, collect(DISTINCT x.value) AS values for a list of values, or WITH r, head(collect(x)) AS x for one related record. Never let a join duplicate the listed records or inflate their count
+
+6. QUERY BEST PRACTICES:
+   - Always include LIMIT clause (default LIMIT 100)
+   - Use DISTINCT when traversing relationships
+   - Use descriptive variable names (p for Person, o for Order, etc.)
+   - With UNION, every branch's RETURN must project the same column names/aliases in the same order (e.g. RETURN x.name AS name)
+   - Optimize for performance (use indexes, avoid cartesian products)
+
+7. OUTPUT FORMAT:
+   - Respond with ONE JSON object and nothing else:
+     {"needs_query": true, "cypher": "<the Cypher query>", "reason": "<one short sentence>"}
+   - "cypher" is clean, executable Cypher: NO markdown code blocks, NO comments, NO decorations
+   - Set "needs_query": false and "cypher": null ONLY when no query is needed or possible (see YOUR TASK)
+
+8. READ-ONLY CONSTRAINT:
+   - NO write operations (CREATE, MERGE, SET, DELETE, REMOVE, etc.)
+   - Only generate read queries (MATCH, RETURN, WHERE, etc.)
+
+

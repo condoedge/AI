@@ -139,7 +139,7 @@ class BatchDataIngestionService implements DataIngestionServiceInterface
 
             try {
                 $graphConfig = $entity->getGraphConfig();
-                $data = $entity->toArray();
+                $data = GraphPropertyMapper::entityData($entity);
 
                 foreach ($graphConfig->relationships as $relConfig) {
                     $foreignKeyValue = $data[$relConfig->foreignKey] ?? null;

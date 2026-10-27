@@ -325,11 +325,13 @@ class AiServiceProvider extends ServiceProvider
             );
         });
 
-        // Conversational turns (small talk, questions about the assistant itself): the
-        // one composition call rides the response_generation role, like every answer.
+        // Conversational turns (small talk, questions about the assistant itself): ROLE
+        // `conversational_reply` (ai.llm_roles); not configured: the response_generation role.
         $this->app->singleton(\Condoedge\Ai\Services\Response\ConversationalReplyComposer::class, function ($app) {
+            $role = !empty(config('ai.llm_roles.conversational_reply')) ? 'conversational_reply' : 'response_generation';
+
             return new \Condoedge\Ai\Services\Response\ConversationalReplyComposer(
-                $app->make(LlmResolver::class)->forRole('response_generation')
+                $app->make(LlmResolver::class)->forRole($role)
             );
         });
 
@@ -461,9 +463,42 @@ class AiServiceProvider extends ServiceProvider
         $this->app->singleton(\Condoedge\Ai\Services\Actions\Attach\ActionAttacher::class, function ($app) {
             return new \Condoedge\Ai\Services\Actions\Attach\ActionAttacher(
                 $app->make(\Condoedge\Ai\Services\Actions\AiActionRegistry::class),
-                $app->make(\Condoedge\Ai\Services\Response\FollowUpWriter::class)
+                $app->make(\Condoedge\Ai\Services\Response\FollowUpWriter::class),
+                new \Condoedge\Ai\Services\Actions\Attach\NavigationPages($app->make(LlmResolver::class)->forRole('navigation'))
             );
         });
+
+        // Tasks (ai.tasks): one small focused call per task turn, ROLE `task_orchestrator`
+        // (ai.llm_roles); not configured: the query-understanding role's (small) model.
+        // Grounded on the task's own articles through the file search.
+        $this->app->singleton(\Condoedge\Ai\Services\Tasks\TaskStepCaller::class, function ($app) {
+            $role = !empty(config('ai.llm_roles.task_orchestrator')) ? 'task_orchestrator' : 'query_understanding';
+
+            return new \Condoedge\Ai\Services\Tasks\TaskStepCaller(
+                $app->make(LlmResolver::class)->forRole($role),
+                $app->make(FileSearchService::class)
+            );
+        });
+        // The chat turn gets the orchestrator only when tasks are on with a definition:
+        // otherwise null, and every turn runs exactly as before.
+        $this->app->when(\Condoedge\Ai\Services\Chat\UseCases\AskQuestionUseCase::class)
+            ->needs(\Condoedge\Ai\Services\Tasks\TaskOrchestrator::class)
+            ->give(fn ($app) => \Condoedge\Ai\Services\Tasks\TaskOrchestrator::configured()
+                ? $app->make(\Condoedge\Ai\Services\Tasks\TaskOrchestrator::class)
+                : null);
+        // The reply to an answer that offered a task: one small call, only on the message right after the offer.
+        // ROLE `task_offer` (ai.llm_roles); not configured: the task step's role, else query understanding.
+        $this->app->singleton(\Condoedge\Ai\Services\Tasks\TaskOffer::class, function ($app) {
+            $role = array_values(array_filter(['task_offer', 'task_orchestrator'], fn (string $role) => !empty(config("ai.llm_roles.{$role}"))))[0]
+                ?? 'query_understanding';
+
+            return new \Condoedge\Ai\Services\Tasks\TaskOffer($app->make(LlmResolver::class)->forRole($role));
+        });
+        $this->app->when(\Condoedge\Ai\Services\Chat\UseCases\AskQuestionUseCase::class)
+            ->needs(\Condoedge\Ai\Services\Tasks\TaskOffer::class)
+            ->give(fn ($app) => \Condoedge\Ai\Services\Tasks\TaskOrchestrator::configured()
+                ? $app->make(\Condoedge\Ai\Services\Tasks\TaskOffer::class)
+                : null);
 
         $this->app->singleton('ai', function ($app) {
             return new AiManager(
@@ -769,6 +804,9 @@ class AiServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(TeamPathResolver::class);
+
+        // Scoped: Laravel drops it after each request and queue job, so a revoked membership is read again.
+        $this->app->scoped(\Condoedge\Ai\Services\Security\RowScope::MEMO, fn () => new \ArrayObject());
 
         $this->app->singleton(AiSecurityService::class, function ($app) {
             return new AiSecurityService(

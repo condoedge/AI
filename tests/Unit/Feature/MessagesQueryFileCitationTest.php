@@ -101,6 +101,23 @@ class MessagesQueryFileCitationTest extends TestCase
         $this->assertEquals(2, $result['file_citations'][1]['id']);
     }
 
+    /** @test Hosts whose users cannot open the cited files turn the citation links and reference cards off. */
+    public function no_citation_link_or_reference_card_when_file_references_are_off(): void
+    {
+        config(['ai.chat.show_file_references' => false]);
+        $files = [['id' => 42, 'name' => 'doc.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf']];
+
+        $result = app(ContentLinkProcessor::class)->processForDirectRendering('Based on [1], here is the answer.', ['files' => $files]);
+        $renderer = new \Condoedge\Ai\Kompo\Support\RichDataRenderer(
+            \Mockery::mock(\Condoedge\Ai\Services\UI\ChatThemeInterface::class),
+            \Mockery::mock(\Condoedge\Ai\Services\Settings\ChatSettingsInterface::class),
+        );
+
+        $this->assertEmpty($result['file_citations']);
+        $this->assertEmpty($result['elements']);
+        $this->assertNull($renderer->renderFileReferences($files));
+    }
+
     /**
      * @test
      */

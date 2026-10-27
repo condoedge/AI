@@ -4,6 +4,7 @@ namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\DTOs\PageContext;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
+use Condoedge\Ai\Kompo\Modals\FeedbackCommentModal;
 use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
 use Condoedge\Ai\Kompo\Support\ConversationActions;
 use Condoedge\Ai\Kompo\Support\ConversationLimitBanner;
@@ -11,6 +12,7 @@ use Condoedge\Ai\Kompo\Support\MessageBubbleRenderer;
 use Condoedge\Ai\Kompo\Support\RichDataRenderer;
 use Condoedge\Ai\Kompo\Support\SuggestionSubmit;
 use Condoedge\Ai\Kompo\Support\WelcomeSuggestions;
+use Condoedge\Ai\Kompo\Traits\HandlesTasks;
 use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
@@ -44,7 +46,7 @@ use Condoedge\Utils\Kompo\Chat\ChatMessagesQuery;
  */
 class MessagesQuery extends ChatMessagesQuery
 {
-    use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation, HasFilePreview;
+    use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation, HasFilePreview, HandlesTasks;
 
     public const ID = 'chat-messages-panel';
     public $class = '';
@@ -318,20 +320,30 @@ class MessagesQuery extends ChatMessagesQuery
     protected function exampleQuestionsBlock(string $extraClass = '')
     {
         $examples = $this->resolveExampleQuestions();
-        if (empty($examples)) {
+        $tasks = WelcomeSuggestions::welcomeTasks(auth()->user());
+        if (empty($examples) && $tasks === []) {
             return null;
         }
 
+        $chipClass = 'w-full p-3 text-left rounded-xl border border-gray-200 bg-white ' . $this->theme()->primaryLightBgHover() . ' transition-all flex items-center gap-3 group text-sm';
+        // Without a conversation, startTask creates one: the whole surface then reloads on it.
+        $taskButtons = array_map(fn ($key, $label) =>
+            _Link(e($label))->icon('plus')->class($chipClass . ' font-medium')
+                ->selfPost('startTask', ['key' => $key])
+                ->refresh($this->conversation ? self::ID : AiChatPanel::ID),
+            array_keys($tasks),
+            $tasks
+        );
         $questionButtons = array_map(fn($q) =>
             _Link(e($q))->icon('chat-bubble-left-ellipsis')
-                ->class('w-full p-3 text-left rounded-xl border border-gray-200 bg-white ' . $this->theme()->primaryLightBgHover() . ' transition-all flex items-center gap-3 group text-sm')
+                ->class($chipClass)
                 ->onClick(fn($e) => $e->run(SuggestionSubmit::fillAndSendJs($q))),
             $examples
         );
 
         return _Rows(
             _Html(__('ai.chat.try-asking'))->class('text-sm font-medium text-gray-400 mb-3'),
-            _Rows(...$questionButtons)->class('space-y-2 w-full max-w-md'),
+            _Rows(...$taskButtons, ...$questionButtons)->class('space-y-2 w-full max-w-md'),
         )->class(trim('w-full flex flex-col items-center ' . $extraClass));
     }
 
@@ -340,7 +352,7 @@ class MessagesQuery extends ChatMessagesQuery
      *
      * When the chat was opened from a page with a known entity type, a host can tailor the
      * suggestions via config('ai.chat.page_examples.{EntityType}') (config-only, no LLM call) so
-     * a Unit page shows "Show this unit's payment history." Falls back to the global example list.
+     * an Order page shows "Show this order's payment history." Falls back to the global example list.
      * Empty when show_suggestions is off; always capped at max_suggestions (see the plain,
      * kit-free WelcomeSuggestions collaborator, which owns + unit-tests this resolution).
      *
@@ -370,6 +382,15 @@ class MessagesQuery extends ChatMessagesQuery
         );
     }
 
+    /** The optional comment after a 👎 on answer $id of this conversation. */
+    public function feedbackComment($id)
+    {
+        return new FeedbackCommentModal(null, [
+            'conversation_id' => $this->conversation?->id,
+            'message_id' => (int) $id,
+        ]);
+    }
+
     /**
      * Regenerate the assistant answer attached to $id.
      *
@@ -385,7 +406,7 @@ class MessagesQuery extends ChatMessagesQuery
         }
 
         $message = $this->conversation->messages()->find($id);
-        if (!$message || $message->role !== 'assistant') {
+        if (!$message || $message->role !== 'assistant' || is_array($message->metadata['task'] ?? null)) {
             return;
         }
 
@@ -433,7 +454,7 @@ class MessagesQuery extends ChatMessagesQuery
         try {
             // Thread the page context the surface was mounted with, exactly like the
             // typed-question path (ChatMessageForm::sendMessage) — a suggestion clicked
-            // from a record page must keep its "this unit/invoice" binding.
+            // from a record page must keep its "this order/invoice" binding.
             app(ChatPresenter::class)->handleSend(
                 $this->conversation,
                 $question,

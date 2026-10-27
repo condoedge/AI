@@ -21,7 +21,7 @@ use Condoedge\Ai\Services\Retrieval\EntitySelectionPruner;
  *   'calculations' => [
  *       'team_total_owed' => [
  *           'label'       => 'Total owed to the team (receivables outstanding)',
- *           'description' => 'What residents/customers still owe.',
+ *           'description' => 'What customers still owe.',
  *           'formula'     => 'SUM of Invoice.calc_due_amount where calc_due_amount > 0',
  *           'cypher'      => 'MATCH (i:Invoice) WHERE i.calc_due_amount > 0 RETURN sum(i.calc_due_amount) AS total_owed',
  *           'notes'       => 'Split overdue vs not-yet-due on i.due_at < date().',
@@ -146,7 +146,7 @@ class CalculationsSection extends BasePromptSection
     /**
      * The labels the question is about: the projected schema minus the labels the
      * entity-selection pruner kept only to join or scope them (identity / tenant /
-     * closure / ownership) — a tenant hop through Union must not pull the Union
+     * closure / ownership) — a tenant hop through Project must not pull the Project
      * formulas in.
      *
      * @return string[]

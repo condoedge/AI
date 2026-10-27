@@ -134,7 +134,7 @@ class QueryGenerator implements QueryGeneratorInterface
         // validate / schema-repair loop below. The former regex template path
         // (TemplateMatcher: English-only "show all X" / "how many X", naive
         // singularization, and an "Unknown label" throw OUTSIDE this retry loop
-        // that hard-failed "How many residents?") was deleted.
+        // that hard-failed "How many customers?") was deleted.
 
         // Try LLM generation with retries.
         //

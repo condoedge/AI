@@ -5,7 +5,12 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services\Chat\UseCases;
 
 use Condoedge\Ai\Contracts\PipelineObserverInterface;
+use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Models\AiTask;
+use Condoedge\Ai\Services\QueryExecutor;
+use Condoedge\Ai\Services\Tasks\TaskOffer;
+use Condoedge\Ai\Services\Tasks\TaskOrchestrator;
 use Condoedge\Ai\Support\CompositePipelineObserver;
 use Condoedge\Ai\Support\GuardedPipelineObserver;
 use Condoedge\Ai\Models\AiConversation;
@@ -17,6 +22,8 @@ use Condoedge\Ai\Services\Chat\Support\ChatSecurityGuard;
 use Condoedge\Ai\Services\Chat\Support\FriendlyError;
 use Condoedge\Ai\Services\Chat\Support\MessageTraceObserver;
 use Condoedge\Ai\Services\Context\ConversationContextManager;
+use Condoedge\Ai\Support\Audiences;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -24,13 +31,20 @@ use Illuminate\Support\Facades\Log;
  * Single home of chat-turn orchestration for both ask and regenerate, collapsed into one
  * private path parameterized by $persistUserMessage. Key guarantees:
  *  - the security gate runs as STEP 0, BEFORE any context processing or persistence;
- *  - injection becomes a per-request refusal (decline-and-continue) instead of a stored
- *    assistant message, returned as a failed ChatTurnResult;
+ *  - injection becomes a per-request refusal (decline-and-continue): a translated assistant
+ *    message the user sees, returned as a failed ChatTurnResult; the blocked text itself is
+ *    never stored, so no later turn reads it;
  *  - NO transaction is held across the (multi-second) LLM calls: only the persistence writes
  *    are wrapped, in short DB::transactions — the user message before the AI call, then the
  *    context snapshot + assistant message together after it. A mid-turn failure is caught and
  *    recorded as a visible error message (the user message stays, so the turn can be retried);
  *  - the created assistant AiMessage is returned on the result so callers never re-query.
+ *
+ * Tasks (ai.tasks): an active task takes the turn (TaskOrchestrator), except a message its step
+ * reads as about something else, which the pipeline answers with the task's pending question put
+ * under the answer. An answer whose chips start tasks gets the offer line (TaskOffer, no model
+ * call); the next message only, while no task runs, makes ONE small call that may start the task
+ * with that message as its first answer, else the turn runs the pipeline as usual.
  *
  * Concrete, container-autowired (not bound, not interfaced) per the Sisc UseCase convention.
  * AI is resolved via the facade (AiChatService is config-`new`ed and cannot inject it).
@@ -45,9 +59,12 @@ class AskQuestionUseCase
      */
     public const ALLOWED_PIPELINE_OPTIONS = ['store_examples'];
 
+    /** @param ?TaskOrchestrator $tasks null unless ai.tasks is on with a definition (AiServiceProvider); $offers likewise */
     public function __construct(
         private readonly ConversationContextManager $contextManager,
         private readonly ChatSecurityGuard $securityGuard,
+        private readonly ?TaskOrchestrator $tasks = null,
+        private readonly ?TaskOffer $offers = null,
     ) {
     }
 
@@ -65,7 +82,7 @@ class AskQuestionUseCase
         // processing, persistence, or even opening a transaction. A missing-user precondition
         // throws; a detected injection becomes a per-request refusal (decline-and-continue).
         if (!$this->passesGate($observer, $input->question, $input->user, $input->allowAnonymous)) {
-            return ChatTurnResult::failure('ai.chat.injection-blocked');
+            return $this->refusal($input->conversation);
         }
 
         return $this->runTurn(
@@ -131,6 +148,15 @@ class AskQuestionUseCase
      * exactly assertSafe(): a precondition failure still throws, an injection still
      * returns false.
      */
+    /** Without a stored reply the panel refresh dropped the user's bubble and showed nothing. */
+    private function refusal(AiConversation $conversation): ChatTurnResult
+    {
+        $text = __('ai.chat.injection-blocked');
+        $message = $conversation->addMessage('assistant', $text, ['error' => true, 'metadata' => ['status' => 'injection_blocked']]);
+
+        return new ChatTurnResult(answer: $text, assistantMessage: $message, error: 'ai.chat.injection-blocked');
+    }
+
     private function passesGate(?PipelineObserverInterface $observer, string $question, mixed $user, bool $allowAnonymous): bool
     {
         $observer?->stageStarted('security_gate');
@@ -182,6 +208,104 @@ class AskQuestionUseCase
     }
 
     /**
+     * A turn of an active task, admitted against the same rate budget as a pipeline turn
+     * (AiManager::admitTurn); a full budget answers "busy" before any model call.
+     *
+     * @return array<string, mixed> the standard response array
+     */
+    private function taskTurn(AiTask $task, string $question, mixed $user, ?PipelineObserverInterface $observer): array
+    {
+        return $this->busy($question, $user) ?? $this->tasks->handleTurn($task, $question, ['user' => $user, 'observer' => $observer]);
+    }
+
+    /** The "busy" response when the turn's rate budget is full, else null (admitted). */
+    private function busy(string $question, mixed $user): ?array
+    {
+        $executor = app(QueryExecutorInterface::class);
+        if ($executor instanceof QueryExecutor) {
+            $admission = $executor->admit(
+                ['user' => $user, 'rate_limit_batch' => 'task:' . bin2hex(random_bytes(8))],
+                max(0, (int) config('ai.rate_limits.max_wait_seconds', 20))
+            );
+            if (!$admission['admitted']) {
+                $seconds = max(1, (int) $admission['retry_after']);
+
+                return [
+                    'question' => $question,
+                    'answer' => trans('ai.error.busy_try_again', ['seconds' => $seconds]),
+                    'cypher' => null,
+                    'data' => [],
+                    'referenced_files' => [],
+                    'metadata' => ['query' => ['source' => 'admission'], 'response' => ['status' => 'rate_limited', 'retry_after' => $seconds, 'error' => true]],
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /** @return list<string> the tasks the conversation's last message, an answer, offered that this user may still start */
+    private function offeredBefore(AiConversation $conversation, mixed $user): array
+    {
+        $last = AiMessage::where('conversation_id', $conversation->getKey())->orderByDesc('id')->first();
+
+        return $last?->role === 'assistant' && is_array($last->metadata['invocations'] ?? null) ? TaskOffer::keys($last->metadata['invocations'], $user) : [];
+    }
+
+    /**
+     * The reply to an offer: the task it takes up starts, reading the reply as its first answer (the reply
+     * is marked as the task's); null when it takes none up, and the pipeline answers.
+     *
+     * @param list<string> $offered
+     */
+    private function offerReply(AiConversation $conversation, ?AiMessage $reply, array $offered, string $question, mixed $user,
+        ?PipelineObserverInterface $observer): ?array
+    {
+        $observer?->stageStarted(TaskOffer::STAGE);
+        $start = hrtime(true);
+        $key = $this->offers->taken($offered, $user, $question, $observer);
+        $observer?->stageFinished(TaskOffer::STAGE, ['offered' => $offered, 'taken' => $key], $this->elapsedMs($start));
+        if ($key === null) {
+            return null;
+        }
+        if ($busy = $this->busy($question, $user)) {
+            return $busy;
+        }
+        try {
+            $response = $this->tasks->start($user, $conversation, $key, ['observer' => $observer, 'message' => $question, 'reason' => 'offer_reply']);
+        } catch (AuthorizationException) {
+            return null;
+        }
+        if ($reply !== null && is_string($uuid = $response['metadata']['task']['uuid'] ?? null)) {
+            $reply->update(['metadata' => ['task' => ['uuid' => $uuid]] + (array) $reply->metadata]);
+        }
+
+        return $response;
+    }
+
+    /** An answer whose chips start tasks the user may start says so, in one line under it. */
+    private function withOffer(array $response, mixed $user): array
+    {
+        $language = $response['metadata']['question_language'] ?? null;
+        $line = TaskOffer::line(TaskOffer::keys((array) ($response['metadata']['response']['invocations'] ?? []), $user), is_string($language) ? $language : null);
+        if ($line !== '' && trim((string) ($response['answer'] ?? '')) !== '') {
+            $response['answer'] = rtrim((string) $response['answer']) . "\n\n" . $line;
+        }
+
+        return $response;
+    }
+
+    /** A question asked during a task: the pipeline's answer, then the question the task waits on, with the task's state. */
+    private function withPending(array $response, array $task): array
+    {
+        $response['answer'] = trim(rtrim((string) ($response['answer'] ?? '')) . "\n\n" . $task['answer']);
+        $response['metadata'] = (is_array($response['metadata'] ?? null) ? $response['metadata'] : []);
+        $response['metadata']['task'] = $task['metadata']['task'];
+
+        return $response;
+    }
+
+    /**
      * The single shared turn flow. Assumes the security gate has already passed.
      *
      * @param bool $persistUserMessage Whether to store the user message (true for ask, false for regenerate).
@@ -214,11 +338,16 @@ class AskQuestionUseCase
             // (QueryUnderstandingResult), and the question is never rewritten.
             // For regenerate the user message already exists.
             $conversationContext = $this->contextManager->buildPromptContext($conversation, $maxHistory);
+            $task = $this->tasks?->claims($conversation);
+            // Read before this message is stored: the answer it replies to may have offered tasks.
+            $offered = $task === null && $persistUserMessage && $this->tasks !== null && $this->offers !== null ? $this->offeredBefore($conversation, $user) : [];
+            $userMessage = null;
             if ($persistUserMessage) {
                 // Short write-only transaction: the user message row + its conversation touch.
-                DB::transaction(fn () => $conversation->addMessage('user', $question, [
+                // An answer to a task is marked, so the chat hides edit on it.
+                $userMessage = DB::transaction(fn () => $conversation->addMessage('user', $question, [
                     'context_used' => $conversationContext,
-                ]));
+                ] + ($task !== null ? ['metadata' => ['task' => ['uuid' => $task->uuid]]] : [])));
             }
             $observer?->stageFinished('conversation_context', [], $this->elapsedMs($stageStart));
 
@@ -227,6 +356,14 @@ class AskQuestionUseCase
             // it is null when the chat was not opened from a page, keeping the turn unchanged.
             // The (guarded) trace rides options['observer'] (observation only — AiManager
             // removes it before any downstream service sees the options).
+            // Who asked, as the host resolved it (ai.audiences): on the trace and the message.
+            $audience = Audiences::configured() ? Audiences::of($user) : null;
+            $audienceStamp = Audiences::configured() ? ['key' => $audience?->key, 'role' => $audience?->role] : null;
+            if ($audienceStamp !== null) {
+                $observer?->stageStarted('audience');
+                $observer?->stageFinished('audience', ['audience' => $audienceStamp['key'], 'role' => $audienceStamp['role']]);
+            }
+
             $stage = 'pipeline';
             $stageStart = hrtime(true);
             // The question the pipeline runs with (the user's wording, verbatim) rides
@@ -235,13 +372,23 @@ class AskQuestionUseCase
             // Caller pipeline options: allowlisted keys only (ALLOWED_PIPELINE_OPTIONS),
             // and they never override the turn's own keys.
             $pipelineOptions = array_intersect_key($pipelineOptions, array_flip(self::ALLOWED_PIPELINE_OPTIONS));
-            $aiResponse = AI::answerQuestion($question, [
+            $pipeline = fn () => AI::answerQuestion($question, [
                 'style' => $style,
                 'conversation_id' => $conversation->id,
                 'conversation_context' => $conversationContext,
                 'page_context' => $pageContext,
                 'user' => $user,
             ] + ($observer !== null ? ['observer' => $observer] : []) + $pipelineOptions);
+            if ($task !== null) {
+                // An active task takes the whole turn (never QU): its own step call, its own audit.
+                $aiResponse = $this->taskTurn($task, $question, $user, $observer);
+                if (($aiResponse['metadata']['task']['side_question'] ?? false) === true) {
+                    $aiResponse = $this->withPending($pipeline(), $aiResponse);
+                }
+            } else {
+                $aiResponse = ($offered !== [] ? $this->offerReply($conversation, $userMessage, $offered, $question, $user, $observer) : null)
+                    ?? $this->withOffer($pipeline(), $user);
+            }
             $observer?->stageFinished('pipeline', [], $this->elapsedMs($stageStart));
             $stage = 'persistence';
             $stageStart = hrtime(true);
@@ -259,9 +406,12 @@ class AskQuestionUseCase
             if (!is_array($invocations)) {
                 $invocations = [];
             }
-            $messageMetadata = [];
+            $messageMetadata = $audienceStamp !== null ? ['audience' => $audienceStamp] : [];
             if ($invocations !== []) {
                 $messageMetadata['invocations'] = $invocations;
+            }
+            if (is_array($aiResponse['metadata']['task'] ?? null)) {
+                $messageMetadata['task'] = $aiResponse['metadata']['task'];
             }
             $exportDocumentMarkdown = $aiResponse['metadata']['response']['export_document_markdown'] ?? null;
             if (is_string($exportDocumentMarkdown) && trim($exportDocumentMarkdown) !== '') {

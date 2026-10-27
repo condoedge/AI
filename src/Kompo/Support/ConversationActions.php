@@ -23,6 +23,8 @@ use Condoedge\Ai\Models\AiConversation;
  */
 class ConversationActions
 {
+    public const FEEDBACK_COMMENT_MAX = 500;
+
     /**
      * Toggle the "pinned" flag on a conversation owned by $user.
      *
@@ -43,7 +45,8 @@ class ConversationActions
     }
 
     /**
-     * Record feedback ('positive'|'negative') on a message inside a conversation owned by $user.
+     * Record feedback ('positive'|'negative') on a message inside a conversation owned by $user,
+     * stamped feedback_at; any rating but 'negative' drops the comment.
      *
      * Scoping the message lookup through the owned conversation prevents writing feedback to a
      * message in a conversation the acting user does not own.
@@ -64,6 +67,34 @@ class ConversationActions
 
         $metadata = $message->metadata ?? [];
         $metadata['feedback'] = $type;
+        $metadata['feedback_at'] = now()->toIso8601String();
+        if ($type !== 'negative') {
+            unset($metadata['feedback_comment']);
+        }
+        $message->update(['metadata' => $metadata]);
+
+        return true;
+    }
+
+    /**
+     * The optional comment after a 👎: trimmed, capped at FEEDBACK_COMMENT_MAX, removed when empty.
+     *
+     * @return bool True when a negatively rated message of $user was found (and updated).
+     */
+    public function recordFeedbackComment(int $conversationId, int $messageId, ?string $comment, mixed $user): bool
+    {
+        $message = $this->ownedConversation($conversationId, $user)?->messages()->find($messageId);
+        if (!$message || ($message->metadata['feedback'] ?? null) !== 'negative') {
+            return false;
+        }
+
+        $metadata = $message->metadata;
+        $comment = mb_substr(trim((string) $comment), 0, self::FEEDBACK_COMMENT_MAX);
+        if ($comment === '') {
+            unset($metadata['feedback_comment']);
+        } else {
+            $metadata['feedback_comment'] = $comment;
+        }
         $message->update(['metadata' => $metadata]);
 
         return true;

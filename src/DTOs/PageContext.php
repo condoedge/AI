@@ -20,11 +20,11 @@ namespace Condoedge\Ai\DTOs;
 final class PageContext
 {
     /**
-     * @param string|null            $route      Current route name, e.g. 'units.show'.
-     * @param string|null            $entityType Short entity label, e.g. 'Unit'.
+     * @param string|null            $route      Current route name, e.g. 'orders.show'.
+     * @param string|null            $entityType Short entity label, e.g. 'Order'.
      * @param int|string|null        $entityId   Id of the record on screen (numeric key or slug/UUID).
      * @param array<string,mixed>    $filters    Whitelisted visible filters, e.g. ['status' => 'active'].
-     * @param string|null            $label      Human-readable record label, e.g. 'Unit 402'.
+     * @param string|null            $label      Human-readable record label, e.g. 'Order 402'.
      */
     public function __construct(
         public readonly ?string $route = null,
@@ -32,6 +32,8 @@ final class PageContext
         public readonly int|string|null $entityId = null,
         public readonly array $filters = [],
         public readonly ?string $label = null,
+        // The page's own name for the model ('' = none) when the chat captured the page itself.
+        public readonly ?string $pageName = null,
     ) {
     }
 
@@ -50,13 +52,14 @@ final class PageContext
             entityId: $a['entity_id'] ?? null,
             filters: isset($a['filters']) && is_array($a['filters']) ? $a['filters'] : [],
             label: $a['label'] ?? null,
+            pageName: isset($a['page_name']) && is_string($a['page_name']) ? $a['page_name'] : null,
         );
     }
 
     /**
      * The lookup key for a host-provided page description ("Explain this page").
      *
-     * Prefers the entity type (the same key page_examples are keyed by, e.g. 'Unit'),
+     * Prefers the entity type (the same key page_examples are keyed by, e.g. 'Order'),
      * falling back to the route name when no entity type is set (e.g. a list/index
      * screen that carries only a route). Null when neither is present, so the caller
      * resolves no description and the turn stays an ordinary query.
@@ -85,6 +88,6 @@ final class PageContext
             'entity_id' => $this->entityId,
             'filters' => $this->filters,
             'label' => $this->label,
-        ];
+        ] + ($this->pageName !== null ? ['page_name' => $this->pageName] : []);
     }
 }

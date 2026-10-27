@@ -14,7 +14,7 @@ namespace Condoedge\Ai\Services\Security;
  *   1. Unbalanced / unterminated delimiters or strings (lexer error).
  *   2. A clause keyword (MATCH, RETURN, WITH, WHERE, …) in CLAUSE position inside
  *      parentheses — i.e. swallowed into a WHERE boolean expression or a pattern
- *      group. A word in LABEL position (`(x:Union)`) or PROPERTY position
+ *      group. A word in LABEL position (`(x:Match)`) or PROPERTY position
  *      (`a.Order`) is not a clause keyword and is allowed.
  *   3. A top-level boolean connective (AND / OR / XOR) appearing in CLAUSE
  *      position rather than inside a WHERE predicate — e.g. `MATCH (...) AND x`.

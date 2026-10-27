@@ -330,7 +330,7 @@ An entry may be a `ModelMethodMutationAction`. It wraps an EXISTING domain metho
 
 Rules (a mutation that breaks them **fails closed**: it is never authorized and never advertised, and one error is logged):
 
-- **Explicit authorization is mandatory.** Do not rely on a generic CRUD policy ability (`update`, `delete`, ...) alone. CRUD policies often let the record's owner through, so a resident could "update" (approve) their own booking.
+- **Explicit authorization is mandatory.** Do not rely on a generic CRUD policy ability (`update`, `delete`, ...) alone. CRUD policies often let the record's owner through, so a customer could "update" (approve) their own booking.
 - **A row-level gate is mandatory.** Declare an `authorizer:` or a transition-specific `ability:` alongside `permission:`. A permission is usually checked on the user's *current* team, not on the row's team, so without a row gate a manager of team A could act on team B's row by id. Pass `rowScoped: false` only for genuinely global (tenant-less) models.
 - **Precondition.** It is checked when the action is proposed, when it is approved, and once more inside the write transaction on the row re-fetched with `lockForUpdate()`. If two cards target the same row, the second one reports "not applied" instead of overwriting the first.
 - **Advertisement.** The action is offered (prompt, chips) only to users who pass `permission:`. Per-row chips only appear for rows that pass the full gate.

@@ -190,6 +190,30 @@ class ModelTieringRoleResolutionTest extends TestCase
         );
     }
 
+    public function test_the_conversational_reply_rides_the_response_generation_role_by_default(): void
+    {
+        $this->app['config']->set('ai.llm_roles', [
+            'response_generation' => ['model' => 'gpt-answer-writer'],
+        ]);
+
+        $composer = $this->app->make(\Condoedge\Ai\Services\Response\ConversationalReplyComposer::class);
+
+        $this->assertSame('gpt-answer-writer', $this->injectedLlm($composer, \Condoedge\Ai\Services\Response\ConversationalReplyComposer::class)->getModel());
+    }
+
+    public function test_the_conversational_reply_uses_its_own_role_when_one_is_configured(): void
+    {
+        // CondoEdge 2026-10-25: gpt-4o-mini, gpt-4o and luna judged 4 of 5 how-to questions small talk; a reasoning model judged all 10 right.
+        $this->app['config']->set('ai.llm_roles', [
+            'response_generation' => ['model' => 'gpt-answer-writer'],
+            'conversational_reply' => ['model' => 'gpt-reasoner'],
+        ]);
+
+        $composer = $this->app->make(\Condoedge\Ai\Services\Response\ConversationalReplyComposer::class);
+
+        $this->assertSame('gpt-reasoner', $this->injectedLlm($composer, \Condoedge\Ai\Services\Response\ConversationalReplyComposer::class)->getModel());
+    }
+
     public function test_config_enhancer_uses_the_config_enhancement_role_when_configured(): void
     {
         $this->app['config']->set('ai.llm_roles', [

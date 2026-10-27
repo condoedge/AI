@@ -125,7 +125,7 @@ final class HostText
 
     /**
      * The language host config text is written in (the same setting the property headers
-     * use), NOT the app's fallback locale: CondoEdge falls back to French while its entity
+     * use), NOT the app's fallback locale: a host may fall back to French while its entity
      * config is English (eval p18: English answers lost the record kind).
      */
     public static function schemaLanguage(): ?string

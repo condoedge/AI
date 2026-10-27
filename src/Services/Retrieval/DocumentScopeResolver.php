@@ -20,15 +20,15 @@ use Condoedge\Ai\Support\FileLink;
  *     rule the record chips follow, {@see RecordResolver}); a list is not one;
  *  3. CITED FILES — the records the uploaded files cited by the previous answer
  *     are filed on: one owner → that record; several owners of one root → the
- *     root (the building of two units); several roots → no scope;
+ *     root (the customer of two orders); several roots → no scope;
  *  4. CURRENT — the user's current scope as the host declares it, a cacheable
- *     attribute map: `ai.file_context.scope.current = ['union' => 'current_union_id']`
+ *     attribute map: `ai.file_context.scope.current = ['project' => 'current_project_id']`
  *     (entity kind => attribute of the user). A DEFAULT: weaker than 1–3.
  *
  * The focus' ancestors are read from the host's entity configuration
  * ({@see RecordAncestry}: one read of the focus row).
  *
- * NOT RESOLVED HERE: a record merely NAMED in the question text ("unit 310").
+ * NOT RESOLVED HERE: a record merely NAMED in the question text ("order 310").
  * That needs record ids before the document search — the seam is
  * {@see self::resolve()}'s precedence list: a fifth, stronger-than-current
  * signal goes between 3 and 4 (or first, if the user named it explicitly).
@@ -68,10 +68,10 @@ final class DocumentScopeResolver
 
     /**
      * A focus that sits in NO record of the current scope's kind (a supplier, a
-     * contact: records of the tenant, not of one building) is asked about from
+     * contact: records of the team, not of one project) is asked about from
      * inside the user's current one: its documents apply, as an owner's would.
      * A focus that is, or already has, a record of that kind is left as it is —
-     * the current scope never replaces or adds a second building.
+     * the current scope never replaces or adds a second project.
      */
     private function insideCurrent(DocumentScope $scope, ?DocumentScope $current): DocumentScope
     {

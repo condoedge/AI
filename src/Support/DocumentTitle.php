@@ -8,10 +8,10 @@ namespace Condoedge\Ai\Support;
  * DocumentTitle — a document's OWN TITLE, read off its structure.
  *
  * A file name says where a document is stored, not what it is
- * ("CCQ_Co-ownership_EN.md"); the document itself usually does, in its first
- * heading ("# Civil Code of Québec — Co-ownership"). That heading is what lets an
+ * ("HR_Policy_EN.md"); the document itself usually does, in its first
+ * heading ("# Employee Handbook — Leave Policy"). That heading is what lets an
  * answer name its source (eval p27: the composer saw the file name only and wrote
- * "the co-ownership laws").
+ * "the HR policy rules").
  *
  * The rule is structural only — no file-name pattern, no vocabulary, no language:
  * the title is the FIRST TOP-LEVEL MARKDOWN HEADING of the document's FIRST

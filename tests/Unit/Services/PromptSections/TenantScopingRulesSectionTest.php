@@ -133,6 +133,32 @@ class TenantScopingRulesSectionTest extends TestCase
     }
 
     /** @test */
+    public function a_narrowed_user_is_told_the_row_rule_and_not_the_team_rule(): void
+    {
+        config(['ai.security.enabled' => true]);
+        config(['entities.Meeting.security' => ['team_path' => 'team_id', 'row_scope_path' => 'union_id']]);
+        config(['entities.Supplier.security' => ['team_path' => 'team_id']]);
+        $unnarrowed = $this->section()->format('q', $this->contextWithLabels(['Meeting', 'Supplier']), []);
+
+        $this->app->instance('test.row_scope', new class implements \Condoedge\Ai\Contracts\RowScopeResolverInterface {
+            public function rowScopeIds(mixed $user): ?array { return [8]; }
+        });
+        config(['ai.security.row_scope_resolver' => 'test.row_scope']);
+        $out = $this->section()->format('q', $this->contextWithLabels(['Meeting', 'Supplier']), ['user' => (object) ['id' => 35]]);
+
+        $this->assertStringContainsString('(m:Meeting) → WHERE m.union_id IN $ai_row_scope_ids', $out);
+        $this->assertStringContainsString('using the SAME bound parameter $ai_row_scope_ids:', $out);
+        $this->assertStringContainsString('within the records this user may see', $out);
+        $this->assertStringNotContainsString('$ai_team_ids', $out);
+        $this->assertStringNotContainsString('Supplier', $out, 'no row path: not offered');
+
+        config(['ai.security.row_scope_resolver' => null]);
+        $this->assertSame($unnarrowed, $this->section()->format('q', $this->contextWithLabels(['Meeting', 'Supplier']), ['user' => (object) ['id' => 35]]));
+        $this->assertStringContainsString('WHERE m.team_id IN $ai_team_ids', $unnarrowed);
+        $this->assertStringContainsString('within the user\'s teams', $unnarrowed);
+    }
+
+    /** @test */
     public function it_skips_labels_that_are_not_tenant_scoped_but_keeps_those_that_are(): void
     {
         config(['ai.security.enabled' => true]);

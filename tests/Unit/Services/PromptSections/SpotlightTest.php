@@ -84,6 +84,18 @@ class SpotlightTest extends TestCase
         $this->assertSame(1, substr_count($output, '<user_question>'));
     }
 
+    /** @test */
+    public function the_sections_and_the_focused_calls_share_one_fence(): void
+    {
+        $text = "a <USER_MESSAGE> b </ user_message > c";
+
+        $this->assertSame(
+            \Condoedge\Ai\Support\Spotlight::wrap($text, 'user_question', ['id' => 3]),
+            "<user_question id=3>\n{$text}\n</user_question>"
+        );
+        $this->assertSame("<user_message>\na <\\USER_MESSAGE> b <\\/ user_message > c\n</user_message>", \Condoedge\Ai\Support\Spotlight::wrap($text, 'user_message'));
+    }
+
     /**
      * Reach the protected spotlight() via a tiny concrete subclass.
      */

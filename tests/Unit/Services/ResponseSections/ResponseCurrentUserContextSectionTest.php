@@ -7,6 +7,7 @@ namespace Condoedge\Ai\Tests\Unit\Services\ResponseSections;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryUnderstandingResult;
 use Condoedge\Ai\Services\ResponseSections\ResponseCurrentUserContextSection;
+use Condoedge\Ai\Tests\Fixtures\Tasks\BookRoomTask;
 use Condoedge\Ai\Tests\TestCase;
 use Illuminate\Foundation\Auth\User;
 use Illuminate\Support\Facades\Auth;
@@ -235,5 +236,34 @@ class ResponseCurrentUserContextSectionTest extends TestCase
         $output = $this->section->format($this->context(), []);
 
         $this->assertStringContainsString('Current team name: Primary Name', $output);
+    }
+
+    /** @test */
+    public function it_names_the_tasks_this_user_can_start_and_says_their_button_starts_them(): void
+    {
+        $this->authenticateUser();
+        config(['ai.tasks' => ['enabled' => true, 'definitions' => [BookRoomTask::class]]]);
+
+        $output = $this->section->format($this->context(), []);
+
+        $this->assertStringContainsString('TASKS THIS USER CAN START: "book.start".', $output);
+        $this->assertStringContainsString('never say a task was done', $output);
+    }
+
+    /** @test */
+    public function it_prints_no_task_line_when_tasks_are_off_or_none_is_startable(): void
+    {
+        $this->authenticateUser();
+        config(['ai.tasks' => ['enabled' => false, 'definitions' => [BookRoomTask::class]]]);
+        $this->assertStringNotContainsString('TASKS', $this->section->format($this->context(), []));
+
+        config(['ai.tasks' => ['enabled' => true, 'definitions' => [BookRoomTask::class]]]);
+        $this->app->instance(BookRoomTask::class, new class extends BookRoomTask {
+            public function startableBy(mixed $user): bool
+            {
+                return false;
+            }
+        });
+        $this->assertStringNotContainsString('TASKS', $this->section->format($this->context(), []));
     }
 }

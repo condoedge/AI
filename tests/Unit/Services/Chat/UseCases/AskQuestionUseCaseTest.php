@@ -110,8 +110,21 @@ class AskQuestionUseCaseTest extends TestCase
         $this->assertTrue($result->failed());
         $this->assertSame('ai.chat.injection-blocked', $result->error);
 
-        // No user message (nor any message) was persisted: the conversation is not bricked.
-        $this->assertSame(0, $conversation->messages()->count());
+        // The user sees a refusal; the blocked text is never stored, so later turns never read it.
+        $this->assertSame(['assistant'], $conversation->messages()->pluck('role')->all());
+        $refusal = $conversation->messages()->first();
+        $this->assertSame(__('ai.chat.injection-blocked'), $refusal->content);
+        $this->assertSame($refusal->id, $result->assistantMessage?->id);
+        $this->assertStringNotContainsString('ignore all previous', $conversation->messages()->pluck('content')->implode(' '));
+    }
+
+    /** @test */
+    public function the_refusal_is_translated_in_english_and_french(): void
+    {
+        foreach (['en', 'fr'] as $locale) {
+            $lines = json_decode(file_get_contents(__DIR__ . "/../../../../../resources/lang/{$locale}.json"), true);
+            $this->assertNotEmpty($lines['ai.chat.injection-blocked'] ?? null, $locale);
+        }
     }
 
     /** @test */

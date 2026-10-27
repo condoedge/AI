@@ -10,7 +10,7 @@ use Condoedge\Ai\Services\UI\AbstractChatTheme;
  * Green chat theme: the indigo theme with Tailwind's default emerald / teal / cyan palette.
  * Only default-palette colours: a theme's classes are compiled by the HOST's Tailwind build, and
  * host-specific colour names (the former `greenmain` / `greenlight` / `greendark` / `level3` of
- * SISC) do not exist in another host — in CondoEdge every green surface rendered as nothing.
+ * one host) do not exist in another — there every green surface rendered as nothing.
  */
 class GreenTheme extends AbstractChatTheme
 {

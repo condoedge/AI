@@ -133,6 +133,38 @@ class AiConversationsAdminAccessTest extends TestCase
         $this->assertStringContainsString('850', $json);
     }
 
+    /** @test */
+    public function the_page_shows_kpis_per_audience_only_while_audiences_are_configured(): void
+    {
+        $this->grantToAdmin();
+
+        $without = (string) $this->actingAs($this->admin)->getJson('/ai/admin/conversations?days=30')->getContent();
+        $this->assertStringNotContainsString(__('ai.admin.audience.title'), $without);
+
+        config(['ai.audiences.resolver' => 'App\AnyResolver']);
+        $with = (string) $this->actingAs($this->admin)->getJson('/ai/admin/conversations?days=30')->getContent();
+        $this->assertStringContainsString(__('ai.admin.audience.title'), $with);
+        $this->assertStringContainsString('members', $with);
+        $this->assertStringContainsString('staff', $with);
+        $this->assertStringContainsString(__('ai.admin.audience.unresolved'), $with);
+        $this->assertStringContainsString('1.3 s', $with, 'unresolved: average of 2 s and 0.5 s');
+    }
+
+    /** @test */
+    public function the_conversations_table_filters_by_answer_kind(): void
+    {
+        $this->grantToAdmin();
+        $this->actingAs($this->admin);
+
+        request()->merge(['answers' => 'regenerated']);
+        $table = new AdminConversationsTable(['days' => 30, 'from' => '2026-09-22', 'to' => '2026-10-21']);
+        $json = (string) json_encode($table->bootForDisplay(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $this->assertStringContainsString('Units question', $json);
+        $this->assertStringNotContainsString('Bills', $json);
+        $this->assertStringContainsString(__('ai.admin.filter.answers-slow', ['seconds' => 20]), $json);
+    }
+
     /** @return array<string, array{0: class-string}> */
     public static function components(): array
     {
@@ -217,6 +249,48 @@ class AiConversationsAdminAccessTest extends TestCase
         $b = $this->transcriptJson($this->conversations['B']->uuid);
         $this->assertStringContainsString(__('ai.admin.trace.failed'), $b);
         $this->assertStringContainsString('execution: boom', $b);
+    }
+
+    /** @test */
+    public function the_transcript_and_the_feedback_table_show_the_comment_and_time_of_a_rating_escaped(): void
+    {
+        $this->grantToAdmin();
+        $this->actingAs($this->admin);
+
+        $transcript = $this->transcriptJson($this->conversations['A']->uuid);
+        $table = (string) json_encode(
+            (new AdminFeedbackTable(['days' => 30, 'from' => '2026-09-22', 'to' => '2026-10-21']))->bootForDisplay(),
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+
+        foreach (['transcript' => $transcript, 'feedback table' => $table] as $where => $json) {
+            $this->assertStringContainsString('Wrong &lt;b&gt;count&lt;/b&gt;', $json, $where);
+            $this->assertStringNotContainsString('<b>count', $json, $where);
+            $this->assertStringContainsString('2026-10-19 12:05', $json, $where);
+        }
+    }
+
+    /** @test */
+    public function the_transcript_copies_the_conversation_as_an_anonymised_eval_case(): void
+    {
+        $this->grantToAdmin();
+        $this->actingAs($this->admin);
+
+        $modal = json_decode($this->transcriptJson($this->conversations['A']->uuid), true);
+        $copied = null;
+        array_walk_recursive($modal, function ($value, $key) use (&$copied) {
+            if ($key === 'jsFunction' && is_string($value) && preg_match('/const text = (".*?");/s', $value, $m)) {
+                $copied = json_decode($m[1]);
+            }
+        });
+
+        $this->assertIsString($copied, 'a button copies text to the clipboard');
+        $case = json_decode($copied, true);
+        $this->assertSame(['How many units?', 'And owners?'], array_column($case['conversations'][0]['turns'], 'ask'));
+        $this->assertSame(['data'], $case['conversations'][0]['turns'][0]['expect']['branch_in']);
+        foreach (['Alice', 'alice@example.com', 'Jardins'] as $personal) {
+            $this->assertStringNotContainsString($personal, $copied);
+        }
     }
 
     /** @test */

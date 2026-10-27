@@ -66,6 +66,25 @@ class ScopeAcceptanceGateTest extends TestCase
     }
 
     /** @test */
+    public function a_row_rule_needs_its_own_parameter(): void
+    {
+        $rowRule = static fn(NodeBinding $b): ?array => [
+            'type' => 'direct',
+            'kind' => 'where',
+            'alias' => $b->alias,
+            'column' => 'union_id',
+            'filter' => "WHERE {$b->alias}.union_id IN \$ai_row_scope_ids",
+            'param' => '$ai_row_scope_ids',
+        ];
+
+        $this->assertTrue($this->isSelfScoped('MATCH (m:Meeting) WHERE m.union_id IN $ai_row_scope_ids RETURN m', $rowRule));
+        $this->assertFalse($this->isSelfScoped('MATCH (m:Meeting) WHERE m.union_id IN $ai_team_ids RETURN m', $rowRule));
+        $this->assertFalse($this->isSelfScoped('MATCH (m:Meeting) WHERE m.team_id IN $ai_team_ids RETURN m', $rowRule));
+        // A rule without `param` keeps the team parameter.
+        $this->assertFalse($this->isSelfScoped('MATCH (i:Invoice) WHERE i.team_id IN $ai_row_scope_ids RETURN i'));
+    }
+
+    /** @test */
     public function accepts_when_team_predicate_is_anded_into_an_existing_where(): void
     {
         $this->assertTrue($this->isSelfScoped(

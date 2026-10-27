@@ -16,7 +16,7 @@ use Condoedge\Ai\Support\AliasNormalizer;
  * A generated query that ran and matched nothing used to reach the abstention with
  * only Query Understanding's guesses about it (eval p16 A#3 / B#1): the stated
  * scope was QU's possessive flag ("nothing linked to you" after a TEAM-wide
- * query), an own-data empty never said WHY (the user owns no unit at all), and a
+ * query), an own-data empty never said WHY (the user has no order at all), and a
  * "next / upcoming" empty offered nothing although the host had declared what to
  * show instead. This class reads the EXECUTED query and host config, and asks the
  * graph through the pipeline's own executor — zero LLM calls:
@@ -27,7 +27,7 @@ use Condoedge\Ai\Support\AliasNormalizer;
  *
  *  - {@see ownershipCheck()}: for an own-data query, ONE count of the ownership
  *    path its emptiness hangs on ({@see UserOwnershipPaths::probeFor()}) — "does
- *    this user have ANY unit?" — returned as a fact (entity, display name, count).
+ *    this user have ANY order?" — returned as a fact (entity, display name, count).
  *
  *  - {@see isAggregateOverNothing()}: the one-row shape of an empty result (a global
  *    aggregate that matched nothing: a total of 0).
@@ -98,7 +98,7 @@ final class EmptyResultInspector
      * Cypher's grammar) yields exactly one row whatever it matched: with no match that
      * row holds only empty values (sum / count → 0, collect → [], min / max / avg →
      * null). Live 2026-10-06: "how much is my contribution this year?" came back as
-     * `RETURN sum(n.total_amount)` → {0} → "$0.00" for a user who owns no unit.
+     * `RETURN sum(n.total_amount)` → {0} → "$0.00" for a user who has no order.
      *
      * True only for that shape; whether the zero is vacuous (nothing to total) or a
      * real figure is for the caller to establish ({@see ownershipCheck()}).

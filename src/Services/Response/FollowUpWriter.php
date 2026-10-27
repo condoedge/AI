@@ -74,7 +74,7 @@ use Illuminate\Support\Facades\Log;
  *  - THE MODEL (default; `$modelDeclines`). The writer runs on the `follow_up_writer`
  *    role, by default the query-generation model. Told "better no question than a
  *    tangential one", that model declined every excerpt of a turn whose retrieval had
- *    drifted (a wall-removal question; excerpts on common expenses, a hypothec, the
+ *    drifted (a question on one procedure; excerpts on fees, a lien, the
  *    language of documents) in four runs of four, and of the 17 questions it wrote over
  *    the set 16 were a natural or acceptable next question. Six of seven live turns
  *    carried a chip. It copies the fact in the excerpt's language also when the question
@@ -151,7 +151,7 @@ final class FollowUpWriter
      * eval p19 / p20 traces (the cited statements, the article each one tells labelled by
      * hand): every statement with a single best article of four words or more points at
      * the article it tells — also the ones told freely, which the paragraph test cannot
-     * see ("if you sell or lease your unit, you must notify the syndicate within 15 days":
+     * see ("if you transfer your account, you must notify the administrator within 15 days":
      * four words of the article on that notice, two of its neighbour). Ties and thinner
      * matches decide nothing.
      */
@@ -179,7 +179,7 @@ final class FollowUpWriter
     /**
      * Material of a passage the answer CITES may run longer: the sentence worth asking
      * about is often not the first of its paragraph or article (live, eval p19-A: the rule
-     * a buyer needed closes a 490-character paragraph; the wall rule sits 250 characters
+     * a buyer needed closes a 490-character paragraph; another rule sits 250 characters
      * into its article).
      */
     public const CITED_EXCERPT_CHARS = 520;
@@ -224,9 +224,9 @@ final class FollowUpWriter
      * short paragraph is "carried" by
      * five words of the document's common vocabulary too easily for that. Live
      * (2026-10-07): an answer on losing the right to vote "used" the article on the
-     * quorum of a meeting — five of its eight words (owner, vote, general, meeting,
-     * holding) — and both of its other paragraphs were offered first; a chip on the
-     * quorum followed. On the labelled traces: of the 19 paragraphs really told, 15 are
+     * attendance a meeting needs — five of its eight words (member, vote, general, meeting,
+     * holding) — and both of its other paragraphs were offered first; a chip on that
+     * attendance rule followed. On the labelled traces: of the 19 paragraphs really told, 15 are
      * carried by eight words or more (the others leave their article used as a whole);
      * of the 7 carried by coincidence, 2.
      */
@@ -241,7 +241,7 @@ final class FollowUpWriter
      * "establishes" / "establishing". {@see AliasNormalizer} folds case, accents and the
      * plural mark only, so a paragraph told in other word forms read as untold: eval p22-B
      * rights t1, the answer said "You will be notified of the amount due and the payment
-     * date", the paragraph "The syndicate, without delay, notifies each co-owner of the
+     * date", the paragraph "The administrator, without delay, notifies each member of the
      * amount of his contribution and the date when it is payable" kept 5 of its 11 words —
      * one short of REFLECTED_SHARE — and the chip re-asked what the answer had said.
      *
@@ -256,15 +256,15 @@ final class FollowUpWriter
      *    designated / designed, proper / property, regulation / regular;
      *  - 5 adds under / understand, thereupon / therefore, contract / contribute, interest /
      *    interfere — and makes a carried one of a paragraph the answer told half of (p19-A
-     *    buyer, art. 1069 paragraph 2: the statement, not the 15 days); 4 does the same on
+     *    buyer, art. 269 paragraph 2: the statement, not the 15 days); 4 does the same on
      *    p22-A buyer and p20-B rights t0.
      * At 7, two tier-1 decisions change from unused to carried: p22-B's paragraph above (the
-     * answer tells it), and p20-B rights t1, art. 1072 paragraph 2 (the Government sets the
+     * answer tells it), and p20-B rights t1, art. 272 paragraph 2 (the Government sets the
      * minimum contribution by regulation — NOT told by that answer: 6 of its 13 words were
      * already the answer's, "determines" / "determined" is the seventh; its chip was graded
      * "not answerable from its excerpt"). No length separates those two: both sit one word
      * under REFLECTED_SHARE. One article more is SEEN ({@see self::seen()}) on p22-B rights
-     * t1 — art. 1071, whose first paragraph that answer does tell — and its three untold
+     * t1 — art. 271, whose first paragraph that answer does tell — and its three untold
      * paragraphs take the place of two excerpts the writer had declined. The other 20 turns
      * offer the same excerpts; no chip graded natural (p20–p22) loses its excerpt.
      */
@@ -309,7 +309,7 @@ final class FollowUpWriter
      */
     private const SUPPORTED_SHARE = 0.7;
 
-    /** A line that starts an article: its clause number, sub-article included ("1069. …", "**1070.1.** …"). */
+    /** A line that starts an article: its clause number, sub-article included ("269. …", "**270.1.** …"). */
     private const ARTICLE_LINE = '/^[\s#*>\-]*(\d{3,5}(?:\.\d+)*)\.(?:\*+)?\s/m';
 
     /**
@@ -379,7 +379,7 @@ final class FollowUpWriter
      *         numbers for the trace, never the text; excerpts (whenever the call was made):
      *         what the model was shown — each excerpt's passage, article, tier and, for an
      *         unused passage, whether the user's own wording found it. `article` is the whole
-     *         number as an integer, a sub-article as written ("1068.1").
+     *         number as an integer, a sub-article as written ("268.1").
      */
     public function write(
         string $question,
@@ -477,12 +477,12 @@ final class FollowUpWriter
      * retrieval may have drifted):
      *   1. MORE OF THE ARTICLES THE ANSWER USED: their unused paragraphs, and their
      *      SUB-ARTICLES the answer neither names nor tells ({@see self::untoldSubArticles()}
-     *      — "1072" used, "1072.1" untouched) — dealt alternately, a paragraph first;
+     *      — "272" used, "272.1" untouched) — dealt alternately, a paragraph first;
      *   2. the new articles of the passages the answer cites, nearest first to the article
      *      it used;
      *   3. the unused passages: one excerpt per new article; a passage without article
      *      lines is one excerpt, its own start.
-     * A sub-article ("1068.1") is an article of its own in tiers 2 and 3. Inside a tier the
+     * A sub-article ("268.1") is an article of its own in tiers 2 and 3. Inside a tier the
      * excerpts are dealt in turns — the first one of every passage in retrieval order
      * (best-ranked first), then the second ones — at most MAX_EXCERPTS_PER_PASSAGE of one
      * passage per tier, MAX_EXCERPTS in all, within ONE character budget
@@ -592,7 +592,7 @@ final class FollowUpWriter
             $excerpt = static fn (?int $article, string $label, string $text, int $limit, int $tier = 0): array => [
                 'passage' => $number,
                 'article' => $article,
-                // The article's own number, sub-article included ("1068.1"): what the chip's
+                // The article's own number, sub-article included ("268.1"): what the chip's
                 // evidence names.
                 'number' => $label !== '' ? $label : null,
                 'tier' => $tier,
@@ -616,7 +616,7 @@ final class FollowUpWriter
                 // carried is not known here.
                 $defined = ArticleLocator::forReference($passage);
                 $earlier = $before !== null ? array_diff($defined, $before['new'][$number] ?? []) : [];
-                // Named by its own number ("1064.1" is not named by "1064") — or, in a passage
+                // Named by its own number ("264.1" is not named by "264") — or, in a passage
                 // cited without any article number, carried.
                 $unnamed = array_intersect($defined, $namedWhole) === [];
                 $usedBlocks = array_values(array_filter(
@@ -735,19 +735,19 @@ final class FollowUpWriter
 
     /**
      * The sub-articles of the articles the answer USED that the answer itself did not touch
-     * — "more of the same article family": art. 1072 used, art. 1072.1 untouched (eval
+     * — "more of the same article family": art. 272 used, art. 272.1 untouched (eval
      * p21-B rights t1; see {@see self::excerpts()}). In the order of how much of its family
      * the answer holds (the family it dwelt on first), the passage's order on a tie.
      *
      * A block is one when, by STRUCTURE and words only:
-     *  - its number is a sub-number ("1072.1") of a whole article in $used — the articles
+     *  - its number is a sub-number ("272.1") of a whole article in $used — the articles
      *    this answer named, carries or draws on, minus the ones an earlier answer covered;
      *  - the answer does not name it by its own number;
      *  - no cited statement draws on it ($drawn: told in the answer's own words);
      *  - the words do not SEE the answer used it ({@see self::seen()} — the measured test of
      *    "told": a short paragraph of the neighbouring rule is "carried" by the family's
      *    common words too easily. Replayed on eval p20-B rights t1: the one paragraph of
-     *    art. 1072.1 shares 7 of its 13 words with an answer that never tells it).
+     *    art. 272.1 shares 7 of its 13 words with an answer that never tells it).
      * Told freely enough to escape both word tests, it is offered — to a model asked only
      * for what the answer does not say.
      *
@@ -935,7 +935,7 @@ final class FollowUpWriter
 
     /**
      * The articles a passage shows, in its order: one block per line that starts an article
-     * (a sub-article is a block of its own — "1068.1" — under the whole number 1068), with
+     * (a sub-article is a block of its own — "268.1" — under the whole number 268), with
      * the block's PARAGRAPHS as plain lines.
      *
      * A paragraph is a line of the block. Structural rules only, no vocabulary:
@@ -1022,7 +1022,7 @@ final class FollowUpWriter
     private static function carried(array $answerWords, string $paragraph): int
     {
         // A FIGURE of the paragraph the answer never states (eval p24-A buyer: the "15 days"
-        // of art. 1069 ¶2, on an answer sharing 16 of its 29 words): the paragraph's rule has
+        // of art. 269 ¶2, on an answer sharing 16 of its 29 words): the paragraph's rule has
         // not been told, whatever the words say.
         foreach (self::figures($paragraph) as $figure) {
             if (!isset($answerWords[$figure])) {
@@ -1047,8 +1047,8 @@ final class FollowUpWriter
     /**
      * The figures a paragraph states: its numeric tokens (a delay, a share, an amount) that are
      * not article references ({@see ArticleLocator::referencedArticles()} — "under article
-     * 1068.1" is a pointer, not a figure of the rule) and not the number the paragraph OPENS
-     * with ("**1069.** A person who…", "2. …": the article's or the item's own enumerator).
+     * 268.1" is a pointer, not a figure of the rule) and not the number the paragraph OPENS
+     * with ("**269.** A person who…", "2. …": the article's or the item's own enumerator).
      *
      * @return list<string>
      */
@@ -1177,7 +1177,7 @@ final class FollowUpWriter
      * The blocks of the wanted articles a passage shows, at most MAX_EXCERPTS_PER_PASSAGE:
      * in the passage's own order — or, given the articles the answer USED, nearest first to
      * one of those (a document's neighbouring clauses are its closest ones: live, eval
-     * p19-A, the rule on main walls stands right before the cited one on partitions), the
+     * p19-A, the rule on one item stands right before the cited one on its neighbour), the
      * passage's order on a tie and when the passage shows none of the used ones.
      *
      * @param list<array{number: string, article: int, paragraphs: list<string>}> $blocks
@@ -1188,7 +1188,7 @@ final class FollowUpWriter
     private static function newBlocks(array $blocks, array $articles, array $used = []): array
     {
         // An article's place in the passage, counted in whole articles: a sub-article stands
-        // where its article does ("1071.1" is as near to 1072 as 1071 is).
+        // where its article does ("271.1" is as near to 272 as 271 is).
         $place = array_flip(array_values(array_unique(array_column($blocks, 'article'))));
         $usedAt = array_values(array_intersect_key($place, array_fill_keys($used, true)));
 
@@ -1267,8 +1267,8 @@ final class FollowUpWriter
         //    NO check of code backs the contract — measured on the same replays: "every
         //    word of the fact is a word of the question" dropped the two subject-only
         //    facts of the old prompt and nothing else (13 pairs), but under this prompt a
-        //    yes / no question holds its whole fact by nature ("main walls of buildings"
-        //    for "Are main walls of buildings presumed common?") and that natural chip
+        //    yes / no question holds its whole fact by nature ("shared equipment of members"
+        //    for "Is shared equipment of members presumed common?") and that natural chip
         //    went on both replays, while a subject copied with one more word passed. A
         //    share threshold separates them no better (0.78-0.83 against 0.71-0.80);
         //  - who decides that an excerpt gives no question is the writer's mode (see the
@@ -1385,7 +1385,7 @@ final class FollowUpWriter
             }
             // A question that names an article by number is not one a user types — and it
             // asks for that article, which its excerpt may only mention (live: "What does
-            // article 2474 state…?" from an excerpt that merely refers to it).
+            // article 474 state…?" from an excerpt that merely refers to it).
             if (ArticleLocator::referencedArticles($text) !== []) {
                 $drop('names_article');
                 continue;
@@ -1414,9 +1414,9 @@ final class FollowUpWriter
     }
 
     /**
-     * The article a chip's evidence names: the whole number as an integer ("1069" → 1069),
-     * a sub-article as written ("1068.1") — eval p20-A buyer recorded two chips, on
-     * art. 1068.1 and art. 1068.2, both as 1068.
+     * The article a chip's evidence names: the whole number as an integer ("269" → 269),
+     * a sub-article as written ("268.1") — eval p20-A buyer recorded two chips, on
+     * art. 268.1 and art. 268.2, both as 268.
      *
      * @param array<string, mixed> $excerpt
      */
@@ -1441,8 +1441,8 @@ final class FollowUpWriter
      * candidates the SMALL model wrote on twelve live turns over six questions, each
      * labelled by hand as a natural next question, an acceptable one or off-topic):
      *  - it is a FLOOR that keeps a follow-up on the SUBJECT of the user's question. Every
-     *    candidate of the turn whose retrieval had drifted (a wall-removal question; chips
-     *    about common expenses, a hypothec, the language of documents) scored 0.12-0.19.
+     *    candidate of the turn whose retrieval had drifted (a question on one procedure; chips
+     *    about fees, a lien, the language of documents) scored 0.12-0.19.
      *    At 0.45 and above, the off-topic candidates left are questions on the subject of
      *    the user's question that are not its next step — and one unrelated question that
      *    repeated the user's own key words (0.62);

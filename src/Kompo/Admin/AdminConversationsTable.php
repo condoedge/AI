@@ -8,11 +8,13 @@ use Condoedge\Ai\Kompo\Admin\Concerns\GuardsConversationInsights;
 use Condoedge\Ai\Kompo\Admin\Concerns\RendersInsightCells;
 use Condoedge\Ai\Services\Admin\ConversationInsights;
 use Condoedge\Ai\Services\Admin\InsightsRange;
+use Condoedge\Ai\Services\Tasks\TaskOrchestrator;
 use Condoedge\Utils\Kompo\Common\Table;
 
 /**
  * Conversations with activity in a date range (default: the page's), filterable by
- * user, team, feedback and message text. A row opens the read-only transcript.
+ * user, team, feedback, answer kind (regenerated, no sources, slow), message text and, while
+ * ai.tasks is configured, tasks. A row opens the read-only transcript.
  */
 class AdminConversationsTable extends Table
 {
@@ -48,8 +50,21 @@ class AdminConversationsTable extends Table
                     'none' => __('ai.admin.filter.feedback-none'),
                 ])
                 ->filter(),
+            _Select('ai.admin.filter.answers')->name('answers', false)
+                ->options([
+                    '' => __('ai.admin.filter.answers-any'),
+                    'regenerated' => __('ai.admin.filter.answers-regenerated'),
+                    'no_sources' => __('ai.admin.filter.answers-no-sources'),
+                    'slow' => __('ai.admin.filter.answers-slow', ['seconds' => round(ConversationInsights::slowAnswerMs() / 1000, 1)]),
+                ])
+                ->filter(),
             _Input('ai.admin.filter.text')->name('text', false)->filter(),
-        )->class('grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-2');
+            TaskOrchestrator::configured()
+                ? _Select('ai.admin.filter.tasks')->name('tasks', false)
+                    ->options(['' => __('ai.admin.filter.tasks-any'), '1' => __('ai.admin.filter.tasks-with')])
+                    ->filter()
+                : null,
+        )->class('grid grid-cols-1 sm:grid-cols-2 gap-3 mb-2 ' . (TaskOrchestrator::configured() ? 'lg:grid-cols-8' : 'lg:grid-cols-7'));
     }
 
     public function query()
@@ -66,7 +81,11 @@ class AdminConversationsTable extends Table
             'feedback' => in_array($this->filterValue('feedback'), ConversationInsights::CONVERSATION_FEEDBACK_FILTERS, true)
                 ? $this->filterValue('feedback')
                 : '',
+            'answers' => in_array($this->filterValue('answers'), ConversationInsights::ANSWER_FILTERS, true)
+                ? $this->filterValue('answers')
+                : '',
             'text' => $this->filterValue('text'),
+            'tasks' => $this->filterValue('tasks'),
         ]);
     }
 

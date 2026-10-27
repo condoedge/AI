@@ -16,7 +16,7 @@ use Condoedge\Ai\Support\EnumLegend;
  * unaliased `v.prop`, keyed by the expression as Neo4j keys it):
  *  - the projected property's entity config declares an enum legend in its
  *    description (metadata.common_properties, "1=High, -1=Regular" or — string keys —
- *    "lead=Lead union manager, manager=Union manager" — {@see EnumLegend}, the same
+ *    "lead=Lead team manager, manager=Team manager" — {@see EnumLegend}, the same
  *    legend the schema cards show the generator): every code the legend names is shown
  *    as its label (eval p16 E7: a roster printed "contact" / "manager");
  *  - the property's entity IS configured but declares no legend, the property is no
@@ -24,7 +24,7 @@ use Condoedge\Ai\Support\EnumLegend;
  *    value is a small integer (a PHP int, |v| <= 9): a bare code nobody can read — the
  *    column is omitted ({@see apply()} only);
  *  - everything else (strings without a legend — including numeric-looking names such
- *    as unit "203" —, decimals, aggregates, expressions, unconfigured labels) is
+ *    as order "203" —, decimals, aggregates, expressions, unconfigured labels) is
  *    untouched.
  *
  * SEVERAL CODES IN ONE CELL (eval p17: the roster's roles once a member's rows are folded

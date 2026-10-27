@@ -20,6 +20,9 @@ class QdrantStore implements VectorStoreInterface, UpdatesPayloadInterface, Grou
     protected int $timeout;
     protected string $baseUrl;
 
+    /** Every collection this host names lives under it (two hosts on one Qdrant); '' = none. */
+    protected string $collectionPrefix;
+
     public function __construct(?array $config = null)
     {
         $config = $config ?? config('ai.vector.qdrant');
@@ -28,6 +31,7 @@ class QdrantStore implements VectorStoreInterface, UpdatesPayloadInterface, Grou
         $this->port = $config['port'] ?? 6333;
         $this->apiKey = $config['api_key'] ?? null;
         $this->timeout = $config['timeout'] ?? 30;
+        $this->collectionPrefix = (string) ($config['collection_prefix'] ?? '');
 
         $this->baseUrl = "http://{$this->host}:{$this->port}";
     }
@@ -131,7 +135,7 @@ class QdrantStore implements VectorStoreInterface, UpdatesPayloadInterface, Grou
             $collections = $response['result']['collections'] ?? [];
 
             foreach ($collections as $collection) {
-                if ($collection['name'] === $name) {
+                if ($collection['name'] === $this->collectionPrefix . $name) {
                     return true;
                 }
             }
@@ -179,9 +183,16 @@ class QdrantStore implements VectorStoreInterface, UpdatesPayloadInterface, Grou
     {
         try {
             $response = $this->request('GET', '/collections');
-            $collections = $response['result']['collections'] ?? [];
+            $names = array_map(fn($col) => (string) $col['name'], $response['result']['collections'] ?? []);
+            if ($this->collectionPrefix === '') {
+                return $names;
+            }
 
-            return array_map(fn($col) => $col['name'], $collections);
+            // Only this host's collections, by the names it gives them.
+            return array_values(array_map(
+                fn (string $name) => substr($name, strlen($this->collectionPrefix)),
+                array_filter($names, fn (string $name) => str_starts_with($name, $this->collectionPrefix))
+            ));
         } catch (\Exception $e) {
             throw new \RuntimeException("Failed to list collections: " . $e->getMessage());
         }
@@ -420,8 +431,15 @@ class QdrantStore implements VectorStoreInterface, UpdatesPayloadInterface, Grou
      */
     protected function request(string $method, string $endpoint, array|object $data = []): array
     {
-        $url = $this->baseUrl . $endpoint;
+        if ($this->collectionPrefix !== '' && str_starts_with($endpoint, '/collections/')) {
+            $endpoint = '/collections/' . $this->collectionPrefix . substr($endpoint, strlen('/collections/'));
+        }
 
+        return $this->send($method, $this->baseUrl . $endpoint, $data);
+    }
+
+    protected function send(string $method, string $url, array|object $data = []): array
+    {
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeout);

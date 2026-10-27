@@ -10,7 +10,7 @@ use Condoedge\Ai\DTOs\PipelineContext;
  * EntityIdIndex — which entity ids the turn's result rows actually carry, per
  * entity label (Phase 8-B link lint).
  *
- * Measured live: `entity://Union/3/view` where 3 was the TEAM id, and
+ * Measured live: `entity://Project/3/view` where 3 was the TEAM id, and
  * `entity://Meeting/1903` where 1903 was a task id — the model attaches any id it
  * saw to any label it knows. A link is only honest when its id came from a row of
  * THAT label. Attribution is purely structural:
@@ -27,9 +27,9 @@ use Condoedge\Ai\DTOs\PipelineContext;
  *     label (the index never rejects what it cannot disprove);
  *   - withIdentity() seeds the current user / team ids (action defaults).
  *
- * Labels are matched case- and punctuation-insensitively ("BoardMember" ≡
- * "board_member" ≡ "boardmember"). Host entity keys and graph labels coincide
- * (CondoEdge: all 73 entity config basenames equal their graph.label).
+ * Labels are matched case- and punctuation-insensitively ("OrderLine" ≡
+ * "order_line" ≡ "orderline"). Host entity keys and graph labels coincide
+ * (measured on a 73-entity host: every config basename equals its graph.label).
  */
 final class EntityIdIndex
 {
@@ -204,8 +204,8 @@ final class EntityIdIndex
     }
 
     /**
-     * The label part of a `<label>_id` / `<label>Id` name ("union_id" → "union",
-     * "boardMemberId" → "boardMember"); null for any other name.
+     * The label part of a `<label>_id` / `<label>Id` name ("project_id" → "project",
+     * "orderLineId" → "orderLine"); null for any other name.
      */
     public static function idColumnPrefix(string $name): ?string
     {

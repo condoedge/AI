@@ -207,7 +207,7 @@ final class CypherScopeAnalyzer
      * Analyze ONE UNION-free part. Returns a Scope, a list of Scopes (one per
      * WITH-segment carrying sensitive bindings), or a (rejecting) ScopePlan.
      *
-     * WITH-SEGMENTATION (item E — board-query carry-through, 2026-07-23): a
+     * WITH-SEGMENTATION (item E — latest-row carry-through, 2026-07-23): a
      * top-level WITH is a SEGMENT BOUNDARY, not a wall. Every sensitive binding
      * anchors at the FIRST WITH|RETURN|ORDER at the part's depth AFTER its own
      * binding site — i.e. in its OWN segment, where its alias is by
@@ -215,18 +215,18 @@ final class CypherScopeAnalyzer
      * a binding and the first anchor keyword after it). Bindings sharing an
      * anchor share a Scope; a query like
      *
-     *   MATCH (b:BoardMember)-[:R]->(un:Union) WHERE un.team_id IN $ai_team_ids
-     *   WITH un, max(b.year) AS y
-     *   MATCH (cur:BoardMember)-[:R]->(un) WHERE cur.year = y RETURN cur
+     *   MATCH (m:Member)-[:R]->(p:Project) WHERE p.team_id IN $ai_team_ids
+     *   WITH p, max(m.year) AS y
+     *   MATCH (cur:Member)-[:R]->(p) WHERE cur.year = y RETURN cur
      *
-     * therefore yields TWO scopes: {b, un} anchored at the WITH (spliced
-     * predicates land BEFORE it, while b and un are live) and {cur} anchored at
-     * the RETURN. A variable re-projected through the WITH (`WITH un, …`)
-     * retains its established scoping — its later label-free `(un)` mention is
+     * therefore yields TWO scopes: {m, p} anchored at the WITH (spliced
+     * predicates land BEFORE it, while m and p are live) and {cur} anchored at
+     * the RETURN. A variable re-projected through the WITH (`WITH p, …`)
+     * retains its established scoping — its later label-free `(p)` mention is
      * a live back-reference, not a new binding. Previously the whole part had
-     * ONE anchor after the LAST binding, so `b` (projected away by the WITH)
+     * ONE anchor after the LAST binding, so `m` (projected away by the WITH)
      * read as 'sensitive_binding_not_live' and the entire valid query
-     * fail-closed (live board-query safe-stop).
+     * fail-closed (live latest-row safe-stop).
      *
      * FAIL-CLOSED preserved: label-free NEW bindings, alias-free labels,
      * comprehension-buried sensitive patterns, anchor-less bindings, and DEAD
@@ -1317,7 +1317,7 @@ final class CypherScopeAnalyzer
     ): bool {
         foreach ($labelledIdxs as $labelledIdx) {
             if ($labelledIdx > $refIdx) {
-                // Forward label re-check (`MATCH (u) MATCH (u:Union)`): the
+                // Forward label re-check (`MATCH (u) MATCH (u:Project)`): the
                 // labelled occurrence constrains and scopes the variable —
                 // but ONLY while it is the SAME variable, i.e. no intervening
                 // WITH projects the alias away between the reference and the

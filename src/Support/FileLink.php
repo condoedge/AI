@@ -13,9 +13,9 @@ use Condoedge\Ai\DTOs\FileChunk;
  * for chunks stored before they existed), beside — never inside — `metadata`:
  *
  *   owner      `<entity label, lower case>:<id>` of the record the file is filed
- *              on (`unit:309`); null for a file that belongs to no record;
+ *              on (`project:309`); null for a file that belongs to no record;
  *   ancestors  the records that own that record, most specific first
- *              (`["union:14"]`);
+ *              (`["team:14"]`);
  *   dedupe     sha1 of the chunk's normalised text + its owner: two chunks with
  *              the same key are ONE passage (the same text filed twice on the
  *              same record). The owner is part of the key, so the same text
@@ -44,7 +44,7 @@ final class FileLink
         return strtolower($label) . ':' . $id;
     }
 
-    /** The kind part of a key (`unit` of `unit:309`); '' when it is not a key. */
+    /** The kind part of a key (`project` of `project:309`); '' when it is not a key. */
     public static function kindOf(string $key): string
     {
         $at = strpos($key, ':');
@@ -52,7 +52,7 @@ final class FileLink
         return $at === false || $at === 0 ? '' : substr($key, 0, $at);
     }
 
-    /** The id part of a key (`309` of `unit:309`); '' when it is not a key. */
+    /** The id part of a key (`309` of `project:309`); '' when it is not a key. */
     public static function idOf(string $key): string
     {
         $at = strpos($key, ':');
@@ -127,7 +127,7 @@ final class FileLink
 
     /**
      * The least specific record of a link — its last ancestor, else its owner
-     * (for a file filed on a unit: the unit's building). Null without an owner.
+     * (for a file filed on a project: the project's team). Null without an owner.
      *
      * @param array{owner?: ?string, ancestors?: array<int, mixed>}|null $link
      */

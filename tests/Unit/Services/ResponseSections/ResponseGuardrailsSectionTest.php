@@ -64,6 +64,18 @@ class ResponseGuardrailsSectionTest extends TestCase
         $this->assertStringContainsString('out-of-scope per rule 2', $output);
     }
 
+    /** @test Docs only: the answer never pretends to see the user's records. */
+    public function docs_only_mode_adds_the_no_records_rule(): void
+    {
+        $this->assertStringNotContainsString('3. ', $this->format());
+
+        config()->set('ai.query_generation.enabled', false);
+        $output = $this->format();
+
+        $this->assertStringContainsString("3. You answer from the documents only and cannot see the user's own records", $output);
+        $this->assertStringContainsString('never state a figure', $output);
+    }
+
     /** @test */
     public function no_domain_scope_keeps_the_generic_project_decline_only(): void
     {
