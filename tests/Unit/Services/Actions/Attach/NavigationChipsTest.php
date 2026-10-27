@@ -210,32 +210,50 @@ class NavigationChipsTest extends TestCase
         $this->assertSame(['start_task|||Change a booking', 'link|||Produits'], $this->chipLines($response['metadata']['response']['invocations']));
     }
 
-    /**
-     * @test "How do I invite a member?" is read as "open my team": the team link replaces the page buttons, so a
-     * page that names tasks gives its start chips to the team link that opens it too.
-     */
-    public function the_team_link_to_a_page_that_names_a_task_gets_its_start_chip(): void
+    /** A how-to answered from the articles that QU also read as "open my team" (live: "Can you help me creating a campaign in my team?"). */
+    private function teamHowToTurn(): array
     {
-        $this->configureTaskPage();
         config(['ai.attached_actions.identity.team' => ['route' => 'campaign.page.products']]);
-        $attach = fn () => (new ActionAttacher(new AiActionRegistry()))
-            ->forTurn($this->turn([], null, ['navigationTarget' => 'own_team']), ['user' => $this->resident()]);
+        $ctx = $this->knowledgeTurn();
+        $ctx->qu = new \Condoedge\Ai\DTOs\QueryUnderstandingResult(questionType: 'knowledge_query', navigationTarget: 'own_team', language: 'en');
+        $ctx->attachedActions = (new ActionAttacher(new AiActionRegistry()))->forTurn($ctx, ['user' => $this->resident()]);
 
-        $this->assertSame(['start_task|||book.start', 'my_team|||My team'], $this->chipLines($attach()->invocations()));
-
-        config(['ai.tasks.enabled' => false]);
-        $this->assertSame(['my_team|||My team'], $this->chipLines($attach()->invocations()), 'tasks off: the link alone');
+        return [$ctx, $this->response($ctx->attachedActions->applyTo(['style' => 'friendly']))];
     }
 
-    /** @test Live 8-data en-period: a data answer that reads the team keeps its team link, with no task offer under it. */
-    public function a_team_link_beside_a_data_answer_gets_no_start_chip(): void
+    /** @test The team link carries no task of its own: what the answer is about decides the task (live: a campaign how-to offered "invite a member"). */
+    public function the_team_link_alone_carries_no_start_chip(): void
     {
         $this->configureTaskPage();
-        config(['ai.attached_actions.identity.team' => ['route' => 'campaign.page.products']]);
+        [$ctx] = $this->teamHowToTurn();
 
-        $chips = (new ActionAttacher(new AiActionRegistry()))
-            ->forTurn($this->turn([], null, ['entityTypes' => ['Team']]), ['user' => $this->resident()]);
+        $this->assertSame(['my_team|||My team'], $this->chipLines($ctx->attachedActions->invocations()));
+    }
 
-        $this->assertSame(['my_team|||My team'], $this->chipLines($chips->invocations()));
+    /** @test */
+    public function a_how_to_read_as_open_my_team_still_gets_the_page_it_is_about_with_its_tasks(): void
+    {
+        $this->configureTaskPage();
+        [$ctx, $response] = $this->teamHowToTurn();
+        Route::get('/my-campaign/dashboard', fn () => 'ok')->name('campaign.dashboard');
+        Route::getRoutes()->refreshNameLookups();
+        config(['ai.navigation.pages.transactions.task' => 'book_room']);
+
+        $response = (new ActionAttacher(new AiActionRegistry(), null, new NavigationPages($this->llm(['transactions']))))
+            ->withNavigation($response, $ctx, ['user' => $this->resident()]);
+
+        $this->assertSame(['my_team|||My team', 'start_task|||book.start', 'link|||Transactions'], $this->chipLines($response['metadata']['response']['invocations']));
+    }
+
+    /** @test The page the team link already opens is not offered twice: only its task chips are added. */
+    public function a_picked_page_the_team_link_opens_adds_only_its_tasks(): void
+    {
+        $this->configureTaskPage();
+        [$ctx, $response] = $this->teamHowToTurn();
+
+        $response = (new ActionAttacher(new AiActionRegistry(), null, new NavigationPages($this->llm(['products']))))
+            ->withNavigation($response, $ctx, ['user' => $this->resident()]);
+
+        $this->assertSame(['my_team|||My team', 'start_task|||book.start'], $this->chipLines($response['metadata']['response']['invocations']));
     }
 }

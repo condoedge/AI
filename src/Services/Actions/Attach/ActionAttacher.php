@@ -267,8 +267,8 @@ class ActionAttacher
      * Page buttons of a document-grounded answer (ai.navigation.pages, {@see NavigationPages}):
      * the pages setup offers this user, of which the model picks at most `max`, each one a
      * `link` chip by route name, with `?section=` and "Page › Section" when one was picked.
-     * Same gates as the follow-ups: documents retrieved, a real answer, no export, no
-     * navigation ask, the turn's own chips. Never throws.
+     * Gates: documents retrieved, a real answer, no export, the turn's own chips. A how-to QU also read as "open
+     * my team" gets them too: the page the answer is about brings its tasks. Never throws.
      *
      * @param array<string, mixed> $response
      * @param array<string, mixed> $options pipeline options (user)
@@ -281,7 +281,7 @@ class ActionAttacher
             $answer = is_string($response['answer'] ?? null) ? $response['answer'] : '';
             $attached = $ctx->attachedActions ?? AttachedActions::none();
             if ($this->navigationPages === null || $metadata === null || trim($answer) === '' || $this->unanswered($metadata)
-                || $ctx->qu->exportFormat !== null || trim((string) $ctx->qu->navigationTarget) !== ''
+                || $ctx->qu->exportFormat !== null
                 || empty($ctx->fileContext['relevant_files']) || !empty($ctx->fileContext['enumeration'])
                 || ($metadata['invocations'] ?? []) !== $attached->invocations()) {
                 return $response;
@@ -299,12 +299,16 @@ class ActionAttacher
             $observer->stageFinished(NavigationPages::STAGE, ['offered' => array_keys($pages), 'picked' => array_keys($picked)], round((hrtime(true) - $start) / 1e6, 3));
 
             $chips = [];
+            $opened = $this->identityRoutes($attached);
             foreach ($picked as $key => $section) {
                 // A page naming tasks the user may start gets their start chips first.
                 foreach ($pages[$key]['task'] ?? [] as $taskKey) {
                     if (($task = StartTaskAction::invocation($taskKey, $user)) !== null) {
                         $chips[] = $this->chip(AttachedActions::ROLE_NEXT, $task);
                     }
+                }
+                if ($section === null && in_array($pages[$key]['route'], $opened, true)) {
+                    continue; // the identity link already opens this page
                 }
                 $chips[] = $this->chip(AttachedActions::ROLE_NEXT, new ActionInvocation('link', null, null, $section === null
                     ? ['route' => $pages[$key]['route'], 'style' => 'button']
@@ -328,6 +332,14 @@ class ActionAttacher
 
             return $response;
         }
+    }
+
+    /** @return list<string> the routes the turn's built-in identity links (my_team / my_profile) open */
+    private function identityRoutes(AttachedActions $attached): array
+    {
+        $keys = array_intersect(array_column($attached->invocations(), 'key'), [IdentityLinkAction::PROFILE, IdentityLinkAction::TEAM]);
+
+        return array_values(array_filter(array_map(static fn (string $key) => (new IdentityLinkAction($key))->route(), $keys)));
     }
 
     /**
@@ -822,14 +834,13 @@ class ActionAttacher
         $aboutSelf = ($ctx->qu->isPersonalPossessive() && $userIsPrimary)
             || $ctx->qu->navigationTarget === 'own_profile';
         if ($aboutSelf || (count($rows) === 1 && $this->isOwnRecord($rows[0], $cypher, $ctx, $user, $userLabel, $current))) {
-            $profile = $this->identityChip('profile', IdentityLinkAction::PROFILE, $user, $this->locale($ctx));
-            array_push($chips, ...($ctx->qu->navigationTarget === 'own_profile' ? $this->pageTaskChips($profile, $user) : []), ...[$profile]);
+            $chips[] = $this->identityChip('profile', IdentityLinkAction::PROFILE, $user, $this->locale($ctx));
         }
         $teamLabel = (string) ($labels['team'] ?? 'Team');
         $aboutTeam = $mentions($teamLabel) || $ctx->qu->navigationTarget === 'own_team';
         if ($aboutTeam && $this->hasLiveCurrentTeam($user)) {
             $team = $this->identityChip('team', IdentityLinkAction::TEAM, $user, $this->locale($ctx));
-            array_push($chips, ...($ctx->qu->navigationTarget === 'own_team' ? $this->pageTaskChips($team, $user) : []), ...[$team]);
+            $chips[] = $team;
             // The doors of the user's own team, beside its link — only for who gets the link.
             if ($team !== null && $current && count($rows) === 1
                 && !in_array($ctx->qu->intent, self::COUNT_INTENTS, true)
@@ -839,23 +850,6 @@ class ActionAttacher
         }
 
         return array_values(array_filter($chips));
-    }
-
-    /**
-     * The start chips of the tasks named by the page a built-in identity link opens (as page buttons get them),
-     * for a navigation ask: it gets that link instead of page buttons.
-     *
-     * @return list<array{role: string, invocation: ActionInvocation}>
-     */
-    private function pageTaskChips(?array $link, mixed $user): array
-    {
-        $key = $link === null ? null : $link['invocation']->key;
-        $route = in_array($key, [IdentityLinkAction::PROFILE, IdentityLinkAction::TEAM], true) ? (new IdentityLinkAction($key))->route() : null;
-
-        return $route === null ? [] : array_values(array_filter(array_map(
-            fn (string $task) => ($invocation = StartTaskAction::invocation($task, $user)) === null ? null : $this->chip(AttachedActions::ROLE_NEXT, $invocation),
-            NavigationPages::tasksOn($route, $user),
-        )));
     }
 
     /**
