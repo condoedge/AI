@@ -171,8 +171,9 @@ final class CypherStructuralValidator
 
             // A bare boolean connective at clause position (not inside a WHERE)
             // means a predicate was spliced after a pattern clause — e.g.
-            // `MATCH (...) AND ...`. Invalid.
-            if (!$inTopLevelWhere && $this->isBooleanConnective($t->value)) {
+            // `MATCH (...) AND ...`. Invalid. In a RETURN / WITH / ORDER BY expression it is Cypher.
+            if (!$inTopLevelWhere && $this->isBooleanConnective($t->value)
+                && in_array($lastClauseByBrace[$t->braceDepth] ?? null, ['MATCH', 'MERGE', 'CREATE'], true)) {
                 return "boolean connective '{$t->value}' outside a WHERE predicate at offset {$t->offset}";
             }
         }

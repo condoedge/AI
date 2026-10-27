@@ -97,6 +97,15 @@ final class IdentityLinkAction extends AbstractBuiltInAction
         return AiActionResult::element(_Link($text)->href($route, $parameters), $this->label());
     }
 
+    /** The name of the route this link opens, or null when it does not exist. */
+    public function route(): ?string
+    {
+        $kind = self::DEFAULTS[$this->key]['kind'] ?? null;
+        $route = $kind === null ? null : self::config("ai.attached_actions.identity.{$kind}.route", self::DEFAULTS[$this->key]['route']);
+
+        return is_string($route) && $route !== '' && self::routeExists($route) ? $route : null;
+    }
+
     /**
      * The route + parameters this link opens for $user, or null when the route does not
      * exist (or the team link has no current team to open).
@@ -106,12 +115,8 @@ final class IdentityLinkAction extends AbstractBuiltInAction
     private function target(mixed $user): ?array
     {
         $kind = self::DEFAULTS[$this->key]['kind'] ?? null;
-        if ($kind === null) {
-            return null;
-        }
-
-        $route = self::config("ai.attached_actions.identity.{$kind}.route", self::DEFAULTS[$this->key]['route']);
-        if (!is_string($route) || $route === '' || !self::routeExists($route)) {
+        $route = $this->route();
+        if ($kind === null || $route === null) {
             return null;
         }
 

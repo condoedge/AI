@@ -50,6 +50,19 @@ class ConversationContextSectionTest extends TestCase
         $this->assertSame('[email#1]', $context->piiMasker?->tokenForValue('karen@x.test'));
     }
 
+    /** @test Live 8-data "Pis le panier moyen?": a cut through 🏈 sent invalid UTF-8 and OpenAI refused the request. */
+    public function a_long_previous_answer_is_cut_between_characters_never_inside_one(): void
+    {
+        $answer = str_repeat('é', 149) . '🏈 TOUCHDOWN JAR ' . str_repeat('x', 300);
+
+        $out = $this->section->format('Pis le panier moyen?', $this->contextWith([
+            'recent_exchanges' => [['role' => 'assistant', 'question' => 'Combien on a vendu?', 'answer_summary' => $answer]],
+        ]), []);
+
+        $this->assertTrue(mb_check_encoding($out, 'UTF-8'));
+        $this->assertNotFalse(json_encode($out));
+    }
+
     /** @test */
     public function it_has_correct_name_and_priority(): void
     {

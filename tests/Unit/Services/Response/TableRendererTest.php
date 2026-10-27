@@ -397,6 +397,15 @@ class TableRendererTest extends TestCase
         $this->assertSame([['305', '456.12']], $matrix);
     }
 
+    /** @test A whole number stored as a float (a percentage of 116.0) reads as the whole number; a fraction keeps 2 digits. */
+    public function a_whole_float_that_is_not_money_reads_as_a_whole_number(): void
+    {
+        config(['ai.response_generation.currency_symbol' => '$']);
+        $this->assertSame('116', $this->renderer->cell(116.0, true, 'fr'));
+        $this->assertSame('116,5', str_replace("\u{202F}", ' ', rtrim($this->renderer->cell(116.5, true, 'fr'), '0')));
+        $this->assertSame('8 000,00 $', str_replace(["\u{202F}", "\u{00A0}"], ' ', $this->renderer->formatMoney(8000.0, 'fr')), 'money keeps its cents');
+    }
+
     /**
      * @test A local-midnight date serialized in UTC (05:00Z / 04:00Z in America/New_York) reads as
      * the date; a real timestamp reads in the app timezone with its time; UTC midnight stays a date.

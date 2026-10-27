@@ -215,6 +215,9 @@
     "ai.response.self_reference_marker": "that's you",
     "ai.response.self_reference_patch": "that's you — your own contact details",
     "ai.clarify.fallback_question": "Could you clarify which of these you mean?",
+    "ai.clarify.page-scope": "Do you mean « :record » only, or your whole organization?",
+    "ai.clarify.page-scope-record": ":question (for « :record » only)",
+    "ai.clarify.page-scope-all": ":question (for my whole organization)",
 
     "ai.error.encountered_issue": "I encountered an issue while trying to answer your question: \":question\".",
     "ai.error.timeout_guidance": "The query took too long to execute. Try asking a more specific question or limiting the scope.",
@@ -263,6 +266,8 @@
     "ai.chat.error-generic": "I encountered an error processing your question. Please try rephrasing or try again later.",
     "ai.error.data_part_failed": "Note: I couldn't retrieve the data part of your question right now, so I can't say anything about your data. Please try again in a moment.",
     "ai.error.data_part_blocked": "Note: I couldn't run the data part of your question safely for your team's data, so I won't guess about it. Could you rephrase or narrow that part?",
+    "ai.error.data_part_denied": "Note: your access does not let me read the data part of your question, so I won't say anything about it. Someone with more access in your organization can see it.",
+    "ai.error.no_access": "Your access does not let me read this information, so I can't answer this question. Someone with more access in your organization can see it.",
     "ai.export.identity_title": "User Information",
     "ai.export.default_title": "Requested Information",
     "ai.export.as_of": "As of: :date",

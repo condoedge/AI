@@ -11,6 +11,7 @@ use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryGenerationResult;
+use Condoedge\Ai\DTOs\QueryUnderstandingResult;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Exceptions\QueryValidationException;
 
@@ -371,5 +372,57 @@ RETURN n LIMIT 100';
         $result = $this->generator->validate($query);
 
         $this->assertTrue($result['valid']);
+    }
+
+    private function formulaTurn(bool $matched): PipelineContext
+    {
+        config(['ai.calculations' => ['platform_fees' => ['label' => 'Platform fees paid by a campaign', 'formula' => 'Campaign.platform_fees',
+            'cypher' => 'MATCH (c:Campaign) RETURN c.platform_fees AS platform_fees']]]);
+        $context = $this->makeContext(['graph_schema' => ['labels' => ['Campaign']]]);
+        $context->qu = new QueryUnderstandingResult(questionType: 'data_query');
+        $context->selectionInfo['calculations'] = ['matched' => $matched ? ['platform_fees' => 0.8] : []];
+
+        return $context;
+    }
+
+    /** @test Live 8-data "Combien on a payé en frais Stripe?": a decline on a question a domain formula matches gets ONE retry naming it. */
+    public function a_data_question_declined_although_a_formula_matches_is_redrafted_once_with_that_formula(): void
+    {
+        $prompts = [];
+        $this->mockLlm->shouldReceive('chatJson')->twice()
+            ->andReturnUsing(function (array $messages) use (&$prompts) {
+                $prompts[] = $messages[1]['content'];
+
+                return count($prompts) === 1
+                    ? (object) ['needs_query' => false, 'cypher' => null, 'reason' => 'Stripe fees are not recorded.']
+                    : $this->draft('MATCH (c:Campaign) RETURN c.platform_fees AS platform_fees LIMIT 100');
+            });
+
+        $result = $this->generator->generate('Combien on a payé en frais Stripe?', $this->formulaTurn(true), ['explain' => false]);
+
+        $this->assertStringContainsString('c.platform_fees', $result->cypher);
+        $this->assertStringContainsString('Platform fees paid by a campaign', $prompts[1]);
+        $this->assertStringContainsString('Stripe fees are not recorded.', $prompts[1]);
+    }
+
+    /** @test */
+    public function a_draft_ordering_an_aggregate_by_an_unreturned_property_is_projected_before_it_runs(): void
+    {
+        $this->mockLlm->shouldReceive('chatJson')->once()->andReturn($this->draft(
+            'MATCH (c:Campaign) RETURN c.id AS id, count(*) AS n ORDER BY c.start_date DESC LIMIT 100'
+        ));
+
+        $this->assertSame(
+            'MATCH (c:Campaign) RETURN c.id AS id, count(*) AS n, c.start_date AS c_start_date ORDER BY c_start_date DESC LIMIT 100',
+            $this->generator->generate('Ventes par campagne', $this->formulaTurn(false), ['explain' => false])->cypher
+        );
+    }
+
+    /** @test */
+    public function a_decline_with_no_formula_matched_stays_a_decline_without_another_call(): void
+    {
+        $this->mockLlm->shouldReceive('chatJson')->once()->andReturn((object) ['needs_query' => false, 'cypher' => null, 'reason' => 'Nothing to look up.']);
+
+        $this->assertSame('', $this->generator->generate('Merci!', $this->formulaTurn(false), ['explain' => false])->cypher);
     }
 }

@@ -1142,3 +1142,48 @@ in the ai package; clarifications only where they truly help.
   BLOCKED on memory: Claude Code killed the Campaign/Product re-ingest, the document map backfill and a test run (low system memory).
   To do once memory allows: Coolecto tests (Unit/Ai, Feature/Ai, Feature/Campaigns, Goals…), re-ingest Campaign + Product +
   Participant, `ai:documents:map --backfill`, then live run `scratchpad/live-run-1026.sh`.
+- 2026-10-27: Memory freed (owner "go"): Coolecto tests green, re-ingest done (Campaign 4116, Product 33189, Participant 169509),
+  document map backfill done (466 files; 1 file without a usable map keeps the plain search). Live run `reports/live-1026/`:
+  8-data ×3 = 57/55/? ok of 80 (27 turns fail at least once, most every time); tasks-offer 4/7; tasks-personas 44/46;
+  tasks-adversarial all ok; tasks-limits 0/1; help suites 1–7: 7 failed checks (2 latency over 30 s, 2 no_cypher, 3 retrieval).
+- 2026-10-27 causes found and fixed (tests red first; package 5327 green, ai-eval 161 green):
+  - `coolecto_context_index` did not exist in Qdrant (entity selection fell back to keywords: "mises" → Transfer). Built with
+    `php artisan ai:index-context` (112 points; Coolecto-prefixed only). **Production rollout step.** Alone it changed no verdict.
+  - Task offer never fired on "How do I invite a member?": QU reads it as navigation `own_team`, which replaces the page buttons
+    that carry the task chips. Fix: a built-in identity link (my_team / my_profile) gets the start chips of the tasks named by the
+    navigation page that opens the same route (`IdentityLinkAction::route()`, `NavigationPages::tasksOn()`,
+    `ActionAttacher::pageTaskChips()`). No extra call.
+  - A role refused the data (editor, ticket scanner) got "I encountered an issue, try again": now `ai.error.no_access` (branch
+    `access_denied`), and `ai.error.data_part_denied` under a documents answer. ai-eval: `access_denied` is an answer, not a
+    stage-error. A refusal was already never retried.
+  - The query writer declined (needs_query false, "not recorded in the schema") on data questions a domain formula matched
+    (statement total, year over year, platform fees): reproducible 2/2 on gpt-4o JSON mode. Fix: one redraft naming the matched
+    formula, only on that decline path (replay: 3/3 then query, twice). Remaining declines (no formula matched) are now answered
+    "the data I can read does not hold this" (`not_in_data`), never "I checked transfers… none matched" (no lookup ran).
+  - A whole number stored as a float showed as "116,00": the answer card now writes "116" (money keeps its cents).
+  - Suite: goal-left expected the goal too; its standard asks only the amount left → template figure trimmed, suite rebuilt.
+- Open (not fixed, measured): "notre profit / notre % / combien on a vendu" on a campaign dashboard is answered for every campaign
+  of the organisation (COLLECTIVE POSSESSIVE rule wins over the page context; a one-line prompt change had no effect on replay);
+  "profit net" picks the account statement's figure; draw tickets answered per product with the row count read as tickets;
+  the record card shows helper columns ("Is P2p: 0"); tickets-present goes to the help articles.
+- 2026-10-27 (later): more general fixes, tests red first (package 5336 green, ai-eval 161, Coolecto Unit/Ai 66):
+  - Conversation summary cut text by bytes: a 🏈 in a campaign name broke UTF-8 and OpenAI refused the whole request on every
+    follow-up ("Pis le panier moyen?"). `mb_strcut` in ConversationContextSection, QueryUnderstandingService (descriptions),
+    ExportResponseComposer (file title).
+  - `AggregateOrderBy`: an aggregating RETURN ordered by an unreturned property (ORDER BY c.start_date) is projected by code
+    (only when the record's id is returned, single RETURN); the model kept writing it, even in its repair.
+  - Owner decision "ask the user": on a record's page, a per-record formula matched + "our" + a query over every record of the
+    page's kind → Coco asks "« record » only, or your whole organization?" with one button per reading
+    (`AiManager::pageScopeClarification`, lang `ai.clarify.page-scope*`); the reply to it is answered. CondoEdge has no
+    per-record formula (unaffected). Suite: 6 conversations get a "this campaign only" turn carrying the figures.
+  - The team link's task chips only on a navigation ask (a data answer reading the team had offered "invite a member").
+  - Coolecto config: participants_without_sale rewritten without EXISTS{} (+ test: every formula passes the scope analyzer);
+    tax receipts exclude canceled + total donation_amount; deposit/receipt dates matched by day; period questions → period
+    sales by payment date; French words in auction/membership/without-sale descriptions; yearly figure never a month.
+  - Owner: task steps stay on gpt-4.1-mini. tasks-limits needs 3 creations in the last 24 h (state, not code; the limit is
+    unit-tested).
+- 2026-10-27 (end): the pick turn added to 33 page-context "our" conversations (115 turns). Final data run 98/115 ok (+5 whose
+  only failure was min_rows on a restated answer; relaxed). Structural validator: AND inside a RETURN/WITH expression is no
+  longer refused (only right after MATCH/MERGE/CREATE). ai-eval cassette ignores CRLF/LF (the prompt files lost their CRLF):
+  CondoEdge gold replay 0 mismatches, 0 drift, 39/39. Report: `docs/eval/2026-10-27-coolecto-data-v1.md` (English, with
+  the 115 questions in English and each turn's result).

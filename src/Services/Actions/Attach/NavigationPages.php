@@ -83,6 +83,19 @@ final class NavigationPages
         return $offered;
     }
 
+    /** @return list<string> the tasks named by the pages offered to $user that open $route */
+    public static function tasksOn(string $route, mixed $user): array
+    {
+        $tasks = [];
+        foreach (self::offeredTo($user) as $page) {
+            if ($page['route'] === $route) {
+                array_push($tasks, ...($page['task'] ?? []));
+            }
+        }
+
+        return array_values(array_unique($tasks));
+    }
+
     public static function max(): int
     {
         return max(0, (int) config('ai.navigation.max', 2));

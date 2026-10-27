@@ -209,4 +209,33 @@ class NavigationChipsTest extends TestCase
 
         $this->assertSame(['start_task|||Change a booking', 'link|||Produits'], $this->chipLines($response['metadata']['response']['invocations']));
     }
+
+    /**
+     * @test "How do I invite a member?" is read as "open my team": the team link replaces the page buttons, so a
+     * page that names tasks gives its start chips to the team link that opens it too.
+     */
+    public function the_team_link_to_a_page_that_names_a_task_gets_its_start_chip(): void
+    {
+        $this->configureTaskPage();
+        config(['ai.attached_actions.identity.team' => ['route' => 'campaign.page.products']]);
+        $attach = fn () => (new ActionAttacher(new AiActionRegistry()))
+            ->forTurn($this->turn([], null, ['navigationTarget' => 'own_team']), ['user' => $this->resident()]);
+
+        $this->assertSame(['start_task|||book.start', 'my_team|||My team'], $this->chipLines($attach()->invocations()));
+
+        config(['ai.tasks.enabled' => false]);
+        $this->assertSame(['my_team|||My team'], $this->chipLines($attach()->invocations()), 'tasks off: the link alone');
+    }
+
+    /** @test Live 8-data en-period: a data answer that reads the team keeps its team link, with no task offer under it. */
+    public function a_team_link_beside_a_data_answer_gets_no_start_chip(): void
+    {
+        $this->configureTaskPage();
+        config(['ai.attached_actions.identity.team' => ['route' => 'campaign.page.products']]);
+
+        $chips = (new ActionAttacher(new AiActionRegistry()))
+            ->forTurn($this->turn([], null, ['entityTypes' => ['Team']]), ['user' => $this->resident()]);
+
+        $this->assertSame(['my_team|||My team'], $this->chipLines($chips->invocations()));
+    }
 }

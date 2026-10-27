@@ -16,6 +16,7 @@ use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\DTOs\QueryUnderstandingResult;
 use Condoedge\Ai\Exceptions\QueryExecutionException;
+use Condoedge\Ai\Exceptions\SecurityException;
 use Condoedge\Ai\Services\AiManager;
 use Condoedge\Ai\Services\ResponseGenerator;
 use Condoedge\Ai\Tests\TestCase;
@@ -146,6 +147,37 @@ class AiManagerErrorAnswerTest extends TestCase
         $this->assertStringEndsWith(trans('ai.error.data_part_failed', [], 'fr'), $result['answer']);
         $this->assertNotSame('ai.error.data_part_failed', trans('ai.error.data_part_failed', [], 'fr'));
         $this->assertSame('partial_data_failed', $result['metadata']['response']['status'] ?? null);
+    }
+
+    /** @test A role refused the data is told so, not "an issue occurred, try again" (live 8-data editor-money). */
+    public function a_query_the_users_access_refuses_is_answered_as_no_access_not_as_an_error(): void
+    {
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($this->frenchDataTurn());
+        $this->mockQueryGenerator->shouldReceive('generate')->andReturn(new QueryGenerationResult(cypher: 'MATCH (c:Campaign) RETURN c.raised AS raised', confidence: 0.9));
+        $this->mockQueryExecutor->shouldReceive('execute')->andThrow(new SecurityException('You do not have permission to query Campaign data'));
+        $this->mockLlm->shouldReceive('complete')->never();
+
+        $result = $this->manager->answerQuestion("Combien d'argent on a amassé?", ['store_examples' => false]);
+
+        $this->assertSame(trans('ai.error.no_access', [], 'fr'), $result['answer']);
+        $this->assertNotSame('ai.error.no_access', $result['answer']);
+        $this->assertSame('access_denied', $result['metadata']['response']['status'] ?? null);
+    }
+
+    /** @test */
+    public function a_mixed_question_whose_data_part_is_refused_says_so_under_the_documents_answer(): void
+    {
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(questionType: 'hybrid', language: 'fr');
+        $ctx->fileContext = ['relevant_files' => [['file_id' => 1, 'filename' => 'aide.md', 'snippet' => 'Tableau de bord', 'relevance' => 0.8]]];
+        $ctx->queryResult = new QueryGenerationResult(cypher: 'MATCH (c:Campaign) RETURN c.raised AS raised', confidence: 0.9);
+        $ctx->executionResult = new QueryExecutionResult(success: false, metadata: ['execution_error' => SecurityException::class], errors: ['You do not have permission to query Campaign data']);
+        $this->mockLlm->shouldReceive('complete')->once()->andReturn('Le montant se voit au tableau de bord [1].');
+
+        $result = (function (string $q, $c) { return $this->buildFinalResponse($q, $c, []); })->call($this->manager, 'Où voir le montant et combien on a?', $ctx);
+
+        $this->assertStringEndsWith(trans('ai.error.data_part_denied', [], 'fr'), $result['answer']);
+        $this->assertNotSame('ai.error.data_part_denied', trans('ai.error.data_part_denied', [], 'fr'));
     }
 
     /** @test */

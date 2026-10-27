@@ -299,4 +299,15 @@ class TenantScopingInvariantTest extends TestCase
                 . (CypherStructuralValidator::diagnose($multiCol) ?? 'ok')
         );
     }
+
+    /** @test Live 8-data period-weeks: AND inside a RETURN expression is Cypher, not a spliced predicate. */
+    public function structural_validator_accepts_boolean_connectives_inside_projection_expressions(): void
+    {
+        foreach ([
+            "MATCH (o:Order) WHERE o.is_paid = 1 RETURN CASE WHEN o.d >= '2025-09-29' AND o.d <= '2025-10-05' THEN 'w2' ELSE 'w1' END AS week, sum(o.net_amount) AS sales",
+            'MATCH (c:Campaign) WITH c, c.goal > 0 AND c.raised >= c.goal AS reached RETURN c.name AS name, reached ORDER BY reached AND c.paused DESC',
+        ] as $cypher) {
+            $this->assertNull(CypherStructuralValidator::diagnose($cypher), $cypher);
+        }
+    }
 }

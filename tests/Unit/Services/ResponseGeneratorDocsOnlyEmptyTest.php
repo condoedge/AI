@@ -52,6 +52,16 @@ class ResponseGeneratorDocsOnlyEmptyTest extends TestCase
         $this->assertStringNotContainsString('WHAT WAS CHECKED', $prompt);
     }
 
+    /** @test Live 8-data auction-bids: the query writer declined, and the answer said "I checked transfers, none matched". */
+    public function when_no_query_ran_the_abstention_never_claims_a_search(): void
+    {
+        $prompt = $this->emptyPrompt(['not_in_data' => true, 'checked_entity_types' => ['Transfer']]);
+
+        $this->assertStringContainsString('No lookup was run', $prompt);
+        $this->assertStringNotContainsString('No matching records were found', $prompt);
+        $this->assertStringNotContainsString('WHAT WAS CHECKED', $prompt);
+    }
+
     /** @test */
     public function without_it_the_abstention_is_unchanged(): void
     {

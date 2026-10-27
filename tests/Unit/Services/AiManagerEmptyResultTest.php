@@ -302,6 +302,23 @@ class AiManagerEmptyResultTest extends TestCase
         $this->assertSame('blocked_by_scoping', $result['metadata']['response']['status']);
     }
 
+    /** @test A data question the query writer declined ran no lookup: the abstention is told so. */
+    public function a_declined_data_question_is_abstained_as_not_in_the_data(): void
+    {
+        $ctx = new PipelineContext();
+        $ctx->qu = new QueryUnderstandingResult(questionType: 'data_query', intent: 'aggregate', entityTypes: ['Transfer'], language: 'fr');
+        $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
+        $this->mockQueryGenerator->shouldReceive('generate')
+            ->andReturn(new QueryGenerationResult(cypher: '', explanation: '', confidence: 1.0, metadata: ['no_query_reason' => 'Not recorded.']));
+        $this->executor();
+        $options = null;
+        $this->expectEmptyResponse($options);
+
+        $this->ask('C\'est quoi le total des mises?');
+
+        $this->assertTrue($options['not_in_data'] ?? false);
+    }
+
     // --------------------------------------------------------------- E1 scope
 
     /** @test */

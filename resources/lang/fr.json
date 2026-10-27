@@ -215,6 +215,9 @@
     "ai.response.self_reference_marker": "c'est vous",
     "ai.response.self_reference_patch": "c'est vous — vos propres coordonnées",
     "ai.clarify.fallback_question": "Pouvez-vous préciser ce que vous voulez dire parmi ces options ?",
+    "ai.clarify.page-scope": "Parlez-vous seulement de « :record », ou de toute votre organisation ?",
+    "ai.clarify.page-scope-record": ":question (seulement pour « :record »)",
+    "ai.clarify.page-scope-all": ":question (pour toute mon organisation)",
 
     "ai.error.encountered_issue": "J'ai rencontré un problème en essayant de répondre à votre question: \":question\".",
     "ai.error.timeout_guidance": "La requête a pris trop de temps à s'exécuter. Essayez de poser une question plus précise ou de limiter la portée.",
@@ -263,6 +266,8 @@
     "ai.chat.error-generic": "Une erreur s'est produite lors du traitement de votre question. Veuillez la reformuler ou réessayer plus tard.",
     "ai.error.data_part_failed": "Note : je n'ai pas pu récupérer la partie « données » de votre question pour le moment, alors je ne peux rien affirmer sur vos données. Veuillez réessayer dans un instant.",
     "ai.error.data_part_blocked": "Note : je n'ai pas pu exécuter la partie « données » de votre question de façon sécuritaire sur les données de votre équipe, alors je préfère ne pas deviner. Pourriez-vous reformuler ou préciser cette partie?",
+    "ai.error.data_part_denied": "Note : votre accès ne me permet pas de lire la partie « données » de votre question, alors je n'en dis rien. Une personne ayant plus d'accès dans votre organisation peut la consulter.",
+    "ai.error.no_access": "Votre accès ne me permet pas de lire cette information, alors je ne peux pas répondre à cette question. Une personne ayant plus d'accès dans votre organisation peut la consulter.",
     "ai.export.identity_title": "Informations utilisateur",
     "ai.export.default_title": "Informations demandées",
     "ai.export.as_of": "En date du : :date",

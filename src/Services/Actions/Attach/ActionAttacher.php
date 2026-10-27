@@ -822,13 +822,14 @@ class ActionAttacher
         $aboutSelf = ($ctx->qu->isPersonalPossessive() && $userIsPrimary)
             || $ctx->qu->navigationTarget === 'own_profile';
         if ($aboutSelf || (count($rows) === 1 && $this->isOwnRecord($rows[0], $cypher, $ctx, $user, $userLabel, $current))) {
-            $chips[] = $this->identityChip('profile', IdentityLinkAction::PROFILE, $user, $this->locale($ctx));
+            $profile = $this->identityChip('profile', IdentityLinkAction::PROFILE, $user, $this->locale($ctx));
+            array_push($chips, ...($ctx->qu->navigationTarget === 'own_profile' ? $this->pageTaskChips($profile, $user) : []), ...[$profile]);
         }
         $teamLabel = (string) ($labels['team'] ?? 'Team');
         $aboutTeam = $mentions($teamLabel) || $ctx->qu->navigationTarget === 'own_team';
         if ($aboutTeam && $this->hasLiveCurrentTeam($user)) {
             $team = $this->identityChip('team', IdentityLinkAction::TEAM, $user, $this->locale($ctx));
-            $chips[] = $team;
+            array_push($chips, ...($ctx->qu->navigationTarget === 'own_team' ? $this->pageTaskChips($team, $user) : []), ...[$team]);
             // The doors of the user's own team, beside its link — only for who gets the link.
             if ($team !== null && $current && count($rows) === 1
                 && !in_array($ctx->qu->intent, self::COUNT_INTENTS, true)
@@ -838,6 +839,23 @@ class ActionAttacher
         }
 
         return array_values(array_filter($chips));
+    }
+
+    /**
+     * The start chips of the tasks named by the page a built-in identity link opens (as page buttons get them),
+     * for a navigation ask: it gets that link instead of page buttons.
+     *
+     * @return list<array{role: string, invocation: ActionInvocation}>
+     */
+    private function pageTaskChips(?array $link, mixed $user): array
+    {
+        $key = $link === null ? null : $link['invocation']->key;
+        $route = in_array($key, [IdentityLinkAction::PROFILE, IdentityLinkAction::TEAM], true) ? (new IdentityLinkAction($key))->route() : null;
+
+        return $route === null ? [] : array_values(array_filter(array_map(
+            fn (string $task) => ($invocation = StartTaskAction::invocation($task, $user)) === null ? null : $this->chip(AttachedActions::ROLE_NEXT, $invocation),
+            NavigationPages::tasksOn($route, $user),
+        )));
     }
 
     /**

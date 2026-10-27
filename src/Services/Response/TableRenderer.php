@@ -826,6 +826,9 @@ final class TableRenderer
         if (is_bool($value)) {
             return $value ? 'Yes' : 'No';
         }
+        if (is_float($value) && $humanize && floor($value) === $value && abs($value) < PHP_INT_MAX) {
+            return (string) (int) $value;
+        }
         if (is_float($value)) {
             return $humanize ? $this->formatDecimal($value, $locale) : $this->plainFloat($value);
         }

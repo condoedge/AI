@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\QueryGeneratorInterface;
+use Condoedge\Ai\Services\Query\AggregateOrderBy;
 use Condoedge\Ai\Contracts\LlmProviderInterface;
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
@@ -155,7 +156,7 @@ class QueryGenerator implements QueryGeneratorInterface
         $checkPrecedence = $this->precedenceCheckEnabled($options);
         $schemaRepairs = 0;
         $softCandidate = null;
-        $runMeta = ['execution_repair' => $repair !== null, 'precedence_repaired' => []];
+        $runMeta = ['execution_repair' => $repair !== null, 'precedence_repaired' => [], 'decline_redrafted' => false];
 
         while ($retryCount < $maxRetries) {
             try {
@@ -174,6 +175,18 @@ class QueryGenerator implements QueryGeneratorInterface
 
                 $draft = $this->requestDraft($systemPrompt, $userPrompt, (float) $temperature, $context);
                 $runMeta['output_format'] = $draft['format'];
+
+                // A data question a domain formula matches holds its answer: a decline is redrafted once, naming the formula.
+                if (!$draft['needs_query'] && !$runMeta['decline_redrafted'] && $retryCount + 1 < $maxRetries
+                    && ($formulas = $this->matchedFormulaLabels($context)) !== []) {
+                    $runMeta['decline_redrafted'] = true;
+                    $lastError = 'You answered needs_query false (' . ($draft['reason'] !== '' ? $draft['reason'] : 'no reason given') . '), but this '
+                        . 'question matches a domain calculation of this prompt (' . implode('; ', $formulas) . '): the data holds its answer. '
+                        . "Answer with that calculation's Cypher, adapted to the question; needs_query false only if the question asks for nothing in the data.";
+                    $previousDraft = null;
+                    $retryCount++;
+                    continue;
+                }
 
                 // Structured "no query needed" (Task 5.6) — replaces the exact-match
                 // 'NO QUERY REQUIRED' sentinel that failed on punctuation/quotes.
@@ -208,6 +221,7 @@ class QueryGenerator implements QueryGeneratorInterface
                 // query parameter carrying the real value BEFORE validation — never an
                 // inlined literal (which could alter the query's structure).
                 [$cypher] = $this->bindPiiTokens($cypher, $context);
+                $cypher = AggregateOrderBy::fix($cypher);
 
                 $validation = $this->validate($cypher, ['allow_write' => $allowWrite]);
 
@@ -403,6 +417,25 @@ class QueryGenerator implements QueryGeneratorInterface
         $previous = $context->conversationContext['last_cypher_parameters'] ?? [];
 
         return PiiMasker::for($context)->bindCypher($cypher, is_array($previous) ? $previous : []);
+    }
+
+    /** @return list<string> the labels of the domain calculations matched to a data question, as the prompt lists them */
+    private function matchedFormulaLabels(PipelineContext $context): array
+    {
+        $matched = $context->selectionInfo['calculations']['matched'] ?? null;
+        if (!isset($context->qu) || $context->qu->questionType !== 'data_query' || !is_array($matched)) {
+            return [];
+        }
+
+        $labels = [];
+        foreach (array_keys($matched) as $key) {
+            $label = config("ai.calculations.{$key}.label");
+            if (is_string($label) && $label !== '') {
+                $labels[] = $label;
+            }
+        }
+
+        return $labels;
     }
 
     /**

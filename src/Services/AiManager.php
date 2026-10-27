@@ -16,6 +16,7 @@ use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryGenerationResult;
+use Condoedge\Ai\Exceptions\SecurityException;
 use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\Services\Actions\Attach\ActionAttacher;
 use Condoedge\Ai\Services\Actions\Attach\AttachedActions;
@@ -1004,6 +1005,12 @@ class AiManager
 
             $stage = 'query_generation';
             $ctx = $this->generateAndExecute($ctx, $question, $options);
+
+            $stage = 'clarify';
+            $pageScope = $this->pageScopeClarification($ctx, $question, $options);
+            if ($pageScope !== null) {
+                return $pageScope;
+            }
 
             $stage = 'composition';
             // Follow-up question chips of a document-grounded answer: ONE small focused call
@@ -3517,6 +3524,56 @@ class AiManager
     }
 
     /**
+     * On a record's page, "our profit" may mean that record or every record of its kind (owner 2026-10-27: ask).
+     * Asked when a per-record formula of the page's kind matched, the question is the group's ("our"), and the query
+     * ran over every record of that kind (no id or name filter on it); the reply to that question is answered.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function pageScopeClarification(PipelineContext $ctx, string $question, array $options): ?array
+    {
+        $page = is_array($options['page_context'] ?? null) ? $options['page_context'] : [];
+        $label = is_string($page['entity_type'] ?? null) ? $page['entity_type'] : '';
+        $record = trim((string) ($page['label'] ?? ''));
+        $cypher = $ctx->queryResult->hasCypher() ? (string) $ctx->queryResult->cypher : '';
+        if (!(bool) config('ai.understanding.page_scope_clarify', true) || $label === '' || $record === '' || empty($page['entity_id'])
+            || $cypher === '' || !$ctx->qu->isCollectivePossessive() || $ctx->qu->followUpReference
+            || !$this->perRecordFormulaMatched($ctx, $label)
+            || !preg_match('/\(\s*(\w+)\s*:\s*' . preg_quote($label, '/') . '\b/', $cypher, $node)
+            || preg_match('/\b' . preg_quote($node[1], '/') . '\.(?:id\s*(?:=|IN\b)|name\)?\s*(?:=|CONTAINS|STARTS|ENDS))/i', $cypher)) {
+            return null;
+        }
+
+        $language = $ctx->qu->language !== '' ? $ctx->qu->language : null;
+        $asked = trans('ai.clarify.page-scope', ['record' => $record], $language);
+        $assistant = array_values(array_filter((array) ($ctx->conversationContext['recent_exchanges'] ?? []),
+            static fn ($exchange) => ($exchange['role'] ?? null) === 'assistant'));
+        if (($assistant[count($assistant) - 1]['answer_summary'] ?? null) === $asked) {
+            return null;
+        }
+
+        $ctx->qu = $ctx->qu->withClarification([
+            trans('ai.clarify.page-scope-record', ['question' => $question, 'record' => $record], $language),
+            trans('ai.clarify.page-scope-all', ['question' => $question], $language),
+        ], $asked);
+
+        return $this->clarifyResponse($ctx, $question, $options);
+    }
+
+    /** Whether a matched domain calculation computes its figure for ONE record of $label (its cypher pins x.id). */
+    private function perRecordFormulaMatched(PipelineContext $ctx, string $label): bool
+    {
+        foreach (array_keys((array) ($ctx->selectionInfo['calculations']['matched'] ?? [])) as $key) {
+            $cypher = config("ai.calculations.{$key}.cypher");
+            if (is_string($cypher) && preg_match('/\(\s*(\w+)\s*:\s*' . preg_quote($label, '/') . '\b[^)]*\)\s*WHERE\s+\1\.id\s*=/i', $cypher)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Answer a genuinely-ambiguous turn with its ONE clarifying question, or
      * null to keep the normal path.
      *
@@ -4498,6 +4555,8 @@ class AiManager
         $generationFailed = ($ctx->queryResult->metadata['error'] ?? false) === true;
         $executionFailed = !empty($ctx->executionResult->errors);
         $safeStopped = ($ctx->executionResult->metadata['safe_stop'] ?? false) === true;
+        // The security layer refused this user the data: an answer, not a failure to retry.
+        $denied = $executionFailed && ($ctx->executionResult->metadata['execution_error'] ?? null) === SecurityException::class;
 
         // Whether THIS turn ran its own data query. Authoritative for export
         // sourcing: when the current question generated a query that returned
@@ -4707,12 +4766,19 @@ class AiManager
             $responseResult['answer'] = rtrim((string) ($responseResult['answer'] ?? ''))
                 . "\n\n"
                 . trans(
-                    $safeStopped ? 'ai.error.data_part_blocked' : 'ai.error.data_part_failed',
+                    $denied ? 'ai.error.data_part_denied' : ($safeStopped ? 'ai.error.data_part_blocked' : 'ai.error.data_part_failed'),
                     [],
                     $ctx->qu->language !== '' ? $ctx->qu->language : null
                 );
-            $responseResult['metadata'] = ['status' => $safeStopped ? 'blocked_by_scoping' : 'partial_data_failed']
+            $responseResult['metadata'] = ['status' => $denied ? 'access_denied' : ($safeStopped ? 'blocked_by_scoping' : 'partial_data_failed')]
                 + ($responseResult['metadata'] ?? []);
+        } elseif (!$hasData && $denied) {
+            $branch = 'access_denied';
+            $responseResult = [
+                'answer' => trans('ai.error.no_access', [], $ctx->qu->language !== '' ? $ctx->qu->language : null),
+                'format' => $options['format'] ?? 'text',
+                'metadata' => ['status' => 'access_denied'],
+            ];
         } elseif (!$hasData && $safeStopped) {
             // SCOPING SAFE-STOP (Task 1.6): the security layer refused to run the
             // query (no valid scoped rewrite) and the executor returned a clean
@@ -4810,7 +4876,10 @@ class AiManager
                             : null,
                     ]
                     // Docs only: nothing was looked up — no document answers, no record was checked.
-                    + (($ctx->queryResult->metadata['generation_skipped'] ?? null) === 'docs_only' ? ['docs_only' => true] : []),
+                    + (($ctx->queryResult->metadata['generation_skipped'] ?? null) === 'docs_only' ? ['docs_only' => true] : [])
+                    // The query writer declined a data question: nothing was looked up either.
+                    + (!$ctx->queryResult->hasCypher() && $ctx->qu->questionType === 'data_query'
+                        && array_key_exists('no_query_reason', $ctx->queryResult->metadata) ? ['not_in_data' => true] : []),
             );
         } else {
             $source = $ctx->queryResult->metadata['source'] ?? null;

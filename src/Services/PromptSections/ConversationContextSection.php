@@ -218,6 +218,6 @@ class ConversationContextSection extends BasePromptSection
             return $text;
         }
 
-        return substr($text, 0, $length) . '...';
+        return mb_strcut($text, 0, $length, 'UTF-8') . '...';
     }
 }

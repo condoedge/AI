@@ -326,7 +326,7 @@ class QueryUnderstandingService
 
             // Truncate description to keep prompt compact
             if (strlen($description) > 120) {
-                $description = substr($description, 0, 117) . '...';
+                $description = mb_strcut($description, 0, 117, 'UTF-8') . '...';
             }
 
             $catalog[] = [

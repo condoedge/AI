@@ -963,7 +963,7 @@ class ExportResponseComposer
         }
 
         if (strlen($title) > 80) {
-            $title = rtrim(substr($title, 0, 77)) . '...';
+            $title = rtrim(mb_strcut($title, 0, 77, 'UTF-8')) . '...';
         }
 
         return ucfirst($title);

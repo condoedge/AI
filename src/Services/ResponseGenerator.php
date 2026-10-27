@@ -1003,11 +1003,17 @@ class ResponseGenerator implements ResponseGeneratorInterface
         $navigation = !$attached->isEmpty() && is_string($options['navigation_target'] ?? null);
         // Docs only (ai.query_generation.enabled = false): nothing was looked up.
         $docsOnly = !$navigation && ($options['docs_only'] ?? false) === true;
+        // The query writer judged the data does not hold the answer: no lookup ran, so none is claimed.
+        $notInData = !$navigation && !$docsOnly && ($options['not_in_data'] ?? false) === true;
+        $noLookup = $docsOnly || $notInData;
 
         $prompt .= match (true) {
             $navigation => "This request needs no data lookup: it asks to open or reach a page of the app. The matching "
                 . "page(s) are attached as buttons below your answer. In one or two sentences, tell the user it "
                 . "is attached below, naming it. Do NOT say that nothing was found, and do not end with an offer.\n\n",
+            $notInData => "No lookup was run: the data you can read does not hold this information. Say so briefly and plainly, "
+                . "without guessing an answer or a figure, and do NOT say that records were searched or that nothing was found. "
+                . "Do NOT end with a bare invitation like \"feel free to ask\" or an offer (\"let me know\", \"would you like…\").\n\n",
             $docsOnly => "None of the documents answers this question. Say so briefly and plainly, without guessing an "
                 . "answer, a figure or a place in the application. Do NOT end with a bare invitation like \"feel free to ask\" "
                 . "or an offer (\"let me know\", \"would you like…\").\n\n",
@@ -1045,14 +1051,14 @@ class ResponseGenerator implements ResponseGeneratorInterface
         // line of their own right below the model's answer ({@see checkedLine()}), in the
         // host's plurals and the answer's language. The model is told, so it does not restate
         // them. Null wherever a fact or a word is missing: the model's instruction stands.
-        $checkedLine = $navigation || $docsOnly ? null : $this->checkedLine($cypherQuery, $scope, $ownership, $this->questionLocale($options));
+        $checkedLine = $navigation || $noLookup ? null : $this->checkedLine($cypherQuery, $scope, $ownership, $this->questionLocale($options));
         $printed = $checkedLine === null
             ? ''
             : 'The system itself prints, on a line right below your answer, what was checked: "' . str_replace('"', "'", $checkedLine)
                 . '" — do NOT restate it: do not list the record kinds and do not say again that they were checked.';
 
         $checkedKinds = [];
-        if ($subject !== '' && !$navigation && !$docsOnly) {
+        if ($subject !== '' && !$navigation && !$noLookup) {
             $types = QueriedKinds::names($cypherQuery);
             if ($types === []) {
                 $types = array_values(array_filter((array) ($options['checked_entity_types'] ?? []), 'is_string'));
