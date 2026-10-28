@@ -823,6 +823,9 @@ class AiServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Master switch off (AI_ENABLED=false): background features forced off, cached config included.
+        \Condoedge\Ai\Support\AiFeature::applyTo($this->app->make('config'));
+
         Gate::policy(AiConversation::class, AiConversationPolicy::class);
 
         // The admin conversations / feedback page shows OTHER people's conversations:
@@ -832,8 +835,11 @@ class AiServiceProvider extends ServiceProvider
             Gate::define(\Condoedge\Ai\Services\Admin\ConversationInsights::ABILITY, fn ($user = null) => false);
         }
 
-        $this->loadRoutesFrom(__DIR__."/../routes/api.php");
-        $this->loadRoutesFrom(__DIR__."/../routes/web.php");
+        // Master switch off: no chat, export, admin or health route at all.
+        if (\Condoedge\Ai\Support\AiFeature::enabled()) {
+            $this->loadRoutesFrom(__DIR__."/../routes/api.php");
+            $this->loadRoutesFrom(__DIR__."/../routes/web.php");
+        }
 
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
 

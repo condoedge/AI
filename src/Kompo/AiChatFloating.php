@@ -3,6 +3,7 @@
 namespace Condoedge\Ai\Kompo;
 
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
+use Condoedge\Ai\Support\AiFeature;
 use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
 use Condoedge\Utils\Kompo\Common\Form;
 
@@ -28,7 +29,7 @@ class AiChatFloating extends Form
      */
     public function created()
     {
-        if (!config('ai.chat.capture_page_route', false)) {
+        if (!AiFeature::enabled() || !config('ai.chat.capture_page_route', false)) {
             return;
         }
         $page = $this->prop('page_context');
@@ -56,6 +57,11 @@ class AiChatFloating extends Form
 
     public function render()
     {
+        // Master switch off: the host keeps mounting the button, nothing is shown.
+        if (!AiFeature::enabled()) {
+            return null;
+        }
+
         return _Rows(
             // Glow effect
             _Html('')->class('absolute inset-0 rounded-full animate-ping opacity-30' . $this->theme_gradient),
@@ -90,6 +96,10 @@ class AiChatFloating extends Form
      */
     public function openChat()
     {
+        if (!AiFeature::enabled()) {
+            return null;
+        }
+
         $props = [];
         $page = $this->prop('page_context');
         if (is_array($page) && !empty($page)) {

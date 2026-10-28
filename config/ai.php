@@ -10,6 +10,11 @@ return [
     |
     */
 
+    // Master switch. false = the assistant is absent: chat surfaces render nothing, no
+    // package route is registered, and auto_sync / file_processing / tasks / admin are
+    // forced off (Condoedge\Ai\Support\AiFeature). Production can ship with AI_ENABLED=false.
+    'enabled' => env('AI_ENABLED', true),
+
     /*
     |--------------------------------------------------------------------------
     | Project Metadata
