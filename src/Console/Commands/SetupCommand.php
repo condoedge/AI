@@ -149,18 +149,22 @@ class SetupCommand extends Command
             'command' => 'ai:index-scopes',
         ];
 
-        $steps[] = [
-            'label' => 'Process files',
-            'command' => 'ai:process-files',
-        ];
+        // Uploads only when the host processes them: ai:process-files fails on a disabled
+        // config, and a host without uploads in the assistant must not embed its files table.
+        if (config('ai.file_processing.enabled', true)) {
+            $steps[] = [
+                'label' => 'Process files',
+                'command' => 'ai:process-files',
+            ];
 
-        // Files processed from now on are linked to their record (owner / parent) as they are
-        // stored; chunks indexed before that carry no link and are filtered by nothing. Payload
-        // only (no re-embedding) and idempotent: a re-run writes nothing.
-        $steps[] = [
-            'label' => 'Link uploaded files to their records',
-            'command' => 'ai:files:link',
-        ];
+            // Files processed from now on are linked to their record (owner / parent) as they are
+            // stored; chunks indexed before that carry no link and are filtered by nothing. Payload
+            // only (no re-embedding) and idempotent: a re-run writes nothing.
+            $steps[] = [
+                'label' => 'Link uploaded files to their records',
+                'command' => 'ai:files:link',
+            ];
+        }
 
         // The document map (a gist per passage, and which parts of a divided document apply)
         // that the reasoning step on documents reads. Idempotent: what is already mapped for

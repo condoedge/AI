@@ -59,6 +59,22 @@ class SetupCommandTest extends TestCase
             ->assertSuccessful();
     }
 
+    /**
+     * @test A host that processes no uploads (file_processing off) gets no upload steps: before,
+     * ai:process-files returned FAILURE on a disabled config and setup stopped there; and with it
+     * on by default, a host's whole files table would be extracted and embedded (2026-10-28).
+     */
+    public function setup_skips_the_upload_steps_when_file_processing_is_off(): void
+    {
+        config(['ai.file_processing.enabled' => false]);
+
+        $this->artisan('ai:setup', ['--dry-run' => true])
+            ->doesntExpectOutputToContain('Process files')
+            ->doesntExpectOutputToContain('Link uploaded files to their records')
+            ->expectsOutputToContain('Ingest physical documentation corpus')
+            ->assertSuccessful();
+    }
+
     /** @test The maps step is skipped when the document map is switched off. */
     public function setup_skips_the_document_maps_when_the_feature_is_off(): void
     {
