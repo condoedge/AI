@@ -225,7 +225,7 @@ class ActionResultPresenter
         $message = $this->translate('ai.actions.no-longer-available', 'This action is no longer available.');
 
         if (function_exists('_Html')) {
-            return _Html(e($message))->class('cdge-action-unavailable text-sm text-gray-500');
+            return _Html(e($message))->class('cdge-action-unavailable text-sm text-gray-700');
         }
 
         return $message;

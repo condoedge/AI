@@ -29,7 +29,7 @@ class UserChatThemeFactory implements ChatThemeFactoryInterface
         // IMPORTANT: Check if auth is available before calling - prevents
         // "Target class [auth] does not exist" during early container resolution
         $userSettings = null;
-        if (auth()->check()) {
+        if (auth()->check() && !\Condoedge\Ai\Kompo\Support\ChatLayout::isCompact()) {
             $userSettings = AiUserSetting::forUser(auth()->id());
         }
 

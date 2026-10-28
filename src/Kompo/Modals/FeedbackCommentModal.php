@@ -17,7 +17,7 @@ use Condoedge\Utils\Kompo\Common\Modal;
 class FeedbackCommentModal extends Modal
 {
     protected $_Title = 'ai.feedback.title';
-    public $class = 'overflow-hidden max-w-lg rounded-2xl';
+    public $class = 'overflow-hidden max-w-lg rounded-3xl';
 
     protected $noHeaderButtons = true;
     protected $hasSubmitButton = false;
@@ -38,7 +38,7 @@ class FeedbackCommentModal extends Modal
     {
         return _Rows(
             _Rows(
-                _Html(__('ai.feedback.comment-intro'))->class('text-sm text-gray-500 mb-3'),
+                _Html(__('ai.feedback.comment-intro'))->class('text-sm text-gray-700 mb-3'),
                 _Textarea()->name('comment', false)
                     ->value($this->comment)
                     ->attr(['maxlength' => ConversationActions::FEEDBACK_COMMENT_MAX])
@@ -47,7 +47,7 @@ class FeedbackCommentModal extends Modal
             )->class('p-6'),
             _FlexBetween(
                 _Link(__('ai.feedback.skip'))
-                    ->class('px-4 py-2 text-gray-500 hover:text-gray-700 transition-all')
+                    ->class('px-4 py-2 text-gray-700 hover:text-gray-700 transition-all')
                     ->closeModal(),
                 _Link(__('ai.feedback.send'))->button()
                     ->selfPost('saveComment')
