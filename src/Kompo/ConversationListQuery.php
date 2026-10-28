@@ -78,12 +78,12 @@ class ConversationListQuery extends Query
                         ->class('font-medium text-gray-800 truncate'),
                 )->class('items-center flex-1 min-w-0'),
                 _Html($this->formatTime($conversation->last_message_at))
-                    ->class('text-xs text-gray-400 whitespace-nowrap ml-2'),
+                    ->class('text-xs text-gray-700 whitespace-nowrap ml-2'),
             ),
             _FlexBetween(
                 _Html($this->getPreviewText($lastMessage))
-                    ->class('text-sm text-gray-500 truncate'),
-                $messageCount > 0 ? _Badge($messageCount)->class('text-xs bg-gray-200 text-gray-600 ml-2') : null,
+                    ->class('text-sm text-gray-700 truncate'),
+                $messageCount > 0 ? _Badge($messageCount)->class('text-xs bg-gray-200 text-gray-700 ml-2') : null,
             )->class('mt-1'),
         )->class('px-4 py-3 cursor-pointer transition-all border-l-4 ' . ($isSelected
             ? $this->theme()->selectedBg() . ' ' . $this->theme()->selectedBorder()

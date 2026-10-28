@@ -28,7 +28,7 @@ class GreenTheme extends AbstractChatTheme
     public function selectedBg(): string { return $this->get('selected_bg', 'bg-emerald-50'); }
     public function selectedBorder(): string { return $this->get('selected_border', 'border-emerald-500'); }
     public function activeBadge(): string { return $this->get('active_badge', 'bg-emerald-100 text-emerald-700'); }
-    public function inactiveBadge(): string { return $this->get('inactive_badge', 'text-gray-500 hover:bg-gray-100'); }
+    public function inactiveBadge(): string { return $this->get('inactive_badge', 'text-gray-700 hover:bg-gray-100'); }
     public function avatarGradient(): string { return $this->get('avatar_gradient', 'from-emerald-500 via-teal-500 to-cyan-500'); }
     public function heroBackground(): string { return $this->get('hero_background', 'from-emerald-50/30 via-white to-teal-50/20'); }
     public function linkHover(): string { return $this->get('link_hover', 'hover:text-emerald-600 hover:bg-emerald-50'); }

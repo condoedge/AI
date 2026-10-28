@@ -22,7 +22,7 @@ class IndigoTheme extends AbstractChatTheme
     public function selectedBg(): string { return $this->get('selected_bg', 'bg-indigo-50'); }
     public function selectedBorder(): string { return $this->get('selected_border', 'border-indigo-500'); }
     public function activeBadge(): string { return $this->get('active_badge', 'bg-indigo-100 text-indigo-700'); }
-    public function inactiveBadge(): string { return $this->get('inactive_badge', 'text-gray-500 hover:bg-gray-100'); }
+    public function inactiveBadge(): string { return $this->get('inactive_badge', 'text-gray-700 hover:bg-gray-100'); }
     public function avatarGradient(): string { return $this->get('avatar_gradient', 'from-indigo-500 via-purple-500 to-fuchsia-500'); }
     public function heroBackground(): string { return $this->get('hero_background', 'from-indigo-50/30 via-white to-purple-50/20'); }
     public function linkHover(): string { return $this->get('link_hover', 'hover:text-indigo-600 hover:bg-indigo-50'); }

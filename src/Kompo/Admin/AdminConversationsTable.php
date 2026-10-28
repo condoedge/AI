@@ -110,11 +110,11 @@ class AdminConversationsTable extends Table
         return _TableRow(
             $this->text($this->excerpt($row->title ?: __('ai.admin.untitled'), 80), 'text-sm font-medium text-gray-900')->style('min-width: 14rem'),
             $this->text($row->user_name ?? '—', 'text-sm text-gray-700'),
-            $this->text($row->team_name ?? '—', 'text-sm text-gray-600'),
+            $this->text($row->team_name ?? '—', 'text-sm text-gray-700'),
             $this->text((string) (int) ($row->messages_count ?? 0), 'text-sm text-gray-700'),
-            $this->text($this->dateTime($row->last_activity ?? null), 'whitespace-nowrap text-xs text-gray-600'),
-            $this->text((string) $positive, $positive > 0 ? 'text-sm font-semibold text-green-700' : 'text-sm text-gray-400'),
-            $this->text((string) $negative, $negative > 0 ? 'text-sm font-semibold text-red-700' : 'text-sm text-gray-400'),
+            $this->text($this->dateTime($row->last_activity ?? null), 'whitespace-nowrap text-xs text-gray-700'),
+            $this->text((string) $positive, $positive > 0 ? 'text-sm font-semibold text-green-700' : 'text-sm text-gray-700'),
+            $this->text((string) $negative, $negative > 0 ? 'text-sm font-semibold text-red-700' : 'text-sm text-gray-700'),
         )->class('cursor-pointer hover:bg-gray-50')
             ->selfGet('openTranscript', ['conversation' => (string) $row->uuid])->inModal();
     }

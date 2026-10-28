@@ -123,7 +123,7 @@ class MessageBubbleRenderer
             $bubble,
             _FlexEnd(
                 _Link(__('ai.common.edit'))->icon('pencil')
-                    ->class('opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-gray-600 mt-1 transition-opacity')
+                    ->class('opacity-0 group-hover:opacity-100 text-xs text-gray-700 hover:text-gray-700 mt-1 transition-opacity')
                     ->selfGet('editMessage', ['id' => $message->id])->inModal(),
             ),
         )->class('group');
@@ -241,7 +241,7 @@ class MessageBubbleRenderer
 
         if ($this->settings->enableCopy()) {
             $actions[] = _Link()->icon(_Sax('copy', 16))
-                ->class('p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-all')
+                ->class('p-1.5 rounded-lg hover:bg-gray-100 text-gray-700 hover:text-gray-700 transition-all')
                 ->balloon(__('ai.messages.copy'), 'up')
                 // The text reaches the JS as ONE JSON string literal (quotes, line breaks, tags
                 // and ampersands escaped): the utils copyToClipboard() macro pasted it raw into a
@@ -258,7 +258,7 @@ class MessageBubbleRenderer
             $actions[] = _Link()->icon(_Sax('like-1', 16))
                 ->class('p-1.5 rounded-lg transition-all ' . ($feedback === 'positive'
                     ? 'bg-emerald-100 text-emerald-600'
-                    : 'hover:bg-emerald-50 text-gray-400 hover:text-emerald-600'))
+                    : 'hover:bg-emerald-50 text-gray-700 hover:text-emerald-600'))
                 ->balloon(__('ai.messages.helpful'), 'up')
                 ->selfPost('feedback', ['id' => $message->id, 'type' => 'positive'])
                 ->alert('ai.messages.feedback-received')
@@ -267,7 +267,7 @@ class MessageBubbleRenderer
             $actions[] = _Link()->icon(_Sax('dislike', 16))
                 ->class('p-1.5 rounded-lg transition-all ' . ($feedback === 'negative'
                     ? 'bg-red-100 text-red-600'
-                    : 'hover:bg-red-50 text-gray-400 hover:text-red-600'))
+                    : 'hover:bg-red-50 text-gray-700 hover:text-red-600'))
                 ->balloon(__('ai.messages.not-helpful'), 'up')
                 // Sibling interactions: the 👎 is saved even when the optional comment modal is dismissed.
                 ->onClick(function ($e) use ($message) {
@@ -281,7 +281,7 @@ class MessageBubbleRenderer
             $regeneratingText = __('ai.messages.regenerating');
             $messageId = $message->id;
             $actions[] = _Link()->icon(_Sax('refresh', 16))
-                ->class('p-1.5 rounded-lg text-gray-400 ' . $this->theme->linkHover() . ' transition-all')
+                ->class('p-1.5 rounded-lg text-gray-700 ' . $this->theme->linkHover() . ' transition-all')
                 ->balloon(__('ai.messages.regenerate'), 'up')
                 ->onClick(fn($e) => $e
                     ->run('() => {
@@ -290,7 +290,7 @@ class MessageBubbleRenderer
                         if (bubble) {
                             const content = bubble.querySelector(".prose");
                             if (content) {
-                                content.innerHTML = "<div class=\"flex items-center gap-1.5 h-6\"><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-1\"></span><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-2\"></span><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-3\"></span></div><div class=\"text-xs text-gray-400 mt-2\">' . $regeneratingText . '</div>";
+                                content.innerHTML = "<div class=\"flex items-center gap-1.5 h-6\"><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-1\"></span><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-2\"></span><span class=\"inline-block w-2.5 h-2.5 rounded-full ' . $dotColor . ' animate-typing-dot-3\"></span></div><div class=\"text-xs text-gray-700 mt-2\">' . $regeneratingText . '</div>";
                             }
                         }
                     }')
@@ -469,7 +469,7 @@ class MessageBubbleRenderer
         }
 
         $progress = _Html(e(__('ai.tasks.progress', app(TaskOrchestrator::class)->progress($live, auth()->user()))))
-            ->class('cdge-task-progress mb-1 text-xs font-medium text-gray-400');
+            ->class('cdge-task-progress mb-1 text-xs font-medium text-gray-700');
         $choices = [];
         foreach ((array) ($task['choices'] ?? []) as $choice) {
             if (is_array($choice)) {
@@ -684,7 +684,7 @@ class MessageBubbleRenderer
                 'The document shows the first :shown rows — more may exist.'
             );
 
-            return _Rows($download, _Html(e($note))->class('cdge-export-partial text-xs text-gray-500 mt-1'));
+            return _Rows($download, _Html(e($note))->class('cdge-export-partial text-xs text-gray-700 mt-1'));
         }
 
         return $download;
