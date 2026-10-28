@@ -30,9 +30,12 @@ Package (`condoedge/ai`), 5337 tests green; ai-eval 162 green; Coolecto AI tests
    matching fell back to keywords ("mises" — bids — matched bank transfers). Built with
    `php artisan ai:index-context`. **Production needs the same command once.**
 2. **The task offer never appeared on "How do I invite a member?".** Query understanding reads it as "open my team
-   page", and that path replaced the page buttons that carry the task buttons. The team link now carries the start
-   buttons of the tasks of the page it opens — only on such a navigation ask (a data answer that reads the team
-   gets no offer). No extra call.
+   page", and that turned off the page buttons, which carry the task buttons. A first fix (the team link carries the
+   team page's tasks) was wrong: "Can you help me creating a campaign in my team?" got "invite a member" and
+   "complete my organisation". Now the page buttons run for every how-to answered from the articles, whatever query
+   understanding called it; the page the answer is about brings its tasks (here « Créer ma campagne avec Coco »), and a
+   page the team link already opens is not shown twice. About +2 s on those turns only (the page-picking call the other
+   article answers already make).
 3. **A role without access to money (editor, ticket scanner) got "I encountered an issue, try again".** Now: "Your
    access does not let me read this information…" (French and English), also under an article answer when only
    the data part is refused. A refusal was already never retried.

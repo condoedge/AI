@@ -1187,3 +1187,19 @@ in the ai package; clarifications only where they truly help.
   longer refused (only right after MATCH/MERGE/CREATE). ai-eval cassette ignores CRLF/LF (the prompt files lost their CRLF):
   CondoEdge gold replay 0 mismatches, 0 drift, 39/39. Report: `docs/eval/2026-10-27-coolecto-data-v1.md` (English, with
   the 115 questions in English and each turn's result).
+- 2026-10-27 (owner test in the browser): "Can you help me creating a campaign in my team?" offered "invite a member" /
+  "complete my organisation" — QU read it as navigation own_team and my afternoon fix hung the team page's tasks on the team
+  link. Replaced (tests red first): the team link carries no task; page buttons run for every document-grounded answer,
+  navigation ask or not, so the page the answer is about brings its tasks; a page the identity link already opens gets only
+  its task chips (`ActionAttacher::identityRoutes`). Live: picks « Nouvelle campagne » → create / copy tasks. tasks-offer
+  7/7 (invite offer kept); package 5338 green; CondoEdge gold replay 0 mismatches (it has no navigation pages).
+  Also: the browser chat reads `.env` — the evals set AI_QUERY_GENERATION_ENABLED / AI_TASKS inline.
+- 2026-10-27 (owner): "I want to collect money from pizza selling…" → Coco recommended « Vente de produits »; should be
+  « Repas bénéfice ». Cause: the step sees only type names + "recommend one from the goal"; the article's line ("vous vendez
+  des produits" / "vous servez un repas… dîners à l'école") leaves pizza open. Fixed in content, not code: article
+  `choisir-le-type-de-campagne` (meal ordered for a date vs food sold as a product, with examples; re-indexed) and the
+  CreateCampaignTask type hint ("prepared food eaten as a meal is a benefit meal unless delivered as a product; packaged
+  food is a product sale; give it as your own advice"). Tried and dropped: "ask when two types fit" (gpt-4.1-mini then asked
+  "product or meal?" for chocolate). Live, 4 starts: pizza EN/FR → Repas bénéfice, chocolate → Vente de produits, spaghetti
+  take-out → Repas bénéfice. Personas 43/46 (school-products = known model issue; task-registrations = daily limit reached
+  by today's runs). Left: the step sometimes says « selon les instructions ».
