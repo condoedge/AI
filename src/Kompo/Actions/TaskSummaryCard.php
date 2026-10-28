@@ -83,14 +83,14 @@ class TaskSummaryCard extends Form
         return _Rows(
             _FlexBetween(
                 _Rows(
-                    _Html(e(__((string) ($row['label'] ?? ''))))->class('text-xs text-gray-500'),
+                    _Html(e(__((string) ($row['label'] ?? ''))))->class('text-xs text-gray-700'),
                     self::data((string) ($row['value'] ?? ''))->class('text-sm font-medium text-gray-900'),
-                    is_string($row['before'] ?? null) ? self::data(__('ai.tasks.was', ['value' => $row['before']]))->class('text-xs text-gray-500') : null,
-                    $source !== null ? _Html(e(__($source)))->class('text-xs text-gray-400') : null,
+                    is_string($row['before'] ?? null) ? self::data(__('ai.tasks.was', ['value' => $row['before']]))->class('text-xs text-gray-700') : null,
+                    $source !== null ? _Html(e(__($source)))->class('text-xs text-gray-700') : null,
                 ),
                 _Flex(
                     $risk !== null ? _Html(e(__('ai.tasks.risk-' . $risk)))->class('px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-800') : null,
-                    $live ? _Link(__('ai.tasks.change'))->class('text-xs font-medium text-gray-500 underline hover:text-gray-800')
+                    $live ? _Link(__('ai.tasks.change'))->class('text-xs font-medium text-gray-700 underline hover:text-gray-800')
                         ->selfPost('reopenTask', ['uuid' => $uuid, 'field' => $field])
                         ->refresh(MessagesQuery::ID) : null,
                 )->class('items-center gap-2 shrink-0'),

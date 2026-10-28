@@ -1766,6 +1766,11 @@ return [
         // - screen => navigates to the routed AiChatScreen full page (ai.chat.screen)
         'surface' => env('AI_CHAT_SURFACE', 'modal'),
 
+        // Layout of that surface: 'full' | 'compact'.
+        // - full    => conversation sidebar + chat; users adjust their settings and theme
+        // - compact => the chat column only; settings and theme are locked to this config
+        'layout' => env('AI_CHAT_LAYOUT', 'full'),
+
         // Welcome screen (read flat by UserChatSettings::welcomeTitle()/welcomeMessage()).
         // Unset: the title is the assistant's own name (ai.identity.name) and the message the
         // translated line `ai.chat.welcome-message`. A configured value goes through the

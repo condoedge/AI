@@ -58,7 +58,7 @@ class RichDataRenderer
         }
 
         $headerHtml = '<tr>' . implode('', array_map(fn($h) =>
-            '<th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50">' . e($h) . '</th>',
+            '<th class="px-4 py-2 text-left text-xs font-medium text-gray-700 uppercase tracking-wider bg-gray-50">' . e($h) . '</th>',
             $headers)) . '</tr>';
 
         $rowsHtml = implode('', array_map(fn($row) =>
@@ -75,7 +75,7 @@ class RichDataRenderer
         return _Flex(
             _Html($data['icon'] ?? '📊')->class('text-3xl'),
             _Rows(
-                _Html($data['label'] ?? __('ai.common.value'))->class('text-sm text-gray-500'),
+                _Html($data['label'] ?? __('ai.common.value'))->class('text-sm text-gray-700'),
                 _Flex(
                     _Html($data['value'] ?? '-')->class('text-2xl font-bold text-gray-800'),
                     isset($data['trend']) ? _Badge($data['trend'])
@@ -98,7 +98,7 @@ class RichDataRenderer
                 _Html('<span class="w-6 h-6 rounded-full ' . $badgeColors . ' flex items-center justify-center text-xs font-medium flex-shrink-0">' . e($item['icon'] ?? '•') . '</span>'),
                 _Rows(
                     _Html(e($item['title'] ?? ''))->class('font-medium text-gray-800'),
-                    _Html(e($item['description'] ?? ''))->class('text-sm text-gray-500'),
+                    _Html(e($item['description'] ?? ''))->class('text-sm text-gray-700'),
                 ),
             )->class('items-start gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors'),
             array_slice($items, 0, 5)
@@ -110,8 +110,8 @@ class RichDataRenderer
     public function renderMetrics($message)
     {
         return _Flex(
-            _Html('⚡ ' . $message->execution_time_ms . 'ms')->class('text-xs text-gray-400'),
-            $message->confidence_score ? _Html('🎯 ' . round($message->confidence_score * 100) . '%')->class('text-xs text-gray-400') : null,
+            _Html('⚡ ' . $message->execution_time_ms . 'ms')->class('text-xs text-gray-700'),
+            $message->confidence_score ? _Html('🎯 ' . round($message->confidence_score * 100) . '%')->class('text-xs text-gray-700') : null,
         )->class('mt-2 gap-3');
     }
 
@@ -124,7 +124,7 @@ class RichDataRenderer
         $cards = array_map(fn($file) => $this->fileReferenceCard($file), $files);
 
         return _Rows(
-            _Html('📎 Referenced Files:')->class('text-xs font-medium text-gray-400 mb-2'),
+            _Html('📎 Referenced Files:')->class('text-xs font-medium text-gray-700 mb-2'),
             _Flex(...$cards)->class('flex-wrap gap-2'),
         )->class('mt-4 pt-3 border-t border-gray-100');
     }

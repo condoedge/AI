@@ -76,7 +76,7 @@ class ApprovalCard
         }
 
         $cancel = _Link(__('ai.actions.cancel') ?: 'Cancel')
-            ->class('px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-all')
+            ->class('px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-all')
             ->removeSelf();
 
         // Unique panel id per token so multiple pending actions in one bubble don't collide.

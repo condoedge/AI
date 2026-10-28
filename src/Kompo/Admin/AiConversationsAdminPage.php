@@ -46,7 +46,7 @@ class AiConversationsAdminPage extends Form
                     _Html(__('ai.admin.range-label', [
                         'from' => $this->range->from->format('Y-m-d'),
                         'to' => $this->range->to->format('Y-m-d'),
-                    ]) . ' · ' . __('ai.admin.excluded-note'))->class('text-sm text-gray-500'),
+                    ]) . ' · ' . __('ai.admin.excluded-note'))->class('text-sm text-gray-700'),
                 ),
                 _Flex(
                     ...array_map(fn (int $days) => $this->presetLink($days), InsightsRange::PRESETS)
@@ -121,16 +121,16 @@ class AiConversationsAdminPage extends Form
 
         return _Rows(
             _Html('ai.admin.audience.title')->class('mb-2 text-sm font-semibold text-gray-900'),
-            $rows === [] ? _Html('ai.admin.audience.none')->class('text-sm text-gray-500') : _Div(
+            $rows === [] ? _Html('ai.admin.audience.none')->class('text-sm text-gray-700') : _Div(
                 ...array_map(fn (array $row) => _Rows(
-                    $this->text($row['audience'] ?? __('ai.admin.audience.unresolved'), 'text-xs font-medium uppercase tracking-wide text-gray-500'),
+                    $this->text($row['audience'] ?? __('ai.admin.audience.unresolved'), 'text-xs font-medium uppercase tracking-wide text-gray-700'),
                     $this->text(__('ai.admin.audience.counts', [
                         'conversations' => number_format($row['conversations']),
                         'answers' => number_format($row['answers']),
                     ]), 'mt-1 text-sm font-semibold text-gray-900'),
                     $this->text('👍 ' . number_format($row['positive']) . '  /  👎 ' . number_format($row['negative']), 'mt-1 text-sm text-gray-700'),
-                    $this->text(__('ai.admin.audience.no-sources', ['pct' => $pct($row['no_source_pct'])]), 'mt-1 text-xs text-gray-500'),
-                    $this->text(__('ai.admin.audience.latency', ['time' => $this->latency($row['latency_avg_ms'])]), 'text-xs text-gray-500'),
+                    $this->text(__('ai.admin.audience.no-sources', ['pct' => $pct($row['no_source_pct'])]), 'mt-1 text-xs text-gray-700'),
+                    $this->text(__('ai.admin.audience.latency', ['time' => $this->latency($row['latency_avg_ms'])]), 'text-xs text-gray-700'),
                 )->class('bg-white rounded-xl border border-gray-200 p-4 shadow-sm'), $rows)
             )->class('grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4'),
         )->class('mb-6');
@@ -139,9 +139,9 @@ class AiConversationsAdminPage extends Form
     protected function kpiCard(string $label, string $value, ?string $hint = null, string $tone = 'text-gray-900')
     {
         return _Rows(
-            _Html($label)->class('text-xs font-medium uppercase tracking-wide text-gray-500'),
+            _Html($label)->class('text-xs font-medium uppercase tracking-wide text-gray-700'),
             $this->text($value, "mt-1 text-2xl font-bold {$tone}"),
-            $hint !== null ? $this->text($hint, 'mt-1 text-xs text-gray-500') : null,
+            $hint !== null ? $this->text($hint, 'mt-1 text-xs text-gray-700') : null,
         )->class('bg-white rounded-xl border border-gray-200 p-4 shadow-sm');
     }
 }

@@ -14,7 +14,7 @@ class ChatHelpModal extends Modal
     use HasChatTheme, HasMethodsAsProperties;
     
     protected $_Title = 'ai.help.title';
-    public $class = 'overflow-hidden max-w-2xl rounded-2xl';
+    public $class = 'overflow-hidden max-w-2xl rounded-3xl';
     protected $noHeaderButtons = true;
 
     public function body()
@@ -33,7 +33,7 @@ class ChatHelpModal extends Modal
             ->noInputWrapper()
             ->containerClass('px-3 gap-2 flex border-none')
             ->commonClass('px-4 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap !border-none focus:!shadow-none !rounded-lg text-center')
-            ->selectedClass($this->theme_active_badge, 'text-gray-500 hover:bg-gray-100')
+            ->selectedClass($this->theme_active_badge, 'text-gray-700 hover:bg-gray-100')
             ->options([
                 'getting_started' => __('ai.help.tab-getting-started'),
                 'tips' => __('ai.help.tab-tips'),
@@ -126,7 +126,7 @@ class ChatHelpModal extends Modal
             _Html($icon)->class('w-10 h-10 rounded-xl flex items-center justify-center' . $this->theme_light_gradient . $this->theme_text . ' mr-4 flex-shrink-0'),
             _Rows(
                 _Html($title)->class('font-semibold text-gray-800'),
-                _Html($description)->class('text-sm text-gray-500'),
+                _Html($description)->class('text-sm text-gray-700'),
             ),
         )->class('items-start mb-6');
     }
@@ -136,7 +136,7 @@ class ChatHelpModal extends Modal
         return _Rows(
             _Html($this->iconHtml($icon))->class('w-8 h-8 rounded-lg flex items-center justify-center mb-2' . $this->theme_text . $this->theme_light_bg),
             _Html($title)->class('font-medium text-gray-800 text-sm'),
-            _Html($description)->class('text-xs text-gray-500'),
+            _Html($description)->class('text-xs text-gray-700'),
         )->class('p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-all');
     }
 
@@ -152,7 +152,7 @@ class ChatHelpModal extends Modal
             _Html($this->iconHtml($icon))->class('w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center mr-4 flex-shrink-0'),
             _Rows(
                 _Html($title)->class('font-medium text-gray-800'),
-                _Html($description)->class('text-sm text-gray-500'),
+                _Html($description)->class('text-sm text-gray-700'),
             ),
         )->class('items-start p-4 bg-gray-50 rounded-xl');
     }
@@ -161,7 +161,7 @@ class ChatHelpModal extends Modal
     {
         return _FlexBetween(
             _Html('<kbd class="px-2 py-1 bg-gray-100 border border-gray-200 rounded text-sm font-mono">' . $key . '</kbd>'),
-            _Html($action)->class('text-sm text-gray-600'),
+            _Html($action)->class('text-sm text-gray-700'),
         )->class('py-2 border-b border-gray-100');
     }
 
@@ -169,7 +169,7 @@ class ChatHelpModal extends Modal
     {
         return _Rows(
             _Html($question)->class('font-medium text-gray-800 mb-1'),
-            _Html($answer)->class('text-sm text-gray-500'),
+            _Html($answer)->class('text-sm text-gray-700'),
         )->class('p-4 bg-gray-50 rounded-xl');
     }
 

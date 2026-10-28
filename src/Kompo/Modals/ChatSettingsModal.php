@@ -19,7 +19,7 @@ class ChatSettingsModal extends Modal
     use HasChatSettings, HasChatTheme, HasMethodsAsProperties;
 
     protected $_Title = 'ai.settings.title';
-    public $class = 'overflow-hidden max-w-lg rounded-2xl';
+    public $class = 'overflow-hidden max-w-lg rounded-3xl';
 
     public $model = AiUserSetting::class;
 
@@ -149,7 +149,7 @@ class ChatSettingsModal extends Modal
     {
         return _Rows(
             _Html($title)->class('font-semibold text-gray-800'),
-            _Html($subtitle)->class('text-xs text-gray-400'),
+            _Html($subtitle)->class('text-xs text-gray-700'),
         )->class('mb-3');
     }
 
@@ -158,7 +158,7 @@ class ChatSettingsModal extends Modal
         return _FlexBetween(
             _Rows(
                 _Html($label)->class('font-medium text-gray-700'),
-                _Html($description)->class('text-xs text-gray-400'),
+                _Html($description)->class('text-xs text-gray-700'),
             ),
             ThemedToggle::make($key),
         )->class('p-3 rounded-xl hover:bg-gray-50 transition-all');
@@ -168,11 +168,11 @@ class ChatSettingsModal extends Modal
     {
         return _FlexBetween(
             _Link(__('ai.settings.reset-defaults'))
-                ->class('text-sm text-gray-500 transition-all !bg-none ' . $this->link_hover)
+                ->class('text-sm text-gray-700 transition-all !bg-none ' . $this->link_hover)
                 ->selfPost('resetSettings'),
             _Flex(
                 _Link(__('ai.common.cancel'))
-                    ->class('px-4 py-2 text-gray-500 hover:text-gray-700 transition-all')
+                    ->class('px-4 py-2 text-gray-700 hover:text-gray-700 transition-all')
                     ->closeModal(),
                 _SubmitButton(__('ai.settings.save-settings'))->icon('check')
                     ->class('px-4 py-2 text-white rounded-xl shadow-lg transition-all' . $this->theme_gradient)

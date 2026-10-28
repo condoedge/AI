@@ -12,6 +12,8 @@ use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Kompo\Modals\ChatSettingsModal;
 use Condoedge\Ai\Kompo\Modals\ChatHelpModal;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
+use Condoedge\Ai\Kompo\Support\ChatLayout;
+use Condoedge\Ai\Kompo\Support\ConversationActions;
 use Condoedge\Ai\Kompo\Support\ThemedChatBubbleRenderer;
 use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
 use Condoedge\Ai\Support\AiFeature;
@@ -107,20 +109,24 @@ abstract class AbstractChatSurface extends Form
      */
     protected function surfaceClass(): string
     {
-        return '!items-start h-full min-h-[700px] bg-gradient-to-br from-white via-gray-50/50 to-gray-50/30 rounded-2xl shadow-2xl overflow-hidden ring-1 ring-gray-200/50';
+        return '!items-start h-full min-h-[700px] bg-gradient-to-br from-white via-gray-50/50 to-gray-50/30 rounded-3xl shadow-2xl overflow-hidden ring-1 ring-gray-200/50';
     }
 
     // ========== SHARED BODY ==========
 
     protected function mainLayout()
     {
+        $compact = ChatLayout::isCompact();
+
         return _Flex(
             _Rows(
                 _Hidden()->onLoad->run('() => {' . $this->js() . '}'),
             ),
 
-            $this->sidebar(),
-            $this->chatArea(),
+            $compact ? null : $this->sidebar(),
+            $compact
+                ? _Rows($this->sidebarHeader(), $this->chatArea()->class('min-h-0'))->class('flex-1 flex flex-col h-full min-h-0')
+                : $this->chatArea(),
         )->class($this->surfaceClass())
             ->style($this->surfaceStyle());
     }
@@ -142,7 +148,7 @@ abstract class AbstractChatSurface extends Form
     {
         $statusClass = $this->isOnline
             ? 'text-emerald-500'
-            : 'text-gray-400';
+            : 'text-gray-700';
         $statusText = $this->isOnline ? __('ai.common.online') : __('ai.common.offline');
         $statusDot = $this->isOnline
             ? '<span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white animate-pulse"></span>'
@@ -153,26 +159,63 @@ abstract class AbstractChatSurface extends Form
                 _Html('<span class="relative">' . $this->assistantAvatarHtml() . $statusDot . '</span>')->class('mr-3'),
                 _Rows(
                     // The assistant's own configured name — the one it introduces itself with.
-                    _Html(e(\Condoedge\Ai\Services\AssistantIdentity::name()))->class('font-semibold text-gray-800'),
+                    // Wrapped so Kompo's __() can't resolve a bare name to a lang file (e.g. maryanne.php).
+                    _Html('<span>' . e(\Condoedge\Ai\Services\AssistantIdentity::name()) . '</span>')->class('font-semibold text-gray-800'),
                     _Html($statusText)->class('text-xs ' . $statusClass),
                 ),
             )->class('items-center'),
-            _Link()->icon('plus')
-                ->class('p-2.5 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200')
-                ->balloon(__('ai.chat.new-conversation-tooltip'), 'left')
-                ->selfPost('createConversation')
-                ->refresh(),
+            _Flex(
+                ChatLayout::isCompact()
+                    ? _Link()->icon('question-mark-circle')
+                        ->class('p-2.5 rounded-xl text-gray-700 ' . $this->theme()->linkHover() . ' transition-all duration-200')
+                        ->balloon(__('ai.chat.help'), 'left')
+                        ->selfGet('openHelp')->inModal()
+                    : null,
+                ChatLayout::isCompact()
+                    ? $this->clearConversationLink()
+                    : _Link()->icon('plus')
+                        ->class('p-2.5 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200')
+                        ->balloon(__('ai.chat.new-conversation-tooltip'), 'left')
+                        ->selfPost('createConversation')
+                        ->refresh(),
+            )->class('items-center gap-2'),
         )->class('p-4 border-b border-gray-200/70 bg-white/80 backdrop-blur-sm');
+    }
+
+    protected function clearConversationLink()
+    {
+        if (!$this->conversation?->messages()->exists()) {
+            return null;
+        }
+
+        return _DeleteLink()->icon(_Sax('trash', 18))
+            ->class('p-2.5 rounded-xl text-gray-700 hover:text-red-500 hover:bg-red-50 transition-all duration-200')
+            ->balloon(__('ai.chat.clear-tooltip'), 'left')
+            ->deleteTitle(__('ai.chat.clear-confirm'))
+            ->confirmMessage(__('ai.chat.clear'))
+            ->cancelMessage(__('ai.common.cancel'))
+            ->selfPost('clearConversation')
+            ->emitDirect('deleted')
+            ->refresh();
+    }
+
+    public function clearConversation()
+    {
+        if ($this->conversation) {
+            app(ConversationActions::class)->delete($this->conversation->id, auth()->user());
+        }
+
+        session(['selected_conversation_id' => null]);
     }
 
     protected function sidebarFooter()
     {
         return _FlexBetween(
             _Link(__('ai.chat.settings'))->icon('cog-6-tooth')
-                ->class('text-sm text-gray-500 ' . $this->theme()->linkHover() . ' p-2 rounded-lg transition-all')
+                ->class('text-sm text-gray-700 ' . $this->theme()->linkHover() . ' p-2 rounded-lg transition-all')
                 ->selfGet('openSettings')->inModal(),
             _Link(__('ai.chat.help'))->icon('question-mark-circle')
-                ->class('text-sm text-gray-500 ' . $this->theme()->linkHover() . ' p-2 rounded-lg transition-all')
+                ->class('text-sm text-gray-700 ' . $this->theme()->linkHover() . ' p-2 rounded-lg transition-all')
                 ->selfGet('openHelp')->inModal(),
         )->class('p-3 border-t border-gray-200/70 bg-white/80 backdrop-blur-sm');
     }
@@ -258,7 +301,7 @@ abstract class AbstractChatSurface extends Form
         $style = $this->settings()->typingAnimationStyle();
         $animationHtml = $this->getTypingAnimationHtml($style);
 
-        return '<div class="flex items-start mt-4 animate-message-assistant"><div class="mr-3 flex-shrink-0 self-start">' . $avatarHtml . '</div><div class="typing-indicator-content group px-5 py-4 rounded-2xl rounded-tl-md bg-white border border-gray-100 shadow-sm">' . $animationHtml . '<div class="text-xs text-gray-400 mt-2">' . __('ai.chat.thinking') . '</div></div></div>';
+        return '<div class="flex items-start mt-4 animate-message-assistant"><div class="mr-3 flex-shrink-0 self-start">' . $avatarHtml . '</div><div class="typing-indicator-content group px-5 py-4 rounded-2xl rounded-tl-md bg-white border border-gray-100 shadow-sm">' . $animationHtml . '<div class="text-xs text-gray-700 mt-2">' . __('ai.chat.thinking') . '</div></div></div>';
     }
 
     /**

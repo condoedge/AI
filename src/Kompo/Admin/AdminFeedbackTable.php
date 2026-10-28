@@ -73,18 +73,18 @@ class AdminFeedbackTable extends Table
         return _TableRow(
             _Rows(
                 $this->feedbackBadge($row->feedback ?? null),
-                $rating['at'] !== null ? $this->text($rating['at'], 'mt-1 whitespace-nowrap text-xs text-gray-500') : null,
+                $rating['at'] !== null ? $this->text($rating['at'], 'mt-1 whitespace-nowrap text-xs text-gray-700') : null,
             ),
             $this->text($this->excerpt($rating['comment'] ?? '', 200), 'text-sm text-gray-700')->style('min-width: 10rem; max-width: 18rem'),
-            $this->text($this->dateTime($row->created_at ?? null), 'whitespace-nowrap text-xs text-gray-600'),
+            $this->text($this->dateTime($row->created_at ?? null), 'whitespace-nowrap text-xs text-gray-700'),
             _Rows(
                 $this->text($row->user_name ?? '—', 'text-sm font-medium text-gray-900'),
-                $this->text($row->team_name ?? '', 'text-xs text-gray-500'),
+                $this->text($row->team_name ?? '', 'text-xs text-gray-700'),
             ),
             $this->text($this->excerpt($row->question ?? '', 140), 'text-sm text-gray-900')->style('min-width: 14rem; max-width: 22rem'),
-            $this->text($this->excerpt($row->content ?? '', 160), 'text-sm text-gray-600')->style('min-width: 14rem; max-width: 26rem'),
+            $this->text($this->excerpt($row->content ?? '', 160), 'text-sm text-gray-700')->style('min-width: 14rem; max-width: 26rem'),
             $this->routeBadge($summary['route'], $summary['is_error']),
-            $this->text($this->latency($summary['latency_ms']), 'whitespace-nowrap text-xs text-gray-600'),
+            $this->text($this->latency($summary['latency_ms']), 'whitespace-nowrap text-xs text-gray-700'),
         )->class('cursor-pointer hover:bg-gray-50')
             ->selfGet('openTranscript', [
                 'conversation' => (string) ($row->conversation_uuid ?? ''),

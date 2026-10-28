@@ -45,7 +45,9 @@ class UserChatSettings extends AbstractChatSettings
         // 1. Check user DB direct columns (if authenticated)
         // IMPORTANT: Check if auth is available before calling - prevents
         // "Target class [auth] does not exist" during early container resolution
-        if (auth()->check()) {
+        $locked = \Condoedge\Ai\Kompo\Support\ChatLayout::isCompact();
+
+        if (!$locked && auth()->check()) {
             $userSetting = AiUserSetting::forUser(auth()->id());
 
             if ($userSetting->getAttribute($key) !== null) {
@@ -54,7 +56,7 @@ class UserChatSettings extends AbstractChatSettings
         }
 
         // 2. Check session
-        $sessionSettings = session('ai_chat_settings', []);
+        $sessionSettings = $locked ? [] : session('ai_chat_settings', []);
         if (isset($sessionSettings[$key])) {
             return $sessionSettings[$key];
         }

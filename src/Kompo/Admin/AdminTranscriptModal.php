@@ -55,7 +55,7 @@ class AdminTranscriptModal extends Modal
     public function body()
     {
         if ($this->transcript === null) {
-            return _Html('ai.admin.transcript-not-found')->class('py-8 text-center text-sm text-gray-500');
+            return _Html('ai.admin.transcript-not-found')->class('py-8 text-center text-sm text-gray-700');
         }
 
         $conversation = $this->transcript['conversation'];
@@ -67,9 +67,9 @@ class AdminTranscriptModal extends Modal
                     $conversation->user_name ?? null,
                     $conversation->team_name ?? null,
                     $this->dateTime($conversation->created_at ?? null),
-                ])), 'text-xs text-gray-500'),
+                ])), 'text-xs text-gray-700'),
                 _FlexBetween(
-                    _Html('ai.admin.read-only')->class('text-xs italic text-gray-400'),
+                    _Html('ai.admin.read-only')->class('text-xs italic text-gray-700'),
                     _Link('ai.admin.copy-eval-case')
                         ->class('text-xs font-medium text-indigo-700 hover:underline')
                         ->onClick(fn ($e) => $e->run(ConversationLimitBanner::copyResumeJs(
@@ -134,8 +134,8 @@ class AdminTranscriptModal extends Modal
                 _Html($roleKey)->class('text-xs font-semibold uppercase tracking-wide ' . ($isAnswer ? 'text-indigo-700' : 'text-gray-700')),
                 _Flex(
                     $isAnswer ? $this->feedbackBadge(is_string($feedback) ? $feedback : null) : null,
-                    $isAnswer && $rating['at'] !== null ? $this->text(__('ai.admin.feedback.rated-at', ['time' => $rating['at']]), 'text-xs text-gray-400') : null,
-                    $this->text($this->dateTime($message->created_at), 'text-xs text-gray-400'),
+                    $isAnswer && $rating['at'] !== null ? $this->text(__('ai.admin.feedback.rated-at', ['time' => $rating['at']]), 'text-xs text-gray-700') : null,
+                    $this->text($this->dateTime($message->created_at), 'text-xs text-gray-700'),
                 )->class('items-center gap-2'),
             )->class('mb-1'),
             $this->text((string) $message->content, 'whitespace-pre-wrap break-words text-sm text-gray-900'),
@@ -161,13 +161,13 @@ class AdminTranscriptModal extends Modal
             _Flex(
                 $this->routeBadge($summary['route'], $summary['is_error']),
                 $summary['is_error'] ? _Html('ai.admin.trace.failed')->class('text-xs font-semibold text-red-700') : null,
-                $this->text(implode(' · ', $facts), 'text-xs text-gray-500'),
+                $this->text(implode(' · ', $facts), 'text-xs text-gray-700'),
             )->class('flex-wrap items-center gap-2'),
             $summary['errors']
                 ? $this->text(__('ai.admin.trace.errors') . ': ' . implode(' | ', $summary['errors']), 'mt-1 text-xs text-red-700 break-words')
                 : null,
             $summary['files']
-                ? $this->text(__('ai.admin.trace.files') . ': ' . implode(', ', $summary['files']), 'mt-1 text-xs text-gray-500 break-words')
+                ? $this->text(__('ai.admin.trace.files') . ': ' . implode(', ', $summary['files']), 'mt-1 text-xs text-gray-700 break-words')
                 : null,
         )->class('mt-2 border-t border-gray-100 pt-2');
     }
