@@ -6,6 +6,7 @@ use Condoedge\Ai\DTOs\PageContext;
 use Condoedge\Ai\Kompo\Modals\EditMessageModal;
 use Condoedge\Ai\Kompo\Modals\FeedbackCommentModal;
 use Condoedge\Ai\Kompo\Presenters\ChatPresenter;
+use Condoedge\Ai\Kompo\Support\ChatLayout;
 use Condoedge\Ai\Kompo\Support\ConversationActions;
 use Condoedge\Ai\Kompo\Support\ConversationLimitBanner;
 use Condoedge\Ai\Kompo\Support\MessageBubbleRenderer;
@@ -89,7 +90,7 @@ class MessagesQuery extends ChatMessagesQuery
         $this->conversation = AiConversation::where('user_id', auth()->id())
             ->find($this->prop('conversation_id') ?? session('selected_conversation_id'));
 
-        $this->class = '!static flex-1 bg-gradient-to-b ' . $this->theme()->heroBackground() . ' ' . $speedClass;
+        $this->class = '!static flex-1 min-h-0 bg-gradient-to-b ' . $this->theme()->heroBackground() . ' ' . $speedClass;
 
         $this->latestMessageId = $this->conversation?->messages()
             ->orderBy('created_at', 'desc')
@@ -98,6 +99,11 @@ class MessagesQuery extends ChatMessagesQuery
 
     public function top()
     {
+        // Compact has no conversation list to pick from or to pin/archive into.
+        if (ChatLayout::isCompact()) {
+            return !$this->conversation || $this->messageCount() === 0 ? $this->welcomeState() : null;
+        }
+
         $content = null;
 
         if (!$this->conversation) {
@@ -133,10 +139,10 @@ class MessagesQuery extends ChatMessagesQuery
                         : null,
                 )->class('items-center'),
                 _Flex(
-                    _Html('<span class="inline-flex items-center px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">' . $messageCount . ' messages</span>'),
-                    _Html('•')->class('mx-2 text-gray-300'),
+                    _Html('<span class="inline-flex items-center px-2 py-0.5 bg-gray-100 text-gray-700 text-xs rounded-full">' . $messageCount . ' messages</span>'),
+                    _Html('•')->class('mx-2 text-gray-700'),
                     _Html($this->conversation->last_message_at?->diffForHumans() ?? __('ai.chat.just-now'))
-                        ->class('text-xs text-gray-400'),
+                        ->class('text-xs text-gray-700'),
                 )->class('items-center mt-1'),
             ),
             $this->headerActions(),
@@ -151,22 +157,22 @@ class MessagesQuery extends ChatMessagesQuery
             _Link()->icon(_Sax('star', 18))
                 ->class('p-2.5 rounded-xl transition-all duration-200 ' . ($isPinned
                     ? 'bg-amber-100 text-amber-600 shadow-sm'
-                    : 'text-gray-400 hover:text-amber-500 hover:bg-amber-50'))
+                    : 'text-gray-700 hover:text-amber-500 hover:bg-amber-50'))
                 ->balloon($isPinned ? __('ai.messages.unpin') : __('ai.messages.pin'), 'down')
                 ->selfPost('togglePin', ['id' => $this->conversation->id])
                 ->refresh([self::ID, ConversationListQuery::ID]),
             _Link()->icon(_Sax('export-2', 18))
-                ->class('p-2.5 rounded-xl text-gray-400 ' . $this->theme()->linkHover() . ' transition-all duration-200')
+                ->class('p-2.5 rounded-xl text-gray-700 ' . $this->theme()->linkHover() . ' transition-all duration-200')
                 ->balloon(__('ai.messages.export'), 'down')
                 ->href('ai.export-chat', ['id' => $this->conversation->id])
                 ->attr(['download' => 'conversation-' . $this->conversation->id . '.md']),
             _Link()->icon(_Sax('archive', 18))
-                ->class('p-2.5 rounded-xl text-gray-400 ' . $this->theme()->linkHover() . ' transition-all duration-200')
+                ->class('p-2.5 rounded-xl text-gray-700 ' . $this->theme()->linkHover() . ' transition-all duration-200')
                 ->balloon(__('ai.messages.archive'), 'down')
                 ->selfPost('archiveConversation', ['id' => $this->conversation->id])
                 ->refresh([self::ID, ConversationListQuery::ID]),
             _DeleteLink()->icon(_Sax('trash', 18))
-                ->class('p-2.5 rounded-xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all duration-200')
+                ->class('p-2.5 rounded-xl text-gray-700 hover:text-red-500 hover:bg-red-50 transition-all duration-200')
                 ->balloon(__('ai.common.delete'), 'down')
                 ->selfPost('deleteConversation', ['id' => $this->conversation->id])
                 ->refresh([self::ID, ConversationListQuery::ID]),
@@ -278,7 +284,7 @@ class MessagesQuery extends ChatMessagesQuery
             _Html($this->welcomeAvatarHtml())->class('mb-6'),
             _Html(__('ai.chat.select-conversation'))->class('text-2xl font-bold text-gray-800 mb-3'),
             _Html(__('ai.chat.select-conversation-desc'))
-                ->class('text-gray-500 text-center max-w-md mb-8'),
+                ->class('text-gray-700 text-center max-w-md mb-8'),
             _Button(__('ai.chat.start-new'))->icon('plus')
                 ->class('px-6 py-3 bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white rounded-xl shadow-lg hover:shadow-xl transition-all')
                 ->selfPost('createConversation')
@@ -291,8 +297,8 @@ class MessagesQuery extends ChatMessagesQuery
     {
         $elements = [
             _Html($this->welcomeAvatarHtml())->class('mb-4'),
-            _Html($this->settings()->welcomeTitle())->class('text-2xl font-bold text-gray-800 mb-2'),
-            _Html($this->settings()->welcomeMessage())->class('text-gray-500 text-center max-w-md mb-6'),
+            _Html('<span>' . e($this->settings()->welcomeTitle()) . '</span>')->class('text-2xl font-bold text-gray-800 mb-2'),
+            _Html($this->settings()->welcomeMessage())->class('text-gray-700 text-center max-w-md mb-6'),
         ];
 
         $elements[] = $this->exampleQuestionsBlock();
@@ -342,7 +348,7 @@ class MessagesQuery extends ChatMessagesQuery
         );
 
         return _Rows(
-            _Html(__('ai.chat.try-asking'))->class('text-sm font-medium text-gray-400 mb-3'),
+            _Html(__('ai.chat.try-asking'))->class('text-sm font-medium text-gray-700 mb-3'),
             _Rows(...$taskButtons, ...$questionButtons)->class('space-y-2 w-full max-w-md'),
         )->class(trim('w-full flex flex-col items-center ' . $extraClass));
     }

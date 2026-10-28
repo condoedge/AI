@@ -185,7 +185,7 @@ class ChatMessageForm extends ChatComposerForm
         $buttons = array_map(fn($action) =>
             _Link($action['label'])
                 ->icon($action['icon'] ?? null)
-                ->class('px-3 py-1.5 text-xs font-medium text-gray-500 bg-gray-100/70 rounded-lg hover:bg-indigo-100 hover:text-indigo-700 transition-all')
+                ->class('px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100/70 rounded-lg hover:bg-indigo-100 hover:text-indigo-700 transition-all')
                 ->selfPost('quickAction', ['action' => $action['value']])
                 ->refresh(MessagesQuery::ID),
             array_slice($actions, 0, 4)
@@ -304,7 +304,9 @@ class ChatMessageForm extends ChatComposerForm
 
     protected function sendingMessageActions()
     {
-        $refreshActionWrap = $this->conversationId ? fn($e) => $e->refresh(MessagesQuery::ID)
+        // Compact refreshes the whole surface so its header knows the chat now has messages.
+        $refreshActionWrap = $this->conversationId && !\Condoedge\Ai\Kompo\Support\ChatLayout::isCompact()
+            ? fn($e) => $e->refresh(MessagesQuery::ID)
             : fn($e) => $e->refresh([AiChatPanel::ID]);
 
         return fn($e) => $e

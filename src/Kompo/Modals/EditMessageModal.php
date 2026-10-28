@@ -18,7 +18,7 @@ class EditMessageModal extends Modal
     use HasChatTheme, HasChatSettings;
 
     protected $_Title = 'ai.edit.title';
-    public $class = 'overflow-hidden max-w-2xl rounded-2xl';
+    public $class = 'overflow-hidden max-w-2xl rounded-3xl';
 
     protected $noHeaderButtons = true;
 
@@ -66,14 +66,14 @@ class EditMessageModal extends Modal
     {
         return _Rows(
             _Html(__('ai.edit.instruction'))
-                ->class('text-sm text-gray-500 mb-4'),
+                ->class('text-sm text-gray-700 mb-4'),
             _Textarea()->name('content')
                 ->value($this->message->content)
                 ->class('w-full min-h-[150px] p-4 border border-gray-200 rounded-xl focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 transition-all resize-none')
                 ->placeholder(__('ai.edit.placeholder')),
             _Flex(
-                _Html(__('ai.edit.original'))->class('text-xs font-medium text-gray-400'),
-                _Html($this->message->created_at->diffForHumans())->class('text-xs text-gray-400'),
+                _Html(__('ai.edit.original'))->class('text-xs font-medium text-gray-700'),
+                _Html($this->message->created_at->diffForHumans())->class('text-xs text-gray-700'),
             )->class('mt-2 items-center gap-2'),
         )->class('p-6');
     }
@@ -84,7 +84,7 @@ class EditMessageModal extends Modal
 
         return _FlexBetween(
             _Link(__('ai.common.cancel'))
-                ->class('px-4 py-2 text-gray-500 hover:text-gray-700 transition-all')
+                ->class('px-4 py-2 text-gray-700 hover:text-gray-700 transition-all')
                 ->closeModal(),
             _Flex(
                 _Button(__('ai.edit.save-regenerate'))->icon('arrow-path')
@@ -119,10 +119,10 @@ class EditMessageModal extends Modal
     protected function notFoundState()
     {
         return _Rows(
-            _Html('<svg class="w-16 h-16 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>')->class('mb-4'),
+            _Html('<svg class="w-16 h-16 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>')->class('mb-4'),
             _Html(__('ai.edit.not-found'))->class('text-lg font-semibold text-gray-700 mb-2'),
             _Html(__('ai.edit.not-found-desc'))
-                ->class('text-sm text-gray-500 text-center max-w-sm'),
+                ->class('text-sm text-gray-700 text-center max-w-sm'),
             _Link(__('ai.common.close'))->class('mt-6 px-4 py-2 bg-gray-200 text-gray-700 rounded-xl hover:bg-gray-300 transition-all')->closeModal(),
         )->class('flex flex-col items-center justify-center p-8');
     }

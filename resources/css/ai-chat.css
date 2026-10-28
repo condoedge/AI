@@ -30,8 +30,8 @@
 
     /* Text Colors */
     --ai-text-primary: #1f2937;
-    --ai-text-secondary: #6b7280;
-    --ai-text-muted: #9ca3af;
+    --ai-text-secondary: #374151;
+    --ai-text-muted: #374151;
 
     /* Border Colors */
     --ai-border-light: #e5e7eb;
@@ -79,6 +79,10 @@
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+}
+
+.kompoModal:has(> .ai-chat-modal-form) {
+    border-radius: 1.5rem;
 }
 
 .ai-chat-wrapper {
