@@ -17,16 +17,25 @@ use Condoedge\Ai\Services\Tasks\TaskOrchestrator;
  */
 trait HandlesTasks
 {
-    public function startTask($key)
+    /**
+     * A start chip (StartTaskAction::element): $groups, the optional groups the task starts at (a JSON list, as the
+     * chip posts it, or a list); $replace, the uuid of the conversation's task the user chose to stop for this one.
+     */
+    public function startTask($key, $groups = null, $replace = null)
     {
         $user = auth()->user();
         $definition = TaskOrchestrator::configured() && is_string($key) ? $this->tasks()->definition($key) : null;
         if ($definition === null || !$definition->startableBy($user)) {
             abort(403);
         }
+        $groups = is_string($groups) ? json_decode($groups, true) : $groups;
+        $context = array_filter([
+            'groups' => is_array($groups) ? array_values(array_filter($groups, 'is_string')) : [],
+            'replace' => is_string($replace) && $replace !== '' ? $replace : null,
+        ], fn (mixed $value) => $value !== null && $value !== []);
 
         $conversation = $this->conversation ?? $this->createNewConversation();
-        $this->storeTaskAnswer($conversation, $this->tasks()->start($user, $conversation, $key));
+        $this->storeTaskAnswer($conversation, $this->tasks()->start($user, $conversation, $key, $context));
     }
 
     /** A choice chip: its label is stored as the user's answer, then the next question. */

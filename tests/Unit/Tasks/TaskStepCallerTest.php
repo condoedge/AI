@@ -234,7 +234,7 @@ class TaskStepCallerTest extends TestCase
 
         $this->assertTrue($step->failed);
         $this->assertSame([], $step->values);
-        $this->assertSame("I didn't quite understand. Could you rephrase?\n\nWhich room?", $step->question);
+        $this->assertSame("I can't answer right now. Please try again in a moment.\n\nWhich room?", $step->question);
         $this->assertStringEndsWith('Could you tell me: book.room, book.day?', $first->question);
     }
 

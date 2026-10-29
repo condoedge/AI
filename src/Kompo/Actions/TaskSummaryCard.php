@@ -16,7 +16,8 @@ use Kompo\Form;
  * The confirm card of a task in review: the rows its definition built in code (label, value,
  * source, and the value it replaces when the host gives one), with a badge on the rows to confirm
  * (money, legal, outward). While the card is the task's current summary it also offers a tick per
- * such row, a Change chip per row, Confirm and Cancel.
+ * such row, a Change chip per changeable row (every row, on a card stored before rows said so),
+ * Confirm and Cancel.
  *
  * A Form of its own so Confirm posts the ticks (ack_<field>, 1|0) with the card's values; the
  * round-trips are HandlesTasks, scoped like the chat panel's, and the server decides whether
@@ -90,7 +91,7 @@ class TaskSummaryCard extends Form
                 ),
                 _Flex(
                     $risk !== null ? _Html(e(__('ai.tasks.risk-' . $risk)))->class('px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-800') : null,
-                    $live ? _Link(__('ai.tasks.change'))->class('text-xs font-medium text-gray-700 underline hover:text-gray-800')
+                    $live && ($row['changeable'] ?? true) ? _Link(__('ai.tasks.change'))->class('text-xs font-medium text-gray-700 underline hover:text-gray-800')
                         ->selfPost('reopenTask', ['uuid' => $uuid, 'field' => $field])
                         ->refresh(MessagesQuery::ID) : null,
                 )->class('items-center gap-2 shrink-0'),

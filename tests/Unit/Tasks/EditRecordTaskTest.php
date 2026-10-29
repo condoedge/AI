@@ -227,6 +227,61 @@ class EditRecordTaskTest extends TestCase
     }
 
     /** @test */
+    public function a_record_changed_between_the_summary_and_the_confirm_shows_the_summary_again_with_the_new_value(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply()]);
+        [$task, $response] = $this->answered($orchestrator, ['room' => 'large'] + self::SAME);
+        $this->definition->bookings['b1']['day'] = '2026-03-04';
+
+        $again = $orchestrator->confirm($task->fresh(), $response['metadata']['task']['token'], ['user' => $this->user, 'acknowledged' => ['_notice']]);
+
+        $this->assertSame(0, $this->definition->executed, 'no write over a value changed meanwhile');
+        $this->assertSame(AiTask::STATUS_REVIEWING, $task->fresh()->status);
+        $this->assertStringContainsString(__('ai.tasks.changed-since'), $again['answer']);
+        $rows = array_column($again['metadata']['task']['summary'], null, 'field');
+        $this->assertSame(['2026-03-03', '2026-03-04'], [$rows['day']['value'], $rows['day']['before']], 'the new "was" is shown');
+
+        $orchestrator->confirm($task->fresh(), $again['metadata']['task']['token'], ['user' => $this->user, 'acknowledged' => ['_notice']]);
+        $this->assertSame(1, $this->definition->executed);
+    }
+
+    /** @test */
+    public function the_bound_record_and_the_hosts_own_rows_are_not_changeable(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply()]);
+        [$task, $response] = $this->answered($orchestrator, ['room' => 'large'] + self::SAME);
+
+        $this->assertSame(['booking' => false, 'room' => true, '_notice' => false],
+            array_column($response['metadata']['task']['summary'], 'changeable', 'field'), 'a single option leaves nothing to change to');
+        $refused = $orchestrator->reopen($task->fresh(), 'booking', ['user' => $this->user]);
+        $this->assertSame(__('ai.tasks.not-changeable'), $refused['answer']);
+        $this->assertSame('b1', $task->fresh()->draft()->get('booking'));
+        $this->assertSame(AiTask::STATUS_REVIEWING, $task->fresh()->status);
+    }
+
+    /** @test */
+    public function a_start_with_a_group_asks_its_fields_first_and_offers_no_other_once_it_holds_a_change(): void
+    {
+        $this->definition->initial = self::SAME;
+        $orchestrator = $this->orchestrator([self::reply([], 'Which start and end days?'), self::reply(['end_day' => '2026-03-12'])]);
+        $conversation = AiConversation::create(['status' => 'active', 'user_id' => 7, 'team_id' => 3]);
+
+        $orchestrator->start($this->user, $conversation, 'edit_booking', ['groups' => ['dates', 'nope']]);
+
+        $task = AiTask::sole();
+        $this->assertSame(['start_day', 'end_day'], AiTaskEvent::where('task_id', $task->id)->where('kind', 'asked')->sole()->payload['fields']);
+        $this->assertSame(['definition' => 'edit_booking', 'groups' => ['dates']], AiTaskEvent::where('task_id', $task->id)->where('kind', 'started')->sole()->payload);
+
+        $response = $this->turn($orchestrator, $task, 'push the end back to March 12');
+
+        $task->refresh();
+        $this->assertSame(AiTask::STATUS_REVIEWING, $task->status, 'no group offer');
+        $this->assertSame([['dates'], []], [$task->draft()->groups, $task->draft()->declined]);
+        $this->assertSame(['booking', 'end_day', '_notice'], array_column($response['metadata']['task']['summary'], 'field'));
+        $this->assertCount(2, $this->llm->calls);
+    }
+
+    /** @test */
     public function a_definition_without_the_contract_is_unchanged(): void
     {
         $orchestrator = $this->orchestrator([self::reply([], 'Which room, day and how many?'), self::reply()]);

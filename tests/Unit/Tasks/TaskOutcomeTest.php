@@ -30,4 +30,21 @@ class TaskOutcomeTest extends TestCase
         $this->assertEquals($done, TaskOutcome::fromArray($done->toArray()));
         $this->assertSame([], TaskOutcome::fromArray(['succeeded' => true])->followUps, 'an outcome stored before follow-ups has none');
     }
+
+    /** @test */
+    public function a_task_follow_up_keeps_the_groups_it_starts_at(): void
+    {
+        $done = TaskOutcome::success()->withFollowUps([
+            ['task' => 'book_room', 'label' => 'book.payment', 'groups' => ['payment', 7, 'extras']],
+            ['task' => 'book_room', 'label' => 'book.start', 'groups' => 'payment'],
+            ['url' => 'https://example.test/rooms', 'label' => 'rooms.open', 'groups' => ['payment']],
+        ]);
+
+        $this->assertSame([
+            ['task' => 'book_room', 'label' => 'book.payment', 'groups' => ['payment', 'extras']],
+            ['task' => 'book_room', 'label' => 'book.start'],
+            ['url' => 'https://example.test/rooms', 'label' => 'rooms.open'],
+        ], $done->followUps);
+        $this->assertEquals($done, TaskOutcome::fromArray($done->toArray()));
+    }
 }

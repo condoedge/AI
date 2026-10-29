@@ -152,7 +152,10 @@ trait HasNodeableConfig
     }
 
     /**
-     * Perform the auto-sync operation
+     * Perform the auto-sync operation, inline or queued, once the write is committed: at once
+     * outside a transaction, after the commit inside one, never when the write is rolled back
+     * (a rolled-back savepoint drops its callbacks too). ai.auto_sync.after_commit = false runs
+     * it at once inside the transaction, as before.
      *
      * @param string $operation
      * @param callable $callback
@@ -160,18 +163,26 @@ trait HasNodeableConfig
      */
     protected function performAutoSync(string $operation, callable $callback): void
     {
-        $shouldQueue = $this->shouldQueueSync();
+        $run = function () use ($operation, $callback) {
+            if ($this->shouldQueueSync()) {
+                $this->dispatchSyncJob($operation);
+                return;
+            }
 
-        if ($shouldQueue) {
-            $this->dispatchSyncJob($operation);
+            try {
+                $callback();
+            } catch (\Throwable $e) {
+                $this->handleSyncError($operation, $e);
+            }
+        };
+
+        $connection = $this->getConnection();
+        if (config('ai.auto_sync.after_commit', true) && $connection->transactionLevel() > 0) {
+            $connection->afterCommit($run);
             return;
         }
 
-        try {
-            $callback();
-        } catch (\Throwable $e) {
-            $this->handleSyncError($operation, $e);
-        }
+        $run();
     }
 
     /**

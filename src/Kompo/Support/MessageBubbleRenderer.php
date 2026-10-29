@@ -445,7 +445,8 @@ class MessageBubbleRenderer
 
     /**
      * The task part of an assistant message: the progress line and choice chips of the current
-     * question, the summary card, or the outcome's link and follow-up chips. Controls show only while
+     * question, the summary card, the outcome's link and follow-up chips, or, when another task's start
+     * met this one, its Continue / stop-and-start chips. Controls show only while
      * the message still is the task's current state, so an older question or summary stays inert.
      *
      * @return array{0: mixed, 1: mixed, 2: array<int, mixed>, 3: array<int, mixed>} [progress line, summary card, choice chips, outcome links]
@@ -453,15 +454,16 @@ class MessageBubbleRenderer
     protected function taskElements($message): array
     {
         $task = $message->metadata['task'] ?? null;
-        $links = is_array($task) ? $this->outcomeLinks($task) : [];
-        if ($links !== []) {
-            return [null, null, [], $links];
+        $links = is_array($task) ? [...$this->outcomeLinks($task), ...$this->switchChips($message, $task)] : [];
+        // A summary shown again after a refused write carries the manual page's link as well as its card.
+        $card = is_array($task) && is_string($task['uuid'] ?? null) && ($task['status'] ?? null) === AiTask::STATUS_REVIEWING
+            && ($links === [] || is_array($task['summary'] ?? null))
+            ? new TaskSummaryCard(null, ['conversation_id' => $message->conversation_id ?? null, 'message_id' => $message->id]) : null;
+        if ($card !== null || $links !== []) {
+            return [null, $card, [], $links];
         }
         if (!is_array($task) || !is_string($task['uuid'] ?? null)) {
             return [null, null, [], []];
-        }
-        if (($task['status'] ?? null) === AiTask::STATUS_REVIEWING) {
-            return [null, new TaskSummaryCard(null, ['conversation_id' => $message->conversation_id ?? null, 'message_id' => $message->id]), [], []];
         }
         $live = $this->liveTask($message, $task);
         if ($live === null || $live->status !== AiTask::STATUS_COLLECTING) {
@@ -503,11 +505,38 @@ class MessageBubbleRenderer
             if (isset($item['url'])) {
                 $links[] = _Link(e(__($item['label'])))->href($item['url']);
             } elseif (StartTaskAction::invocation($item['task'], $user) !== null) {
-                $links[] = StartTaskAction::element($item['task'], (string) __($item['label']));
+                $links[] = StartTaskAction::element($item['task'], (string) __($item['label']), (array) ($item['groups'] ?? []));
             }
         }
 
         return $links;
+    }
+
+    /**
+     * Another task's start while this one runs (metadata.task.switch): "Continue" this task, or stop it and start
+     * the other one; only while the task is still where the message shows it, and each only while this user may start it.
+     *
+     * @return array<int, mixed>
+     */
+    protected function switchChips($message, array $task): array
+    {
+        $switch = $task['switch'] ?? null;
+        if (!is_array($switch) || !is_string($switch['task'] ?? null) || !is_string($task['definition'] ?? null) || !is_string($task['uuid'] ?? null)
+            || $this->liveTask($message, $task) === null) {
+            return [];
+        }
+        $user = auth()->user();
+        $definitions = TaskOrchestrator::registered();
+        $chips = [];
+        if (isset($definitions[$task['definition']]) && StartTaskAction::invocation($task['definition'], $user) !== null) {
+            $chips[] = StartTaskAction::element($task['definition'], (string) __('ai.tasks.continue', ['task' => __($definitions[$task['definition']]->label())]));
+        }
+        if (isset($definitions[$switch['task']]) && StartTaskAction::invocation($switch['task'], $user) !== null) {
+            $chips[] = StartTaskAction::element($switch['task'], (string) __('ai.tasks.replace', ['task' => __($definitions[$switch['task']]->label())]),
+                (array) ($switch['groups'] ?? []), $task['uuid']);
+        }
+
+        return $chips;
     }
 
     /** A code-built choice ({label, field, value}): it posts the value, the orchestrator checks it is still asked. */

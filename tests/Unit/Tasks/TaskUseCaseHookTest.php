@@ -336,6 +336,36 @@ class TaskUseCaseHookTest extends TestCase
     }
 
     /** @test */
+    public function a_message_after_the_task_stopped_gets_the_pipelines_answer_one_notice_and_a_restart_chip(): void
+    {
+        config(['ai.tasks' => ['enabled' => true, 'definitions' => [BookRoomTask::class]]]);
+        $this->pipeline(2);
+        $step = $this->stepLlm([]);
+        $offer = $this->offerLlm([['task' => null]]);
+        $conversation = $this->conversationWithTask();
+        $this->travel(86401)->seconds();
+
+        $result = $this->ask($conversation, 'How much is the large room?');
+
+        $task = AiTask::sole();
+        $this->assertSame(AiTask::STATUS_EXPIRED, $task->status);
+        $this->assertSame(['limit_hit', 'expired'], AiTaskEvent::where('task_id', $task->id)->orderBy('id')->pluck('kind')->all());
+        $notice = __('ai.tasks.expired-on-return', ['task' => 'book.start']);
+        $this->assertNotSame('ai.tasks.expired-on-return', $notice);
+        $this->assertSame("Pipeline answer.\n\n" . $notice, $result->answer);
+        $metadata = $result->assistantMessage->fresh()->metadata;
+        $this->assertSame([self::startChip()], $metadata['invocations'], 'the restart chip');
+        $this->assertArrayNotHasKey('task', $metadata, 'the answer is not a task message');
+        $this->assertNull($conversation->messages()->where('role', 'user')->sole()->metadata, 'the message is not an answer of the task');
+        $this->assertSame([], $step->calls);
+
+        $again = $this->ask($conversation, 'And the small one?');
+
+        $this->assertSame('Pipeline answer.', $again->answer, 'one notice only');
+        $this->assertCount(1, $offer->calls, 'the restart chip is offered like any other start chip');
+    }
+
+    /** @test */
     public function a_typed_cancel_during_a_task_still_cancels_it(): void
     {
         config(['ai.tasks' => ['enabled' => true, 'definitions' => [BookRoomTask::class]]]);

@@ -7,8 +7,11 @@ namespace Condoedge\Ai\Tests\Unit\Domain\Traits;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Domain\Traits\HasNodeableConfig;
 use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Jobs\IngestEntityJob;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Mockery;
 use Orchestra\Testbench\TestCase;
@@ -17,6 +20,9 @@ use Orchestra\Testbench\TestCase;
  * A Nodeable model with NO entity config (not in config/entities.php, no nodeableConfig())
  * is simply not part of the AI domain: saving it must be a silent skip (one debug line per
  * class), not a Log::error with a full stack trace on every save.
+ *
+ * A configured model's sync leaves the database only once its write is committed: at once
+ * outside a transaction, after the commit inside one, never for a rolled-back write.
  */
 class HasNodeableConfigAutoSyncTest extends TestCase
 {
@@ -99,6 +105,128 @@ class HasNodeableConfigAutoSyncTest extends TestCase
 
         Log::shouldNotHaveReceived('error');
         $this->assertSame(1, AutoSyncConfiguredModel::count());
+    }
+
+    /** @test */
+    public function outside_a_transaction_the_sync_runs_at_once(): void
+    {
+        $ingested = 0;
+        $this->mockAi()->shouldReceive('ingest')->andReturnUsing(function () use (&$ingested) {
+            $ingested++;
+
+            return [];
+        });
+
+        AutoSyncConfiguredModel::create(['name' => 'now']);
+
+        $this->assertSame(1, $ingested);
+    }
+
+    /** @test */
+    public function inside_a_transaction_the_sync_waits_for_the_commit(): void
+    {
+        $ingested = 0;
+        $this->mockAi()->shouldReceive('ingest')->andReturnUsing(function () use (&$ingested) {
+            $ingested++;
+
+            return [];
+        });
+        $during = null;
+
+        DB::transaction(function () use (&$ingested, &$during) {
+            AutoSyncConfiguredModel::create(['name' => 'later']);
+            $during = $ingested;
+        });
+
+        $this->assertSame(0, $during, 'nothing leaves the database before the commit');
+        $this->assertSame(1, $ingested);
+    }
+
+    /** @test */
+    public function a_rolled_back_transaction_syncs_nothing(): void
+    {
+        $this->mockAi()->shouldReceive('ingest')->never();
+
+        try {
+            DB::transaction(function () {
+                AutoSyncConfiguredModel::create(['name' => 'gone']);
+                throw new \RuntimeException('the write is refused');
+            });
+        } catch (\RuntimeException) {
+        }
+
+        $this->assertSame(0, AutoSyncConfiguredModel::count());
+    }
+
+    /** @test */
+    public function a_rolled_back_savepoint_inside_a_committed_transaction_syncs_nothing_of_it(): void
+    {
+        $names = [];
+        $this->mockAi()->shouldReceive('ingest')->andReturnUsing(function ($model) use (&$names) {
+            $names[] = $model->name;
+
+            return [];
+        });
+
+        DB::transaction(function () {
+            AutoSyncConfiguredModel::create(['name' => 'kept']);
+            try {
+                DB::transaction(function () {
+                    AutoSyncConfiguredModel::create(['name' => 'undone']);
+                    throw new \RuntimeException('the inner write is refused');
+                });
+            } catch (\RuntimeException) {
+            }
+        });
+
+        $this->assertSame(['kept'], $names);
+    }
+
+    /** @test */
+    public function a_queued_sync_is_pushed_only_once_the_transaction_commits(): void
+    {
+        config(['ai.auto_sync.queue' => true]);
+        Queue::fake();
+
+        try {
+            DB::transaction(function () {
+                AutoSyncConfiguredModel::create(['name' => 'gone']);
+                throw new \RuntimeException('the write is refused');
+            });
+        } catch (\RuntimeException) {
+        }
+        Queue::assertNothingPushed();
+
+        $pushedDuring = null;
+        DB::transaction(function () use (&$pushedDuring) {
+            AutoSyncConfiguredModel::create(['name' => 'kept']);
+            $pushedDuring = Queue::pushed(IngestEntityJob::class)->count();
+        });
+
+        $this->assertSame(0, $pushedDuring);
+        Queue::assertPushed(IngestEntityJob::class, 1);
+    }
+
+    /** @test */
+    public function with_after_commit_off_the_sync_runs_inside_the_transaction_as_before(): void
+    {
+        config(['ai.auto_sync.after_commit' => false]);
+        $ingested = 0;
+        $this->mockAi()->shouldReceive('ingest')->andReturnUsing(function () use (&$ingested) {
+            $ingested++;
+
+            return [];
+        });
+
+        try {
+            DB::transaction(function () {
+                AutoSyncConfiguredModel::create(['name' => 'gone']);
+                throw new \RuntimeException('the write is refused');
+            });
+        } catch (\RuntimeException) {
+        }
+
+        $this->assertSame(1, $ingested);
     }
 }
 

@@ -335,6 +335,10 @@ return [
         // Queue name to use
         'queue_name' => env('AI_AUTO_SYNC_QUEUE_NAME', 'default'),
 
+        // Sync (or queue the sync) only once the write is committed, never for a rolled-back
+        // one; false runs it at once inside the transaction
+        'after_commit' => env('AI_AUTO_SYNC_AFTER_COMMIT', true),
+
         // Operations to sync automatically
         'operations' => [
             'create' => env('AI_AUTO_SYNC_CREATE', true),  // Sync on model creation

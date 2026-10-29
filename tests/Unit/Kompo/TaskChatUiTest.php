@@ -346,6 +346,34 @@ class TaskChatUiTest extends TestCase
         $this->assertSame(1, substr_count($json, '"Sent or published"'));
         $this->assertStringContainsString('"name":"ack__notice"', $json);
         $this->assertSame(2, substr_count($json, '"' . __('ai.tasks.acknowledge') . '"'), 'the money row and the outward row');
+        $this->assertSame(7, substr_count($json, '"Change"'), 'no Change on a row that is not an answer');
+    }
+
+    /** @test */
+    public function a_card_stored_before_rows_said_whether_they_change_keeps_a_change_per_row(): void
+    {
+        $this->definition->extraRows = [['field' => '_notice', 'label' => 'book.notice', 'value' => 'The attendees get an invitation.', 'risk' => 'outward', 'source' => '']];
+        [$message] = $this->reviewing($this->conversation());
+        $metadata = $message->metadata;
+        $metadata['task']['summary'] = array_map(fn (array $row) => array_diff_key($row, ['changeable' => 1]), $metadata['task']['summary']);
+        $message->update(['metadata' => $metadata]);
+
+        $this->assertSame(8, substr_count($this->rendered($message), '"Change"'));
+    }
+
+    /** @test */
+    public function a_summary_shown_again_after_a_refused_write_offers_the_card_and_the_manual_form(): void
+    {
+        $conversation = $this->conversation();
+        [, $task, $token] = $this->reviewing($conversation);
+        $this->definition->refusal = new HttpException(409, 'The room was just taken.');
+
+        $response = app(TaskOrchestrator::class)->confirm($task, $token, ['user' => auth()->user(), 'acknowledged' => ['catering_budget']]);
+        $json = $this->rendered($this->answer($conversation, $response));
+
+        $this->assertStringContainsString('The room was just taken.', $response['answer']);
+        $this->assertStringContainsString('"Confirm"', $json);
+        $this->assertStringContainsString('"href":"https://example.test/rooms/new"', $json);
     }
 
     /** @test */
@@ -505,6 +533,51 @@ class TaskChatUiTest extends TestCase
         $this->assertStringContainsString('"href":"https://example.test/rooms"', $json);
     }
 
+    /** @test */
+    public function a_task_follow_up_with_groups_posts_them_and_starts_at_those_groups(): void
+    {
+        $message = $this->outcomeMessage([['task' => 'book_room', 'label' => 'Set the payment', 'groups' => ['payment']]]);
+
+        $json = $this->rendered($message);
+        $this->assertStringContainsString('"Set the payment"', $json);
+        $this->assertStringContainsString('"ajaxPayload":' . json_encode(['key' => 'book_room', 'groups' => '["payment"]'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), $json);
+
+        $this->scripted([self::reply([], 'Which room?')]);
+        $conversation = $this->conversation();
+        $this->panel($conversation)->startTask('book_room', '["payment"]');
+
+        $this->assertSame(['payment'], AiTask::where('conversation_id', $conversation->id)->sole()->draft()->groups);
+    }
+
+    /** @test */
+    public function another_tasks_chip_while_one_runs_offers_to_continue_it_or_stop_it_and_start_the_other(): void
+    {
+        config(['ai.tasks.definitions' => [BookRoomTask::class, EditBookingTask::class]]);
+        $orchestrator = $this->scripted([self::reply([], 'Which room?'), self::reply(['room' => 'large'], 'Which day?'), self::reply([], 'Which room, day and email?')]);
+        $conversation = $this->conversation();
+        $this->panel($conversation)->startTask('book_room');
+        $task = AiTask::sole();
+        $orchestrator->handleTurn($task, 'large', ['user' => auth()->user()]);
+
+        $this->panel($conversation)->startTask('edit_booking');
+
+        $switch = $this->latest($conversation);
+        $this->assertSame(__('ai.tasks.other-in-progress', ['task' => 'Book a room with the assistant']), $switch->content);
+        $json = $this->rendered($switch);
+        $this->assertStringContainsString('"' . __('ai.tasks.continue', ['task' => 'Book a room with the assistant']) . '"', $json);
+        $this->assertStringContainsString('"' . __('ai.tasks.replace', ['task' => 'Change a booking']) . '"', $json);
+        $this->assertStringContainsString('"ajaxPayload":{"key":"book_room"}', $json, 'continue resumes it');
+        $this->assertStringContainsString('"ajaxPayload":' . json_encode(['key' => 'edit_booking', 'groups' => '[]', 'replace' => $task->uuid]), $json);
+        $this->assertNotSame('ai.tasks.continue', __('ai.tasks.continue'));
+
+        $this->panel($conversation)->startTask('edit_booking', '[]', $task->uuid);
+
+        $this->assertSame(AiTask::STATUS_CANCELLED, $task->fresh()->status);
+        $this->assertSame('edit_booking', AiTask::where('status', AiTask::STATUS_COLLECTING)->sole()->definition_key);
+        $this->assertSame('Which room, day and email?', $this->latest($conversation)->content);
+        $this->assertStringNotContainsString(__('ai.tasks.continue', ['task' => 'Book a room with the assistant']), $this->rendered($switch), 'the old choice is inert');
+    }
+
     /** A done task's outcome message carrying these follow-ups. */
     private function outcomeMessage(array $followUps): AiMessage
     {
@@ -595,6 +668,7 @@ class UiBookRoomTask extends BookRoomTask
     public ?array $link = null;
     public array $extraRows = [];
     public array $followUps = [];
+    public ?\Throwable $refusal = null;
 
     public function label(): string
     {
@@ -622,6 +696,9 @@ class UiBookRoomTask extends BookRoomTask
     public function execute(mixed $user, TaskDraft $draft, AiTask $run): \Condoedge\Ai\DTOs\Tasks\TaskOutcome
     {
         $this->executed++;
+        if ($this->refusal !== null) {
+            throw $this->refusal;
+        }
         $outcome = parent::execute($user, $draft, $run);
 
         $outcome = $this->link === null ? $outcome : $outcome->withLink(...$this->link);

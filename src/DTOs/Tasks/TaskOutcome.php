@@ -15,7 +15,7 @@ final class TaskOutcome
         public readonly array $data = [],
         /** @var array{url?: string, label?: string} where the chat's button leads, and its label's translation key */
         public readonly array $link = [],
-        /** @var list<array{url: string, label: string}|array{task: string, label: string}> chips after the link: a page, or a task's start */
+        /** @var list<array{url: string, label: string}|array{task: string, label: string, groups?: list<string>}> chips after the link: a page, or a task's start (at those optional groups) */
         public readonly array $followUps = [],
     ) {
     }
@@ -35,14 +35,15 @@ final class TaskOutcome
         return new self($this->succeeded, $this->message, $this->data, ['url' => $url, 'label' => $labelKey], $this->followUps);
     }
 
-    /** Keeps only the well-formed items: a `url` or a `task` key, each with a `label`. */
+    /** Keeps only the well-formed items: a `url` or a `task` key, each with a `label`; a task's may name the `groups` it starts at. */
     public function withFollowUps(array $items): self
     {
         $kept = [];
         foreach ($items as $item) {
             $target = is_array($item) ? (is_string($item['url'] ?? null) ? 'url' : (is_string($item['task'] ?? null) ? 'task' : null)) : null;
             if ($target !== null && is_string($item['label'] ?? null)) {
-                $kept[] = [$target => $item[$target], 'label' => $item['label']];
+                $groups = $target === 'task' && is_array($item['groups'] ?? null) ? array_values(array_filter($item['groups'], 'is_string')) : [];
+                $kept[] = [$target => $item[$target], 'label' => $item['label']] + ($groups !== [] ? ['groups' => $groups] : []);
             }
         }
 

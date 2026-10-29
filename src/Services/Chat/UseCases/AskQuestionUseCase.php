@@ -8,6 +8,7 @@ use Condoedge\Ai\Contracts\PipelineObserverInterface;
 use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Facades\AI;
 use Condoedge\Ai\Models\AiTask;
+use Condoedge\Ai\Services\Actions\BuiltIn\StartTaskAction;
 use Condoedge\Ai\Services\QueryExecutor;
 use Condoedge\Ai\Services\Tasks\TaskOffer;
 use Condoedge\Ai\Services\Tasks\TaskOrchestrator;
@@ -44,7 +45,9 @@ use Illuminate\Support\Facades\Log;
  * reads as about something else, which the pipeline answers with the task's pending question put
  * under the answer. An answer whose chips start tasks gets the offer line (TaskOffer, no model
  * call); the next message only, while no task runs, makes ONE small call that may start the task
- * with that message as its first answer, else the turn runs the pipeline as usual.
+ * with that message as its first answer, else the turn runs the pipeline as usual. A task past its
+ * lifetime is expired first: the pipeline answers the message, with one line saying the task had
+ * stopped and a chip that starts it again.
  *
  * Concrete, container-autowired (not bound, not interfaced) per the Sisc UseCase convention.
  * AI is resolved via the facade (AiChatService is config-`new`ed and cannot inject it).
@@ -295,6 +298,32 @@ class AskQuestionUseCase
         return $response;
     }
 
+    /**
+     * The answer to the first message after a task stopped past its lifetime: one line says it stopped and nothing
+     * was changed, and a chip starts it again (unless the answer already offers it), while this user may start it.
+     */
+    private function withStopped(array $response, AiTask $task, mixed $user): array
+    {
+        $definition = $this->tasks->definition($task->definition_key);
+        if ($definition === null || trim((string) ($response['answer'] ?? '')) === '') {
+            return $response;
+        }
+        $language = $response['metadata']['question_language'] ?? null;
+        $locale = is_string($language) ? $language : null;
+        $response['answer'] = rtrim((string) $response['answer']) . "\n\n"
+            . __('ai.tasks.expired-on-return', ['task' => __($definition->label(), [], $locale)], $locale);
+        $metadata = is_array($response['metadata'] ?? null) ? $response['metadata'] : [];
+        $metadata['response'] = is_array($metadata['response'] ?? null) ? $metadata['response'] : [];
+        $invocations = is_array($metadata['response']['invocations'] ?? null) ? $metadata['response']['invocations'] : [];
+        $chip = StartTaskAction::invocation($task->definition_key, $user);
+        if ($chip !== null && !in_array($task->definition_key, TaskOffer::keys($invocations, $user), true)) {
+            $metadata['response']['invocations'] = [...$invocations, $chip->toArray()];
+            $response['metadata'] = $metadata;
+        }
+
+        return $response;
+    }
+
     /** A question asked during a task: the pipeline's answer, then the question the task waits on, with the task's state. */
     private function withPending(array $response, array $task): array
     {
@@ -338,6 +367,8 @@ class AskQuestionUseCase
             // (QueryUnderstandingResult), and the question is never rewritten.
             // For regenerate the user message already exists.
             $conversationContext = $this->contextManager->buildPromptContext($conversation, $maxHistory);
+            // A task past its lifetime ends here, so this message goes to the pipeline (with one line saying so).
+            $stopped = $this->tasks?->expireStale($conversation, $user) ?? [];
             $task = $this->tasks?->claims($conversation);
             // Read before this message is stored: the answer it replies to may have offered tasks.
             $offered = $task === null && $persistUserMessage && $this->tasks !== null && $this->offers !== null ? $this->offeredBefore($conversation, $user) : [];
@@ -388,6 +419,9 @@ class AskQuestionUseCase
             } else {
                 $aiResponse = ($offered !== [] ? $this->offerReply($conversation, $userMessage, $offered, $question, $user, $observer) : null)
                     ?? $this->withOffer($pipeline(), $user);
+                if ($stopped !== [] && !is_array($aiResponse['metadata']['task'] ?? null)) {
+                    $aiResponse = $this->withStopped($aiResponse, end($stopped), $user);
+                }
             }
             $observer?->stageFinished('pipeline', [], $this->elapsedMs($stageStart));
             $stage = 'persistence';

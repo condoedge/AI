@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Tests\Unit\Tasks;
 
+use Condoedge\Ai\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Contracts\ReportsTokenUsageInterface;
 use Condoedge\Ai\DTOs\Tasks\TaskDraft;
 use Condoedge\Ai\DTOs\Tasks\TaskField;
 use Condoedge\Ai\DTOs\Tasks\TaskLimits;
@@ -18,12 +20,15 @@ use Condoedge\Ai\Services\Tasks\TaskStepCaller;
 use Condoedge\Ai\Services\Tasks\TaskStore;
 use Condoedge\Ai\Tests\Fixtures\ScriptedJsonLlm;
 use Condoedge\Ai\Tests\Fixtures\Tasks\BookRoomTask;
+use Condoedge\Ai\Tests\Fixtures\Tasks\EditBookingTask;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Sleep;
+use Illuminate\Validation\ValidationException;
 use Orchestra\Testbench\TestCase;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 class TaskOrchestratorTest extends TestCase
 {
@@ -180,7 +185,7 @@ class TaskOrchestratorTest extends TestCase
         $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply([], 'Q?')]);
         $conversation = $this->conversation();
         $task = $this->started($orchestrator, $conversation);
-        $this->started($orchestrator);
+        $orchestrator->start((object) ['id' => 8, 'current_team_id' => 3], $this->conversation(), 'book_room');
 
         $this->assertTrue($orchestrator->claims($conversation)->is($task));
         config(['ai.tasks.definitions' => []]);
@@ -230,7 +235,7 @@ class TaskOrchestratorTest extends TestCase
         $response = $this->turn($orchestrator, $task, 'forget it');
 
         $this->assertSame(AiTask::STATUS_CANCELLED, $task->fresh()->status);
-        $this->assertSame('All right, I stopped. Nothing was created.', $response['answer']);
+        $this->assertSame('All right, I stopped. Nothing was changed.', $response['answer']);
         $this->assertSame(['started', 'asked', 'answered', 'cancelled'], $this->kinds($task));
         $this->assertSame([], $task->fresh()->draft()->values, 'a cancelling turn writes no value');
     }
@@ -244,7 +249,7 @@ class TaskOrchestratorTest extends TestCase
         $this->turn($orchestrator, $task, 'hmm');
         $response = $this->turn($orchestrator, $task, 'hmm');
 
-        $this->assertSame("I didn't quite understand. Could you rephrase?\n\nWhich room?", $response['answer']);
+        $this->assertSame("I can't answer right now. Please try again in a moment.\n\nWhich room?", $response['answer']);
         $this->assertSame(AiTask::STATUS_COLLECTING, $task->fresh()->status);
     }
 
@@ -350,7 +355,7 @@ class TaskOrchestratorTest extends TestCase
     /** @test */
     public function a_value_given_with_the_acceptance_is_kept_and_accepts_its_group(): void
     {
-        [$orchestrator, $task] = $this->offered([self::reply(['_groups' => ['payment'], 'deposit' => 20, 'room' => 'small'])]);
+        [$orchestrator, $task] = $this->offered([self::reply(['_groups' => ['payment'], 'deposit' => 20, 'screen_size' => 80])]);
 
         $this->turn($orchestrator, $task, 'yes, a 20% deposit');
 
@@ -358,7 +363,7 @@ class TaskOrchestratorTest extends TestCase
         $this->assertSame(['payment'], $task->draft()->groups);
         $this->assertSame(['equipment', 'extras'], $task->draft()->declined);
         $this->assertSame(20, $task->draft()->get('deposit'));
-        $this->assertSame('large', $task->draft()->get('room'), 'a field outside the offer is dropped');
+        $this->assertFalse($task->draft()->has('screen_size'), 'a field not in play is dropped');
         $this->assertSame(AiTask::STATUS_REVIEWING, $task->status);
     }
 
@@ -670,7 +675,7 @@ class TaskOrchestratorTest extends TestCase
         $refused = $orchestrator->confirm($other, $otherToken, ['user' => $this->user]);
 
         $this->assertSame(AiTask::STATUS_CANCELLED, $other->fresh()->status);
-        $this->assertSame('You can no longer do this. Nothing was created.', $refused['answer']);
+        $this->assertSame('You can no longer do this. Nothing was changed.', $refused['answer']);
         $this->assertSame(0, $this->definition->executed);
     }
 
@@ -932,9 +937,10 @@ class TaskOrchestratorTest extends TestCase
         $this->definition->limits = new TaskLimits(maxExecutedPerUserPerDay: 1);
         $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply(), self::reply([], 'Q?'), self::reply()]);
         [$first, $firstToken] = $this->reviewing($orchestrator);
-        [$second, $secondToken] = $this->reviewing($orchestrator);
-        $during = null;
-        $this->definition->duringExecute = function () use ($orchestrator, $second, $secondToken, &$during) {
+        // A start of the same task cancels one still active elsewhere (superseded): the second runs once the first executes.
+        $second = $secondToken = $during = null;
+        $this->definition->duringExecute = function () use ($orchestrator, &$second, &$secondToken, &$during) {
+            [$second, $secondToken] = $this->reviewing($orchestrator);
             $during = $orchestrator->confirm($second->fresh(), $secondToken, ['user' => $this->user]);
         };
 
@@ -1100,6 +1106,459 @@ The large room please", $this->llm->userMessage(0));
         $this->assertStringContainsString('OTHER FIELDS', $this->llm->userMessage(0), 'a value given ahead is kept');
     }
 
+    /** @test */
+    public function confirm_validates_before_it_builds_any_summary(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply()]);
+        [$task, $token] = $this->reviewing($orchestrator);
+        $this->definition->errors = ['attendees' => 'The room is gone.'];
+        $this->definition->summaryThrows = true;
+
+        $response = $orchestrator->confirm($task, $token, ['user' => $this->user]);
+
+        $this->assertSame(AiTask::STATUS_COLLECTING, $task->fresh()->status);
+        $this->assertStringContainsString('The room is gone.', $response['answer']);
+        $this->assertSame(0, $this->definition->executed);
+    }
+
+    /** @test */
+    public function a_validation_error_on_a_value_the_draft_does_not_hold_offers_the_manual_form(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply(), self::reply()]);
+        [$task, $token] = $this->reviewing($orchestrator);
+        $this->definition->errors = ['_record' => 'The record is locked.'];
+
+        $confirmed = $orchestrator->confirm($task, $token, ['user' => $this->user]);
+
+        $this->assertSame(AiTask::STATUS_COLLECTING, $task->fresh()->status);
+        $this->assertStringContainsString('The record is locked.', $confirmed['answer']);
+        $this->assertSame(self::MANUAL_LINK, $confirmed['metadata']['task']['link'], 'nothing to ask again: the manual form is the way on');
+
+        $turn = $this->turn($orchestrator, $task, 'and now?');
+
+        $this->assertStringContainsString('The record is locked.', $turn['answer']);
+        $this->assertSame(self::MANUAL_LINK, $turn['metadata']['task']['link']);
+        $this->assertSame(0, $this->definition->executed);
+    }
+
+    /** @test */
+    public function a_crash_in_execute_fails_the_task_with_the_manual_form_and_a_repeat_returns_it(): void
+    {
+        $this->definition->throws = true;
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply()]);
+        [$task, $token] = $this->reviewing($orchestrator);
+
+        $response = $orchestrator->confirm($task, $token, ['user' => $this->user]);
+        $again = $orchestrator->confirm($task->fresh(), $token, ['user' => $this->user]);
+
+        $this->assertSame(AiTask::STATUS_FAILED, $task->fresh()->status);
+        $this->assertSame(__('ai.tasks.failed'), $response['answer']);
+        $this->assertSame(self::MANUAL_LINK, $response['metadata']['task']['outcome']['link']);
+        $this->assertSame($response['metadata']['task']['outcome'], $again['metadata']['task']['outcome']);
+        $this->assertSame(1, $this->definition->executed);
+    }
+
+    /** @test */
+    public function a_write_refused_on_an_answer_reopens_that_answer_with_the_reason(): void
+    {
+        Log::spy();
+        $this->definition->refusal = ValidationException::withMessages(['attendees.0' => 'Only 3 seats are left.']);
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply(), self::reply([], 'How many people, at most 3?')]);
+        [$task, $token] = $this->reviewing($orchestrator);
+        $conversations = AiConversation::count();
+
+        $response = $orchestrator->confirm($task, $token, ['user' => $this->user]);
+
+        $task->refresh();
+        $this->assertSame(AiTask::STATUS_COLLECTING, $task->status);
+        $this->assertFalse($task->draft()->has('attendees'));
+        $this->assertSame('large', $task->draft()->get('room'), 'the other answers stay');
+        $this->assertStringContainsString('Only 3 seats are left.', $response['answer']);
+        $this->assertSame($conversations, AiConversation::count(), 'the refused write was rolled back');
+        $validated = AiTaskEvent::where('task_id', $task->id)->where('kind', 'validated')->orderByDesc('id')->first();
+        $this->assertSame('execute', $validated->payload['at']);
+        $this->assertSame(0, AiTaskEvent::where('task_id', $task->id)->where('kind', 'failed')->count());
+        Log::shouldNotHaveReceived('error');
+        $this->assertTrue((new TaskStore())->verifyChain($task));
+
+        $this->turn($orchestrator, $task, 'hmm');
+        $this->assertStringContainsString("FIELDS TO ASK:\n- attendees", $this->llm->userMessage(2), 'the refused answer is asked again');
+    }
+
+    /** @test */
+    public function a_write_refused_with_a_reason_shows_the_summary_again_with_it_and_the_manual_form(): void
+    {
+        $this->definition->refusal = new HttpException(403, 'The room is <b>locked</b> by a colleague.');
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply()]);
+        [$task, $token] = $this->reviewing($orchestrator);
+
+        $response = $orchestrator->confirm($task, $token, ['user' => $this->user]);
+
+        $this->assertSame(AiTask::STATUS_REVIEWING, $task->fresh()->status);
+        $this->assertStringContainsString('The room is locked by a colleague.', $response['answer']);
+        $this->assertStringContainsString(__('ai.tasks.review'), $response['answer']);
+        $this->assertSame(self::MANUAL_LINK, $response['metadata']['task']['link']);
+        $this->assertNotNull($response['metadata']['task']['token']);
+        $this->assertSame(0, AiTaskEvent::where('task_id', $task->id)->where('kind', 'failed')->count());
+        $this->assertSame('execute', AiTaskEvent::where('task_id', $task->id)->where('kind', 'validated')->orderByDesc('id')->first()->payload['at']);
+
+        $this->definition->refusal = null;
+        $done = $orchestrator->confirm($task->fresh(), $response['metadata']['task']['token'], ['user' => $this->user]);
+        $this->assertSame(AiTask::STATUS_DONE, $done['metadata']['task']['status']);
+        $this->assertTrue((new TaskStore())->verifyChain($task));
+    }
+
+    /** @test */
+    public function a_refusal_on_no_answer_of_the_draft_shows_the_summary_again(): void
+    {
+        $this->definition->refusal = ValidationException::withMessages(['_record' => 'The booking window is closed.']);
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply()]);
+        [$task, $token] = $this->reviewing($orchestrator);
+
+        $response = $orchestrator->confirm($task, $token, ['user' => $this->user]);
+
+        $this->assertSame(AiTask::STATUS_REVIEWING, $task->fresh()->status);
+        $this->assertStringContainsString('The booking window is closed.', $response['answer']);
+        $this->assertSame(self::MANUAL_LINK, $response['metadata']['task']['link']);
+    }
+
+    /** @test */
+    public function a_server_error_or_a_refusal_without_a_reason_fails_the_task(): void
+    {
+        foreach ([new HttpException(500, 'down'), new HttpException(403, '')] as $refusal) {
+            $this->definition->refusal = $refusal;
+            $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply()]);
+            [$task, $token] = $this->reviewing($orchestrator);
+
+            $response = $orchestrator->confirm($task, $token, ['user' => $this->user]);
+
+            $this->assertSame(AiTask::STATUS_FAILED, $task->fresh()->status);
+            $this->assertSame(__('ai.tasks.failed'), $response['answer']);
+            $this->assertSame(HttpException::class, AiTaskEvent::where('task_id', $task->id)->where('kind', 'failed')->sole()->payload['error']);
+        }
+    }
+
+    /** @test */
+    public function a_card_that_changed_since_it_was_shown_is_shown_again_and_nothing_is_written(): void
+    {
+        $row = fn (string $before) => ['field' => 'attendees', 'label' => 'book.attendees', 'value' => '4', 'risk' => 'none', 'source' => 'your choice', 'before' => $before];
+        $this->definition->rows = [$row('2')];
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply()]);
+        [$task, $token] = $this->reviewing($orchestrator);
+        $shown = AiTaskEvent::where('task_id', $task->id)->where('kind', 'summary_shown')->sole()->payload;
+        $this->assertSame(['fields', 'changeable', 'rows_hash'], array_keys($shown), 'no value of the card reaches the audit');
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{16}$/', $shown['rows_hash']);
+        $this->definition->rows = [$row('3')];
+
+        $response = $orchestrator->confirm($task, $token, ['user' => $this->user]);
+
+        $this->assertSame(0, $this->definition->executed);
+        $this->assertSame(AiTask::STATUS_REVIEWING, $task->fresh()->status);
+        $this->assertStringContainsString(__('ai.tasks.changed-since'), $response['answer']);
+        $this->assertSame('3', $response['metadata']['task']['summary'][0]['before']);
+        $this->assertSame('changed', AiTaskEvent::where('task_id', $task->id)->where('kind', 'confirm_refused')->sole()->payload['reason']);
+        $this->assertSame(__('ai.tasks.stale'), $orchestrator->confirm($task->fresh(), $token, ['user' => $this->user])['answer'], 'the old card no longer confirms');
+
+        $orchestrator->confirm($task->fresh(), $response['metadata']['task']['token'], ['user' => $this->user]);
+        $this->assertSame(1, $this->definition->executed);
+    }
+
+    /** @test */
+    public function only_a_declared_answered_row_with_a_choice_left_is_changeable(): void
+    {
+        $row = fn (string $field, array $extra = []) => ['field' => $field, 'label' => $field, 'value' => 'x', 'risk' => 'none', 'source' => ''] + $extra;
+        $this->definition->rows = [$row('room'), $row('title', ['changeable' => false]), $row('_notice'), $row('deposit'), $row('nope')];
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply()]);
+        [$task] = $this->reviewing($orchestrator);
+
+        $response = $orchestrator->start($this->user, AiConversation::findOrFail($task->conversation_id), 'book_room');
+
+        $this->assertSame(['room' => true, 'title' => false, '_notice' => false, 'deposit' => false, 'nope' => false],
+            array_column($response['metadata']['task']['summary'], 'changeable', 'field'));
+        foreach (['title', '_notice', 'deposit', 'nope'] as $field) {
+            $refused = $orchestrator->reopen($task->fresh(), $field, ['user' => $this->user]);
+            $this->assertSame(__('ai.tasks.not-changeable'), $refused['answer'], $field);
+        }
+        $this->assertSame(AiTask::STATUS_REVIEWING, $task->fresh()->status);
+        $this->assertSame(0, AiTaskEvent::where('kind', 'reopened')->count());
+    }
+
+    /** @test */
+    public function a_typed_correction_during_review_shows_a_new_summary_whose_token_alone_confirms(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply(), self::reply(['attendees' => 6])]);
+        [$task, $token] = $this->reviewing($orchestrator);
+        $version = $task->version;
+
+        $response = $this->turn($orchestrator, $task, 'make it six people, not four');
+
+        $prompt = $this->llm->userMessage(2);
+        $this->assertStringContainsString('- attendees (int)', substr($prompt, (int) strpos($prompt, 'OTHER FIELDS')), 'an answered field is read for a change');
+        $task->refresh();
+        $this->assertSame([AiTask::STATUS_REVIEWING, 6], [$task->status, $task->draft()->get('attendees')]);
+        $this->assertGreaterThan($version, $task->version);
+        $this->assertSame(__('ai.tasks.review'), $response['answer']);
+        $this->assertNotSame($token, $response['metadata']['task']['token']);
+        $corrected = AiTaskEvent::where('task_id', $task->id)->where('kind', 'extracted')->where('field', 'attendees')->sole();
+        $this->assertSame([4, 6], [$corrected->value_before, $corrected->value_after]);
+
+        $this->assertSame(__('ai.tasks.stale'), $orchestrator->confirm($task->fresh(), $token, ['user' => $this->user])['answer'], 'the old card no longer confirms');
+        $this->assertSame(0, $this->definition->executed);
+        $orchestrator->confirm($task->fresh(), $response['metadata']['task']['token'], ['user' => $this->user]);
+        $this->assertSame(1, $this->definition->executed);
+        $this->assertTrue((new TaskStore())->verifyChain($task));
+    }
+
+    /** @test */
+    public function a_typed_correction_while_collecting_changes_the_answer_and_a_repeated_one_is_no_change(): void
+    {
+        $orchestrator = $this->orchestrator([
+            self::reply([], 'Which room, day and how many?'),
+            self::reply(['room' => 'large', 'day' => '2026-03-03', 'attendees' => 4]),
+            self::reply([], 'Catering? And a title?'),
+            self::reply(['room' => 'small', 'attendees' => 4], 'Catering? And a title?'),
+        ]);
+        $task = $this->started($orchestrator);
+        $this->turn($orchestrator, $task, 'large, March 3, four of us');
+
+        $response = $this->turn($orchestrator, $task, 'actually the small room, still four of us');
+
+        $prompt = $this->llm->userMessage(3);
+        $others = substr($prompt, (int) strpos($prompt, 'OTHER FIELDS'));
+        foreach (['- room (enum)', '- day (date)', '- attendees (int)'] as $spec) {
+            $this->assertStringContainsString($spec, $others);
+        }
+        $task->refresh();
+        $this->assertSame(['small', AiTask::STATUS_COLLECTING], [$task->draft()->get('room'), $task->status]);
+        $this->assertSame('Catering? And a title?', $response['answer']);
+        $room = AiTaskEvent::where('task_id', $task->id)->where('kind', 'extracted')->where('field', 'room')->orderBy('id')->get();
+        $this->assertSame([[null, 'large'], ['large', 'small']], $room->map(fn (AiTaskEvent $event) => [$event->value_before, $event->value_after])->all());
+        $this->assertSame(1, AiTaskEvent::where('task_id', $task->id)->where('kind', 'extracted')->where('field', 'attendees')->count(), 'an answer repeated is no change');
+        $this->assertCount(4, $this->llm->calls);
+    }
+
+    /** @test */
+    public function a_task_past_its_lifetime_is_not_claimed_and_is_expired_once_on_the_next_touch(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?')]);
+        $conversation = $this->conversation();
+        $task = $this->started($orchestrator, $conversation);
+        $this->travel(86401)->seconds();
+
+        $this->assertNull($orchestrator->claims($conversation));
+        $this->assertSame(AiTask::STATUS_COLLECTING, $task->fresh()->status, 'claims only reads');
+
+        $expired = $orchestrator->expireStale($conversation, $this->user);
+
+        $this->assertSame([$task->uuid], array_map(fn (AiTask $stale) => $stale->uuid, $expired));
+        $this->assertSame(AiTask::STATUS_EXPIRED, $task->fresh()->status);
+        $this->assertSame(['started', 'asked', 'limit_hit', 'expired'], $this->kinds($task));
+        $this->assertSame('ttl', AiTaskEvent::where('task_id', $task->id)->where('kind', 'limit_hit')->sole()->payload['limit']);
+        $this->assertSame([], $orchestrator->expireStale($conversation, $this->user));
+        $this->assertTrue((new TaskStore())->verifyChain($task));
+    }
+
+    /** @test */
+    public function a_start_after_the_lifetime_opens_a_new_task(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply([], 'Which room?')]);
+        $conversation = $this->conversation();
+        $old = $this->started($orchestrator, $conversation);
+        $this->travel(86401)->seconds();
+
+        $response = $orchestrator->start($this->user, $conversation, 'book_room');
+
+        $this->assertNotSame($old->uuid, $response['metadata']['task']['uuid']);
+        $this->assertSame([AiTask::STATUS_COLLECTING, 'Which room?'], [$response['metadata']['task']['status'], $response['answer']]);
+        $this->assertSame(AiTask::STATUS_EXPIRED, $old->fresh()->status);
+    }
+
+    /** @test */
+    public function a_chip_or_a_change_on_a_task_past_its_lifetime_expires_it(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Which room?', asksAbout: 'room')]);
+        $task = $this->started($orchestrator);
+        $this->travel(86401)->seconds();
+
+        $chosen = $orchestrator->choose($task->fresh(), 'room', 'large', ['user' => $this->user, 'version' => $task->version]);
+
+        $this->assertSame(AiTask::STATUS_EXPIRED, $task->fresh()->status);
+        $this->assertStringContainsString('went on too long', $chosen['answer']);
+        $this->travelBack();
+
+        [$reviewing] = $this->reviewing($this->orchestrator([self::reply([], 'Q?'), self::reply()]));
+        $this->travel(86401)->seconds();
+
+        $reopened = $orchestrator->reopen($reviewing->fresh(), 'attendees', ['user' => $this->user]);
+
+        $this->assertSame(AiTask::STATUS_EXPIRED, $reviewing->fresh()->status);
+        $this->assertStringContainsString('went on too long', $reopened['answer']);
+        $this->assertSame(self::MANUAL_LINK, $reopened['metadata']['task']['link']);
+        $this->assertSame(0, AiTaskEvent::where('kind', 'reopened')->count());
+    }
+
+    /** @test */
+    public function a_failed_step_counts_no_turn_and_a_model_call_only_when_billed(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Which room?'), new \RuntimeException('down')]);
+        $task = $this->started($orchestrator);
+
+        $response = $this->turn($orchestrator, $task, 'the large room');
+
+        $this->assertSame(__('ai.tasks.unavailable') . "\n\nWhich room?", $response['answer']);
+        $this->assertNotSame('ai.tasks.unavailable', __('ai.tasks.unavailable'));
+        $this->assertSame([0, 1, 0, 1], [$task->fresh()->turns, $task->fresh()->llm_calls, $task->fresh()->tokens, $task->fresh()->version]);
+
+        $billed = new BilledScriptedLlm([self::reply([], 'Which room?'), new \RuntimeException('cut off')], 30);
+        $orchestrator = new TaskOrchestrator(new TaskStore(), new TaskPlanner(), new TaskStepCaller($billed));
+        $other = $this->started($orchestrator);
+
+        $orchestrator->handleTurn($other->fresh(), 'the large room', ['user' => $this->user]);
+
+        $this->assertSame([0, 2, 60], [$other->fresh()->turns, $other->fresh()->llm_calls, $other->fresh()->tokens], 'a billed failure is a model call');
+    }
+
+    /** @test */
+    public function a_model_outage_during_review_keeps_the_summary_and_its_token(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply(), new \RuntimeException('down')]);
+        [$task, $token] = $this->reviewing($orchestrator);
+
+        $response = $this->turn($orchestrator, $task, 'ok');
+
+        $this->assertSame(__('ai.tasks.unavailable') . "\n\n" . __('ai.tasks.still-reviewing'), $response['answer']);
+        $this->assertSame(AiTask::STATUS_REVIEWING, $task->fresh()->status);
+        $this->assertSame(1, AiTaskEvent::where('task_id', $task->id)->where('kind', 'token_issued')->count());
+        $this->assertSame(AiTask::STATUS_DONE, $orchestrator->confirm($task->fresh(), $token, ['user' => $this->user])['metadata']['task']['status']);
+    }
+
+    /** Both test definitions registered: book_room (X) and edit_booking (Y). */
+    private function twoDefinitions(): void
+    {
+        config(['ai.tasks.definitions' => [BookRoomTask::class, EditBookingTask::class]]);
+    }
+
+    /** @test */
+    public function another_tasks_start_while_one_holds_an_answer_asks_whether_to_continue_or_switch(): void
+    {
+        $this->twoDefinitions();
+        $orchestrator = $this->orchestrator([self::reply([], 'Which room?'), self::reply(['room' => 'large'], 'Which day?')]);
+        $conversation = $this->conversation();
+        $task = $this->started($orchestrator, $conversation);
+        $this->turn($orchestrator, $task, 'the large room');
+
+        $response = $orchestrator->start($this->user, $conversation, 'edit_booking', ['groups' => ['dates']]);
+
+        $this->assertSame(1, AiTask::count());
+        $this->assertSame(AiTask::STATUS_COLLECTING, $task->fresh()->status);
+        $this->assertSame(__('ai.tasks.other-in-progress', ['task' => 'book.start']), $response['answer']);
+        $this->assertNotSame('ai.tasks.other-in-progress', __('ai.tasks.other-in-progress'));
+        $this->assertSame($task->uuid, $response['metadata']['task']['uuid']);
+        $this->assertSame(['task' => 'edit_booking', 'groups' => ['dates'], 'replace' => $task->uuid], $response['metadata']['task']['switch']);
+        $this->assertCount(2, $this->llm->calls, 'no model call');
+
+        $elsewhere = $orchestrator->start($this->user, $conversation, 'edit_booking', ['replace' => 'not-the-active-task']);
+        $this->assertSame([1, $task->uuid], [AiTask::count(), $elsewhere['metadata']['task']['uuid']], 'a replace naming another task changes nothing');
+    }
+
+    /** @test */
+    public function stop_and_start_cancels_the_active_task_as_replaced_and_starts_the_other(): void
+    {
+        $this->twoDefinitions();
+        $orchestrator = $this->orchestrator([self::reply([], 'Which room?'), self::reply(['room' => 'large'], 'Which day?'), self::reply([], 'Which room, day and email?')]);
+        $conversation = $this->conversation();
+        $task = $this->started($orchestrator, $conversation);
+        $this->turn($orchestrator, $task, 'the large room');
+
+        $response = $orchestrator->start($this->user, $conversation, 'edit_booking', ['replace' => $task->uuid]);
+
+        $this->assertSame(AiTask::STATUS_CANCELLED, $task->fresh()->status);
+        $this->assertSame('replaced', AiTaskEvent::where('task_id', $task->id)->where('kind', 'cancelled')->sole()->payload['reason']);
+        $started = AiTask::where('uuid', $response['metadata']['task']['uuid'])->sole();
+        $this->assertSame(['edit_booking', AiTask::STATUS_COLLECTING], [$started->definition_key, $started->status]);
+        $this->assertSame('Which room, day and email?', $response['answer']);
+        $this->assertTrue($orchestrator->claims($conversation)->is($started));
+    }
+
+    /** @test */
+    public function another_tasks_start_replaces_one_that_holds_no_answer_yet_without_asking(): void
+    {
+        $this->twoDefinitions();
+        $orchestrator = $this->orchestrator([self::reply([], 'Which room?'), self::reply([], 'Which room, day and email?')]);
+        $conversation = $this->conversation();
+        $task = $this->started($orchestrator, $conversation);
+
+        $response = $orchestrator->start($this->user, $conversation, 'edit_booking');
+
+        $this->assertSame(AiTask::STATUS_CANCELLED, $task->fresh()->status);
+        $this->assertSame('replaced', AiTaskEvent::where('task_id', $task->id)->where('kind', 'cancelled')->sole()->payload['reason']);
+        $this->assertSame(['edit_booking', 'Which room, day and email?'], [$response['metadata']['task']['definition'], $response['answer']]);
+    }
+
+    /** @test */
+    public function a_new_start_cancels_the_same_task_left_in_another_conversation_of_the_user(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply([], 'Q?'), self::reply([], 'Q?')]);
+        $old = $this->started($orchestrator);
+        $theirs = AiTask::where('uuid', $orchestrator->start((object) ['id' => 8, 'current_team_id' => 3], $this->conversation(), 'book_room')['metadata']['task']['uuid'])->sole();
+
+        $new = $this->started($orchestrator);
+
+        $this->assertSame(AiTask::STATUS_CANCELLED, $old->fresh()->status);
+        $this->assertSame('superseded', AiTaskEvent::where('task_id', $old->id)->where('kind', 'cancelled')->sole()->payload['reason']);
+        $this->assertSame([AiTask::STATUS_COLLECTING, AiTask::STATUS_COLLECTING], [$theirs->fresh()->status, $new->status], "another user's task is not touched");
+    }
+
+    /** @test */
+    public function resuming_a_collecting_task_shows_its_question_with_its_choice_chips(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Which room, day and how many?', asksAbout: 'room')]);
+        $conversation = $this->conversation();
+        $start = $orchestrator->start($this->user, $conversation, 'book_room');
+
+        $response = $orchestrator->start($this->user, $conversation, 'book_room');
+
+        $this->assertSame('Which room, day and how many?', $response['answer']);
+        $this->assertSame(['small', 'large'], array_column($response['metadata']['task']['choices'], 'value'));
+        $this->assertSame($start['metadata']['task']['choices'], $response['metadata']['task']['choices']);
+        $this->assertCount(1, $this->llm->calls);
+    }
+
+    /** @test */
+    public function resuming_a_task_in_review_checks_its_answers_before_any_summary(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Q?'), self::reply()]);
+        [$task] = $this->reviewing($orchestrator);
+        $this->definition->errors = ['attendees' => 'Too many people for that room.'];
+        $this->definition->summaryThrows = true;
+
+        $response = $orchestrator->start($this->user, AiConversation::findOrFail($task->conversation_id), 'book_room');
+
+        $this->assertSame(AiTask::STATUS_COLLECTING, $task->fresh()->status);
+        $this->assertFalse($task->fresh()->draft()->has('attendees'));
+        $this->assertStringContainsString('Too many people for that room.', $response['answer']);
+        $this->assertTrue((new TaskStore())->verifyChain($task));
+    }
+
+    /** @test */
+    public function a_start_with_groups_accepts_the_declared_ones_and_records_them(): void
+    {
+        $orchestrator = $this->orchestrator([self::reply([], 'Which room, day and how many?'), self::reply([], 'Which room, day and how many?')]);
+
+        $orchestrator->start($this->user, $this->conversation(), 'book_room', ['groups' => ['payment', 'nope', 'payment']]);
+
+        $task = AiTask::sole();
+        $this->assertSame([['payment'], []], [$task->draft()->groups, $task->draft()->declined]);
+        $this->assertSame(['definition' => 'book_room', 'groups' => ['payment']], AiTaskEvent::where('task_id', $task->id)->where('kind', 'started')->sole()->payload);
+        $orchestrator->cancel($task, ['user' => $this->user]);
+
+        $orchestrator->start($this->user, $this->conversation(), 'book_room', ['groups' => ['nope']]);
+
+        $other = AiTask::where('id', '!=', $task->id)->sole();
+        $this->assertSame([[], 1], [$other->draft()->groups, $other->version], 'an unknown group is ignored');
+        $this->assertSame(['definition' => 'book_room'], AiTaskEvent::where('task_id', $other->id)->where('kind', 'started')->sole()->payload);
+    }
+
     private function doneTask(int $userId, int $teamId, int $hoursAgo = 1): void
     {
         $conversation = $this->conversation();
@@ -1123,6 +1582,8 @@ class SpyBookRoomTask extends BookRoomTask
     public ?\Closure $attendeesMax = null;
     public ?\Closure $duringExecute = null;
     public ?\Closure $duringLimits = null;
+    public bool $summaryThrows = false;
+    public ?\Throwable $refusal = null;
 
     public function manualUrl(mixed $user): ?string
     {
@@ -1131,6 +1592,10 @@ class SpyBookRoomTask extends BookRoomTask
 
     public function summary(mixed $user, TaskDraft $draft): TaskSummary
     {
+        if ($this->summaryThrows) {
+            throw new \RuntimeException('the summary was built for a draft that does not validate');
+        }
+
         return new TaskSummary($this->rows);
     }
 
@@ -1173,6 +1638,10 @@ class SpyBookRoomTask extends BookRoomTask
             AiConversation::create(['status' => 'active']);
             throw new \RuntimeException('the host write failed half way');
         }
+        if ($this->refusal !== null) {
+            AiConversation::create(['status' => 'active']);
+            throw $this->refusal;
+        }
 
         return parent::execute($user, $draft, $run);
     }
@@ -1185,5 +1654,63 @@ class SpyBookRoomTask extends BookRoomTask
         }
 
         return $this->limits ?? parent::limits();
+    }
+}
+
+/** A scripted model whose every call, a failed one included, is billed the same tokens. */
+final class BilledScriptedLlm implements LlmProviderInterface, ReportsTokenUsageInterface
+{
+    private ScriptedJsonLlm $scripted;
+    private ?array $last = null;
+
+    public function __construct(array $replies, private readonly int $tokens)
+    {
+        $this->scripted = new ScriptedJsonLlm($replies);
+    }
+
+    public function chatJson(array $messages, array $options = []): object|array
+    {
+        $this->last = ['input' => $this->tokens, 'output' => 0, 'total' => $this->tokens];
+
+        return $this->scripted->chatJson($messages, $options);
+    }
+
+    public function chat(array $messages, array $options = []): string
+    {
+        return $this->scripted->chat($messages, $options);
+    }
+
+    public function complete(string $prompt, ?string $systemPrompt = null, array $options = []): string
+    {
+        return $this->scripted->complete($prompt, $systemPrompt, $options);
+    }
+
+    public function stream(array $messages, callable $callback, array $options = []): void
+    {
+    }
+
+    public function getModel(): string
+    {
+        return 'billed';
+    }
+
+    public function getProvider(): string
+    {
+        return 'scripted';
+    }
+
+    public function getMaxTokens(): int
+    {
+        return 100000;
+    }
+
+    public function countTokens(string $text): int
+    {
+        return 1;
+    }
+
+    public function lastUsage(): ?array
+    {
+        return $this->last;
     }
 }
