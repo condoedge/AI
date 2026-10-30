@@ -44,6 +44,9 @@ class PipelineContext
     /** What the host states about the asker's own records (Audiences::askerFacts): grounds an answer like rows do. */
     public array $askerFacts = [];
 
+    /** What the model replies when a question out of reach asks for nothing else; code words the refusal. */
+    public const OUT_OF_REACH_MARKER = 'NOT_READABLE';
+
     /** A data question the asker's audience could not even query: the answer says it is not available to them. */
     public bool $dataOutOfReach = false;
 

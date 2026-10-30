@@ -42,6 +42,7 @@ class AiManagerExecutionRepairTest extends TestCase
     private QueryExecutorInterface $executor;
     private ResponseGeneratorInterface $responder;
     private AiManager $manager;
+    private array $recorded = [];
 
     public function setUp(): void
     {
@@ -97,10 +98,21 @@ class AiManagerExecutionRepairTest extends TestCase
         return new QueryExecutionException('Query execution failed: Failed to execute Neo4j query: ' . $driver->getMessage(), 0, new \RuntimeException('Failed to execute Neo4j query: ' . $driver->getMessage(), 0, $driver));
     }
 
+    /** The turn's conversation recorded FIXED, answering $question. */
+    private function recordedTurn(string $question): void
+    {
+        $this->recorded = [
+            'last_cypher_query' => self::FIXED,
+            'last_cypher_question' => $question,
+            'last_cypher_parameters' => ['pii_0123456789ab' => 'a@b.c', 'ai_team_ids' => [99]],
+        ];
+    }
+
     private function ask(RecordingPipelineObserver $observer): array
     {
         return $this->manager->answerQuestion('What is the balance of each account?', [
             'store_examples' => false,
+            'conversation_context' => $this->recorded,
             'observer' => $observer,
         ]);
     }
@@ -168,57 +180,51 @@ class AiManagerExecutionRepairTest extends TestCase
     }
 
     /** @test */
-    public function a_second_repair_sees_the_latest_draft_and_error_when_the_host_allows_it(): void
+    public function the_same_question_again_runs_the_recorded_query_with_no_generation_and_answers_from_its_rows(): void
     {
-        config(['ai.query_generation.execution_repair_attempts' => 2]);
-        $second = 'MATCH (a:Account) RETURN a.still_broken';
-        $repairs = [];
-        $this->generator->shouldReceive('generate')->times(3)->andReturnUsing(
-            function ($q, $ctx, $options) use (&$repairs, $second) {
-                if (!isset($options['repair'])) {
-                    return new QueryGenerationResult(cypher: self::BROKEN, confidence: 0.9);
-                }
-                $repairs[] = $options['repair'];
-
-                return new QueryGenerationResult(cypher: count($repairs) === 1 ? $second : self::FIXED, confidence: 0.9);
-            }
-        );
-
-        $this->executor->shouldReceive('execute')->times(3)->andReturnUsing(function ($cypher) use ($second) {
-            if ($cypher === self::BROKEN) {
-                throw $this->neo4jStatementError('Variable `ab` not defined');
-            }
-            if ($cypher === $second) {
-                throw $this->neo4jStatementError('Variable `cd` not defined');
-            }
+        $this->generator->shouldNotReceive('generate');
+        $executed = [];
+        $this->executor->shouldReceive('execute')->once()->andReturnUsing(function ($cypher, $params) use (&$executed) {
+            $executed = [$cypher, $params];
 
             return new QueryExecutionResult(success: true, data: [['balance' => 10.0], ['balance' => 5.0]]);
         });
+        $this->recordedTurn('WHAT is the balance of each account');
 
         $result = $this->ask(new RecordingPipelineObserver());
 
+        $this->assertSame(self::FIXED, $executed[0]);
+        $this->assertSame(['pii_0123456789ab' => 'a@b.c'], $executed[1], 'Only the recorded PII tokens ride along.');
         $this->assertSame('rows: 2', $result['answer']);
-        $this->assertSame(self::FIXED, $result['cypher']);
-        $this->assertSame($second, $repairs[1]['cypher']);
-        $this->assertStringContainsString('Variable `cd` not defined', $repairs[1]['error']);
     }
 
     /** @test */
-    public function repairs_stop_once_a_failure_cannot_be_repaired(): void
+    public function the_generator_saying_the_recorded_query_answers_runs_it_and_a_plain_decline_does_not(): void
     {
-        config(['ai.query_generation.execution_repair_attempts' => 3]);
-        $this->generator->shouldReceive('generate')->twice()->andReturnUsing(
-            fn ($q, $ctx, $options) => new QueryGenerationResult(cypher: isset($options['repair']) ? self::FIXED : self::BROKEN, confidence: 0.9)
+        $this->generator->shouldReceive('generate')->once()->andReturn(
+            new QueryGenerationResult(cypher: '', confidence: 1.0, metadata: ['reuse_previous' => true])
         );
-        $this->executor->shouldReceive('execute')->twice()->andReturnUsing(function ($cypher) {
-            throw $cypher === self::BROKEN
-                ? $this->neo4jStatementError('Variable `ab` not defined')
-                : new \Condoedge\Ai\Exceptions\QueryTimeoutException('took too long');
+        $this->executor->shouldReceive('execute')->once()->andReturn(new QueryExecutionResult(success: true, data: [['balance' => 10.0]]));
+        $this->recordedTurn('Another wording');
+
+        $this->assertSame('rows: 1', $this->ask(new RecordingPipelineObserver())['answer']);
+    }
+
+    /** @test */
+    public function a_decline_without_the_reuse_signal_runs_nothing(): void
+    {
+        $this->generator->shouldReceive('generate')->once()->andReturn(new QueryGenerationResult(cypher: '', confidence: 1.0));
+        $executed = [];
+        $this->executor->shouldReceive('execute')->andReturnUsing(function ($cypher) use (&$executed) {
+            $executed[] = $cypher;
+
+            return new QueryExecutionResult(success: true, data: []);
         });
+        $this->recordedTurn('Another wording');
 
-        $result = $this->ask(new RecordingPipelineObserver());
+        $this->ask(new RecordingPipelineObserver());
 
-        $this->assertSame(self::FIXED, $result['cypher'], 'Two generations only: the timeout ended the repairs.');
+        $this->assertNotContains(self::FIXED, $executed, 'The recorded query does not run.');
     }
 
     /** @test */

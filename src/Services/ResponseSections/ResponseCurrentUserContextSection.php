@@ -79,10 +79,10 @@ class ResponseCurrentUserContextSection extends BaseResponseSection
                 . implode("\n- ", $context->askerFacts) . "\n\n";
         }
         if ($context->dataOutOfReach) {
-            $output .= "THIS USER'S ACCESS DOES NOT REACH THE DATA THIS QUESTION ASKS FOR. Say in one sentence that their access does not "
-                . "show it; never give, estimate or compute a figure. "
-                . "A help passage may still say where the app shows it or who can answer. A question that only asks how to "
-                . "do something or where to find something is answered normally.\n\n";
+            $output .= "THIS USER'S ACCESS DOES NOT SHOW THE FIGURES OR RECORDS THIS QUESTION ASKS FOR: never give, estimate or compute one. "
+                . "When the question also asks something the help passages answer (what a thing is, how to do something, where to find it), "
+                . "answer that part and say in one sentence that their access does not show the rest. "
+                . "When it asks only for those figures or records, reply with exactly " . PipelineContext::OUT_OF_REACH_MARKER . " and nothing else.\n\n";
         }
         // The tasks (ai.tasks) this user may start: only their button starts one, never the answer.
         $tasks = WelcomeSuggestions::tasks($user);

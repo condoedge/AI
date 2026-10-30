@@ -14,6 +14,7 @@ use Condoedge\Ai\Exceptions\LlmInvalidJsonException;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
 use Condoedge\Ai\Services\Query\CypherBooleanPrecedence;
+use Condoedge\Ai\Services\Query\CypherOptionalFilter;
 use Condoedge\Ai\Services\Query\CypherScopeHint;
 use Condoedge\Ai\Services\Security\CypherSchemaValidator;
 use Condoedge\Ai\Services\Security\CypherScopeAnalyzer;
@@ -77,6 +78,13 @@ class QueryGenerator implements QueryGeneratorInterface
     private CypherBooleanPrecedence $precedenceCheck;
 
     /**
+     * Draft-quality check: a text condition on an OPTIONAL MATCH the total does not use
+     * filters nothing, so the total covers every row. Fed back like a schema violation.
+     * Never part of the security pipeline.
+     */
+    private CypherOptionalFilter $optionalFilterCheck;
+
+    /**
      * Constructor
      *
      * @param LlmProviderInterface $llm LLM provider for query generation
@@ -88,6 +96,7 @@ class QueryGenerator implements QueryGeneratorInterface
      * @param CypherScopeAnalyzer|null $scopeAnalyzer Optional subset recognizer
      * @param CypherSchemaValidator|null $schemaValidator Optional live-schema validator
      * @param CypherBooleanPrecedence|null $precedenceCheck Optional OR / AND precedence check
+     * @param CypherOptionalFilter|null $optionalFilterCheck Optional check of conditions an OPTIONAL MATCH cannot apply
      */
     public function __construct(
         private readonly LlmProviderInterface $llm,
@@ -98,7 +107,8 @@ class QueryGenerator implements QueryGeneratorInterface
         ?CypherValidator $validator = null,
         ?CypherScopeAnalyzer $scopeAnalyzer = null,
         ?CypherSchemaValidator $schemaValidator = null,
-        ?CypherBooleanPrecedence $precedenceCheck = null
+        ?CypherBooleanPrecedence $precedenceCheck = null,
+        ?CypherOptionalFilter $optionalFilterCheck = null
     ) {
         $this->promptBuilder = $promptBuilder ?? new SemanticPromptBuilder();
         $this->rateLimiter = RateLimiter::forLlm();
@@ -107,6 +117,7 @@ class QueryGenerator implements QueryGeneratorInterface
         $this->scopeAnalyzer = $scopeAnalyzer ?? new CypherScopeAnalyzer();
         $this->schemaValidator = $schemaValidator ?? new CypherSchemaValidator();
         $this->precedenceCheck = $precedenceCheck ?? new CypherBooleanPrecedence();
+        $this->optionalFilterCheck = $optionalFilterCheck ?? new CypherOptionalFilter();
     }
 
     /**
@@ -146,7 +157,8 @@ class QueryGenerator implements QueryGeneratorInterface
         // returned with schema_violations recorded when the budget runs out, since
         // the security layer still guards execution). A predicate that mixes OR with
         // AND at one level (eval p22-1001-B) is the same kind of soft redraft, with
-        // its own feedback and its own record (precedence_violations).
+        // its own feedback and its own record (precedence_violations), and so is a text
+        // condition an OPTIONAL MATCH cannot apply (optional_filter_violations).
         $retryCount = 0;
         $lastError = $repair !== null ? $this->executionRepairFeedback($repair) : null;
         $previousDraft = $repair !== null ? trim((string) ($repair['cypher'] ?? '')) : null;
@@ -154,9 +166,10 @@ class QueryGenerator implements QueryGeneratorInterface
             ? CypherSchemaValidator::schemaFromContext($context->graphSchema)
             : null;
         $checkPrecedence = $this->precedenceCheckEnabled($options);
+        $checkOptionalFilter = $this->optionalFilterCheckEnabled($options);
         $schemaRepairs = 0;
         $softCandidate = null;
-        $runMeta = ['execution_repair' => $repair !== null, 'precedence_repaired' => [], 'decline_redrafted' => false];
+        $runMeta = ['execution_repair' => $repair !== null, 'precedence_repaired' => [], 'optional_filter_repaired' => [], 'decline_redrafted' => false];
 
         while ($retryCount < $maxRetries) {
             try {
@@ -177,7 +190,7 @@ class QueryGenerator implements QueryGeneratorInterface
                 $runMeta['output_format'] = $draft['format'];
 
                 // A data question a domain formula matches holds its answer: a decline is redrafted once, naming the formula.
-                if (!$draft['needs_query'] && !$runMeta['decline_redrafted'] && $retryCount + 1 < $maxRetries
+                if (!$draft['needs_query'] && !$draft['reuse_previous'] && !$runMeta['decline_redrafted'] && $retryCount + 1 < $maxRetries
                     && ($formulas = $this->matchedFormulaLabels($context)) !== []) {
                     $runMeta['decline_redrafted'] = true;
                     $lastError = 'You answered needs_query false (' . ($draft['reason'] !== '' ? $draft['reason'] : 'no reason given') . '), but this '
@@ -207,8 +220,10 @@ class QueryGenerator implements QueryGeneratorInterface
                             'retry_count' => $retryCount,
                             'complexity' => 0,
                             'no_query_reason' => $draft['reason'],
+                            'reuse_previous' => $draft['reuse_previous'],
                             'schema_violations' => [],
                             'precedence_violations' => [],
+                            'optional_filter_violations' => [],
                             'repair_attempts' => $schemaRepairs,
                         ] + $runMeta,
                     );
@@ -252,19 +267,23 @@ class QueryGenerator implements QueryGeneratorInterface
                         : [];
                     // Precedence check (eval p22-1001-B): `A OR B AND C` at one level.
                     $ambiguous = $checkPrecedence ? $this->precedenceCheck->violations($cypher) : [];
+                    // A text condition on an OPTIONAL MATCH the total does not use.
+                    $ineffective = $checkOptionalFilter ? $this->optionalFilterCheck->violations($cypher) : [];
 
-                    if ($violations === [] && $ambiguous === []) {
+                    if ($violations === [] && $ambiguous === [] && $ineffective === []) {
                         return $this->llmResult($cypher, $question, $context, $explain, $validation, $retryCount, [], $schemaRepairs, $runMeta);
                     }
 
                     // Keep the least-violating draft (latest on a tie) as the fallback.
                     if ($softCandidate === null
-                        || count($violations) + count($ambiguous) <= count($softCandidate['violations']) + count($softCandidate['ambiguous'])) {
+                        || count($violations) + count($ambiguous) + count($ineffective)
+                            <= count($softCandidate['violations']) + count($softCandidate['ambiguous']) + count($softCandidate['ineffective'])) {
                         $softCandidate = [
                             'cypher' => $cypher,
                             'validation' => $validation,
                             'violations' => $violations,
                             'ambiguous' => $ambiguous,
+                            'ineffective' => $ineffective,
                         ];
                     }
 
@@ -274,7 +293,7 @@ class QueryGenerator implements QueryGeneratorInterface
                     }
 
                     $schemaRepairs++;
-                    $lastError = $this->draftRepairFeedback($violations, $ambiguous);
+                    $lastError = $this->draftRepairFeedback($violations, $ambiguous, $ineffective);
                     $previousDraft = $cypher;
                     if ($ambiguous !== []) {
                         // What was sent back, for the trace (the predicates, not the instruction).
@@ -283,10 +302,17 @@ class QueryGenerator implements QueryGeneratorInterface
                             $this->precedenceCheck->ambiguousPredicates($cypher)
                         )));
                     }
+                    if ($ineffective !== []) {
+                        $runMeta['optional_filter_repaired'] = array_values(array_unique(array_merge(
+                            $runMeta['optional_filter_repaired'],
+                            $this->optionalFilterCheck->ineffectiveConditions($cypher)
+                        )));
+                    }
                     $this->logger->warning('query_generator', "Draft violates the graph schema or is ambiguous — regenerating (attempt {$retryCount}/{$maxRetries})", [
                         'retry_number' => $retryCount,
                         'violations' => $violations,
                         'precedence_violations' => $ambiguous,
+                        'optional_filter_violations' => $ineffective,
                     ]);
                     continue;
                 }
@@ -327,6 +353,7 @@ class QueryGenerator implements QueryGeneratorInterface
             $this->logger->warning('query_generator', 'Returning a draft that still violates the graph schema or is ambiguous', [
                 'violations' => $softCandidate['violations'],
                 'precedence_violations' => $softCandidate['ambiguous'],
+                'optional_filter_violations' => $softCandidate['ineffective'],
                 'repair_attempts' => $schemaRepairs,
             ]);
 
@@ -340,7 +367,8 @@ class QueryGenerator implements QueryGeneratorInterface
                 $softCandidate['violations'],
                 $schemaRepairs,
                 $runMeta,
-                $softCandidate['ambiguous']
+                $softCandidate['ambiguous'],
+                $softCandidate['ineffective']
             );
         }
 
@@ -364,6 +392,7 @@ class QueryGenerator implements QueryGeneratorInterface
      *
      * @param list<string> $violations schema violations the draft still has
      * @param list<string> $ambiguous precedence violations the draft still has
+     * @param list<string> $ineffective optional-filter violations the draft still has
      */
     private function llmResult(
         string $cypher,
@@ -375,7 +404,8 @@ class QueryGenerator implements QueryGeneratorInterface
         array $violations,
         int $schemaRepairs,
         array $runMeta,
-        array $ambiguous = []
+        array $ambiguous = [],
+        array $ineffective = []
     ): QueryGenerationResult {
         $confidence = $this->calculateConfidence($cypher, $context);
         $durationMs = $this->logger->stopTimer('query_generation');
@@ -387,6 +417,7 @@ class QueryGenerator implements QueryGeneratorInterface
             'complexity' => $validation['complexity'],
             'schema_violations' => count($violations),
             'precedence_violations' => count($ambiguous),
+            'optional_filter_violations' => count($ineffective),
         ]);
 
         return new QueryGenerationResult(
@@ -400,6 +431,7 @@ class QueryGenerator implements QueryGeneratorInterface
                 'complexity' => $validation['complexity'],
                 'schema_violations' => $violations,
                 'precedence_violations' => $ambiguous,
+                'optional_filter_violations' => $ineffective,
                 'repair_attempts' => $schemaRepairs,
             ] + $runMeta,
             parameters: $this->bindPiiTokens($cypher, $context)[1],
@@ -445,7 +477,7 @@ class QueryGenerator implements QueryGeneratorInterface
      * re-requesting; a decoded reply that is not the contract object throws so the
      * retry loop redrafts with a teachable error.
      *
-     * @return array{needs_query: bool, cypher: string, reason: string, format: string}
+     * @return array{needs_query: bool, cypher: string, reason: string, format: string, reuse_previous: bool}
      */
     private function requestDraft(string $systemPrompt, string $userPrompt, float $temperature, PipelineContext $context): array
     {
@@ -481,7 +513,7 @@ class QueryGenerator implements QueryGeneratorInterface
                 $this->logger->info('query_generator', 'Empty free-text generation reply read as needs_query=false (no query)');
             }
 
-            return ['needs_query' => $cypher !== '', 'cypher' => $cypher, 'reason' => '', 'format' => 'text'];
+            return ['needs_query' => $cypher !== '', 'cypher' => $cypher, 'reason' => '', 'format' => 'text', 'reuse_previous' => false];
         } finally {
             TokenUsage::report($observer, 'query_generation', $this->llm);
         }
@@ -505,7 +537,7 @@ class QueryGenerator implements QueryGeneratorInterface
             );
         }
 
-        return ['needs_query' => $needsQuery, 'cypher' => $cypher, 'reason' => $reason, 'format' => 'json'];
+        return ['needs_query' => $needsQuery, 'cypher' => $cypher, 'reason' => $reason, 'format' => 'json', 'reuse_previous' => !$needsQuery && ($reply['reuse_previous'] ?? false) === true];
     }
 
     /**
@@ -521,13 +553,15 @@ class QueryGenerator implements QueryGeneratorInterface
 
     /**
      * Retry feedback for a draft that is valid Cypher but should be redrafted: what
-     * it uses that the graph does not have, and / or a predicate whose OR / AND
-     * precedence is ambiguous (each violation carries its own instruction).
+     * it uses that the graph does not have, a predicate whose OR / AND precedence is
+     * ambiguous, and / or a condition an OPTIONAL MATCH cannot apply (each violation
+     * carries its own instruction).
      *
      * @param list<string> $violations schema violations
      * @param list<string> $ambiguous precedence violations
+     * @param list<string> $ineffective optional-filter violations
      */
-    private function draftRepairFeedback(array $violations, array $ambiguous): string
+    private function draftRepairFeedback(array $violations, array $ambiguous, array $ineffective = []): string
     {
         $parts = [];
         if ($violations !== []) {
@@ -536,6 +570,9 @@ class QueryGenerator implements QueryGeneratorInterface
         if ($ambiguous !== []) {
             $parts[] = "the query's boolean logic is ambiguous as written:\n- " . implode("\n- ", $ambiguous)
                 . "\nAdd the parentheses and change nothing else in that predicate.";
+        }
+        if ($ineffective !== []) {
+            $parts[] = "the query's total does not apply its condition as written:\n- " . implode("\n- ", $ineffective);
         }
 
         return implode("\n", $parts);
@@ -582,6 +619,19 @@ class QueryGenerator implements QueryGeneratorInterface
         }
 
         return (bool) config('ai.query_generation.precedence_check', $this->config['precedence_check'] ?? true);
+    }
+
+    /**
+     * Whether generated drafts are checked for a text condition on an OPTIONAL MATCH the
+     * total does not use (config ai.query_generation.optional_filter_check, default on).
+     */
+    private function optionalFilterCheckEnabled(array $options): bool
+    {
+        if (array_key_exists('optional_filter_check', $options)) {
+            return (bool) $options['optional_filter_check'];
+        }
+
+        return (bool) config('ai.query_generation.optional_filter_check', $this->config['optional_filter_check'] ?? true);
     }
 
     /**

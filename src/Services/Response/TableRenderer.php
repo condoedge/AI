@@ -298,11 +298,18 @@ final class TableRenderer
             $key = $property;
         }
 
+        $header = self::headerWords($key);
+
+        return $header === '' ? 'Value' : $header;
+    }
+
+    /** An identifier as the words of a header: `due_amount` → "Due Amount". */
+    private static function headerWords(string $key): string
+    {
         $header = preg_replace('/(?<=[a-z0-9])([A-Z])/', ' $1', $key) ?? $key;
         $header = str_replace(['_', '-'], ' ', $header);
-        $header = trim(preg_replace('/\s+/', ' ', $header) ?? $header);
 
-        return $header === '' ? 'Value' : ucwords($header);
+        return ucwords(trim(preg_replace('/\s+/', ' ', $header) ?? $header));
     }
 
     /**
@@ -503,7 +510,28 @@ final class TableRenderer
         $schema = self::primaryLanguage($schema);
         $answer = self::primaryLanguage($language) ?? self::primaryLanguage($locale);
 
-        return $schema !== null && $schema === $answer ? self::columnProjections($cypher) : [];
+        $projections = self::columnProjections($cypher);
+        if ($schema !== null && $schema === $answer) {
+            return $projections;
+        }
+        if ($schema === null || $answer === null) {
+            return [];
+        }
+
+        // A figure is what decides an answer: `b.due_amount AS frais` beside `b.total_amount AS coût`
+        // told the model the fees were 0,00 $ on 6 of 6 runs (2026-10-30). So the alias of an amount
+        // yields to the host's own word for its property. No word, and the alias stays.
+        $money = MoneyColumns::fromCypher($cypher);
+
+        return array_filter(
+            $projections,
+            static function (array $projection, string $column) use ($money, $answer): bool {
+                $words = self::headerWords($projection[1]);
+
+                return in_array($column, $money, true) && HostText::header($words, $answer) !== $words;
+            },
+            ARRAY_FILTER_USE_BOTH
+        );
     }
 
     /** "fr-CA" / "FR_ca" → "fr"; null for a non-string or blank code. */

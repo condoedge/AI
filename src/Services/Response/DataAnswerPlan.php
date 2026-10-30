@@ -8,8 +8,10 @@ use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\Actions\Attach\RecordResolver;
 use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
 use Condoedge\Ai\Services\Query\FanOutCollapse;
+use Condoedge\Ai\Services\Query\RecordedQuery;
 use Condoedge\Ai\Services\ResponseSections\SelfReferenceNoticeSection;
 use Condoedge\Ai\Support\AliasNormalizer;
+use Condoedge\Ai\Support\ShownCalculation;
 
 /**
  * DataAnswerPlan — deterministic data answers (Phase 8 batch A).
@@ -105,6 +107,14 @@ final class DataAnswerPlan
 
     /** The table is ONE record, rendered as a "Field: value" block instead of a one-row table. */
     private bool $record = false;
+
+    /**
+     * The request works on rows the user already saw ({@see RecordedQuery}): the rows are its
+     * material, not its answer. Every rule of the lead that presents rows yields to what it asks:
+     * measured 2026-10-30, "which is the highest?" got "Your FIRST sentence states the totals",
+     * and "what is the difference between the two years?" got "never add them up into one figure".
+     */
+    private bool $rowsAreMaterial = false;
 
     /** Whether the last finalize() dropped model text written after the table placeholder. */
     private bool $tailDropped = false;
@@ -548,6 +558,10 @@ final class DataAnswerPlan
         // (The line is quoted last: every value the summary masked holds its token by now.)
         // p20-A account-310: beside a code-written homonym statement, the lead's PLURAL subject.
         $subject = in_array('homonyms', $stated, true) ? (string) $this->homonymSubject(null) : '';
+        if ($this->rowsAreMaterial) {
+            $lines[] = 'THESE ROWS WERE ALREADY SHOWN TO THE USER: this request works on them. Your lead states what it asks '
+                . 'of them (the result, the comparison, the one it picks), never the rows or their totals again.';
+        }
         $lines = array_merge($lines, $this->answerFormatLines(
             $tableMode,
             $homonymLead,
@@ -691,6 +705,18 @@ final class DataAnswerPlan
         }
 
         try {
+            // A calculation the user asked for IS the answer, and the validator has checked it:
+            // no bound below may cut it. What follows it only introduces the block.
+            $calculation = ShownCalculation::through($lead);
+            if ($calculation !== null) {
+                $after = trim(substr($lead, strlen($calculation)));
+                if ($after !== '') {
+                    $this->leadTrimmed[] = ['rule' => 'after_calculation', 'text' => $this->masker->maskFreeText($after)];
+                }
+
+                return $calculation;
+            }
+
             $notes = $this->promptNotes
                 ?? $this->requiringNotes($this->homonymLead(10, true) || in_array('homonyms', $facts['stated'], true), $facts['stated']);
             if ($notes === []) {
@@ -987,6 +1013,7 @@ final class DataAnswerPlan
 
     private function build(PipelineContext $context): void
     {
+        $this->rowsAreMaterial = ($context->queryResult->metadata['recorded_query_reason'] ?? null) === RecordedQuery::REASON_GENERATOR;
         $this->moneyColumns = MoneyColumns::fromCypher($context->queryResult->cypher);
         $this->variableLabels = TableRenderer::variableLabels($context->queryResult->cypher);
         $this->subject = $this->subjectOf($context);
@@ -2393,6 +2420,10 @@ final class DataAnswerPlan
      */
     private function homonymGroups(): array
     {
+        if ($this->rowsAreMaterial) {
+            return [];
+        }
+
         return $this->identityHomonyms
             ?? $this->renderer->homonyms($this->tableRows, 5, $this->aggregateAliases);
     }
@@ -2703,7 +2734,7 @@ final class DataAnswerPlan
 
         $numbers = 'Every total, count or amount you state must be copied verbatim from FACTS / QUERY TOTAL / '
             . 'COMPUTED TOTALS / the DATA SUMMARY rows / the row count — never add, subtract or re-derive numbers '
-            . 'yourself, and never state a figure for a row that is not in the DATA SUMMARY.';
+            . 'on your own, and never state a figure for a row that is not in the DATA SUMMARY.';
 
         if (!$tableMode) {
             return ['ANSWER RULE: ' . $numbers];
@@ -2751,8 +2782,8 @@ final class DataAnswerPlan
                 'ANSWER FORMAT — THE SYSTEM LISTS THE RECORD:',
                 '- Write ONLY the lead — ONE sentence that answers the question or introduces the record' . $required . $ends
                     . 'the system prints the record there and discards any text after it. The sentence may state the one value '
-                    . 'the question literally asks for, copied verbatim from the row above (never recomputed); leave every '
-                    . 'other value to the system.',
+                    . 'the question literally asks for, copied verbatim from the row above (recomputed only when the question '
+                    . 'asks for a calculation on it); leave every other value to the system.',
                 '- The system replaces ' . self::PLACEHOLDER . " with every field of this record and its exact value ({$fields}): "
                     . 'do NOT list the fields yourself and do NOT restate their values in your sentence.',
                 ...(in_array('not_recorded', $stated, true)
@@ -2837,10 +2868,12 @@ final class DataAnswerPlan
                 $parts[] = 'the total' . (count($stated) > 1 ? 's' : '') . ' (' . implode('; ', $stated) . '), copied verbatim';
             }
             $last = array_pop($parts);
-            $lines[] = '- Your FIRST sentence states ' . ($parts === [] ? '' : implode(', ', $parts) . ' and ') . $last
-                . ', then answers the question.'
-                // No host-named kind: the question's own noun, never the system's.
-                . ($counted && $kind === null ? ' Name what is counted in the question\'s own words — never as "rows".' : '');
+            if (!$this->rowsAreMaterial) {
+                $lines[] = '- Your FIRST sentence states ' . ($parts === [] ? '' : implode(', ', $parts) . ' and ') . $last
+                    . ', then answers the question.'
+                    // No host-named kind: the question's own noun, never the system's.
+                    . ($counted && $kind === null ? ' Name what is counted in the question\'s own words — never as "rows".' : '');
+            }
         } else {
             array_push($lines, ...$emptyLead);
         }

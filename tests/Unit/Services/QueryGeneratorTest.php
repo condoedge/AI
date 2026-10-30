@@ -418,6 +418,18 @@ RETURN n LIMIT 100';
         );
     }
 
+    /** @test The generator says the recorded query already answers: no redraft, the manager runs that query. */
+    public function a_reply_that_reuses_the_previous_query_is_passed_on_without_a_redraft(): void
+    {
+        $this->mockLlm->shouldReceive('chatJson')->once()
+            ->andReturn((object) ['needs_query' => false, 'cypher' => null, 'reuse_previous' => true, 'reason' => 'Same question.']);
+
+        $result = $this->generator->generate('Les campagnes?', $this->formulaTurn(true), ['explain' => false]);
+
+        $this->assertFalse($result->hasCypher());
+        $this->assertTrue($result->metadata['reuse_previous']);
+    }
+
     /** @test */
     public function a_decline_with_no_formula_matched_stays_a_decline_without_another_call(): void
     {

@@ -728,11 +728,15 @@ return [
         // still ambiguous when the budget is spent runs as written, recorded in the
         // trace (precedence_violations).
         'precedence_check' => env('AI_QUERY_PRECEDENCE_CHECK', true),
+        // Check each draft for a text condition on an OPTIONAL MATCH when a total is computed
+        // without what that match binds: it filters nothing, so the total covers every row.
+        // Fed back within the same retry budget, asking for MATCH. A draft still written that
+        // way when the budget is spent runs as written, recorded in the trace
+        // (optional_filter_violations).
+        'optional_filter_check' => env('AI_QUERY_OPTIONAL_FILTER_CHECK', true),
         // Regenerate ONCE with the Neo4j error when the generated query fails with a
         // statement (syntax / semantic) error. Never on timeout / safe-stop / infra (Task 5.5).
         'repair_on_execution_error' => env('AI_QUERY_REPAIR_ON_EXECUTION_ERROR', true),
-        // How many such regenerations one turn may make, each seeing the latest draft and error.
-        'execution_repair_attempts' => env('AI_QUERY_EXECUTION_REPAIR_ATTEMPTS', 1),
     ],
 
     /*
@@ -1873,7 +1877,7 @@ return [
 
         // Features
         'enable_copy' => env('AI_CHAT_ENABLE_COPY', true),
-        'enable_feedback' => env('AI_CHAT_ENABLE_FEEDBACK', false),
+        'enable_feedback' => env('AI_CHAT_ENABLE_FEEDBACK', true),
         'enable_regenerate' => env('AI_CHAT_ENABLE_REGENERATE', true),
         'enable_edit' => env('AI_CHAT_ENABLE_EDIT', true),
         'response_style' => env('AI_CHAT_RESPONSE_STYLE', 'friendly'),

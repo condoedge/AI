@@ -62,7 +62,8 @@ final class MoneyColumns
                     continue;
                 }
 
-                if (preg_match('/^(.*)\s+AS\s+([A-Za-z_]\w*)\s*$/is', $item, $as)) {
+                // The alias in the user's language: `AS coût` is as much a column as `AS cost`.
+                if (preg_match('/^(.*)\s+AS\s+`?([\p{L}_][\p{L}\p{N}_]*)`?\s*$/isu', $item, $as)) {
                     [$expr, $alias] = [trim($as[1]), $as[2]];
                 } elseif (preg_match('/^([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/', $item, $prop)) {
                     // Unaliased `v.prop`: Neo4j keys the result column by the expression

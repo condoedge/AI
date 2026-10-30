@@ -48,7 +48,7 @@ DATA SUMMARY (all 2 rows):
 ANSWER FORMAT — THE SYSTEM RENDERS THE TABLE:
 - Write ONLY the lead — one or two sentences that answer the question — then the placeholder {{table}} on its own line as the LAST line of your answer: the system prints the rows there and discards any text after it.
 - The system replaces {{table}} with a table of the rows (2 of 2) and adds any "showing X of Y" line itself. Do NOT list the rows (no bullet or numbered list, no row-by-row sentences) and do NOT write your own table.
-- Every total, count or amount you state must be copied verbatim from FACTS / QUERY TOTAL / COMPUTED TOTALS / the DATA SUMMARY rows / the row count — never add, subtract or re-derive numbers yourself, and never state a figure for a row that is not in the DATA SUMMARY.
+- Every total, count or amount you state must be copied verbatim from FACTS / QUERY TOTAL / COMPUTED TOTALS / the DATA SUMMARY rows / the row count — never add, subtract or re-derive numbers on your own, and never state a figure for a row that is not in the DATA SUMMARY.
 </retrieved_document>
 
 (DATA STATS: 2 rows in total; the table the system shows the user holds 2 of 2.)
@@ -67,7 +67,7 @@ Guidelines:
 - Start with a direct answer to the question when the data supports one
 - Use specific data from the results
 - Keep response under 100 words
-- If the retrieved data cannot actually answer the question (wrong level of detail, truncated or mixed results, or an ambiguous reference), say so plainly or ask ONE short clarifying question instead of forcing an answer. Never derive, estimate, or invent a figure the data does not directly state.
+- If the retrieved data cannot actually answer the question (wrong level of detail, truncated or mixed results, or an ambiguous reference), say so plainly or ask ONE short clarifying question instead of forcing an answer. Never derive, estimate, or invent a figure the data does not directly state. When the user asks for a calculation on figures you were given, do it: write the operation in full with those figures, then = and its result. The system checks it.
 - Never present a partial list as complete: when more rows or results exist than are shown, say so explicitly.
 - For claims about laws, regulations, policies, or document contents: state only what the retrieved file content actually supports, citing it with its passage number in square brackets when file content is provided. If the available documents do not contain the answer, say it could not be found in the available documents — never answer such questions from general knowledge.
 - Do NOT end with an offer or a question ("let me know", "would you like…", "feel free to ask"), and do not mention links, buttons or attachments.

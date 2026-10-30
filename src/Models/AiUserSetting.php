@@ -35,7 +35,7 @@ class AiUserSetting extends Model
             'show_metrics' => config('ai.chat.show_metrics', false),
             'show_suggestions' => config('ai.chat.show_suggestions', true),
             'enable_copy' => config('ai.chat.enable_copy', true),
-            'enable_feedback' => config('ai.chat.enable_feedback', false),
+            'enable_feedback' => config('ai.chat.enable_feedback', true),
             'enable_regenerate' => config('ai.chat.enable_regenerate', true),
             'enable_edit' => config('ai.chat.enable_edit', true),
             'response_style' => config('ai.chat.response_style', 'friendly'),

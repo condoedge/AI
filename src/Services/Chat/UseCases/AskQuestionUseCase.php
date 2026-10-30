@@ -484,13 +484,14 @@ class AskQuestionUseCase
             // transaction AFTER the LLM calls) so a turn never records context without its answer.
             $assistantMessage = DB::transaction(function () use (
                 $conversation, $answerText, $cypherQuery, $queryData, $referencedFiles,
-                $aiResponse, $regenerated, $messageMetadata, $trace
+                $aiResponse, $regenerated, $messageMetadata, $trace, $question
             ) {
                 $this->contextManager->recordResponse(
                     $conversation,
                     $answerText,
                     $cypherQuery ?? '',
                     [
+                        'question' => $question,
                         'data' => $queryData,
                         'referenced_files' => $referencedFiles,
                         'metadata' => is_array($aiResponse['metadata'] ?? null) ? $aiResponse['metadata'] : [],

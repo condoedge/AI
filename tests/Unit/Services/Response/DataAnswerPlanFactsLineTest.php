@@ -781,6 +781,23 @@ class DataAnswerPlanFactsLineTest extends TestCase
         $this->assertSame('You can find the details in the table below.', $plan->leadTrimmed()[0]['text']);
     }
 
+    /** @test Measured 2026-10-30: the one-sentence bound cut the calculation the user had asked for. */
+    public function a_calculation_in_the_lead_is_never_cut(): void
+    {
+        config(['entities' => $this->boardEntities()]);
+        $plan = $this->planFor('Who is on our board of directors and who is the president?', self::BOARD_CYPHER, $this->boardRows(), [], 'en', ['BoardMember']);
+
+        $answer = $plan->finalize(
+            "The first figure is 37. Doubled and with one more:\n\n37 x 2 + 1 = 75.\n\nHere are the members:\n\n{{table}}",
+            true,
+            'en'
+        );
+
+        $this->assertStringContainsString('37 x 2 + 1 = 75.', $answer);
+        $this->assertStringNotContainsString('Here are the members', $answer);
+        $this->assertSame(['after_calculation'], array_column($plan->leadTrimmed(), 'rule'));
+    }
+
     /**
      * @test iteration 5 live check, board: with the line saying "Not recorded: Board role." the
      * lead came back as "…is not recorded in the available data." — above 37 board members. What

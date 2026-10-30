@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Services\ResponseSections;
 
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\Response\DataAnswerPlan;
+use Condoedge\Ai\Support\ShownCalculation;
 
 /**
  * GuidelinesSection
@@ -168,7 +169,7 @@ class GuidelinesSection extends BaseResponseSection
 
         // L1-C: honesty/clarify affordance — an unanswerable result must never be
         // forced into a fabricated direct answer.
-        $output .= "- If the retrieved data cannot actually answer the question (wrong level of detail, truncated or mixed results, or an ambiguous reference), say so plainly or ask ONE short clarifying question instead of forcing an answer. Never derive, estimate, or invent a figure the data does not directly state.\n";
+        $output .= "- If the retrieved data cannot actually answer the question (wrong level of detail, truncated or mixed results, or an ambiguous reference), say so plainly or ask ONE short clarifying question instead of forcing an answer. Never derive, estimate, or invent a figure the data does not directly state. " . ShownCalculation::INSTRUCTION . "\n";
         // On the deterministic-table path the system-rendered table carries its own
         // "Showing X of Y" line — the model must not restate (or miscount) it.
         // (ONE code-rendered record has no row count to disclose: the generic line.)

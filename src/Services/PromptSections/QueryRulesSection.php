@@ -131,7 +131,6 @@ class QueryRulesSection extends BasePromptSection
                "   - CRITICAL: If the DETECTED BUSINESS CONCEPTS block has a CYPHER PATTERN, you MUST use it in your WHERE clause\n" .
                "   - Before filtering on a status/role/type field, use the {code=meaning} enum legend on the GRAPH SCHEMA card, written in the property's type (Integer → 2, String(numeric) → '2')\n" .
                "   - Apply filters exactly as specified in scope definitions\n" .
-               "   - A condition that narrows the result never sits on an OPTIONAL MATCH: there it filters nothing, every row stays and a total covers them all. Use MATCH\n" .
                "   - A name the user gives for a record is how they say it, not how it is stored: match it with toLower(x.name) CONTAINS toLower(\"<its distinctive words>\"), never with =\n" .
                "   - Use DISTINCT when specified to avoid duplicates\n" .
                "   - When returning entity data, JOIN to related entities to get human-readable names (e.g., " . DomainProfile::text('query_rules.join_example') . ")\n\n";

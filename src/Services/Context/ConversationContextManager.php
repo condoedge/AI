@@ -139,6 +139,8 @@ class ConversationContextManager
         $rowCount = count($queryResult['data'] ?? []);
         if ($rowCount > 0) {
             $snapshotUpdate['last_cypher_query'] = $cypherQuery;
+            // The question those rows answered: the same one asked again runs this query again.
+            $snapshotUpdate['last_cypher_question'] = is_string($queryResult['question'] ?? null) ? $queryResult['question'] : null;
             // Always written with last_cypher_query, so the pair never mixes turns.
             $snapshotUpdate['last_generated_cypher'] = $generatedCypher;
             // The label of the records the rows ARE (the companion count's anchor,
@@ -262,6 +264,7 @@ class ConversationContextManager
             'last_result_sample' => $snapshot['last_result_sample'] ?? [],
             'last_result_count' => $snapshot['last_result_count'] ?? 0,
             'last_cypher_query' => $snapshot['last_cypher_query'] ?? null,
+            'last_cypher_question' => $snapshot['last_cypher_question'] ?? null,
             // Older snapshots predate the split: their recorded query is the generated one.
             'last_generated_cypher' => $snapshot['last_generated_cypher'] ?? $snapshot['last_cypher_query'] ?? null,
             'last_anchor_label' => $snapshot['last_anchor_label'] ?? null,

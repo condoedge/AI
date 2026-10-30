@@ -8,6 +8,7 @@ use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\DTOs\QueryUnderstandingResult;
+use Condoedge\Ai\Services\Query\RecordedQuery;
 use Condoedge\Ai\Services\Response\DataAnswerPlan;
 use Condoedge\Ai\Tests\TestCase;
 
@@ -57,6 +58,38 @@ class DataAnswerPlanLeadTest extends TestCase
     private const TEAM_CYPHER = 'MATCH (t:Team) WHERE t.id = 3 OPTIONAL MATCH (u:User) WHERE u.current_team_id = t.id '
         . 'RETURN t.name AS team_name, t.team_type AS team_type, count(DISTINCT u) AS members, t.contact_email AS contact_email, '
         . 't.contact_phone AS contact_phone LIMIT 100';
+
+    /** @test Measured: "what is the difference between the two years?" was told never to add them up. */
+    public function rows_the_request_works_on_are_material_and_the_rules_that_present_rows_yield(): void
+    {
+        $prompt = function (array $metadata): string {
+            $context = new PipelineContext();
+            $context->question = 'What is the difference between the two years?';
+            $context->qu = new QueryUnderstandingResult(questionType: 'data_query', language: 'en');
+            $context->queryResult = new QueryGenerationResult(
+                cypher: 'MATCH (u:Union) RETURN u.name AS union_name, u.year AS year, u.supplier AS supplier, sum(u.billed) AS billed',
+                metadata: $metadata
+            );
+            $context->executionResult = new QueryExecutionResult(success: true, data: [
+                ['union_name' => 'Soho', 'year' => '2021', 'supplier' => 'Hydro', 'billed' => 100.50],
+                ['union_name' => 'Soho', 'year' => '2022', 'supplier' => 'Hydro', 'billed' => 40.25],
+            ]);
+
+            return DataAnswerPlan::for($context)->promptBlock(true);
+        };
+
+        $fresh = $prompt([]);
+        $this->assertStringContainsString('HOMONYMS', $fresh);
+        $this->assertStringNotContainsString('ALREADY SHOWN', $fresh);
+
+        $material = $prompt(['source' => RecordedQuery::SOURCE, 'recorded_query_reason' => RecordedQuery::REASON_GENERATOR]);
+        $this->assertStringContainsString('ALREADY SHOWN', $material);
+        $this->assertStringNotContainsString('HOMONYMS', $material);
+        $this->assertStringNotContainsString('Your FIRST sentence states', $material);
+
+        // The same question asked again gets the rows presented as the first time.
+        $this->assertStringContainsString('HOMONYMS', $prompt(['source' => RecordedQuery::SOURCE, 'recorded_query_reason' => RecordedQuery::REASON_SAME_QUESTION]));
+    }
 
     /** The first ten roster rows of the p17 trace (name, email, role code). */
     private const ROSTER_HEAD = [

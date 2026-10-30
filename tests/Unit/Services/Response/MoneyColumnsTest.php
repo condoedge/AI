@@ -26,6 +26,12 @@ class MoneyColumnsTest extends TestCase
         ]]);
     }
 
+    /** @test Measured: `AS coût` was not money, so the only total the answer was told to lead with was the due amount. */
+    public function an_alias_in_the_users_language_is_a_column_like_any_other(): void
+    {
+        $this->assertSame(['coût', 'frais'], MoneyColumns::fromCypher('MATCH (b:Bill) RETURN b.total_amount AS coût, b.due_amount AS frais'));
+    }
+
     /** @test */
     public function a_projected_money_property_is_money_through_functions_and_aliases(): void
     {

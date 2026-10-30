@@ -36,6 +36,8 @@ class AiManagerUploadsYieldToDataTest extends TestCase
 
     private bool $outOfReach = false;
 
+    private string $composed = 'ok';
+
     private array $factsReply = ['answered' => false, 'answer' => ''];
 
     public function setUp(): void
@@ -75,7 +77,7 @@ class AiManagerUploadsYieldToDataTest extends TestCase
         $executor = Mockery::mock(QueryExecutorInterface::class);
         $executor->shouldReceive('execute')->andReturn(new QueryExecutionResult(success: true, data: $rows, stats: [], metadata: [], errors: []));
         $responder = Mockery::mock(ResponseGeneratorInterface::class);
-        $responder->shouldReceive('generate')->andReturn(['answer' => 'ok', 'insights' => [], 'visualizations' => [], 'metadata' => []]);
+        $responder->shouldReceive('generate')->andReturn(['answer' => $this->composed, 'insights' => [], 'visualizations' => [], 'metadata' => []]);
         $files = Mockery::mock(FileContextProvider::class);
         $files->shouldReceive('getFileContext')->andReturn(['relevant_files' => $found, 'file_count' => count($found)]);
 
@@ -222,7 +224,7 @@ class AiManagerUploadsYieldToDataTest extends TestCase
     }
 
     /** @test */
-    public function a_calculation_out_of_reach_is_refused_without_a_query_even_beside_a_help_article(): void
+    public function a_calculation_out_of_reach_runs_no_query_and_the_help_articles_may_answer_the_rest(): void
     {
         $this->limitAudience();
         $this->outOfReach = true;
@@ -230,6 +232,19 @@ class AiManagerUploadsYieldToDataTest extends TestCase
         $ctx = $this->turn('data_query', []);
 
         $this->assertFalse($ctx->queryResult->hasCypher());
+        $this->assertTrue($ctx->dataOutOfReach);
+        $this->assertSame('ok', $this->lastAnswer, 'A mixed question: what the articles answer is composed.');
+    }
+
+    /** @test */
+    public function the_models_marker_becomes_the_refusal_sentence(): void
+    {
+        $this->limitAudience();
+        $this->outOfReach = true;
+        $this->composed = \Condoedge\Ai\DTOs\PipelineContext::OUT_OF_REACH_MARKER;
+
+        $this->turn('data_query', []);
+
         $this->assertSame((string) trans('ai.error.no_access'), $this->lastAnswer);
     }
 

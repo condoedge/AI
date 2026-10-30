@@ -343,6 +343,19 @@ class TableRendererTest extends TestCase
         $this->assertSame(1, $out['marked']);
     }
 
+    /** @test Measured: `b.due_amount AS frais` told the model the fees were 0,00 $. */
+    public function in_another_language_an_amounts_alias_yields_to_the_hosts_word_for_its_property(): void
+    {
+        config(['entities' => ['Bill' => ['graph' => ['label' => 'Bill'], 'metadata' => ['money_properties' => ['due_amount', 'total_amount']]]]]);
+        app('translator')->addLines(['*.Due Amount' => 'Montant dû'], 'fr', '*');
+        $cypher = 'MATCH (b:Bill) RETURN b.number AS facture, b.due_amount AS frais, b.total_amount AS coût';
+
+        $projections = TableRenderer::headerProjections($cypher, 'fr');
+
+        $this->assertSame(['frais'], array_keys($projections), 'Not the text column; not the amount the host has no word for.');
+        $this->assertSame('Due Amount', (new TableRenderer())->label('frais', [], $projections));
+    }
+
     /** @test */
     public function without_marked_values_nothing_is_marked(): void
     {

@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Tests\Unit\Services\Response;
 
 use Condoedge\Ai\Services\Response\AnswerValidator;
 use Condoedge\Ai\Services\Response\EntityIdIndex;
+use Condoedge\Ai\Support\ShownCalculation;
 use Condoedge\Ai\Support\StatedNumber;
 use Condoedge\Ai\Tests\TestCase;
 
@@ -255,6 +256,63 @@ class AnswerValidatorTest extends TestCase
         $this->assertFalse($validator->validate('You owe $10,493.17.')[0]['fixable_deterministically']);
         // Without a single known grand total nothing is ever replaced.
         $this->assertFalse((new AnswerValidator(evidence: [1.0], grandTotals: [5.0, 6.0]))->validate('$11,943.17')[0]['fixable_deterministically']);
+    }
+
+    /** @test */
+    public function a_calculated_figure_stands_only_with_an_operation_that_gives_it(): void
+    {
+        $validator = new AnswerValidator(evidence: [1.05, 0.5]);
+
+        $this->assertSame([], $validator->validate('The result is 1.05 × 2 + 0.5 = 2.60.'));
+        $this->assertSame([AnswerValidator::NUMBER_UNSUPPORTED], $this->types($validator->validate('The result is 2.60.')));
+        $this->assertSame([AnswerValidator::NUMBER_UNSUPPORTED], $this->types($validator->validate('The result is 1.05 × 2 + 0.5 = 3.70.')));
+        $this->assertSame([AnswerValidator::NUMBER_UNSUPPORTED], $this->types($validator->validate('The result is 7.77 × 2 = 15.54.')));
+    }
+
+    /** @test */
+    public function a_result_that_slipped_is_patched_without_a_retry_in_the_answers_typography(): void
+    {
+        $validator = new AnswerValidator(evidence: [11996.81, 5.0]);
+        $answer = 'Cela donne 11 996,81 $ x 1,05 = 12 586,65 $.';
+
+        $violations = $validator->validate($answer);
+        $this->assertTrue($violations[0]['fixable_deterministically']);
+
+        [$patched] = $validator->patch($answer, $violations);
+        $this->assertStringContainsString("12\u{00A0}596,65", $patched);
+        $this->assertSame([], $validator->validate($patched));
+    }
+
+    /** @test Measured 3 of 3: the 0.5 was never added, and the step's own figure was stated as the result. */
+    public function a_step_stated_as_the_result_is_corrected_and_the_step_stays(): void
+    {
+        $validator = new AnswerValidator(evidence: [819.82, 0.5]);
+        $answer = '$819.82 x 2 + 0.5 = $1639.64 + 0.5 = $1639.64.';
+
+        $violations = $validator->validate($answer);
+        $this->assertTrue($violations[0]['fixable_deterministically']);
+
+        [$patched] = $validator->patch($answer, $violations);
+        $this->assertSame('$819.82 x 2 + 0.5 = $1639.64 + 0.5 = $1,640.14.', $patched);
+        $this->assertSame([], $validator->validate($patched));
+    }
+
+    /** @test Every figure of a calculation that holds may be stated, the steps and the factor too. */
+    public function nothing_of_a_calculation_that_holds_is_flagged(): void
+    {
+        $validator = new AnswerValidator(evidence: [800.0, 15.0]);
+
+        $this->assertSame([], $validator->validate('With tax: $800 + ($800 * 0.15) = $800 + $120 = $920.'));
+        $this->assertSame([], (new AnswerValidator(evidence: [57015.71, 158393.80]))->validate('(57,015.71 / 158,393.80) * 100 = 36.0 %'));
+    }
+
+    /** @test */
+    public function the_retry_says_how_to_show_a_calculation_the_user_asked_for(): void
+    {
+        $validator = new AnswerValidator(evidence: [1.05, 0.5]);
+        $violations = $validator->validate('The result is 2.60.');
+
+        $this->assertStringContainsString(ShownCalculation::INSTRUCTION, $validator->retryInstruction($violations, 'The result is 2.60.'));
     }
 
     /** @test */

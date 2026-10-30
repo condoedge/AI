@@ -779,6 +779,10 @@ class ResponseGenerator implements ResponseGeneratorInterface
             if (preg_match_all('/\d+/', $value, $runs)) {
                 array_push($figures, ...array_map('floatval', $runs[0]));
             }
+            // A decimal glued to a word ("0.5cad") is still the figure the user gave.
+            if (preg_match_all('/\d+[.,]\d+/', $value, $decimals)) {
+                array_push($figures, ...array_map(static fn (string $d): float => (float) str_replace(',', '.', $d), $decimals[0]));
+            }
 
             return $figures;
         }

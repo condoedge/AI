@@ -7,6 +7,7 @@ namespace Condoedge\Ai\Services\Response;
 use Condoedge\Ai\Services\ResponseSections\SelfReferenceNoticeSection;
 use Condoedge\Ai\Support\AliasNormalizer;
 use Condoedge\Ai\Support\ArticleLocator;
+use Condoedge\Ai\Support\ShownCalculation;
 use Condoedge\Ai\Support\StatedNumber;
 
 /**
@@ -209,8 +210,16 @@ final class AnswerValidator
 
         $violations = [];
         $seen = [];
-        foreach (StatedNumber::quantities($this->numberText($answer)) as $quantity) {
-            if ($this->ignorable($quantity) || StatedNumber::supported($quantity['values'], $quantity['decimals'], $this->evidence)) {
+        $text = $this->numberText($answer);
+        $calculated = ShownCalculation::figures($text, $this->evidence);
+        $slips = ShownCalculation::corrections($text, $this->evidence);
+        foreach (StatedNumber::quantities($text) as $quantity) {
+            // A result that slipped is wrong even when the same figure is known elsewhere:
+            // "819.82 x 2 + 0.5 = 1639.64 + 0.5 = 1639.64" states a real step as the result.
+            $slipped = isset($slips[$quantity['raw']]);
+            if (!$slipped && ($this->ignorable($quantity)
+                || StatedNumber::supported($quantity['values'], $quantity['decimals'], $this->evidence)
+                || StatedNumber::supported($quantity['values'], $quantity['decimals'], $calculated))) {
                 continue;
             }
             if (isset($seen[$quantity['raw']])) {
@@ -218,12 +227,14 @@ final class AnswerValidator
             }
             $seen[$quantity['raw']] = true;
 
-            $replacement = $this->totalReplacement($quantity);
+            $replacement = $slipped
+                ? $this->asWritten($slips[$quantity['raw']], $quantity['raw'], $quantity['decimals'])
+                : $this->totalReplacement($quantity);
             $violations[] = $this->violation(
                 self::NUMBER_UNSUPPORTED,
                 $quantity['raw'],
                 $replacement !== null,
-                ['raw' => $quantity['raw'], 'replacement' => $replacement]
+                ['raw' => $quantity['raw'], 'replacement' => $replacement, 'keeps_operands' => $slipped]
             );
         }
 
@@ -320,8 +331,10 @@ final class AnswerValidator
                 // Callback: a money replacement ("$1,211.48") must never be read as a
                 // back-reference by preg_replace.
                 $replacement = (string) $violation['replacement'];
+                // A corrected result: the same figure used as an operand is that step's, and stays.
+                $notOperand = ($violation['keeps_operands'] ?? false) ? ShownCalculation::NOT_AN_OPERAND : '';
                 $answer = (string) preg_replace_callback(
-                    '/(?<![\p{L}\p{N}_])' . preg_quote($violation['raw'], '/') . '(?![\p{L}\p{N}_])/u',
+                    '/(?<![\p{L}\p{N}_])' . preg_quote($violation['raw'], '/') . '(?![\p{L}\p{N}_])' . $notOperand . '/u',
                     static fn (): string => $replacement,
                     $answer
                 );
@@ -575,7 +588,7 @@ final class AnswerValidator
                 ? ' Use only figures given to you — e.g. ' . implode(', ', array_map(fn (float $f) => $this->figure($f), array_slice($this->keyFigures, 0, 12))) . '.'
                 : ' Use only figures that appear in the data or the documents.';
             $rules[] = "NUMBERS: {$raw} " . (count($numbers) === 1 ? 'does' : 'do') . ' not appear in the data or the '
-                . "documents.{$known} Never add, subtract or re-derive figures yourself.";
+                . "documents.{$known} Never add, subtract or re-derive figures on your own. " . ShownCalculation::INSTRUCTION;
         }
 
         $links = array_values(array_filter($violations, static fn (array $v) => $v['type'] === self::LINK_INVALID));
@@ -886,12 +899,15 @@ final class AnswerValidator
         if (!$slip) {
             return null;
         }
-        // Keep the answer's own typography: decimal comma ⇒ space-grouped French form.
-        $french = preg_match('/,\d{1,2}$/', $quantity['raw']) === 1;
+        return $this->asWritten($total, $quantity['raw'], 2);
+    }
 
-        return $french
-            ? number_format($total, 2, ',', "\u{00A0}")
-            : number_format($total, 2, '.', ',');
+    /** A figure in the typography of the one it replaces: decimal comma ⇒ space-grouped French form. */
+    private function asWritten(float $value, string $raw, int $decimals): string
+    {
+        return preg_match('/,\d{1,2}$/', $raw) === 1
+            ? number_format($value, $decimals, ',', "\u{00A0}")
+            : number_format($value, $decimals, '.', ',');
     }
 
     /** Two ADJACENT digits swapped ("11,943.17" for 11,493.17), compared at cent precision. */

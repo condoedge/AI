@@ -148,6 +148,13 @@ class ConversationContextSection extends BasePromptSection
                 . "Do NOT write an unrelated fresh query and do NOT drop columns the user was already shown.\n";
         }
 
+        // The rows shown earlier are not this turn's (RecordedQuery): nothing else brings them back.
+        if (!empty($conversationContext['last_cypher_query'])) {
+            $output .= "\nWhen the Previous Query already returns what this request asks, or the figures or records it works on (to calculate, compare or rank them), do not write it again: reply "
+                . "{\"needs_query\": false, \"cypher\": null, \"reuse_previous\": true, \"reason\": \"<why>\"}. It runs again and the "
+                . "answer is written from its rows; the rows of earlier turns are not otherwise available to the answer.\n";
+        }
+
         // Follow-up instructions: each bullet is gated on the data it references, so the model
         // is never handed guidance about context that isn't present.
         $output .= $this->formatFollowUpInstructions($conversationContext);

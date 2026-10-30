@@ -33,6 +33,9 @@ namespace Condoedge\Ai\Support;
  */
 final class StatedNumber
 {
+    /** One number as answers write it: locale digit groups and decimal mark. */
+    public const QUANTITY = '[1-9]\d{0,2}(?:[,.\x{00A0}\x{202F} ]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d+)?';
+
     /** Digit-grouping separators between 3-digit groups (comma, dot, space, NBSP, narrow NBSP). */
     private const GROUP_SEPARATOR_CLASS = '[,\. \x{00A0}\x{202F}]';
 
@@ -170,7 +173,7 @@ final class StatedNumber
         $text = (string) preg_replace_callback('/^[ \t]*\d+[.)](?=\s)/m', $blank, $text);
         $text = (string) preg_replace_callback('/\d+(?:[\/:\-–]\d+)+/u', $blank, $text);
 
-        $pattern = '/(?<![\p{L}\p{N}_])([1-9]\d{0,2}(?:[,.\x{00A0}\x{202F} ]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d+)?)(?![\p{L}\p{N}_])/u';
+        $pattern = '/(?<![\p{L}\p{N}_])(' . self::QUANTITY . ')(?![\p{L}\p{N}_])/u';
         if (!preg_match_all($pattern, $text, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
             return [];
         }

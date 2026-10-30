@@ -26,6 +26,7 @@ use Condoedge\Ai\Services\Query\EmptyResultInspector;
 use Condoedge\Ai\Services\Query\FanOutCollapse;
 use Condoedge\Ai\Services\Query\PreviousResultExport;
 use Condoedge\Ai\Services\Query\RecordParentEnricher;
+use Condoedge\Ai\Services\Query\RecordedQuery;
 use Condoedge\Ai\Services\Response\AskerFactsAnswerer;
 use Condoedge\Ai\Services\Response\ConversationalReplyComposer;
 use Condoedge\Ai\Services\Response\DigestResponseComposer;
@@ -3719,6 +3720,39 @@ class AiManager
      * Generate Cypher query and execute it, or skip for knowledge-only questions.
      */
     /**
+     * The query this turn's data comes from, one source per turn: the recorded query when the same
+     * question comes back (no model call) or when the generator says the recorded query already
+     * answers it, else what the generator writes. All of them then run the same path.
+     */
+    private function turnQuery(string $question, PipelineContext $ctx, array $options): QueryGenerationResult
+    {
+        $recorded = $ctx->qu->questionType === 'data_query' && is_array($ctx->conversationContext)
+            ? RecordedQuery::fromConversation($ctx->conversationContext)
+            : null;
+
+        if ($recorded?->answers($question)) {
+            $this->emitStage($ctx->observer, RecordedQuery::SOURCE, ['reason' => RecordedQuery::REASON_SAME_QUESTION]);
+
+            return $recorded->asQueryResult(RecordedQuery::REASON_SAME_QUESTION);
+        }
+
+        $generated = $this->observeStage(
+            $ctx->observer,
+            'query_generation',
+            fn (): QueryGenerationResult => $this->generateQueryResult($question, $ctx, $options),
+            fn (QueryGenerationResult $r): array => $this->generationTrace($r)
+        );
+
+        if ($recorded !== null && ($generated->metadata['reuse_previous'] ?? false) === true) {
+            $this->emitStage($ctx->observer, RecordedQuery::SOURCE, ['reason' => RecordedQuery::REASON_GENERATOR]);
+
+            return $recorded->asQueryResult(RecordedQuery::REASON_GENERATOR);
+        }
+
+        return $generated;
+    }
+
+    /**
      * ai.file_context.uploads_yield_to_data: an uploaded file is a dated picture of the data. On a data
      * question it leaves the turn when the query returned rows (beside fresh rows it can only contradict
      * them) and whenever the asker's audience limits what they read (a figure the app does not show them
@@ -3872,12 +3906,7 @@ class AiManager
             return $ctx;
         }
 
-        $queryResult = $this->observeStage(
-            $ctx->observer,
-            'query_generation',
-            fn (): QueryGenerationResult => $this->generateQueryResult($question, $ctx, $options),
-            fn (QueryGenerationResult $r): array => $this->generationTrace($r)
-        );
+        $queryResult = $this->turnQuery($question, $ctx, $options);
 
         // Thread pipeline identity/provenance into execution so the executor can
         // (a) team-filter against the real user ($options['user']) rather than
@@ -4444,16 +4473,15 @@ class AiManager
     }
 
     /**
-     * Regeneration after a repairable execution error (Task 5.5), at most
-     * ai.query_generation.execution_repair_attempts times: the generator receives
-     * its OWN latest draft + the latest Neo4j error (never the scoped rewrite), gets
-     * a single LLM attempt per repair (the draft is re-validated, schema-checked and
+     * ONE regeneration after a repairable execution error (Task 5.5): the generator
+     * receives its OWN failed draft + the Neo4j error (never the scoped rewrite),
+     * gets a single LLM attempt (the draft is re-validated, schema-checked and
      * subset-checked as usual), and the new draft runs through the SAME scoped
-     * executor. Observed as a query_generation + execution stage pair per repair; the
+     * executor. Observed as a second query_generation + execution stage pair; the
      * execution stage carries repair_attempted / repair_succeeded.
      *
-     * Falls back to the failure in hand when regeneration yields nothing new; stops
-     * early at a failure no regeneration can fix (timeout, security, infrastructure).
+     * Falls back to the ORIGINAL failure (existing error answer) when regeneration
+     * yields nothing new; to the second failure when the repaired query fails too.
      *
      * @return array{0: QueryGenerationResult, 1: QueryExecutionResult}
      */
@@ -4466,56 +4494,45 @@ class AiManager
         QueryExecutionResult $failedExecution,
         \Throwable $failure
     ): array {
-        $query = $failedQuery;
-        $execution = $failedExecution;
-        $attempts = max(1, (int) config('ai.query_generation.execution_repair_attempts', 1));
+        $repairOptions = array_merge($options, [
+            'repair' => [
+                'cypher' => (string) $failedQuery->cypher,
+                'error' => ExecutionErrorClassifier::feedback($failure),
+            ],
+            'max_retries' => 1,
+        ]);
 
-        for ($attempt = 1; $attempt <= $attempts; $attempt++) {
-            $repairOptions = array_merge($options, [
-                'repair' => [
-                    'cypher' => (string) $query->cypher,
-                    'error' => ExecutionErrorClassifier::feedback($failure),
-                ],
-                'max_retries' => 1,
-            ]);
+        $regenerated = $this->observeStage(
+            $ctx->observer,
+            'query_generation',
+            fn (): QueryGenerationResult => $this->generateQueryResult($question, $ctx, $repairOptions),
+            fn (QueryGenerationResult $r): array => $this->generationTrace($r) + ['execution_repair' => true]
+        );
 
-            $regenerated = $this->observeStage(
-                $ctx->observer,
-                'query_generation',
-                fn (): QueryGenerationResult => $this->generateQueryResult($question, $ctx, $repairOptions),
-                fn (QueryGenerationResult $r): array => $this->generationTrace($r) + ['execution_repair' => true]
-            );
+        $ctx->observer->stageStarted('execution');
+        $start = hrtime(true);
 
-            $ctx->observer->stageStarted('execution');
-            $start = hrtime(true);
-
-            if (!$regenerated->hasCypher() || trim((string) $regenerated->cypher) === trim((string) $query->cypher)) {
-                // Nothing new to run: keep the failure in hand.
-                $ctx->observer->stageFinished(
-                    'execution',
-                    $this->executionTrace($execution) + ['repair_attempted' => true, 'repair_succeeded' => false, 'repair_skipped' => true],
-                    $this->elapsedMs($start)
-                );
-
-                return [$query, $execution];
-            }
-
-            [$execution, $failure] = $this->runExecution($regenerated->cypher, $execOptions, $ctx, $question, $regenerated->parameters);
-            $query = $regenerated;
-            $succeeded = $failure === null && $execution->success && empty($execution->errors);
-
+        if (!$regenerated->hasCypher() || trim((string) $regenerated->cypher) === trim((string) $failedQuery->cypher)) {
+            // Nothing new to run: keep the original failure.
             $ctx->observer->stageFinished(
                 'execution',
-                $this->executionTrace($execution) + ['repair_attempted' => true, 'repair_succeeded' => $succeeded],
+                $this->executionTrace($failedExecution) + ['repair_attempted' => true, 'repair_succeeded' => false, 'repair_skipped' => true],
                 $this->elapsedMs($start)
             );
 
-            if ($failure === null || !ExecutionErrorClassifier::isRepairable($failure)) {
-                break;
-            }
+            return [$failedQuery, $failedExecution];
         }
 
-        return [$query, $execution];
+        [$result, $secondFailure] = $this->runExecution($regenerated->cypher, $execOptions, $ctx, $question, $regenerated->parameters);
+        $succeeded = $secondFailure === null && $result->success && empty($result->errors);
+
+        $ctx->observer->stageFinished(
+            'execution',
+            $this->executionTrace($result) + ['repair_attempted' => true, 'repair_succeeded' => $succeeded],
+            $this->elapsedMs($start)
+        );
+
+        return [$regenerated, $result];
     }
 
     /**
@@ -4542,6 +4559,7 @@ class AiManager
         array $options
     ): void {
         $proven = $queryResult->hasCypher()
+            && ($queryResult->metadata['source'] ?? null) !== RecordedQuery::SOURCE
             && $executionResult->success
             && empty($executionResult->errors)
             && ($executionResult->metadata['safe_stop'] ?? false) !== true
@@ -4873,7 +4891,7 @@ class AiManager
                 'format' => $options['format'] ?? 'text',
                 'metadata' => ['status' => 'asker_facts'],
             ];
-        } elseif (!$hasData && ($denied || ($ctx->dataOutOfReach && (!$hasFileContext || ($ctx->queryResult->metadata['generation_skipped'] ?? null) === 'out_of_reach')))) {
+        } elseif (!$hasData && ($denied || ($ctx->dataOutOfReach && !$hasFileContext))) {
             $branch = 'access_denied';
             $responseResult = [
                 'answer' => trans('ai.error.no_access', [], $ctx->qu->language !== '' ? $ctx->qu->language : null),
@@ -4990,6 +5008,15 @@ class AiManager
                 default => 'data',
             };
             $responseResult = $this->generateResponse($ctx, $options);
+        }
+
+        if ($ctx->dataOutOfReach && str_contains((string) ($responseResult['answer'] ?? ''), PipelineContext::OUT_OF_REACH_MARKER)) {
+            $branch = 'access_denied';
+            $responseResult = [
+                'answer' => trans('ai.error.no_access', [], $ctx->qu->language !== '' ? $ctx->qu->language : null),
+                'format' => $options['format'] ?? 'text',
+                'metadata' => ['status' => 'access_denied'],
+            ];
         }
 
         if ($exportSource === null && in_array($branch, ['data', 'knowledge_query', 'file_listing', 'empty_result', 'partial_data'], true)) {
@@ -5137,17 +5164,8 @@ class AiManager
                     'conversation_id' => $options['conversation_id'] ?? null,
                 ];
 
-                // P-1: a recorded query bound PII tokens as `$pii_…` parameters. Only
-                // keys of that exact shape are honoured (review #5): the snapshot is
-                // stored data, so nothing else (e.g. a forged `ai_team_ids`) may ride
-                // into the re-execution or its companion counts.
-                $recordedParams = array_filter(
-                    is_array($conversation['last_cypher_parameters'] ?? null) ? $conversation['last_cypher_parameters'] : [],
-                    static fn ($value, $key): bool => is_string($key)
-                        && preg_match('/^pii_[a-f0-9]{12}$/', $key) === 1
-                        && is_string($value),
-                    ARRAY_FILTER_USE_BOTH
-                );
+                // P-1: a recorded query bound PII tokens as `$pii_…` parameters; only those ride along.
+                $recordedParams = RecordedQuery::fromConversation($conversation)->parameters;
                 // Eval p11 D1c: the recorded query carries the DISPLAY cap
                 // (`LIMIT 100`, or the executor's default) — the file was "100 of
                 // 525". Re-run it without that cap, up to
@@ -6040,6 +6058,9 @@ class AiManager
             // still has (repair budget spent; the draft ran as written).
             'precedence_repaired' => array_values((array) ($metadata['precedence_repaired'] ?? [])),
             'precedence_violations' => array_values((array) ($metadata['precedence_violations'] ?? [])),
+            // Text conditions on an OPTIONAL MATCH the total does not use: sent back, and still in the final draft.
+            'optional_filter_repaired' => array_values((array) ($metadata['optional_filter_repaired'] ?? [])),
+            'optional_filter_violations' => array_values((array) ($metadata['optional_filter_violations'] ?? [])),
         ];
         if (($metadata['error'] ?? false) === true) {
             $trace['error'] = (string) ($metadata['error_message'] ?? 'generation failed');
