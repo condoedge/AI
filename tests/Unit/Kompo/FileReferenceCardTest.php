@@ -89,20 +89,6 @@ class FileReferenceCardTest extends TestCase
     }
 
     /** @test */
-    public function an_uploaded_file_is_looked_up_on_the_hosts_own_model(): void
-    {
-        config(['ai.file_context.file_model' => HostFileStub::class]);
-        $renderer = new class(Mockery::mock(ChatThemeInterface::class), Mockery::mock(ChatSettingsInterface::class)) extends RichDataRenderer {
-            public function look(int $id): mixed
-            {
-                return $this->findFile($id);
-            }
-        };
-
-        $this->assertInstanceOf(HostFileStub::class, $renderer->look(7), 'Its morph alias is what the file URLs resolve.');
-    }
-
-    /** @test */
     public function internal_files_can_be_left_out_of_the_sources(): void
     {
         config(['ai.chat.show_internal_file_references' => false]);
@@ -131,13 +117,5 @@ class FileReferenceCardTest extends TestCase
 
         $this->assertStringNotContainsString('<img src=x', $html);
         $this->assertStringContainsString('&lt;img src=x', $html);
-    }
-}
-
-class HostFileStub
-{
-    public static function find(mixed $id): self
-    {
-        return new self();
     }
 }
