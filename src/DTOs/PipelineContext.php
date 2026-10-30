@@ -41,6 +41,12 @@ class PipelineContext
     /** File context from FileContextProvider */
     public array $fileContext = [];
 
+    /** What the host states about the asker's own records (Audiences::askerFacts): grounds an answer like rows do. */
+    public array $askerFacts = [];
+
+    /** A data question the asker's audience could not even query: the answer says it is not available to them. */
+    public bool $dataOutOfReach = false;
+
     /** Conversation context from chat pipeline */
     public array $conversationContext = [];
 

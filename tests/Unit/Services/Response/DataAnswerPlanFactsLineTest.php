@@ -192,6 +192,16 @@ class DataAnswerPlanFactsLineTest extends TestCase
         $this->assertSame(['count', 'groups', 'not_recorded'], $plan->factsStated());
     }
 
+    /** @test A lead that copied the printed line word for word: the reader sees the line once. */
+    public function a_lead_that_copied_the_printed_line_says_it_once(): void
+    {
+        $line = '37 contacts across 12 unions. Not recorded: Bm Role.';
+
+        $answer = $this->boardPlan()->finalize("Here are the board members.\n\n{$line}\n\n{{table}}", true, 'en');
+
+        $this->assertSame(1, substr_count($answer, $line));
+    }
+
     /** @test …and the model is no longer asked to say any of it: one sentence that answers the question. */
     public function p18_a_board_the_lead_instruction_no_longer_demands_what_code_prints(): void
     {

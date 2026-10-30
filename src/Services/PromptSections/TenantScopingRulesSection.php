@@ -80,6 +80,9 @@ class TenantScopingRulesSection extends BasePromptSection
         $lines[] = '  - Apply the filter to the node\'s OWN variable; reuse the variable, do not rebind it.';
         $lines[] = "  - {$param} is provided automatically — never inline team ids as a list.";
         $lines[] = '  - Combine multiple node filters with AND in a single WHERE per query part.';
+        if ($rowScoped) {
+            $lines[] = "  - These filters replace any team filter shown elsewhere in these instructions: never compare a team_id with {$param}.";
+        }
         // Tenant-specific UNION rules only; the generic "same column aliases" rule is in
         // QueryRulesSection so it ships even with scoping off (review M-3).
         $lines[] = 'UNION RULES (critical):';

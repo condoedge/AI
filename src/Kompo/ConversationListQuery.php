@@ -88,8 +88,9 @@ class ConversationListQuery extends Query
         )->class('px-4 py-3 cursor-pointer transition-all border-l-4 ' . ($isSelected
             ? $this->theme()->selectedBg() . ' ' . $this->theme()->selectedBorder()
             : 'hover:bg-gray-100 border-transparent'))
-         ->selfPost('selectConversation', ['id' => $conversation->id])
-         ->refresh([self::ID, MessagesQuery::ID]);
+         ->onClick(fn($e) => $e->run(AbstractChatSurface::closeHistoryJs())
+             && $e->selfPost('selectConversation', ['id' => $conversation->id])
+                 ->refresh([self::ID, MessagesQuery::ID]));
     }
 
     protected function getPreviewText($message): string
@@ -109,16 +110,18 @@ class ConversationListQuery extends Query
             return '';
         }
 
+        $date = $date->copy()->locale(app()->getLocale());
+
         if ($date->isToday()) {
-            return $date->format('g:i A');
+            return $date->isoFormat('LT');
         }
         if ($date->isYesterday()) {
             return __('ai.chat.yesterday');
         }
         if ($date->isCurrentWeek()) {
-            return $date->format('l');
+            return $date->isoFormat('dddd');
         }
-        return $date->format('M j');
+        return $date->isoFormat('D MMM');
     }
 
     public function selectConversation($id)

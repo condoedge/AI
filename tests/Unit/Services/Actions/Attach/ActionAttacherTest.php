@@ -874,6 +874,60 @@ class ActionAttacherTest extends TestCase
         $this->assertSame('Team settings', $de->invocations()[0]['text']);
     }
 
+    /**
+     * @test D13: a RECORD chip says its host words in the QUESTION's language like every other
+     * chip: the action label of a nameless record and the entity word before a bare code ("Open
+     * invoice — Unit 1-101" under a French answer). Those words are glued to data, so the
+     * render-time translation of a whole label can never reach them.
+     */
+    public function record_chip_host_words_are_said_in_the_question_language(): void
+    {
+        app('translator')->addLines(['*.Invoice PDF' => 'Facture PDF', '*.unit' => 'unité', '*.Account statement' => 'Relevé de compte'], 'fr');
+        app()->setLocale('en');
+
+        $nameless = 'MATCH (i:Invoice)-[:CUSTOMER]->(u:Unit) RETURN i.id AS invoice_id, i.due_amount AS due, u.name AS unit_name, u.id AS unit_id';
+        $rows = [
+            ['invoice_id' => 700, 'due' => 10.5, 'unit_name' => '301', 'unit_id' => 12],
+            ['invoice_id' => 701, 'due' => 20.0, 'unit_name' => '302', 'unit_id' => 13],
+        ];
+        $list = ['intent' => 'list', 'entityTypes' => ['Invoice']];
+
+        $this->assertSame(
+            ['pdf|Invoice|700|Facture PDF — Unité 301', 'pdf|Invoice|701|Facture PDF — Unité 302'],
+            array_slice($this->chipLines($this->attach($this->turn($rows, $nameless, $list + ['language' => 'fr']))->invocations()), 0, 2)
+        );
+
+        // One record: the chip that names it AND its secondary actions.
+        $this->assertSame([
+            'view|Unit|159|Unité 310',
+            'statement|Unit|159|Relevé de compte',
+            'add_access|Unit|159|Add access', // no French line: the host's label stands
+        ], $this->chipLines($this->attach($this->turn(
+            [['unit_id' => 159, 'unit_name' => '310', 'union_name' => 'Carré Soho Phase 3']],
+            self::HOMONYM_CYPHER,
+            ['intent' => 'lookup', 'language' => 'fr']
+        ))->invocations()));
+
+        // An English question keeps the declared words, whatever the app locale.
+        app()->setLocale('fr');
+        $this->assertSame(
+            ['pdf|Invoice|700|Invoice PDF — Unit 301', 'pdf|Invoice|701|Invoice PDF — Unit 302'],
+            array_slice($this->chipLines($this->attach($this->turn($rows, $nameless, $list))->invocations()), 0, 2)
+        );
+    }
+
+    /** @test D13: the host's line for the entity word is kept as written, not Title Cased word by word. */
+    public function a_translated_entity_word_only_gets_its_first_letter_raised(): void
+    {
+        app('translator')->addLines(['*.unit' => 'unité de condo'], 'fr');
+
+        $this->assertSame('view|Unit|159|Unité de condo 310', $this->chipLines($this->attach($this->turn(
+            [['unit_id' => 159, 'unit_name' => '310', 'union_name' => 'Carré Soho Phase 3']],
+            self::HOMONYM_CYPHER,
+            ['intent' => 'lookup', 'language' => 'fr']
+        ))->invocations())[0]);
+    }
+
     // ------------------------------------------------- B2 on a follow-up (eval p16-B E8)
 
     /** Eval p16-B long-conversation-resilience t0: "I wanna know the members of my team with their roles." */

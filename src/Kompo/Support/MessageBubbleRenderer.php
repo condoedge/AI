@@ -248,7 +248,7 @@ class MessageBubbleRenderer
                 // "…" literal — an answer with a quote or a line break broke the button, and
                 // answer text could close the string and run as script (2026-10-21).
                 ->onClick(fn ($e) => $e->run('() => {navigator.clipboard?.writeText('
-                        . json_encode((string) $message->content, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE)
+                        . json_encode($this->contentLinkProcessor->stripLinks((string) $message->content), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE)
                         . ')}')
                     && $e->alert('ai.messages.copied'));
         }

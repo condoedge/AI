@@ -685,6 +685,11 @@ final class DataAnswerPlan
      */
     private function boundedLead(string $lead, array $facts, array $headers = []): string
     {
+        // The line is printed below the lead: a lead that copied it word for word would say it twice.
+        if ($facts['line'] !== '') {
+            $lead = trim(str_replace($facts['line'], '', $lead));
+        }
+
         try {
             $notes = $this->promptNotes
                 ?? $this->requiringNotes($this->homonymLead(10, true) || in_array('homonyms', $facts['stated'], true), $facts['stated']);

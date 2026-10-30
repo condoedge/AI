@@ -12,6 +12,15 @@ namespace Condoedge\Ai\Support;
  * processing, scheduled tasks, the admin review page) are forced off — whatever the host
  * set for them individually. The host's code (views mounting the chat, menu links checking
  * Route::has) needs no change to ship with the assistant off.
+ *
+ * Off, NOTHING is ingested and nothing leaves the process. The container hands out no-op
+ * clients for the graph, the vectors, the embeddings and the LLM (AiServiceProvider,
+ * LlmResolver), so no API key or server is needed either. Above them: the commands say they
+ * did nothing and succeed (SkippedWhenAiDisabled), the jobs and queued file events already on
+ * a queue return, the file events queue nothing, AI::ingest/sync/remove return at once.
+ *
+ * Read once per process: after changing AI_ENABLED, clear a cached config and restart the
+ * queue workers (a running worker keeps the value it started with).
  */
 final class AiFeature
 {

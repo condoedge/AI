@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Jobs;
 
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Support\AiFeature;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -61,6 +62,10 @@ class RemoveEntityJob implements ShouldQueue
      */
     public function handle(): void
     {
+        if (!AiFeature::enabled()) {
+            return; // switched off since the job was queued
+        }
+
         try {
             AI::remove($this->entity);
 

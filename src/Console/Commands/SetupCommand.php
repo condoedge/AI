@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Console\Commands;
 
 use Condoedge\Ai\Console\Commands\Concerns\FlushesGraphSchemaCache;
+use Condoedge\Ai\Console\Commands\Concerns\SkippedWhenAiDisabled;
 use Illuminate\Console\Command;
 
 /**
@@ -25,6 +26,7 @@ use Illuminate\Console\Command;
 class SetupCommand extends Command
 {
     use FlushesGraphSchemaCache;
+    use SkippedWhenAiDisabled;
 
     protected $signature = 'ai:setup
         {--discover : Also run ai:discover before ingestion (overwrites existing config)}

@@ -166,6 +166,42 @@ class ChatComponentsBootTest extends TestCase
     }
 
     /** @test */
+    public function below_md_every_surface_is_one_column_with_its_conversation_list_behind_a_button(): void
+    {
+        foreach ([new AiChatModal(), new AiChatDrawer(), new AiChatScreen()] as $surface) {
+            $body = json_encode($surface->render());
+
+            $this->assertStringContainsString('ai-chat-surface', $body);
+            $this->assertStringContainsString('ai-chat-sidebar', $body, 'The list stays for larger screens.');
+            $this->assertStringContainsString('ai-chat-history-open', $body, 'The button that opens it.');
+            $this->assertStringContainsString('@media (max-width: 767.98px)', $body, 'Printed inline: no asset build in the host.');
+        }
+    }
+
+    /** @test */
+    public function the_compact_layout_has_no_list_to_open_and_is_full_screen_below_md_too(): void
+    {
+        config(['ai.chat.layout' => 'compact']);
+
+        $body = json_encode((new AiChatModal())->render());
+
+        $this->assertStringContainsString('ai-chat-surface', $body);
+        $this->assertStringNotContainsString('ai-chat-sidebar w-80', $body);
+        $this->assertStringNotContainsString('classList.toggle', $body);
+    }
+
+    /** @test */
+    public function opening_a_conversation_closes_the_list_and_still_selects_it(): void
+    {
+        $conversation = \Condoedge\Ai\Models\AiConversation::create(['user_id' => $this->user->id, 'title' => 'One']);
+
+        $item = json_decode(json_encode((new ConversationListQuery())->render($conversation)), true);
+        $clicks = collect($item['interactions'])->where('interactionType', 'click')->pluck('action.actionType')->all();
+
+        $this->assertSame(['runJs', 'axiosRequest'], $clicks);
+    }
+
+    /** @test */
     public function ai_chat_modal_builds_its_shared_body(): void
     {
         // The modal surface should build the shared body (sidebar + messages) without error.

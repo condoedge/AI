@@ -12,6 +12,7 @@ use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
 use Condoedge\Ai\Services\Files\RecordAncestry;
 use Condoedge\Ai\Jobs\ProcessFileJob;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Support\AiFeature;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
@@ -53,13 +54,23 @@ class FileProcessingPlugin extends ModelPlugin
         // again — never "recently created", never dirty. Decided inside the job
         // (as it was), neither branch ran on any queue but `sync` and a new upload
         // was never indexed.
+        //
+        // MASTER SWITCH OFF: no job is queued, and a job queued before it does nothing.
         $modelClass::saved(function ($file) {
+            if (!AiFeature::enabled()) {
+                return;
+            }
+
             $event = $this->savedEvent($file);
             if ($event === null) {
                 return;
             }
 
             dispatch(function () use ($file, $event) {
+                if (!AiFeature::enabled()) {
+                    return;
+                }
+
                 match ($event) {
                     self::CREATED => $this->handleFileCreated($file),
                     self::REPLACED => $this->handleFileUpdated($file, true),
@@ -69,8 +80,16 @@ class FileProcessingPlugin extends ModelPlugin
         });
 
         $modelClass::deleting(function ($file) {
+            if (!AiFeature::enabled()) {
+                return;
+            }
+
             dispatch(function () use ($file) {
-                 $this->handleFileDeleting($file);
+                if (!AiFeature::enabled()) {
+                    return;
+                }
+
+                $this->handleFileDeleting($file);
             });
         });
     }

@@ -18,7 +18,6 @@ use Condoedge\Ai\Kompo\Traits\HasAvatars;
 use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
-use Condoedge\Ai\Kompo\Traits\HasFilePreview;
 use Condoedge\Ai\Models\AiConversation;
 use Condoedge\Ai\Models\AiMessage;
 use Condoedge\Ai\Services\Actions\ActionInvocation;
@@ -47,7 +46,7 @@ use Condoedge\Utils\Kompo\Chat\ChatMessagesQuery;
  */
 class MessagesQuery extends ChatMessagesQuery
 {
-    use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation, HasFilePreview, HandlesTasks;
+    use HasChatTheme, HasAvatars, HasChatSettings, HasConversationCreation, HandlesTasks;
 
     public const ID = 'chat-messages-panel';
     public $class = '';
@@ -146,7 +145,7 @@ class MessagesQuery extends ChatMessagesQuery
                 )->class('items-center mt-1'),
             ),
             $this->headerActions(),
-        )->class('px-6 py-4 border-b border-gray-100/70 bg-white/90 backdrop-blur-md shadow-sm');
+        )->class('ai-chat-thread-header px-6 py-4 border-b border-gray-100/70 bg-white/90 backdrop-blur-md shadow-sm');
     }
 
     protected function headerActions()

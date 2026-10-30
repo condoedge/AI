@@ -11,7 +11,6 @@ use Condoedge\Ai\Kompo\Traits\HasChatSettings;
 use Condoedge\Ai\Kompo\Traits\HasChatTheme;
 use Condoedge\Ai\Kompo\Traits\HasConversationCreation;
 use Condoedge\Ai\Kompo\Support\SuggestionSubmit;
-use Condoedge\Ai\Kompo\Traits\HasFilePreview;
 use Condoedge\Utils\Kompo\Chat\ChatComposerForm;
 
 /**
@@ -37,7 +36,7 @@ use Condoedge\Utils\Kompo\Chat\ChatComposerForm;
  */
 class ChatMessageForm extends ChatComposerForm
 {
-    use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation, HasFilePreview;
+    use HasAvatars, HasChatSettings, HasChatTheme, HasConversationCreation;
 
     protected ?int $conversationId = null;
     protected ?AiConversation $conversation = null;

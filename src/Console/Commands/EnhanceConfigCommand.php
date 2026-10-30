@@ -10,6 +10,7 @@ use Condoedge\Ai\Services\Discovery\DataExplorer;
 use Condoedge\Ai\Services\Discovery\LangExplorer;
 use Condoedge\Ai\Facades\AI;
 use Condoedge\Ai\Support\RecordingPipelineObserver;
+use Condoedge\Ai\Console\Commands\Concerns\SkippedWhenAiDisabled;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
@@ -27,6 +28,8 @@ use Illuminate\Support\Facades\File;
  */
 class EnhanceConfigCommand extends Command
 {
+    use SkippedWhenAiDisabled;
+
     protected $signature = 'ai:enhance
                             {--model= : Specific model class to enhance}
                             {--iterations=3 : Number of improvement rounds}

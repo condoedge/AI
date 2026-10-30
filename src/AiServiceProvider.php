@@ -85,7 +85,12 @@ use Condoedge\Ai\Contracts\AiAuthAdapterInterface;
 use Condoedge\Ai\Auth\KompoAuthAdapter;
 use Condoedge\Ai\Services\Security\TeamPathResolver;
 use Condoedge\Ai\Services\Security\AiSecurityService;
+use Condoedge\Ai\Support\AiFeature;
 use Condoedge\Ai\Support\AiLogger;
+use Condoedge\Ai\VectorStore\DisabledVectorStore;
+use Condoedge\Ai\GraphStore\DisabledGraphStore;
+use Condoedge\Ai\EmbeddingProviders\DisabledEmbeddingProvider;
+use Condoedge\Ai\LlmProviders\DisabledLlmProvider;
 use Condoedge\Utils\Facades\FileModel;
 
 /**
@@ -124,7 +129,13 @@ class AiServiceProvider extends ServiceProvider
             \Condoedge\Ai\Support\NullPipelineObserver::class
         );
 
+        // Master switch off (AI_ENABLED=false): the four ways out of the process are no-ops, at
+        // resolve time, so no caller can reach a server or a provider and none needs a key.
         $this->app->singleton(VectorStoreInterface::class, function ($app) {
+            if (!AiFeature::enabled()) {
+                return new DisabledVectorStore();
+            }
+
             $defaultStore = config('ai.vector.default', 'qdrant');
 
             return match ($defaultStore) {
@@ -135,6 +146,10 @@ class AiServiceProvider extends ServiceProvider
 
         // Factory auto-selects the Bolt or HTTP driver based on URI scheme.
         $this->app->singleton(GraphStoreInterface::class, function ($app) {
+            if (!AiFeature::enabled()) {
+                return new DisabledGraphStore();
+            }
+
             $defaultStore = config('ai.graph.default', 'neo4j');
 
             return match ($defaultStore) {
@@ -144,6 +159,10 @@ class AiServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(EmbeddingProviderInterface::class, function ($app) {
+            if (!AiFeature::enabled()) {
+                return new DisabledEmbeddingProvider();
+            }
+
             $defaultProvider = config('ai.embedding.default', 'openai');
 
             $provider = match ($defaultProvider) {
@@ -156,6 +175,10 @@ class AiServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(LlmProviderInterface::class, function ($app) {
+            if (!AiFeature::enabled()) {
+                return new DisabledLlmProvider();
+            }
+
             $defaultProvider = config('ai.llm.default', 'openai');
 
             return match ($defaultProvider) {

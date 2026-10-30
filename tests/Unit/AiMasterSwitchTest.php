@@ -25,4 +25,13 @@ class AiMasterSwitchTest extends AiMasterSwitchTestCase
         $this->assertTrue((bool) config('ai.file_processing.enabled'));
         $this->assertTrue((bool) config('ai.admin.enabled', true));
     }
+
+    /** @test */
+    public function enabled_the_container_hands_out_the_real_clients(): void
+    {
+        $this->assertInstanceOf(\Condoedge\Ai\VectorStore\QdrantStore::class, app(\Condoedge\Ai\Contracts\VectorStoreInterface::class));
+        $this->assertNotInstanceOf(\Condoedge\Ai\GraphStore\DisabledGraphStore::class, app(\Condoedge\Ai\Contracts\GraphStoreInterface::class));
+        $this->assertInstanceOf(\Condoedge\Ai\EmbeddingProviders\MemoizedEmbeddingProvider::class, app(\Condoedge\Ai\Contracts\EmbeddingProviderInterface::class));
+        $this->assertInstanceOf(\Condoedge\Ai\LlmProviders\OpenAiLlmProvider::class, app(\Condoedge\Ai\Contracts\LlmProviderInterface::class));
+    }
 }

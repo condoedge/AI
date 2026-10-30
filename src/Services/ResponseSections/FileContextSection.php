@@ -81,6 +81,10 @@ class FileContextSection extends BaseResponseSection
                 . "for THAT part only, never for another part or situation.\n";
         }
         $output .= $this->scopeInstructions($context, $files);
+        if (!empty($context->fileContext['uploads_are_dated'])) {
+            $output .= "A figure read in an uploaded document is the figure as of that document: name the document and the "
+                . "year it speaks of, and never present it as today's figure or as this user's own amount.\n";
+        }
         $output .= "\n";
 
         foreach (array_values($files) as $index => $file) {

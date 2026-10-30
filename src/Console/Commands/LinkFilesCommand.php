@@ -8,6 +8,7 @@ use Condoedge\Ai\Contracts\ChunkLinkStoreInterface;
 use Condoedge\Ai\Contracts\ChunkStoreInterface;
 use Condoedge\Ai\Contracts\FileOwnerResolverInterface;
 use Condoedge\Ai\Services\FileProcessor;
+use Condoedge\Ai\Console\Commands\Concerns\SkippedWhenAiDisabled;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Model;
 
@@ -31,6 +32,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class LinkFilesCommand extends Command
 {
+    use SkippedWhenAiDisabled;
+
     protected $signature = 'ai:files:link
                             {--collection= : The uploads collection (default: ai.file_processing.collection)}
                             {--file=* : Link only these file ids}

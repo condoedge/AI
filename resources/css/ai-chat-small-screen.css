@@ -1,0 +1,39 @@
+/* Below md the chat is full screen, one column: the conversation list opens over it from a button.
+   Printed inline by AbstractChatSurface, so it needs no asset build in the host. */
+.ai-chat-small-screen-only { display: none !important; }
+
+@media (max-width: 767.98px) {
+    .kompoModal:has(> .ai-chat-modal-form) {
+        width: 100vw;
+        height: 100dvh;
+        max-width: 100vw;
+        max-height: 100dvh;
+        border-radius: 0;
+    }
+
+    .ai-chat-modal-form { max-width: 100vw !important; max-height: 100dvh !important; }
+
+    .ai-chat-surface {
+        height: 100dvh !important;
+        min-height: 0 !important;
+        border-radius: 0 !important;
+        position: relative;
+    }
+
+    .ai-chat-small-screen-only { display: flex !important; }
+
+    /* Room for the modal's close button, fixed in the top corner. */
+    .ai-chat-main-header { padding-right: 3.75rem !important; }
+
+    .ai-chat-sidebar { display: none !important; }
+
+    .ai-chat-history-open .ai-chat-sidebar {
+        display: flex !important;
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        z-index: 20;
+    }
+
+    .ai-chat-thread-header { flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 1rem !important; }
+}

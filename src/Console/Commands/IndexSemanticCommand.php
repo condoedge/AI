@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Console\Commands;
 
 use Condoedge\Ai\Console\Commands\Concerns\FlushesGraphSchemaCache;
+use Condoedge\Ai\Console\Commands\Concerns\SkippedWhenAiDisabled;
 use Illuminate\Console\Command;
 use Condoedge\Ai\Services\SemanticIndexer;
 
@@ -32,6 +33,7 @@ use Condoedge\Ai\Services\SemanticIndexer;
 class IndexSemanticCommand extends Command
 {
     use FlushesGraphSchemaCache;
+    use SkippedWhenAiDisabled;
 
     /**
      * Command signature

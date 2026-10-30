@@ -127,6 +127,8 @@ return [
     */
     'audiences' => [
         'resolver' => null,
+        // A class implementing AskerFactsInterface: what the host states about the asker's own records.
+        'facts_resolver' => null,
         'map' => [],
     ],
 
@@ -729,6 +731,8 @@ return [
         // Regenerate ONCE with the Neo4j error when the generated query fails with a
         // statement (syntax / semantic) error. Never on timeout / safe-stop / infra (Task 5.5).
         'repair_on_execution_error' => env('AI_QUERY_REPAIR_ON_EXECUTION_ERROR', true),
+        // How many such regenerations one turn may make, each seeing the latest draft and error.
+        'execution_repair_attempts' => env('AI_QUERY_EXECUTION_REPAIR_ATTEMPTS', 1),
     ],
 
     /*
@@ -1653,6 +1657,12 @@ return [
         // phrase matching. Set to [] to always run file search.
         'skip_for_question_types' => ['data_query'],
 
+        // For a host that searches the documents on data questions too (the list above is empty, so
+        // help articles answer how-to questions read as data): when the query returned rows, the
+        // uploaded files leave the turn, help articles stay. Every uploaded figure must then name its
+        // document and year (FileContextSection). Off keeps today's behaviour and prompts.
+        'uploads_yield_to_data' => env('AI_FILE_UPLOADS_YIELD_TO_DATA', false),
+
         // Maximum snippet length (characters) — the HARD cap on the stitched
         // passage. It must fit the ±context_window stitch: with the default window
         // of 2 that is up to 5 chunks of ~1000 chars, so 6000. (The old 1200 cut
@@ -1805,6 +1815,9 @@ return [
         // Citation links and "Referenced files" cards under answers. Off when users cannot open the
         // cited files (e.g. help articles indexed from the host's source tree).
         'show_file_references' => env('AI_CHAT_SHOW_FILE_REFERENCES', true),
+        // The project's own files among them (help articles, bundled texts). Off when these are internal
+        // knowledge: the reader cannot open them and their names mean nothing to them.
+        'show_internal_file_references' => env('AI_CHAT_SHOW_INTERNAL_FILE_REFERENCES', true),
 
         // Host-provided "Explain this page" narration, keyed by page_context.entity_type
         // (falling back to the route name when a screen carries only a route). When the

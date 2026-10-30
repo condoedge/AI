@@ -123,9 +123,7 @@ const ChatMessageInjector = {
     /**
      * Wire visible action buttons to their proxy counterparts within the same element.
      *
-     * Supports two wiring patterns:
-     * 1. Class-based: js-action-X → js-action-X-proxy (for action bar buttons)
-     * 2. Data attribute: data-action-slot="X" → data-action-proxy="X" (for file citations)
+     * Class-based: js-action-X → js-action-X-proxy.
      */
     wireActionButtons(messageElement) {
         if (!messageElement) return;
@@ -186,31 +184,6 @@ const ChatMessageInjector = {
                     e.stopPropagation();
                     proxy.click();
                 };
-            }
-        });
-
-        // Pattern 2: Data attribute wiring (for file citations)
-        const slotButtons = messageElement.querySelectorAll('[data-action-slot]');
-
-        slotButtons.forEach(btn => {
-            const slot = btn.getAttribute('data-action-slot');
-            if (!slot) return;
-
-            const proxy = messageElement.querySelector(`[data-action-proxy="${slot}"]`);
-
-            if (proxy) {
-                btn.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-
-                    try {
-                        proxy.click();
-                    } catch (err) {
-                        console.error('[AI Chat] File citation proxy click failed:', slot, err);
-                    }
-                };
-            } else {
-                console.warn('[AI Chat] File citation proxy not found for slot:', slot);
             }
         });
     },
@@ -535,23 +508,6 @@ const ChatMessageInjector = {
         if (messages.length === 0) return null;
         const lastMessage = messages[messages.length - 1];
         return lastMessage ? lastMessage.getAttribute('data-message-id') : null;
-    },
-
-    /**
-     * Wire all file citation links on the page.
-     * Called on page load for PHP-rendered messages.
-     */
-    wireAllFileCitations() {
-        // Find all message containers (PHP-rendered)
-        const messageContainers = document.querySelectorAll('[data-message-id]');
-
-        messageContainers.forEach(container => {
-            // Check if this message has file citation slots
-            const slots = container.querySelectorAll('[data-action-slot^="file-citation-"]');
-            if (slots.length > 0) {
-                this.wireActionButtons(container);
-            }
-        });
     }
 };
 
@@ -595,23 +551,3 @@ window.updateMessageContent = updateMessageContent;
 window.removeMessagesAfter = removeMessagesAfter;
 window.showTypingAfterMessage = showTypingAfterMessage;
 window.removeMessageAndAfter = removeMessageAndAfter;
-
-/**
- * Wire all file citations helper
- */
-window.wireAllFileCitations = () => ChatMessageInjector.wireAllFileCitations();
-
-/**
- * Auto-initialize on DOMContentLoaded
- */
-document.addEventListener('DOMContentLoaded', () => {
-    // Wire file citations for PHP-rendered messages
-    ChatMessageInjector.wireAllFileCitations();
-});
-
-/**
- * Re-wire after Kompo refreshes (for paginated content)
- */
-document.addEventListener('kompo:refresh', () => {
-    ChatMessageInjector.wireAllFileCitations();
-});

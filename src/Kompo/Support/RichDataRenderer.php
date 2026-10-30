@@ -117,14 +117,21 @@ class RichDataRenderer
 
     public function renderFileReferences(array $files)
     {
-        if (empty($files) || !config('ai.chat.show_file_references', true)) {
+        if (!config('ai.chat.show_file_references', true)) {
             return null;
         }
 
-        $cards = array_map(fn($file) => $this->fileReferenceCard($file), $files);
+        if (!config('ai.chat.show_internal_file_references', true)) {
+            $files = array_filter($files, fn ($file) => !$this->isInternalFile($file));
+        }
+        if (empty($files)) {
+            return null;
+        }
+
+        $cards = array_map(fn($file) => $this->fileReferenceCard($file), array_values($files));
 
         return _Rows(
-            _Html('📎 Referenced Files:')->class('text-xs font-medium text-gray-700 mb-2'),
+            _Html(__('ai.chat.sources'))->class('text-xs font-medium text-gray-700 mb-2'),
             _Flex(...$cards)->class('flex-wrap gap-2'),
         )->class('mt-4 pt-3 border-t border-gray-100');
     }
@@ -143,7 +150,7 @@ class RichDataRenderer
         $name = e((string) ($file['name'] ?? ''));
         $plain = fn () => _Html($name)->class('text-sm text-gray-700 font-medium');
 
-        if (is_string($id) && str_starts_with($id, 'physical:')) {
+        if ($this->isInternalFile($file)) {
             return _Html(__('ai.internal-file', ['name' => $name]))->class('text-sm text-gray-700 font-medium');
         }
 
@@ -155,11 +162,17 @@ class RichDataRenderer
 
         return _Flex(
             _Sax($type->icon(), 16)->class($this->theme->primaryText()),
-            _Html(e((string) ($model->name ?? $file['name'] ?? '')))->class('text-sm text-gray-700 font-medium'),
+            _Html(e(implode(' · ', array_filter([(string) ($model->name ?? $file['name'] ?? ''), trim((string) ($file['scope_label'] ?? ''))]))))->class('text-sm text-gray-700 font-medium'),
         )->class('inline-flex items-center gap-2 px-3 py-2 rounded-lg ' . $this->theme->primaryLightBg() . ' ' . $this->theme->primaryLightBgHover() . ' cursor-pointer transition-all')
          ->balloon(__('ai.messages.click-to-view'), 'up')
          ->when($type->isPreviewable(), fn($link) => $type->getPreviewButton($link, $model)
          );
+    }
+
+    /** A file of the project itself (help articles, bundled texts): the reader cannot open it. */
+    protected function isInternalFile(array $file): bool
+    {
+        return is_string($file['id'] ?? null) && str_starts_with($file['id'], 'physical:');
     }
 
     /** The uploaded file's row, or null when it no longer exists. */

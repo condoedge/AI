@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Support;
 
+use Condoedge\Ai\Contracts\AskerFactsInterface;
 use Condoedge\Ai\Contracts\AudienceResolverInterface;
 use Condoedge\Ai\DTOs\ResolvedAudience;
 
@@ -97,6 +98,25 @@ final class Audiences
         $entities = self::entry($user)['data_entities'] ?? null;
 
         return is_array($entities) ? array_values(array_filter($entities, 'is_string')) : null;
+    }
+
+    /** @return list<string> What the host states about the asker's own records (ai.audiences.facts_resolver); never throws. */
+    public static function askerFacts(mixed $user): array
+    {
+        $resolver = config('ai.audiences.facts_resolver');
+        if (!is_string($resolver) || $resolver === '') {
+            return [];
+        }
+
+        try {
+            $facts = app($resolver);
+
+            return $facts instanceof AskerFactsInterface ? array_values(array_filter($facts->factsFor($user), 'is_string')) : [];
+        } catch (\Throwable $e) {
+            \Log::warning('Asker facts failed', ['resolver' => $resolver, 'error' => get_class($e)]);
+
+            return [];
+        }
     }
 
     private static function entry(mixed $user, ?ResolvedAudience $audience = null): array

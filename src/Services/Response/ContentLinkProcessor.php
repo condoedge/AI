@@ -19,7 +19,7 @@ use Condoedge\Ai\Contracts\ContentLinkHandlerInterface;
  *
  * Default handlers:
  * - ActionLinkHandler: entity:// and action:// links (configured)
- * - FileCitationHandler: [1], [2] citations (strips from text only)
+ * - FileCitationHandler: [1], [2] citation markers (stripped from the text)
  *
  * Extensible: Add custom handlers via registerHandler()
  */
@@ -27,9 +27,6 @@ class ContentLinkProcessor
 {
     /** @var ContentLinkHandlerInterface[] */
     private array $handlers = [];
-
-    /** @var FileCitationHandler|null Reference for metadata extraction */
-    private ?FileCitationHandler $citationHandler = null;
 
     public function __construct(
         ?ActionLinkHandler $actionHandler = null,
@@ -40,7 +37,6 @@ class ContentLinkProcessor
         }
         if ($citationHandler) {
             $this->handlers['citations'] = $citationHandler;
-            $this->citationHandler = $citationHandler;
         }
     }
 
@@ -111,49 +107,18 @@ class ContentLinkProcessor
      * Strips links and creates elements in one pass.
      * This is the main entry point for message rendering.
      *
-     * Inline citation [1], [2] chips are created (with data-action-slot
-     * attributes) and included in the returned elements array alongside the
-     * action elements, while still being stripped from the prose content.
-     * Their metadata (slot/id/type/mime) is exposed via the file_citations key
-     * for proxy element wiring.
-     *
      * @param string $content The AI response content
      * @param array $context Context for handlers (files, user, etc.)
-     * @return array{content: string, elements: array, has_links: bool, file_citations: array}
+     * @return array{content: string, elements: array, has_links: bool}
      */
     public function processForDirectRendering(string $content, array $context = []): array
     {
-        // Reset citation metadata before processing
-        if ($this->citationHandler) {
-            $this->citationHandler->resetMetadata();
-        }
-
-        // Create elements from the action handler.
-        $elements = [];
-        if (isset($this->handlers['actions'])) {
-            $elements = $this->handlers['actions']->createElements($content, $context);
-        }
-
-        // Create file citation chip elements. This call also populates the
-        // citation handler's metadata, which we read below for file_citations.
-        if ($this->citationHandler) {
-            $citationElements = $this->citationHandler->createElements($content, $context);
-            $elements = array_merge($elements, $citationElements);
-        }
-
-        // Strip all links (including citations) from content
-        $cleanContent = $this->stripLinks($content);
-
-        // Collect file citation metadata (slot/id/type/mime) for proxy wiring.
-        $fileCitations = $this->citationHandler
-            ? $this->citationHandler->getCitationMetadata()
-            : [];
+        $elements = $this->createElements($content, $context);
 
         return [
-            'content' => $cleanContent,
+            'content' => $this->stripLinks($content),
             'elements' => $elements,
             'has_links' => !empty($elements),
-            'file_citations' => $fileCitations,
         ];
     }
 

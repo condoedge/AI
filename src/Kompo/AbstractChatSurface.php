@@ -122,12 +122,14 @@ abstract class AbstractChatSurface extends Form
             _Rows(
                 _Hidden()->onLoad->run('() => {' . $this->js() . '}'),
             ),
+            _Html('<style>' . file_get_contents(__DIR__ . '/../../resources/css/ai-chat-small-screen.css') . '</style>'),
 
             $compact ? null : $this->sidebar(),
-            $compact
-                ? _Rows($this->sidebarHeader(), $this->chatArea()->class('min-h-0'))->class('flex-1 flex flex-col h-full min-h-0')
-                : $this->chatArea(),
-        )->class($this->surfaceClass())
+            _Rows(
+                $compact ? $this->sidebarHeader() : $this->sidebarHeader()->class('ai-chat-small-screen-only'),
+                $this->chatArea()->class('min-h-0'),
+            )->class('flex-1 flex flex-col h-full min-h-0 min-w-0'),
+        )->class($this->surfaceClass() . ' ai-chat-surface')
             ->style($this->surfaceStyle());
     }
 
@@ -141,7 +143,7 @@ abstract class AbstractChatSurface extends Form
                 ]),
             )->id('conversation-list-panel'),
             $this->sidebarFooter(),
-        )->class('w-80 border-r border-gray-200/70 bg-gradient-to-b from-gray-50 via-white to-gray-50/80 flex flex-col backdrop-blur-sm');
+        )->class('ai-chat-sidebar w-80 border-r border-gray-200/70 bg-gradient-to-b from-gray-50 via-white to-gray-50/80 flex flex-col backdrop-blur-sm');
     }
 
     protected function sidebarHeader()
@@ -165,6 +167,7 @@ abstract class AbstractChatSurface extends Form
                 ),
             )->class('items-center'),
             _Flex(
+                ChatLayout::isCompact() ? null : $this->historyToggle(),
                 ChatLayout::isCompact()
                     ? _Link()->icon('question-mark-circle')
                         ->class('p-2.5 rounded-xl text-gray-700 ' . $this->theme()->linkHover() . ' transition-all duration-200')
@@ -176,10 +179,24 @@ abstract class AbstractChatSurface extends Form
                     : _Link()->icon('plus')
                         ->class('p-2.5 rounded-xl bg-gradient-to-r ' . $this->theme()->primaryGradient() . ' text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200')
                         ->balloon(__('ai.chat.new-conversation-tooltip'), 'left')
-                        ->selfPost('createConversation')
-                        ->refresh(),
+                        ->onClick(fn($e) => $e->run(self::closeHistoryJs()) && $e->selfPost('createConversation')->refresh()),
             )->class('items-center gap-2'),
-        )->class('p-4 border-b border-gray-200/70 bg-white/80 backdrop-blur-sm');
+        )->class('ai-chat-main-header p-4 border-b border-gray-200/70 bg-white/80 backdrop-blur-sm');
+    }
+
+    /** Below md the conversation list is closed: this opens it over the chat, and closes it again. */
+    protected function historyToggle()
+    {
+        return _Link()->icon('chat-bubble-left-ellipsis')
+            ->class('ai-chat-small-screen-only p-2.5 rounded-xl text-gray-700 ' . $this->theme()->linkHover() . ' transition-all duration-200')
+            ->balloon(__('ai.chat.history'), 'down')
+            ->run('() => document.getElementById("' . static::ID . '-wrapper")?.classList.toggle("ai-chat-history-open")');
+    }
+
+    /** Opening a conversation or starting one goes back to the chat. Does nothing above md: the list is never "open" there. */
+    public static function closeHistoryJs(): string
+    {
+        return '() => document.getElementById("' . static::ID . '-wrapper")?.classList.remove("ai-chat-history-open")';
     }
 
     protected function clearConversationLink()

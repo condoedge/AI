@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Jobs;
 
 use Condoedge\Ai\Contracts\FileProcessorInterface;
+use Condoedge\Ai\Support\AiFeature;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -70,6 +71,10 @@ class ProcessFileJob implements ShouldQueue
      */
     public function handle(FileProcessorInterface $processor): void
     {
+        if (!AiFeature::enabled()) {
+            return; // switched off since the job was queued
+        }
+
         try {
             $result = $this->reprocess
                 ? $processor->reprocessFile($this->file)

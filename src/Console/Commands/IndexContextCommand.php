@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Console\Commands;
 
 use Condoedge\Ai\Console\Commands\Concerns\FlushesGraphSchemaCache;
+use Condoedge\Ai\Console\Commands\Concerns\SkippedWhenAiDisabled;
 use Illuminate\Console\Command;
 use Condoedge\Ai\Services\SemanticContextSelector;
 use Condoedge\Ai\Services\ScopeSemanticMatcher;
@@ -26,6 +27,7 @@ use Condoedge\Ai\Services\ScopeSemanticMatcher;
 class IndexContextCommand extends Command
 {
     use FlushesGraphSchemaCache;
+    use SkippedWhenAiDisabled;
 
     protected $signature = 'ai:index-context
                             {--scopes-only : Only index scopes}

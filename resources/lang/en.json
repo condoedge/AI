@@ -85,6 +85,8 @@
     "ai.chat.start-new": "Start New Chat",
     "ai.chat.try-asking": "Try asking:",
     "ai.chat.settings": "Settings",
+    "ai.chat.history": "Conversations",
+    "ai.chat.sources": "Sources",
     "ai.chat.new-conversation-tooltip": "New conversation",
     "ai.chat.clear": "Clear",
     "ai.chat.clear-tooltip": "Clear the chat",

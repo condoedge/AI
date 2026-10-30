@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Services;
 
 use Condoedge\Ai\Contracts\LlmProviderInterface;
+use Condoedge\Ai\Support\AiFeature;
 
 /**
  * Resolves the LLM provider for a given pipeline role — the seam for
@@ -27,7 +28,8 @@ class LlmResolver
 
     public function forRole(string $role): LlmProviderInterface
     {
-        if (empty($this->roleConfig[$role])) {
+        // Master switch off: the default provider is the no-op one, and no role gets a real one.
+        if (empty($this->roleConfig[$role]) || !AiFeature::enabled()) {
             return $this->defaultProvider;
         }
 
@@ -63,6 +65,10 @@ class LlmResolver
      */
     public function isolated(string $role, string $breaker): LlmProviderInterface
     {
+        if (!AiFeature::enabled()) {
+            return $this->defaultProvider;
+        }
+
         $key = $role . '|' . $breaker;
         if (isset($this->cache[$key])) {
             return $this->cache[$key];

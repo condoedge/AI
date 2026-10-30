@@ -26,6 +26,7 @@ use Condoedge\Ai\Services\Query\EmptyResultInspector;
 use Condoedge\Ai\Services\Query\FanOutCollapse;
 use Condoedge\Ai\Services\Query\PreviousResultExport;
 use Condoedge\Ai\Services\Query\RecordParentEnricher;
+use Condoedge\Ai\Services\Response\AskerFactsAnswerer;
 use Condoedge\Ai\Services\Response\ConversationalReplyComposer;
 use Condoedge\Ai\Services\Response\DigestResponseComposer;
 use Condoedge\Ai\Services\Response\ExportResponseComposer;
@@ -35,6 +36,7 @@ use Condoedge\Ai\Services\Retrieval\DocumentProbeWriter;
 use Condoedge\Ai\Services\Retrieval\PassageSelector;
 use Condoedge\Ai\Services\Schema\GraphSchemaCache;
 use Condoedge\Ai\Services\Understanding\ClarityChecker;
+use Condoedge\Ai\Support\AiFeature;
 use Condoedge\Ai\Support\Audiences;
 use Condoedge\Ai\Support\PipelineObserverScope;
 
@@ -88,6 +90,8 @@ class AiManager
 
     /** The ONE composition call of a conversational turn (small talk, questions about the assistant). */
     private readonly ConversationalReplyComposer $conversationalComposer;
+
+    private readonly AskerFactsAnswerer $askerFactsAnswerer;
 
     /** Code-attached links/actions (actions plan B1–B4): the AI only narrates. */
     private readonly ActionAttacher $actionAttacher;
@@ -148,6 +152,7 @@ class AiManager
         ?ConversationalReplyComposer $conversationalComposer = null
     ) {
         $this->conversationalComposer = $conversationalComposer ?? new ConversationalReplyComposer($llm);
+        $this->askerFactsAnswerer = new AskerFactsAnswerer($llm);
         $this->actionAttacher = $actionAttacher ?? new ActionAttacher();
         $this->queryParameterizer = $queryParameterizer ?? new QueryParameterizer();
         $this->exportComposer = $exportComposer ?? new ExportResponseComposer();
@@ -170,6 +175,10 @@ class AiManager
      */
     public function ingest(Nodeable $entity): array
     {
+        if (!AiFeature::enabled()) {
+            return ['graph_stored' => false, 'relationships_created' => 0, 'errors' => []];
+        }
+
         return $this->ingestion->ingest($entity);
     }
 
@@ -181,6 +190,10 @@ class AiManager
      */
     public function ingestBatch(array $entities): array
     {
+        if (!AiFeature::enabled()) {
+            return ['total' => count($entities), 'succeeded' => 0, 'partially_succeeded' => 0, 'failed' => 0, 'errors' => []];
+        }
+
         return $this->ingestion->ingestBatch($entities);
     }
 
@@ -192,6 +205,10 @@ class AiManager
      */
     public function remove(Nodeable $entity): bool
     {
+        if (!AiFeature::enabled()) {
+            return false;
+        }
+
         return $this->ingestion->remove($entity);
     }
 
@@ -203,6 +220,10 @@ class AiManager
      */
     public function sync(Nodeable $entity): array
     {
+        if (!AiFeature::enabled()) {
+            return ['action' => 'skipped', 'graph_synced' => false, 'errors' => []];
+        }
+
         return $this->ingestion->sync($entity);
     }
 
@@ -1005,6 +1026,7 @@ class AiManager
 
             $stage = 'query_generation';
             $ctx = $this->generateAndExecute($ctx, $question, $options);
+            $ctx = $this->letUploadsYieldToData($ctx, $options['user'] ?? null);
 
             $stage = 'clarify';
             $pageScope = $this->pageScopeClarification($ctx, $question, $options);
@@ -3696,6 +3718,52 @@ class AiManager
     /**
      * Generate Cypher query and execute it, or skip for knowledge-only questions.
      */
+    /**
+     * ai.file_context.uploads_yield_to_data: an uploaded file is a dated picture of the data. On a data
+     * question it leaves the turn when the query returned rows (beside fresh rows it can only contradict
+     * them) and whenever the asker's audience limits what they read (a figure the app does not show them
+     * never reaches them through a PDF); help articles stay. A question that audience's data could not
+     * even be queried for is out of their reach: the answer says so. Wherever uploaded files stay,
+     * FileContextSection asks the answer to name their document and year.
+     */
+    private function letUploadsYieldToData(PipelineContext $ctx, mixed $user): PipelineContext
+    {
+        if (!config('ai.file_context.uploads_yield_to_data', false) || !empty($ctx->fileContext['enumeration'])) {
+            return $ctx;
+        }
+
+        $isDataQuestion = $ctx->qu->questionType === 'data_query';
+        $hasRows = !empty($ctx->executionResult->data);
+        $limited = Audiences::dataEntities($user) !== null;
+
+        $ctx->dataOutOfReach = $isDataQuestion && $limited && !$hasRows && !$ctx->queryResult->hasCypher();
+
+        $files = (array) ($ctx->fileContext['relevant_files'] ?? []);
+        $kept = array_values(array_filter($files, fn ($file) => ($file['source'] ?? '') === 'physical'));
+        if (count($kept) === count($files)) {
+            return $ctx;
+        }
+
+        if (!$isDataQuestion || (!$hasRows && !$limited)) {
+            $ctx->fileContext['uploads_are_dated'] = true;
+
+            return $ctx;
+        }
+
+        // The question analysis and the scope roots speak of the uploaded passages.
+        unset($ctx->fileContext['analysis'], $ctx->fileContext['scope_roots']);
+        $ctx->fileContext = [
+            'relevant_files' => $kept,
+            'file_count' => count($kept),
+            'has_physical' => $kept !== [],
+            'has_database' => false,
+        ] + $ctx->fileContext;
+
+        $this->emitStage($ctx->observer, 'uploads_yield_to_data', ['dropped' => count($files) - count($kept)]);
+
+        return $ctx;
+    }
+
     private function generateAndExecute(PipelineContext $ctx, string $question, array $options): PipelineContext
     {
         $hasFileContext = !empty($ctx->fileContext['relevant_files'] ?? []);
@@ -4364,15 +4432,16 @@ class AiManager
     }
 
     /**
-     * ONE regeneration after a repairable execution error (Task 5.5): the generator
-     * receives its OWN failed draft + the Neo4j error (never the scoped rewrite),
-     * gets a single LLM attempt (the draft is re-validated, schema-checked and
+     * Regeneration after a repairable execution error (Task 5.5), at most
+     * ai.query_generation.execution_repair_attempts times: the generator receives
+     * its OWN latest draft + the latest Neo4j error (never the scoped rewrite), gets
+     * a single LLM attempt per repair (the draft is re-validated, schema-checked and
      * subset-checked as usual), and the new draft runs through the SAME scoped
-     * executor. Observed as a second query_generation + execution stage pair; the
+     * executor. Observed as a query_generation + execution stage pair per repair; the
      * execution stage carries repair_attempted / repair_succeeded.
      *
-     * Falls back to the ORIGINAL failure (existing error answer) when regeneration
-     * yields nothing new; to the second failure when the repaired query fails too.
+     * Falls back to the failure in hand when regeneration yields nothing new; stops
+     * early at a failure no regeneration can fix (timeout, security, infrastructure).
      *
      * @return array{0: QueryGenerationResult, 1: QueryExecutionResult}
      */
@@ -4385,45 +4454,56 @@ class AiManager
         QueryExecutionResult $failedExecution,
         \Throwable $failure
     ): array {
-        $repairOptions = array_merge($options, [
-            'repair' => [
-                'cypher' => (string) $failedQuery->cypher,
-                'error' => ExecutionErrorClassifier::feedback($failure),
-            ],
-            'max_retries' => 1,
-        ]);
+        $query = $failedQuery;
+        $execution = $failedExecution;
+        $attempts = max(1, (int) config('ai.query_generation.execution_repair_attempts', 1));
 
-        $regenerated = $this->observeStage(
-            $ctx->observer,
-            'query_generation',
-            fn (): QueryGenerationResult => $this->generateQueryResult($question, $ctx, $repairOptions),
-            fn (QueryGenerationResult $r): array => $this->generationTrace($r) + ['execution_repair' => true]
-        );
+        for ($attempt = 1; $attempt <= $attempts; $attempt++) {
+            $repairOptions = array_merge($options, [
+                'repair' => [
+                    'cypher' => (string) $query->cypher,
+                    'error' => ExecutionErrorClassifier::feedback($failure),
+                ],
+                'max_retries' => 1,
+            ]);
 
-        $ctx->observer->stageStarted('execution');
-        $start = hrtime(true);
+            $regenerated = $this->observeStage(
+                $ctx->observer,
+                'query_generation',
+                fn (): QueryGenerationResult => $this->generateQueryResult($question, $ctx, $repairOptions),
+                fn (QueryGenerationResult $r): array => $this->generationTrace($r) + ['execution_repair' => true]
+            );
 
-        if (!$regenerated->hasCypher() || trim((string) $regenerated->cypher) === trim((string) $failedQuery->cypher)) {
-            // Nothing new to run: keep the original failure.
+            $ctx->observer->stageStarted('execution');
+            $start = hrtime(true);
+
+            if (!$regenerated->hasCypher() || trim((string) $regenerated->cypher) === trim((string) $query->cypher)) {
+                // Nothing new to run: keep the failure in hand.
+                $ctx->observer->stageFinished(
+                    'execution',
+                    $this->executionTrace($execution) + ['repair_attempted' => true, 'repair_succeeded' => false, 'repair_skipped' => true],
+                    $this->elapsedMs($start)
+                );
+
+                return [$query, $execution];
+            }
+
+            [$execution, $failure] = $this->runExecution($regenerated->cypher, $execOptions, $ctx, $question, $regenerated->parameters);
+            $query = $regenerated;
+            $succeeded = $failure === null && $execution->success && empty($execution->errors);
+
             $ctx->observer->stageFinished(
                 'execution',
-                $this->executionTrace($failedExecution) + ['repair_attempted' => true, 'repair_succeeded' => false, 'repair_skipped' => true],
+                $this->executionTrace($execution) + ['repair_attempted' => true, 'repair_succeeded' => $succeeded],
                 $this->elapsedMs($start)
             );
 
-            return [$failedQuery, $failedExecution];
+            if ($failure === null || !ExecutionErrorClassifier::isRepairable($failure)) {
+                break;
+            }
         }
 
-        [$result, $secondFailure] = $this->runExecution($regenerated->cypher, $execOptions, $ctx, $question, $regenerated->parameters);
-        $succeeded = $secondFailure === null && $result->success && empty($result->errors);
-
-        $ctx->observer->stageFinished(
-            'execution',
-            $this->executionTrace($result) + ['repair_attempted' => true, 'repair_succeeded' => $succeeded],
-            $this->elapsedMs($start)
-        );
-
-        return [$regenerated, $result];
+        return [$query, $execution];
     }
 
     /**
@@ -4538,6 +4618,7 @@ class AiManager
     {
         $hasFileContext = !empty($ctx->fileContext['relevant_files'] ?? []);
         $hasData = !empty($ctx->executionResult->data);
+        $ctx->askerFacts = Audiences::askerFacts($options['user'] ?? null);
         $exportIntent = $this->resolveExportIntent($ctx);
 
         // Actions plan B1–B4: CODE decides the answer's links/actions BEFORE composition,
@@ -4772,7 +4853,15 @@ class AiManager
                 );
             $responseResult['metadata'] = ['status' => $denied ? 'access_denied' : ($safeStopped ? 'blocked_by_scoping' : 'partial_data_failed')]
                 + ($responseResult['metadata'] ?? []);
-        } elseif (!$hasData && $denied) {
+        } elseif (!$hasData && $ctx->askerFacts !== [] && $ctx->qu->questionType === 'data_query'
+            && ($factsAnswer = $this->askerFactsAnswerer->answer($question, $ctx)) !== null) {
+            $branch = 'asker_facts';
+            $responseResult = [
+                'answer' => $factsAnswer,
+                'format' => $options['format'] ?? 'text',
+                'metadata' => ['status' => 'asker_facts'],
+            ];
+        } elseif (!$hasData && ($denied || ($ctx->dataOutOfReach && !$hasFileContext))) {
             $branch = 'access_denied';
             $responseResult = [
                 'answer' => trans('ai.error.no_access', [], $ctx->qu->language !== '' ? $ctx->qu->language : null),
@@ -4831,7 +4920,7 @@ class AiManager
                 'format' => $options['format'] ?? 'text',
                 'metadata' => ['status' => 'understanding_failed', 'error' => true],
             ];
-        } elseif (!$hasData && !$hasFileContext) {
+        } elseif (!$hasData && !$hasFileContext && $ctx->askerFacts === []) {
             // Abstain explicitly when there is nothing to ground an answer on: no rows
             // from the query AND no document context. This is the single no-source path
             // (rather than letting the LLM narrate over an empty result and risk

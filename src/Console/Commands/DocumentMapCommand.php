@@ -8,6 +8,7 @@ use Condoedge\Ai\Contracts\ChunkStoreInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
 use Condoedge\Ai\Services\Files\DocumentMapBuilder;
 use Condoedge\Ai\Support\DocumentMap;
+use Condoedge\Ai\Console\Commands\Concerns\SkippedWhenAiDisabled;
 use Illuminate\Console\Command;
 
 /**
@@ -50,6 +51,8 @@ use Illuminate\Console\Command;
  */
 class DocumentMapCommand extends Command
 {
+    use SkippedWhenAiDisabled;
+
     /**
      * Points read when listing the files of a collection.
      *

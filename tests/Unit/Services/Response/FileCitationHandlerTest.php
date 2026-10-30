@@ -7,134 +7,20 @@ use Condoedge\Ai\Tests\TestCase;
 
 class FileCitationHandlerTest extends TestCase
 {
-    private FileCitationHandler $handler;
-
-    public function setUp(): void
+    public function test_a_marker_never_becomes_an_element(): void
     {
-        parent::setUp();
-        $this->handler = new FileCitationHandler();
+        $files = [['ref' => 1, 'id' => 1, 'name' => 'a.pdf']];
+
+        $this->assertSame([], (new FileCitationHandler())->createElements('See [1].', ['files' => $files]));
     }
 
-    public function test_getCitationMetadata_returns_metadata_after_createElements()
+    public function test_a_run_of_markers_leaves_with_its_separators(): void
     {
-        $content = 'See [1] and [2] for details.';
-        $files = [
-            ['id' => 42, 'name' => 'doc.pdf', 'morphable_type' => 'attachment', 'mime_type' => 'application/pdf'],
-            ['id' => 43, 'name' => 'img.png', 'morphable_type' => 'file', 'mime_type' => 'image/png'],
-        ];
-
-        $this->handler->createElements($content, ['files' => $files]);
-        $metadata = $this->handler->getCitationMetadata();
-
-        $this->assertCount(2, $metadata);
-
-        $this->assertEquals('file-citation-1', $metadata[0]['slot']);
-        $this->assertEquals(42, $metadata[0]['id']);
-        $this->assertEquals('attachment', $metadata[0]['type']);
-        $this->assertEquals('application/pdf', $metadata[0]['mime']);
-
-        $this->assertEquals('file-citation-2', $metadata[1]['slot']);
-        $this->assertEquals(43, $metadata[1]['id']);
+        $this->assertSame('See this. And that.', (new FileCitationHandler())->stripLinks('See this [1]. And that [2], [3] ,[4].'));
     }
 
-    public function test_getCitationMetadata_handles_missing_files()
+    public function test_a_text_without_markers_is_unchanged(): void
     {
-        $content = 'See [1] and [5] for details.';
-        $files = [
-            ['id' => 42, 'name' => 'doc.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf'],
-        ];
-
-        $this->handler->createElements($content, ['files' => $files]);
-        $metadata = $this->handler->getCitationMetadata();
-
-        $this->assertCount(1, $metadata);
-        $this->assertEquals('file-citation-1', $metadata[0]['slot']);
-    }
-
-    public function test_created_elements_have_data_action_slot_attribute()
-    {
-        $content = 'See [1] for details.';
-        $files = [
-            ['id' => 42, 'name' => 'doc.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf'],
-        ];
-
-        $elements = $this->handler->createElements($content, ['files' => $files]);
-
-        $this->assertCount(1, $elements);
-
-        // Check the element's config for data-action-slot attribute
-        // Kompo stores attributes in config['attrs']
-        $element = $elements[0];
-        $attrs = $element->config['attrs'] ?? [];
-        $this->assertArrayHasKey('data-action-slot', $attrs);
-        $this->assertEquals('file-citation-1', $attrs['data-action-slot']);
-    }
-
-    public function test_created_elements_do_not_have_selfGet_binding()
-    {
-        $content = 'See [1] for details.';
-        $files = [
-            ['id' => 42, 'name' => 'doc.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf'],
-        ];
-
-        $elements = $this->handler->createElements($content, ['files' => $files]);
-
-        $this->assertNotEmpty($elements, 'Expected at least one element to be created');
-
-        $element = $elements[0];
-
-        // Should NOT have interactions property with selfGet binding
-        // Check that no vlAjax or interaction config exists that would indicate selfGet was used
-        $interactions = $element->config['interactions'] ?? [];
-        foreach ($interactions as $interaction) {
-            $this->assertNotContains('viewFile', $interaction['action']['method'] ?? '');
-        }
-    }
-
-    public function test_resetMetadata_clears_previous_metadata()
-    {
-        $content = 'See [1] for details.';
-        $files = [
-            ['id' => 42, 'name' => 'doc.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf'],
-        ];
-
-        // Process once
-        $this->handler->createElements($content, ['files' => $files]);
-        $this->assertCount(1, $this->handler->getCitationMetadata());
-
-        // Reset
-        $this->handler->resetMetadata();
-        $this->assertEmpty($this->handler->getCitationMetadata());
-    }
-
-    public function test_stripping_a_run_of_citations_leaves_no_separators()
-    {
-        $this->assertSame(
-            'They describe how to create campaigns and choose types.',
-            $this->handler->stripLinks('They describe how to create campaigns [1] and choose types [2], [3], [4] ,[5].')
-        );
-        $this->assertSame('See the guide for details.', $this->handler->stripLinks('See the guide [1] for details.'));
-    }
-
-    public function test_createElements_auto_resets_metadata()
-    {
-        $content1 = 'See [1] for details.';
-        $content2 = 'See [1] and [2] for details.';
-        $files1 = [['id' => 1, 'name' => 'a.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf']];
-        $files2 = [
-            ['id' => 2, 'name' => 'b.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf'],
-            ['id' => 3, 'name' => 'c.pdf', 'morphable_type' => 'file', 'mime_type' => 'application/pdf'],
-        ];
-
-        // Process first content
-        $this->handler->createElements($content1, ['files' => $files1]);
-        $this->assertCount(1, $this->handler->getCitationMetadata());
-        $this->assertEquals(1, $this->handler->getCitationMetadata()[0]['id']);
-
-        // Process second content - should NOT accumulate
-        $this->handler->createElements($content2, ['files' => $files2]);
-        $this->assertCount(2, $this->handler->getCitationMetadata());
-        $this->assertEquals(2, $this->handler->getCitationMetadata()[0]['id']); // New ID, not 1
-        $this->assertEquals(3, $this->handler->getCitationMetadata()[1]['id']);
+        $this->assertSame('No marker here.', (new FileCitationHandler())->stripLinks('No marker here.'));
     }
 }

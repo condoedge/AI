@@ -11,6 +11,7 @@ use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
 use Condoedge\Ai\Services\Files\PhysicalFileIndexer;
 use Condoedge\Ai\Console\Commands\Concerns\FlushesGraphSchemaCache;
+use Condoedge\Ai\Console\Commands\Concerns\SkippedWhenAiDisabled;
 use Illuminate\Console\Command;
 
 /**
@@ -31,6 +32,7 @@ use Illuminate\Console\Command;
 class IngestEntitiesCommand extends Command
 {
     use FlushesGraphSchemaCache;
+    use SkippedWhenAiDisabled;
 
     /**
      * The name and signature of the console command.

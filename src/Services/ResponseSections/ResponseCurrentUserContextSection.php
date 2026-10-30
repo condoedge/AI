@@ -74,6 +74,16 @@ class ResponseCurrentUserContextSection extends BaseResponseSection
         if ($role !== '') {
             $output .= $role . "\n\n";
         }
+        if ($context->askerFacts !== []) {
+            $output .= "WHAT THE APP SHOWS THIS USER ABOUT THEIR OWN RECORDS (current; for these topics they come before any document):\n- "
+                . implode("\n- ", $context->askerFacts) . "\n\n";
+        }
+        if ($context->dataOutOfReach) {
+            $output .= "THIS USER'S ACCESS DOES NOT REACH THE DATA THIS QUESTION ASKS FOR. Say in one sentence that their access does not "
+                . "show it; never give, estimate or compute a figure. "
+                . "A help passage may still say where the app shows it or who can answer. A question that only asks how to "
+                . "do something or where to find something is answered normally.\n\n";
+        }
         // The tasks (ai.tasks) this user may start: only their button starts one, never the answer.
         $tasks = WelcomeSuggestions::tasks($user);
         if ($tasks !== []) {

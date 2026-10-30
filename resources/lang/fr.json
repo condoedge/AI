@@ -85,6 +85,8 @@
     "ai.chat.start-new": "Nouvelle discussion",
     "ai.chat.try-asking": "Essayez de demander:",
     "ai.chat.settings": "Paramètres",
+    "ai.chat.history": "Conversations",
+    "ai.chat.sources": "Sources",
     "ai.chat.new-conversation-tooltip": "Nouvelle conversation",
     "ai.chat.clear": "Effacer",
     "ai.chat.clear-tooltip": "Effacer la discussion",

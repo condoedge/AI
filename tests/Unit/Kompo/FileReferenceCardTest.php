@@ -89,6 +89,19 @@ class FileReferenceCardTest extends TestCase
     }
 
     /** @test */
+    public function internal_files_can_be_left_out_of_the_sources(): void
+    {
+        config(['ai.chat.show_internal_file_references' => false]);
+        $internal = ['id' => 'physical:help/article.md', 'name' => 'article.md'];
+
+        $this->assertNull($this->renderer()->renderFileReferences([$internal]), 'Nothing the reader can open: no Sources block.');
+
+        $listed = $this->html($this->renderer()->renderFileReferences([$internal, ['id' => 7, 'name' => 'minutes.pdf']]));
+        $this->assertStringNotContainsString('article.md', $listed);
+        $this->assertStringContainsString('minutes.pdf', $listed);
+    }
+
+    /** @test */
     public function a_reference_without_an_id_or_a_name_does_not_break_the_message(): void
     {
         $renderer = $this->renderer();

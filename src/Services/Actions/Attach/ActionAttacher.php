@@ -20,6 +20,7 @@ use Condoedge\Ai\Services\Chat\Exporter\RecordedQueryRerun;
 use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
 use Condoedge\Ai\Services\Query\UserOwnershipPaths;
 use Condoedge\Ai\Services\Response\FollowUpWriter;
+use Condoedge\Ai\Services\Response\HostText;
 use Condoedge\Ai\Services\Response\MoneyColumns;
 use Condoedge\Ai\Services\ResponseSections\SelfReferenceNoticeSection;
 use Condoedge\Ai\Support\GuardedPipelineObserver;
@@ -599,7 +600,7 @@ class ActionAttacher
             if ($action !== null) {
                 $actions[$index] = $action;
                 $invocations[$index] = new ActionInvocation(
-                    $action->key(), $record['label'], $record['id'], [], $this->recordText($record, $action)
+                    $action->key(), $record['label'], $record['id'], [], $this->recordText($record, $action, false, $this->locale($ctx))
                 );
             }
         }
@@ -619,7 +620,7 @@ class ActionAttacher
 
         $max ??= $this->maxRecordChips();
         $chips = [];
-        foreach ($this->spreadOverGroups($distinct, $firstRow, $records, $actions, $max) as $invocation) {
+        foreach ($this->spreadOverGroups($distinct, $firstRow, $records, $actions, $max, $this->locale($ctx)) as $invocation) {
             $chips[] = $this->chip(AttachedActions::ROLE_RECORD, $invocation);
         }
 
@@ -671,7 +672,7 @@ class ActionAttacher
      * @param array<int, AiActionInterface> $actions row index => the record's primary action
      * @return list<ActionInvocation>
      */
-    private function spreadOverGroups(array $distinct, array $firstRow, array $records, array $actions, int $max): array
+    private function spreadOverGroups(array $distinct, array $firstRow, array $records, array $actions, int $max, ?string $locale = null): array
     {
         if (count($distinct) <= $max) {
             return $distinct;
@@ -699,13 +700,13 @@ class ActionAttacher
             }
         }
 
-        return array_map(function (int $position) use ($distinct, $firstRow, $records, $actions): ActionInvocation {
+        return array_map(function (int $position) use ($distinct, $firstRow, $records, $actions, $locale): ActionInvocation {
             $invocation = $distinct[$position];
             $row = $firstRow[$position];
 
             return new ActionInvocation(
                 $invocation->key, $invocation->entityType, $invocation->entityId, $invocation->params,
-                $this->recordText($records[$row], $actions[$row], true)
+                $this->recordText($records[$row], $actions[$row], true, $locale)
             );
         }, $picked);
     }
@@ -716,19 +717,22 @@ class ActionAttacher
      * Account 301"), never N identical chips. $withGroup (chips spread over groups): a record
      * no disambiguator already places gets " — <its group>".
      *
+     * The host's words in it (action label, entity word) are said in the QUESTION's language:
+     * glued to data, the chip's text is no line the render-time translation can find.
+     *
      * @param array{label: string, name: ?string, disambiguator: ?string, group?: ?string, context?: array{label: string, name: string}|null} $record
      */
-    private function recordText(array $record, AiActionInterface $action, bool $withGroup = false): string
+    private function recordText(array $record, AiActionInterface $action, bool $withGroup = false, ?string $locale = null): string
     {
         $name = $record['name'];
         if ($name === null) {
-            $text = $action->label();
+            $text = $this->trans($action->label(), [], $action->label(), $locale);
             $context = $record['context'] ?? null;
             if (is_array($context)) {
-                $text .= ' — ' . $this->named($context['label'], $context['name']);
+                $text .= ' — ' . $this->named($context['label'], $context['name'], $locale);
             }
         } else {
-            $text = $this->named($record['label'], $name);
+            $text = $this->named($record['label'], $name, $locale);
         }
 
         if ($record['disambiguator'] !== null && $record['disambiguator'] !== $name) {
@@ -742,9 +746,9 @@ class ActionAttacher
     }
 
     /** A bare number/code gets its entity's display name ("Account 310"); a real name stays. */
-    private function named(string $label, string $name): string
+    private function named(string $label, string $name, ?string $locale = null): string
     {
-        return preg_match('/\p{L}{2,}/u', $name) === 1 ? $name : $this->displayName($label) . ' ' . $name;
+        return preg_match('/\p{L}{2,}/u', $name) === 1 ? $name : $this->displayName($label, $locale) . ' ' . $name;
     }
 
     /**
@@ -1145,7 +1149,7 @@ class ActionAttacher
             $primary = $this->primaryAction($record['label'], $user);
             foreach ($this->readableActions($record['label'], $user) as $action) {
                 if ($primary === null || $action->key() !== $primary->key()) {
-                    $steps[] = new ActionInvocation($action->key(), $record['label'], $record['id'], [], $action->label());
+                    $steps[] = new ActionInvocation($action->key(), $record['label'], $record['id'], [], $this->trans($action->label(), [], $action->label(), $this->locale($ctx)));
                 }
             }
         }
@@ -1446,7 +1450,11 @@ class ActionAttacher
         return is_numeric($trueTotal) && (int) $trueTotal >= $rows ? (int) $trueTotal : $rows;
     }
 
-    private function displayName(string $label): string
+    /**
+     * The entity's word: the host's own line for it in $locale when it ships another word (kept
+     * as written, first letter raised), else the declared word in Title Case.
+     */
+    private function displayName(string $label, ?string $locale = null): string
     {
         try {
             $config = EntityLabelIndex::shared()->configForLabel($label) ?? [];
@@ -1454,8 +1462,14 @@ class ActionAttacher
             $config = [];
         }
         $display = $config['metadata']['display_name'] ?? $config['display_name'] ?? null;
+        $word = is_string($display) && trim($display) !== '' ? trim($display) : $label;
 
-        return mb_convert_case(is_string($display) && trim($display) !== '' ? trim($display) : $label, MB_CASE_TITLE);
+        $line = HostText::line($word, $locale);
+        if ($line !== null && $line !== $word) {
+            return mb_strtoupper(mb_substr($line, 0, 1)) . mb_substr($line, 1);
+        }
+
+        return mb_convert_case($word, MB_CASE_TITLE);
     }
 
     /**

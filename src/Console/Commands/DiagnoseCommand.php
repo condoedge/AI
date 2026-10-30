@@ -6,6 +6,7 @@ namespace Condoedge\Ai\Console\Commands;
 
 use Condoedge\Ai\Contracts\GraphStoreInterface;
 use Condoedge\Ai\Contracts\VectorStoreInterface;
+use Condoedge\Ai\Console\Commands\Concerns\SkippedWhenAiDisabled;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
@@ -22,6 +23,8 @@ use Illuminate\Support\Facades\File;
  */
 class DiagnoseCommand extends Command
 {
+    use SkippedWhenAiDisabled;
+
     protected $signature = 'ai:diagnose';
     protected $description = 'Diagnose AI package configuration and connectivity';
 

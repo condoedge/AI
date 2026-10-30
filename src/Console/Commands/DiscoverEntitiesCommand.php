@@ -9,6 +9,7 @@ use Condoedge\Ai\Services\Discovery\CodeExplorer;
 use Condoedge\Ai\Services\Discovery\DataExplorer;
 use Condoedge\Ai\Services\Discovery\LangExplorer;
 use Condoedge\Ai\Services\Discovery\EntityAutoDiscovery;
+use Condoedge\Ai\Console\Commands\Concerns\SkippedWhenAiDisabled;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
@@ -29,6 +30,8 @@ use Illuminate\Support\Facades\File;
  */
 class DiscoverEntitiesCommand extends Command
 {
+    use SkippedWhenAiDisabled;
+
     protected $signature = 'ai:discover
                             {--model= : Specific model class to discover}
                             {--force : Overwrite existing configuration}

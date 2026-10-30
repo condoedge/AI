@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Condoedge\Ai\Jobs;
 
 use Condoedge\Ai\Services\Files\DocumentMapBuilder;
+use Condoedge\Ai\Support\AiFeature;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -131,7 +132,7 @@ class BuildDocumentMapJob implements ShouldQueue
     public function handle(DocumentMapBuilder $builder): void
     {
         try {
-            if (!config('ai.file_context.document_map.enabled', true)) {
+            if (!AiFeature::enabled() || !config('ai.file_context.document_map.enabled', true)) {
                 return; // switched off since the job was queued
             }
 
