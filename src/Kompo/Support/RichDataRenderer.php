@@ -7,6 +7,7 @@ namespace Condoedge\Ai\Kompo\Support;
 use Condoedge\Ai\Services\Settings\ChatSettingsInterface;
 use Condoedge\Ai\Services\UI\ChatThemeInterface;
 use Condoedge\Utils\Facades\FileModel;
+use Condoedge\Utils\Models\Files\FileTypeEnum;
 
 /**
  * Renders the structured "rich data" that hangs off an assistant message: response_data tables /
@@ -155,7 +156,7 @@ class RichDataRenderer
         }
 
         $model = is_int($id) || (is_string($id) && $id !== '') ? $this->findFile($id) : null;
-        $type = $model?->file_type_enum;
+        $type = $model?->mime_type ? FileTypeEnum::fromMimeType($model->mime_type) : $model?->file_type_enum;
         if ($model === null || $type === null) {
             return $plain();
         }
@@ -179,7 +180,10 @@ class RichDataRenderer
     protected function findFile(int|string $id): mixed
     {
         try {
-            return FileModel::find($id);
+            // The host's own model, as for the access checks: its morph alias is what the file URLs resolve.
+            $model = config('ai.file_context.file_model');
+
+            return is_string($model) && class_exists($model) ? $model::find($id) : FileModel::find($id);
         } catch (\Throwable $e) {
             return null;
         }

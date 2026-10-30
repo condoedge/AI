@@ -3803,6 +3803,18 @@ class AiManager
             return $ctx;
         }
 
+        // What a data question asks for is a calculation this asker cannot read: no query to
+        // improvise around it. The asker's own facts may still answer; if not, the clear refusal.
+        if ($ctx->qu->questionType === 'data_query' && !empty($ctx->selectionInfo['calculations']['out_of_reach'])) {
+            $ctx->queryResult = new QueryGenerationResult(
+                explanation: 'The calculation asked for is out of this asker\'s reach.',
+                metadata: ['generation_skipped' => 'out_of_reach'],
+            );
+            $ctx->executionResult = QueryExecutionResult::empty();
+
+            return $ctx;
+        }
+
         // Skip Cypher for knowledge queries ONLY when documents were actually
         // retrieved — those documents are the grounding. With no document context
         // we must NOT claim "answered from documents" at confidence 1.0; fall
@@ -4861,7 +4873,7 @@ class AiManager
                 'format' => $options['format'] ?? 'text',
                 'metadata' => ['status' => 'asker_facts'],
             ];
-        } elseif (!$hasData && ($denied || ($ctx->dataOutOfReach && !$hasFileContext))) {
+        } elseif (!$hasData && ($denied || ($ctx->dataOutOfReach && (!$hasFileContext || ($ctx->queryResult->metadata['generation_skipped'] ?? null) === 'out_of_reach')))) {
             $branch = 'access_denied';
             $responseResult = [
                 'answer' => trans('ai.error.no_access', [], $ctx->qu->language !== '' ? $ctx->qu->language : null),

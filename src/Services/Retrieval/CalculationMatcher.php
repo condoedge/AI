@@ -107,6 +107,38 @@ final class CalculationMatcher
     }
 
     /**
+     * The matches the asker can run: a calculation reading an entity outside $readable goes
+     * (the model would improvise around it), replaced by its 'reachable_alternative' when it
+     * declares one the asker can read. out_of_reach = something matched and nothing is left:
+     * what the question asks for is not this asker's to read.
+     *
+     * @param array<string, float> $matched
+     * @param array<int|string, mixed> $calculations
+     * @param list<string>|null $readable the asker's entity labels; null = no limit
+     * @return array{matched: array<string, float>, out_of_reach: bool}
+     */
+    public static function withinReach(array $matched, array $calculations, ?array $readable): array
+    {
+        if ($readable === null || $matched === []) {
+            return ['matched' => $matched, 'out_of_reach' => false];
+        }
+
+        $reachable = fn (string $key): bool => is_array($calculations[$key] ?? null)
+            && array_diff(self::labelsOf($calculations[$key]), $readable) === [];
+
+        $kept = [];
+        foreach ($matched as $key => $score) {
+            $alternative = $calculations[$key]['reachable_alternative'] ?? null;
+            $use = $reachable((string) $key) ? (string) $key : (is_string($alternative) && $reachable($alternative) ? $alternative : null);
+            if ($use !== null) {
+                $kept[$use] = max($score, $kept[$use] ?? $score);
+            }
+        }
+
+        return ['matched' => $kept, 'out_of_reach' => $kept === []];
+    }
+
+    /**
      * The text a calculation is matched on: "label — description".
      */
     public static function textOf(int|string $key, array $calc): string

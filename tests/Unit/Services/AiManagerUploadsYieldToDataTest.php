@@ -34,6 +34,8 @@ class AiManagerUploadsYieldToDataTest extends TestCase
 
     private ?string $lastAnswer = null;
 
+    private bool $outOfReach = false;
+
     private array $factsReply = ['answered' => false, 'answer' => ''];
 
     public function setUp(): void
@@ -57,6 +59,9 @@ class AiManagerUploadsYieldToDataTest extends TestCase
         $ctx->qu = new QueryUnderstandingResult(searchQuery: 'amount', intent: 'lookup', questionType: $questionType);
         $ctx->similarQueries = [];
         $ctx->graphSchema = ['labels' => ['Thing']];
+        if ($this->outOfReach) {
+            $ctx->selectionInfo['calculations'] = ['matched' => [], 'out_of_reach' => true];
+        }
 
         $retriever = Mockery::mock(ContextRetrieverInterface::class);
         $retriever->shouldReceive('retrieveContext')->andReturn($ctx);
@@ -214,6 +219,18 @@ class AiManagerUploadsYieldToDataTest extends TestCase
         $this->turn('data_query', [['amount' => 12]]);
 
         $this->assertSame('ok', $this->lastAnswer);
+    }
+
+    /** @test */
+    public function a_calculation_out_of_reach_is_refused_without_a_query_even_beside_a_help_article(): void
+    {
+        $this->limitAudience();
+        $this->outOfReach = true;
+
+        $ctx = $this->turn('data_query', []);
+
+        $this->assertFalse($ctx->queryResult->hasCypher());
+        $this->assertSame((string) trans('ai.error.no_access'), $this->lastAnswer);
     }
 
     /** @test */

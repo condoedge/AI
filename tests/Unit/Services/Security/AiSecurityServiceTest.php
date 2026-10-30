@@ -350,4 +350,14 @@ class AiSecurityServiceTest extends TestCase
         config()->set('ai.audiences.resolver', FixedAudienceResolver::class);
         config()->set('ai.audiences.map.resident', ['data_entities' => $dataEntities]);
     }
+
+    /** @test */
+    public function a_row_scope_path_of_team_reads_at_team_level_for_a_narrowed_user(): void
+    {
+        config()->set('entities.Supplier.security', ['team_path' => 'team_id', 'row_scope_path' => 'team']);
+
+        $rule = (new \Condoedge\Ai\Services\Security\TeamPathResolver())->ruleFor('Supplier', 's', true);
+
+        $this->assertSame('WHERE s.team_id IN $ai_team_ids', $rule['filter']);
+    }
 }

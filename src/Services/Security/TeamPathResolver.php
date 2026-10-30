@@ -85,6 +85,11 @@ class TeamPathResolver
      */
     public function ruleFor(string $entity, string $alias, bool $rowScoped = false): ?array
     {
+        // row_scope_path 'team': the app shows this entity to the whole team, a narrowed user included.
+        if ($rowScoped && $this->getRowScopePath($entity) === 'team') {
+            return $this->ruleFor($entity, $alias, false);
+        }
+
         $teamPath = $rowScoped ? $this->getRowScopePath($entity) : $this->getTeamPath($entity);
 
         if ($teamPath === null) {

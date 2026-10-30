@@ -465,7 +465,7 @@ class ContextRetriever implements ContextRetrieverInterface
                 // CALCULATIONS (Task 5.11): which canonical metric(s) the question asks
                 // for, by embedding similarity — rendered alone by CalculationsSection,
                 // and their labels seed the selection below.
-                $calculationLabels = $this->matchCalculations($ctx, $question, $retrievalQuery);
+                $calculationLabels = $this->matchCalculations($ctx, $question, $retrievalQuery, $options);
 
                 // PRUNING (Task 5.10): replace the vector union with the tiered,
                 // structurally-closed label set. Needs the live patterns, so the
@@ -720,7 +720,7 @@ class ContextRetriever implements ContextRetrieverInterface
      *
      * @return string[]
      */
-    private function matchCalculations(PipelineContext $ctx, string $question, string $retrievalQuery): array
+    private function matchCalculations(PipelineContext $ctx, string $question, string $retrievalQuery, array $options = []): array
     {
         $calculations = function_exists('config') ? config('ai.calculations', []) : [];
         if (!is_array($calculations) || $calculations === []
@@ -734,7 +734,9 @@ class ContextRetriever implements ContextRetrieverInterface
             return []; // could not judge: CalculationsSection falls back to label overlap
         }
 
-        $ctx->selectionInfo['calculations'] = ['matched' => $matched];
+        $reach = CalculationMatcher::withinReach($matched, $calculations, Audiences::dataEntities($options['user'] ?? auth()->user()));
+        $matched = $reach['matched'];
+        $ctx->selectionInfo['calculations'] = ['matched' => $matched] + ($reach['out_of_reach'] ? ['out_of_reach' => true] : []);
 
         $labels = [];
         foreach (array_keys($matched) as $key) {

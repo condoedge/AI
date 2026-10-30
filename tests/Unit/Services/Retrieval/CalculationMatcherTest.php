@@ -138,4 +138,35 @@ class CalculationMatcherTest extends TestCase
         $this->assertSame(['TeamRole'], CalculationMatcher::labelsOf(['entities' => ['TeamRole'], 'cypher' => 'MATCH (i:Invoice)']));
         $this->assertSame([], CalculationMatcher::labelsOf(['formula' => 'no labels here']));
     }
+
+    private const REACH = [
+        'ledger' => ['label' => 'Ledger', 'entities' => ['Account', 'Entry'], 'reachable_alternative' => 'bills'],
+        'bills' => ['label' => 'Bills', 'entities' => ['Bill']],
+        'vault' => ['label' => 'Vault', 'entities' => ['Vault']],
+    ];
+
+    /** @test */
+    public function an_unlimited_asker_keeps_every_match(): void
+    {
+        $this->assertSame(
+            ['matched' => ['vault' => 0.5], 'out_of_reach' => false],
+            CalculationMatcher::withinReach(['vault' => 0.5], self::REACH, null)
+        );
+    }
+
+    /** @test */
+    public function a_calculation_the_asker_cannot_read_gives_way_to_its_alternative(): void
+    {
+        $this->assertSame(
+            ['matched' => ['bills' => 0.5], 'out_of_reach' => false],
+            CalculationMatcher::withinReach(['ledger' => 0.5], self::REACH, ['Bill'])
+        );
+    }
+
+    /** @test */
+    public function nothing_left_to_run_is_out_of_reach_and_no_match_is_not(): void
+    {
+        $this->assertSame(['matched' => [], 'out_of_reach' => true], CalculationMatcher::withinReach(['vault' => 0.5], self::REACH, ['Bill']));
+        $this->assertSame(['matched' => [], 'out_of_reach' => false], CalculationMatcher::withinReach([], self::REACH, ['Bill']));
+    }
 }
