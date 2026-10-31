@@ -12,6 +12,7 @@ use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\Exceptions\LlmInvalidJsonException;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
+use Condoedge\Ai\Services\Query\CalculationQuery;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
 use Condoedge\Ai\Services\Query\CypherBooleanPrecedence;
 use Condoedge\Ai\Services\Query\CypherOptionalFilter;
@@ -188,6 +189,7 @@ class QueryGenerator implements QueryGeneratorInterface
 
                 $draft = $this->requestDraft($systemPrompt, $userPrompt, (float) $temperature, $context);
                 $runMeta['output_format'] = $draft['format'];
+                $runMeta['calculation'] = $draft['calculation'];
 
                 // A data question a domain formula matches holds its answer: a decline is redrafted once, naming the formula.
                 if (!$draft['needs_query'] && !$draft['reuse_previous'] && !$runMeta['decline_redrafted'] && $retryCount + 1 < $maxRetries
@@ -195,7 +197,7 @@ class QueryGenerator implements QueryGeneratorInterface
                     $runMeta['decline_redrafted'] = true;
                     $lastError = 'You answered needs_query false (' . ($draft['reason'] !== '' ? $draft['reason'] : 'no reason given') . '), but this '
                         . 'question matches a domain calculation of this prompt (' . implode('; ', $formulas) . '): the data holds its answer. '
-                        . "Answer with that calculation's Cypher, adapted to the question; needs_query false only if the question asks for nothing in the data.";
+                        . 'Answer with that calculation; needs_query false only if the question asks for nothing in the data.';
                     $previousDraft = null;
                     $retryCount++;
                     continue;
@@ -451,6 +453,14 @@ class QueryGenerator implements QueryGeneratorInterface
         return PiiMasker::for($context)->bindCypher($cypher, is_array($previous) ? $previous : []);
     }
 
+    /** @return list<string>|null the calculations this turn's prompt offers: null = no verdict, any the host configured */
+    private function offeredCalculations(PipelineContext $context): ?array
+    {
+        $matched = $context->selectionInfo['calculations']['matched'] ?? null;
+
+        return is_array($matched) ? array_map('strval', array_keys($matched)) : null;
+    }
+
     /** @return list<string> the labels of the domain calculations matched to a data question, as the prompt lists them */
     private function matchedFormulaLabels(PipelineContext $context): array
     {
@@ -477,7 +487,10 @@ class QueryGenerator implements QueryGeneratorInterface
      * re-requesting; a decoded reply that is not the contract object throws so the
      * retry loop redrafts with a teachable error.
      *
-     * @return array{needs_query: bool, cypher: string, reason: string, format: string, reuse_previous: bool}
+     * A reply may instead name a domain calculation and give its values ({@see CalculationQuery}):
+     * code fills in the host's query, and the draft continues like any other.
+     *
+     * @return array{needs_query: bool, cypher: string, reason: string, format: string, reuse_previous: bool, calculation: ?string}
      */
     private function requestDraft(string $systemPrompt, string $userPrompt, float $temperature, PipelineContext $context): array
     {
@@ -513,7 +526,7 @@ class QueryGenerator implements QueryGeneratorInterface
                 $this->logger->info('query_generator', 'Empty free-text generation reply read as needs_query=false (no query)');
             }
 
-            return ['needs_query' => $cypher !== '', 'cypher' => $cypher, 'reason' => '', 'format' => 'text', 'reuse_previous' => false];
+            return ['needs_query' => $cypher !== '', 'cypher' => $cypher, 'reason' => '', 'format' => 'text', 'reuse_previous' => false, 'calculation' => null];
         } finally {
             TokenUsage::report($observer, 'query_generation', $this->llm);
         }
@@ -531,13 +544,21 @@ class QueryGenerator implements QueryGeneratorInterface
             : $cypher !== '';
         $reason = is_string($reply['reason'] ?? null) ? trim($reply['reason']) : '';
 
+        $calculation = is_string($reply['calculation'] ?? null) ? trim($reply['calculation']) : '';
+        if ($calculation !== '') {
+            $filled = CalculationQuery::named($calculation, $this->offeredCalculations($context))
+                ->fill(is_array($reply['values'] ?? null) ? $reply['values'] : []);
+
+            return ['needs_query' => true, 'cypher' => $filled, 'reason' => $reason, 'format' => 'json', 'reuse_previous' => false, 'calculation' => $calculation];
+        }
+
         if ($needsQuery && $cypher === '') {
             throw new QueryGenerationException(
                 'needs_query was true but "cypher" was empty — return the Cypher query in "cypher", or set needs_query to false.'
             );
         }
 
-        return ['needs_query' => $needsQuery, 'cypher' => $cypher, 'reason' => $reason, 'format' => 'json', 'reuse_previous' => !$needsQuery && ($reply['reuse_previous'] ?? false) === true];
+        return ['needs_query' => $needsQuery, 'cypher' => $cypher, 'reason' => $reason, 'format' => 'json', 'reuse_previous' => !$needsQuery && ($reply['reuse_previous'] ?? false) === true, 'calculation' => null];
     }
 
     /**

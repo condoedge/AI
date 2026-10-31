@@ -20,6 +20,9 @@ class TaskInstructionsSection extends BasePromptSection
     /** The generation cue: the reply is the structured JSON object (Task 5.6). */
     public const RESPONSE_CUE = 'JSON RESPONSE ({"needs_query", "cypher", "reason"}):';
 
+    /** The cue when a domain calculation matches: the last thing read is what is asked of the reply. */
+    public const CALCULATION_RESPONSE_CUE = 'JSON RESPONSE ({"needs_query", "calculation", "values", "cypher", "reason"}):';
+
     /**
      * Custom instructions that can override or extend default
      */
@@ -54,6 +57,14 @@ class TaskInstructionsSection extends BasePromptSection
 
         $output .= "If the question cannot be answered with a Cypher query based on the provided context, or a query is not required to answer it, "
             . "respond with {\"needs_query\": false, \"cypher\": null, \"reason\": \"<why>\"}.\n\n";
+
+        if (!empty($context->selectionInfo['calculations']['matched'])) {
+            $output .= "A DOMAIN CALCULATION above matches this question: name it by its key, or its variant's, with \"calculation\" and \"values\". "
+                . "Write \"cypher\" only if none of them can return what is asked.\n\n";
+            $output .= self::CALCULATION_RESPONSE_CUE;
+
+            return $output;
+        }
 
         $output .= self::RESPONSE_CUE;
 

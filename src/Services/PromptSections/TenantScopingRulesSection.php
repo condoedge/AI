@@ -7,6 +7,7 @@ namespace Condoedge\Ai\Services\PromptSections;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\Security\RowScope;
 use Condoedge\Ai\Services\Security\TeamPathResolver;
+use Condoedge\Ai\Support\Audiences;
 
 /**
  * TenantScopingRulesSection
@@ -82,6 +83,10 @@ class TenantScopingRulesSection extends BasePromptSection
         $lines[] = '  - Combine multiple node filters with AND in a single WHERE per query part.';
         if ($rowScoped) {
             $lines[] = "  - These filters replace any team filter shown elsewhere in these instructions: never compare a team_id with {$param}.";
+        }
+        foreach (Audiences::listedRecords($options['user'] ?? auth()->user()) as $label => $rule) {
+            $lines[] = "  - A list of {$label} records themselves is MATCH (x:{$label}) alone: the system limits it to the ones this "
+                . 'user may see. Join it from a record that names it (' . implode(', ', (array) ($rule['named_on'] ?? [])) . ') only to read that record.';
         }
         // Tenant-specific UNION rules only; the generic "same column aliases" rule is in
         // QueryRulesSection so it ships even with scoping off (review M-3).

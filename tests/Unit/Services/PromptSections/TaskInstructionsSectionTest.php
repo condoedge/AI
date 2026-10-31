@@ -56,4 +56,17 @@ class TaskInstructionsSectionTest extends TestCase
         $this->assertStringContainsString('Do the special thing.', $output);
         $this->assertStringEndsWith(TaskInstructionsSection::RESPONSE_CUE, $output);
     }
+
+    /** @test Measured: told only at the top of the block, the model kept retyping the query. */
+    public function a_matched_calculation_is_the_last_thing_asked_of_the_reply(): void
+    {
+        $context = new \Condoedge\Ai\DTOs\PipelineContext();
+        $context->selectionInfo['calculations'] = ['matched' => ['fees' => 0.8]];
+
+        $this->assertStringEndsWith(TaskInstructionsSection::CALCULATION_RESPONSE_CUE, (new TaskInstructionsSection())->format('q', $context));
+
+        $context->selectionInfo['calculations'] = ['matched' => []];
+
+        $this->assertStringEndsWith(TaskInstructionsSection::RESPONSE_CUE, (new TaskInstructionsSection())->format('q', $context));
+    }
 }

@@ -100,6 +100,18 @@ final class Audiences
         return is_array($entities) ? array_values(array_filter($entities, 'is_string')) : null;
     }
 
+    /**
+     * Which records of an entity the asker may list; {@see \Condoedge\Ai\Services\Security\ListedRecords}.
+     *
+     * @return array<string, array{where?: array<string, list<int>>, named_on?: list<string>}>
+     */
+    public static function listedRecords(mixed $user): array
+    {
+        $rules = self::entry($user)['listed_records'] ?? null;
+
+        return is_array($rules) ? $rules : [];
+    }
+
     /** @return list<string> What the host states about the asker's own records (ai.audiences.facts_resolver); never throws. */
     public static function askerFacts(mixed $user): array
     {

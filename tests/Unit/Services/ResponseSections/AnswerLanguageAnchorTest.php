@@ -39,6 +39,29 @@ class AnswerLanguageAnchorTest extends TestCase
         return (new ResponseGenerator(Mockery::mock(LlmProviderInterface::class)))->buildPrompts($context, ['format' => 'text']);
     }
 
+    /** @test A follow-up leans on the conversation: the answer step reads the rows against what it resolved to. */
+    public function a_follow_up_also_carries_what_it_resolved_to(): void
+    {
+        $build = function (bool $followUp): string {
+            $context = new PipelineContext();
+            $context->question = 'And that number doubled?';
+            $context->qu = new QueryUnderstandingResult(
+                questionType: 'data_query',
+                language: 'en',
+                searchQuery: 'due amount',
+                clarifiedQuestion: 'What is the due amount of the last bill doubled?',
+                followUpReference: $followUp
+            );
+            $context->queryResult = new QueryGenerationResult(cypher: 'MATCH (b:Bill) RETURN b.due_amount AS due');
+            $context->executionResult = new QueryExecutionResult(success: true, data: [['due' => 1.05]]);
+
+            return (new ResponseGenerator(Mockery::mock(LlmProviderInterface::class)))->buildPrompts($context, ['format' => 'text'])['user'];
+        };
+
+        $this->assertStringContainsString('What is the due amount of the last bill doubled?', $build(true));
+        $this->assertStringNotContainsString('What is the due amount of the last bill doubled?', $build(false));
+    }
+
     /** @test */
     public function the_user_message_ends_with_the_question_language(): void
     {

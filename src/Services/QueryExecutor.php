@@ -18,6 +18,7 @@ use Condoedge\Ai\Services\Security\CypherCanonicalizer;
 use Condoedge\Ai\Services\Security\CypherLexer;
 use Condoedge\Ai\Services\Security\CypherScopeAnalyzer;
 use Condoedge\Ai\Services\Security\CypherStructuralValidator;
+use Condoedge\Ai\Services\Security\ListedRecords;
 use Condoedge\Ai\Services\Security\ScopeAcceptanceGate;
 use Condoedge\Ai\Services\Security\SecurityFilterInjector;
 use Condoedge\Ai\Services\Security\SensitiveLabelCoverageGate;
@@ -228,6 +229,7 @@ class QueryExecutor implements QueryExecutorInterface
                     'read_only' => $readOnly,
                     'timeout' => $timeout,
                     'security_filter_applied' => $securityFilterApplied,
+                    'listed_records_narrowed' => ($securityResult['listed_records_narrowed'] ?? false) === true,
                 ],
                 errors: [],
             );
@@ -816,10 +818,23 @@ class QueryExecutor implements QueryExecutorInterface
         $anyFilter = false;
         $resolvedCache = [];
 
-        $resolveFor = function (NodeBinding $binding) use ($securityService, $user, &$resolvedCache): array {
+        $listedNarrowed = false;
+        $resolveFor = function (NodeBinding $binding) use ($securityService, $user, $cypherQuery, &$resolvedCache, &$listedNarrowed): array {
             $key = $binding->label . '|' . $binding->alias;
             if (!array_key_exists($key, $resolvedCache)) {
-                $resolvedCache[$key] = $securityService->getTeamFilterWithParameters($user, $binding->label, $binding->alias);
+                $resolved = $securityService->getTeamFilterWithParameters($user, $binding->label, $binding->alias);
+
+                // Beside the scope, never in place of it. An 'unverifiable' rule sends the query
+                // to the injector: the generator is not told this rule, so it never emits it.
+                $listed = ListedRecords::predicateFor($user, $binding, $cypherQuery);
+                if ($listed !== null) {
+                    $listedNarrowed = true;
+                    $filter = empty($resolved['filter']) ? "WHERE {$listed}" : "{$resolved['filter']} AND {$listed}";
+                    $resolved['filter'] = $filter;
+                    $resolved['rule'] = ['type' => 'unverifiable', 'kind' => 'where', 'alias' => $binding->alias, 'column' => null, 'filter' => $filter];
+                }
+
+                $resolvedCache[$key] = $resolved;
             }
             return $resolvedCache[$key];
         };
@@ -919,7 +934,8 @@ class QueryExecutor implements QueryExecutorInterface
             return $unfiltered;
         }
 
-        return ['query' => $injected, 'filter_applied' => true, 'parameters' => $mergedParameters];
+        return ['query' => $injected, 'filter_applied' => true, 'parameters' => $mergedParameters]
+            + ($listedNarrowed ? ['listed_records_narrowed' => true] : []);
     }
 
     /** Distinct tenant-sensitive labels present across all scopes. */

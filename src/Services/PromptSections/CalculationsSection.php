@@ -25,8 +25,12 @@ use Condoedge\Ai\Services\Retrieval\EntitySelectionPruner;
  *           'formula'     => 'SUM of Invoice.calc_due_amount where calc_due_amount > 0',
  *           'cypher'      => 'MATCH (i:Invoice) WHERE i.calc_due_amount > 0 RETURN sum(i.calc_due_amount) AS total_owed',
  *           'notes'       => 'Split overdue vs not-yet-due on i.due_at < date().',
+ *           'variants'    => ['per_year' => ['when' => 'asked per year', 'cypher' => '...']],
  *       ],
  *   ],
+ *
+ * A cypher's <PLACEHOLDERS> are what the model fills in by naming the calculation
+ * ({@see \\Condoedge\\Ai\\Services\\Query\\CalculationQuery}), rather than retyping the query.
  *
  * Every key is optional except one of formula/cypher. Priority 74: with the query rules
  * (QueryRules 75 / TenantScopingRules 76), just before the question.
@@ -56,7 +60,11 @@ class CalculationsSection extends BasePromptSection
         $output = $this->header('DOMAIN CALCULATIONS (canonical formulas)');
         $output .= "When the question asks for one of these metrics, use its canonical formula EXACTLY — do not invent a different aggregation.\n";
         $output .= "NEVER return the bare aggregate alone: keep the aggregation itself unchanged, and ALSO RETURN identifying/verification columns alongside it — the count of rows aggregated and the ids/names of the entities involved (e.g. count(x) AS items_counted, plus the id/name of the entity the metric is about) — so the result is verifiable, especially when the aggregate is 0 or empty.\n";
-        $output .= "ADD columns; never change the aggregation itself.\n\n";
+        $output .= "ADD columns; never change the aggregation itself.\n";
+        $output .= "To use one as it stands, do NOT write its Cypher: reply {\"needs_query\": true, \"calculation\": \"<its key>\", "
+            . "\"values\": {\"<PLACEHOLDER>\": \"<value>\"}, \"cypher\": null, \"reason\": \"<why>\"}. The system runs it exactly, with your values. "
+            . "Leave out a placeholder ending in ? when the question names none. A value is a list when the notes ask for several. "
+            . "Write the Cypher yourself only when the question asks for something none of these returns.\n\n";
 
         foreach ($calculations as $key => $calc) {
             if (!is_array($calc)) {
@@ -68,6 +76,9 @@ class CalculationsSection extends BasePromptSection
             if (!empty($calc['description'])) {
                 $output .= " — {$calc['description']}";
             }
+            if (is_string($key) && !empty($calc['cypher'])) {
+                $output .= " [key: {$key}]";
+            }
             $output .= "\n";
 
             if (!empty($calc['formula'])) {
@@ -78,6 +89,11 @@ class CalculationsSection extends BasePromptSection
             }
             if (!empty($calc['notes'])) {
                 $output .= "  Notes: {$calc['notes']}\n";
+            }
+            foreach ((array) ($calc['variants'] ?? []) as $name => $variant) {
+                if (is_array($variant) && !empty($variant['cypher'])) {
+                    $output .= "  Variant [key: {$key}.{$name}]" . (!empty($variant['when']) ? " — {$variant['when']}" : '') . ": {$variant['cypher']}\n";
+                }
             }
             $output .= "\n";
         }

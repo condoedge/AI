@@ -385,6 +385,40 @@ RETURN n LIMIT 100';
         return $context;
     }
 
+    /** @test Measured: retyping a long calculation lost a variable. The model names it, code fills it in. */
+    public function a_reply_naming_a_calculation_runs_the_hosts_query_with_its_values(): void
+    {
+        $turn = $this->formulaTurn(true);
+        config(['ai.calculations.platform_fees.cypher' => 'MATCH (c:Campaign) WHERE c.name = "<NAME>" RETURN c.platform_fees AS platform_fees']);
+        $this->mockLlm->shouldReceive('chatJson')->once()
+            ->andReturn((object) ['needs_query' => true, 'calculation' => 'platform_fees', 'values' => (object) ['NAME' => "d'oka"], 'cypher' => null]);
+
+        $result = $this->generator->generate('Les frais?', $turn, ['explain' => false]);
+
+        $this->assertStringContainsString('c.name = "d\'oka" RETURN c.platform_fees AS platform_fees', $result->cypher);
+        $this->assertSame('platform_fees', $result->metadata['calculation']);
+    }
+
+    /** @test */
+    public function a_refused_calculation_goes_back_with_the_reason_and_the_written_query_is_taken(): void
+    {
+        $turn = $this->formulaTurn(true);
+        $prompts = [];
+        $this->mockLlm->shouldReceive('chatJson')->twice()->andReturnUsing(function (array $messages) use (&$prompts) {
+            $prompts[] = $messages[1]['content'];
+
+            return count($prompts) === 1
+                ? (object) ['needs_query' => true, 'calculation' => 'not_offered', 'values' => (object) [], 'cypher' => null]
+                : $this->draft('MATCH (c:Campaign) RETURN c.name AS name LIMIT 100');
+        });
+
+        $result = $this->generator->generate('Les frais?', $turn, ['explain' => false]);
+
+        $this->assertStringContainsString('not one of the calculations', $prompts[1]);
+        $this->assertStringContainsString('c.name', $result->cypher);
+        $this->assertNull($result->metadata['calculation']);
+    }
+
     /** @test Live 8-data "Combien on a payé en frais Stripe?": a decline on a question a domain formula matches gets ONE retry naming it. */
     public function a_data_question_declined_although_a_formula_matches_is_redrafted_once_with_that_formula(): void
     {

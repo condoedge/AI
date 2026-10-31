@@ -4668,6 +4668,8 @@ class AiManager
         $safeStopped = ($ctx->executionResult->metadata['safe_stop'] ?? false) === true;
         // The security layer refused this user the data: an answer, not a failure to retry.
         $denied = $executionFailed && ($ctx->executionResult->metadata['execution_error'] ?? null) === SecurityException::class;
+        // Nothing this user may list (ListedRecords): "none found" would say the records do not exist.
+        $nothingListed = ($ctx->executionResult->metadata['listed_records_narrowed'] ?? false) === true;
 
         // Whether THIS turn ran its own data query. Authoritative for export
         // sourcing: when the current question generated a query that returned
@@ -4891,7 +4893,7 @@ class AiManager
                 'format' => $options['format'] ?? 'text',
                 'metadata' => ['status' => 'asker_facts'],
             ];
-        } elseif (!$hasData && ($denied || ($ctx->dataOutOfReach && !$hasFileContext))) {
+        } elseif (!$hasData && ($denied || $nothingListed || ($ctx->dataOutOfReach && !$hasFileContext))) {
             $branch = 'access_denied';
             $responseResult = [
                 'answer' => trans('ai.error.no_access', [], $ctx->qu->language !== '' ? $ctx->qu->language : null),
@@ -6048,6 +6050,7 @@ class AiManager
             'confidence' => $result->confidence,
             'attempts' => (int) ($metadata['retry_count'] ?? 0) + 1,
             'template' => $metadata['template_used'] ?? null,
+            'calculation' => $metadata['calculation'] ?? null,
             'warnings' => $result->warnings,
             // Task 5.4: what the final draft still gets wrong against the live graph
             // schema (after in-budget repairs), and how many schema repairs ran.

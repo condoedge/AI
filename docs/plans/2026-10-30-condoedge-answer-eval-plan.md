@@ -137,3 +137,27 @@ If the software does not show it to that user, the assistant refuses clearly: no
 - Open: electricity per year correct 3/5, the other 2 call the two-year total 13,387.72 "pour l'annee". "Total des factures" reads as resident invoices (140,570.99), a valid reading.
 - CondoEdge `calculation_matching`: min_similarity 0.40, margin 0.05 (measured on 7 should and 10 should-not questions).
 - All of this is one union with local data: repeat on dev for union 136.
+
+## Follow-up: working on retrieved data (2026-10-30)
+
+Root problem: the engine treated each turn as a new lookup, with no concept of working on what was already retrieved.
+
+| Concept | Where | What it replaces |
+|---|---|---|
+| One data source per turn | `Services/Query/RecordedQuery`, `AiManager::turnQuery`, reply field `reuse_previous` | A repeat declining to query and answering "not found" |
+| Rows as material | `DataAnswerPlan::$rowsAreMaterial` | Presentation rules overriding what the request asks |
+| Checked calculation | `Support/ShownCalculation`, `AnswerValidator` | "Never derive a figure", which overruled correct drafts |
+| Figure columns named by the host | `TableRenderer::headerProjections`, `MoneyColumns` accented aliases | `b.due_amount AS frais`, and `AS coût` not being money |
+| OPTIONAL MATCH check | `Query/CypherOptionalFilter` | A prompt-only rule |
+
+Removed: `execution_repair_attempts`, the decline redraft patch.
+
+Regression guard: `CondoEdge/tests/eval/stability/{manager,board,owner}.php`, run with `ai:eval --suite=<file>`. Commands are in `fixture.php`; truth is computed by the app at run time.
+
+Open: per-year snow query (1 of 3), first-turn snow answer depends on wording, composer-worded refusals on some forbidden questions, board supplier list ignores the screen's visibility filter, and the OPTIONAL MATCH check has not yet fired end to end.
+
+## Calculations run as written (2026-10-30)
+
+The model names a matched calculation and gives its values; `Services/Query/CalculationQuery` fills the host's query. Retyping long queries lost variables (`Variable b not defined`). Optional placeholders end in `?`, per-year queries are declared `variants`, several values repeat the OR group. Tests in both hosts fill every calculation: `CalculationsRunAsWrittenTest`.
+
+**Not yet measured live:** OpenAI ran out of credits during the first run, and in the turns before that the model did not use the option. The closing instruction now asks for it. After adding credits, run the regression suite and check `calculation` in the `query_generation` trace stage: if the model still does not name them, the option is not doing its job, whatever the tests say.
