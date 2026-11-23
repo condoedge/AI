@@ -6,7 +6,7 @@ namespace Condoedge\Ai\Services\Chat\UseCases;
 
 use Condoedge\Ai\Contracts\PipelineObserverInterface;
 use Condoedge\Ai\Contracts\QueryExecutorInterface;
-use Condoedge\Ai\Facades\AI;
+use Condoedge\Ai\Services\Engines\EngineSwitch;
 use Condoedge\Ai\Models\AiTask;
 use Condoedge\Ai\Services\Actions\BuiltIn\StartTaskAction;
 use Condoedge\Ai\Services\QueryExecutor;
@@ -60,7 +60,7 @@ class AskQuestionUseCase
      * allow_write, read_only, limit, capture_prompts, ...) is dropped: a chat
      * turn must never be able to weaken the pipeline's security or limits.
      */
-    public const ALLOWED_PIPELINE_OPTIONS = ['store_examples'];
+    public const ALLOWED_PIPELINE_OPTIONS = ['store_examples', 'engine'];
 
     /** @param ?TaskOrchestrator $tasks null unless ai.tasks is on with a definition (AiServiceProvider); $offers likewise */
     public function __construct(
@@ -403,7 +403,14 @@ class AskQuestionUseCase
             // Caller pipeline options: allowlisted keys only (ALLOWED_PIPELINE_OPTIONS),
             // and they never override the turn's own keys.
             $pipelineOptions = array_intersect_key($pipelineOptions, array_flip(self::ALLOWED_PIPELINE_OPTIONS));
-            $pipeline = fn () => AI::answerQuestion($question, [
+            // Which engine answers (ai.engine): on the trace, so two engines can be compared turn by turn.
+            $engine = EngineSwitch::resolve($pipelineOptions['engine'] ?? null);
+            unset($pipelineOptions['engine']);
+            if (EngineSwitch::configured()) {
+                $observer?->stageStarted('engine');
+                $observer?->stageFinished('engine', ['engine' => $engine]);
+            }
+            $pipeline = fn () => EngineSwitch::answer($engine, $question, [
                 'style' => $style,
                 'conversation_id' => $conversation->id,
                 'conversation_context' => $conversationContext,

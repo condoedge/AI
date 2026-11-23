@@ -191,6 +191,27 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Engines (another way of answering, beside the question pipeline)
+    |--------------------------------------------------------------------------
+    |
+    | Optional. 'v1' is the question pipeline and needs no entry. `engines` names
+    | other ways of answering a chat turn — host or package classes implementing
+    | Condoedge\Ai\Contracts\AnswerEngineInterface — so that two can be compared
+    | on the same questions. A turn runs the engine its caller names (pipeline
+    | option `engine`, e.g. an evaluation run), else `default`; a name that is not
+    | registered runs the pipeline. The engine that answered is on the turn's trace
+    | (stage `engine`) and in the response metadata.
+    |
+    | With no engine registered nothing changes and nothing is stamped.
+    |
+    */
+    'engine' => [
+        'default' => env('AI_ENGINE', 'v1'),
+        'engines' => [],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Tasks (a conversation that ends in one confirmed write)
     |--------------------------------------------------------------------------
     |
