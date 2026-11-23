@@ -35,8 +35,10 @@ use Condoedge\Ai\Services\Response\ResponseFileEnricher;
 use Condoedge\Ai\Services\Response\ResponseEntityEnricher;
 use Condoedge\Ai\Services\Retrieval\DocumentProbeWriter;
 use Condoedge\Ai\Services\Retrieval\PassageSelector;
+use Condoedge\Ai\Services\Skills\SkillSelector;
 use Condoedge\Ai\Services\Schema\GraphSchemaCache;
 use Condoedge\Ai\Services\Understanding\ClarityChecker;
+use Condoedge\Ai\Support\AiLogger;
 use Condoedge\Ai\Support\AiFeature;
 use Condoedge\Ai\Support\Audiences;
 use Condoedge\Ai\Support\PipelineObserverScope;
@@ -1022,6 +1024,9 @@ class AiManager
                 return $clarify;
             }
 
+            $stage = 'skill';
+            $ctx = $this->selectSkill($ctx, $question, $options);
+
             $stage = 'file_context';
             $ctx = $this->retrieveAndSetFileContext($ctx, $question, $options);
 
@@ -1082,6 +1087,36 @@ class AiManager
                     + (isset($ctx) ? $this->quUnavailableMetadata($ctx) : []),
             ];
         }
+    }
+
+    /**
+     * The host skill this question calls for (ai.skills); nothing configured, no stage.
+     * A selection failure leaves the turn without a skill.
+     */
+    private function selectSkill(PipelineContext $ctx, string $question, array $options): PipelineContext
+    {
+        if ((array) config('ai.skills.paths', []) === []) {
+            return $ctx;
+        }
+
+        return $this->observeStage(
+            $ctx->observer,
+            'skill',
+            function () use ($ctx, $question, $options): PipelineContext {
+                try {
+                    $ctx->skill = (new SkillSelector($this->embedding, new AiLogger()))
+                        ->select($question, $ctx->qu, $options['user'] ?? null);
+                } catch (\Throwable $e) {
+                    \Log::warning('Skill selection failed — continuing without one: ' . $e->getMessage());
+                }
+
+                return $ctx;
+            },
+            fn (PipelineContext $c): array => $c->skill === [] ? ['selected' => null] : [
+                'selected' => $c->skill['name'],
+                'references' => array_column($c->skill['references'], 'similarity', 'id'),
+            ]
+        );
     }
 
     /**
@@ -4646,7 +4681,9 @@ class AiManager
      */
     private function composeFinalResponse(string $question, PipelineContext $ctx, array $options, string &$branch): array
     {
-        $hasFileContext = !empty($ctx->fileContext['relevant_files'] ?? []);
+        // A selected skill grounds an answer as retrieved files do: no rows is then not "nothing found".
+        $hasFileContext = !empty($ctx->fileContext['relevant_files'] ?? []) || !empty($ctx->skill['references'] ?? []);
+        $skillOnly = empty($ctx->fileContext['relevant_files'] ?? []) && !empty($ctx->skill['references'] ?? []);
         $hasData = !empty($ctx->executionResult->data);
         $ctx->askerFacts = Audiences::askerFacts($options['user'] ?? null);
         $exportIntent = $this->resolveExportIntent($ctx);
@@ -4865,6 +4902,11 @@ class AiManager
                 $exportSource = 'documents';
                 $responseResult = $this->generateResponse($ctx, $options);
             }
+        } elseif (!$hasData && $skillOnly && $ctx->qu->questionType === 'knowledge_query') {
+            // The question asked for knowledge and the skill holds it: a query tried on the side
+            // and refused or failed is not a part of the answer the user is missing.
+            $branch = 'skill';
+            $responseResult = $this->generateResponse($ctx, $options);
         } elseif (!$hasData && ($executionFailed || $safeStopped) && $hasFileContext
             && $ctx->qu->questionType !== 'data_query') {
             // PARTIAL ANSWER (review Focus-2): a MIXED question (QU did not class it
@@ -5021,7 +5063,11 @@ class AiManager
             ];
         }
 
-        if ($exportSource === null && in_array($branch, ['data', 'knowledge_query', 'file_listing', 'empty_result', 'partial_data'], true)) {
+        if ($exportSource === null && in_array($branch, ['data', 'knowledge_query', 'skill', 'partial_data'], true)) {
+            $responseResult = $this->withSkillDisclaimer($responseResult, $ctx);
+        }
+
+        if ($exportSource === null && in_array($branch, ['data', 'knowledge_query', 'skill', 'file_listing', 'empty_result', 'partial_data'], true)) {
             $responseResult = $this->withAttachedActions($responseResult, $ctx->attachedActions);
         }
 
@@ -5892,6 +5938,21 @@ class AiManager
      * @param array<string, mixed> $response
      * @return array<string, mixed>
      */
+    /** The skill's own line under an answer its references ground, in the question's language. */
+    private function withSkillDisclaimer(array $response, PipelineContext $ctx): array
+    {
+        $disclaimer = empty($ctx->skill['references']) ? '' : (string) ($ctx->skill['disclaimer'][$ctx->qu->language] ?? '');
+        $answer = $response['answer'] ?? null;
+
+        if ($disclaimer === '' || !is_string($answer) || trim($answer) === '') {
+            return $response;
+        }
+
+        $response['answer'] = rtrim($answer) . "\n\n" . $disclaimer;
+
+        return $response;
+    }
+
     private function withAttachedActions(array $response, ?AttachedActions $attached): array
     {
         if ($attached === null || $attached->isEmpty()) {

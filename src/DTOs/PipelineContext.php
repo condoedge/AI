@@ -41,6 +41,9 @@ class PipelineContext
     /** File context from FileContextProvider */
     public array $fileContext = [];
 
+    /** The skill this turn's answer reasons from (SkillSelector::select); [] for none. */
+    public array $skill = [];
+
     /** What the host states about the asker's own records (Audiences::askerFacts): grounds an answer like rows do. */
     public array $askerFacts = [];
 
