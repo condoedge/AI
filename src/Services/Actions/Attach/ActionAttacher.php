@@ -265,7 +265,7 @@ class ActionAttacher
     }
 
     /**
-     * Page buttons of a document-grounded answer (ai.navigation.pages, {@see NavigationPages}):
+     * Page buttons of a document- or skill-grounded answer (ai.navigation.pages, {@see NavigationPages}):
      * the pages setup offers this user, of which the model picks at most `max`, each one a
      * `link` chip by route name, with `?section=` and "Page › Section" when one was picked.
      * Gates: documents retrieved, a real answer, no export, the turn's own chips. A how-to QU also read as "open
@@ -281,14 +281,19 @@ class ActionAttacher
             $metadata = is_array($response['metadata']['response'] ?? null) ? $response['metadata']['response'] : null;
             $answer = is_string($response['answer'] ?? null) ? $response['answer'] : '';
             $attached = $ctx->attachedActions ?? AttachedActions::none();
+            // A skill answer offers only the pages its references name.
+            $skillPages = array_merge([], ...array_column($ctx->skill['references'] ?? [], 'pages'));
             if ($this->navigationPages === null || $metadata === null || trim($answer) === '' || $this->unanswered($metadata)
                 || $ctx->qu->exportFormat !== null
-                || empty($ctx->fileContext['relevant_files']) || !empty($ctx->fileContext['enumeration'])
+                || (empty($ctx->fileContext['relevant_files']) && $skillPages === []) || !empty($ctx->fileContext['enumeration'])
                 || ($metadata['invocations'] ?? []) !== $attached->invocations()) {
                 return $response;
             }
             $user = $this->user($options);
             $pages = NavigationPages::offeredTo($user);
+            if (empty($ctx->fileContext['relevant_files'])) {
+                $pages = array_intersect_key($pages, array_flip($skillPages));
+            }
             if ($pages === [] || $this->allowedGeneric('link', $user) === null) {
                 return $response;
             }

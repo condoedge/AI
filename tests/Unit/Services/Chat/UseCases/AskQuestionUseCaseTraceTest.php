@@ -245,12 +245,14 @@ class AskQuestionUseCaseTraceTest extends TestCase
                 'read_only' => false,
                 'limit' => 100000,
                 'capture_prompts' => true,
+                'engine' => 'v2',
             ],
         ));
 
-        $this->assertSame(['store_examples'], AskQuestionUseCase::ALLOWED_PIPELINE_OPTIONS);
+        $this->assertSame(['store_examples', 'engine'], AskQuestionUseCase::ALLOWED_PIPELINE_OPTIONS);
         $this->assertFalse($options['store_examples'], 'store_examples passes');
-        foreach (['skip_security', 'allow_write', 'read_only', 'limit', 'capture_prompts'] as $key) {
+        // `engine` chooses who answers (ai.engine); the pipeline itself never receives it.
+        foreach (['skip_security', 'allow_write', 'read_only', 'limit', 'capture_prompts', 'engine'] as $key) {
             $this->assertArrayNotHasKey($key, $options, "{$key} must never reach the pipeline from a caller");
         }
     }

@@ -161,6 +161,57 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Skills (expert knowledge the answer reasons from)
+    |--------------------------------------------------------------------------
+    |
+    | Optional, off by default. A skill is a folder the host writes: SKILL.md (its
+    | instructions) and references/**\/*.md, one subject per file, each with a
+    | frontmatter `title` and `description` and optionally `questions`, `audience`
+    | (ai.audiences document audiences; none = everyone), `pages` (keys of
+    | ai.navigation.pages) and `language`. Nothing is ingested: the files are read
+    | on each turn.
+    |
+    | Code picks the references a question calls for by embedding similarity with
+    | their "title — description and questions" (the calculations' measure): at
+    | least `min_similarity`, within `margin` of the best one, `max_references` at
+    | most, all of one skill. They are given whole to the answering call with the
+    | skill's instructions, beside the data and the retrieved files; a question
+    | with no rows and no file is then answered from them instead of "nothing
+    | found". Its buttons are the pages its references name.
+    |
+    | - paths: the skill folders, relative to the application root.
+    |
+    */
+    'skills' => [
+        'paths' => [],
+        'min_similarity' => 0.40,
+        'margin' => 0.08,
+        'max_references' => 3,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Engines (another way of answering, beside the question pipeline)
+    |--------------------------------------------------------------------------
+    |
+    | Optional. 'v1' is the question pipeline and needs no entry. `engines` names
+    | other ways of answering a chat turn — host or package classes implementing
+    | Condoedge\Ai\Contracts\AnswerEngineInterface — so that two can be compared
+    | on the same questions. A turn runs the engine its caller names (pipeline
+    | option `engine`, e.g. an evaluation run), else `default`; a name that is not
+    | registered runs the pipeline. The engine that answered is on the turn's trace
+    | (stage `engine`) and in the response metadata.
+    |
+    | With no engine registered nothing changes and nothing is stamped.
+    |
+    */
+    'engine' => [
+        'default' => env('AI_ENGINE', 'v1'),
+        'engines' => [],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Tasks (a conversation that ends in one confirmed write)
     |--------------------------------------------------------------------------
     |
@@ -2321,6 +2372,7 @@ return [
         // for debugging; re-add this section (or gate it behind a 'technical' style) if needed.
         // Renders only on a gated document-map turn (ai.file_context.document_map).
         \Condoedge\Ai\Services\ResponseSections\QuestionAnalysisSection::class,
+        \Condoedge\Ai\Services\ResponseSections\SkillSection::class, // Priority 44: the host skill the turn selected (ai.skills); zero tokens without one
         \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
         \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class, // For file reference follow-ups
         \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,
