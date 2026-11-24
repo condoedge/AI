@@ -16,6 +16,7 @@ use Condoedge\Ai\Kompo\Support\ChatLayout;
 use Condoedge\Ai\Kompo\Support\ConversationActions;
 use Condoedge\Ai\Kompo\Support\ThemedChatBubbleRenderer;
 use Condoedge\Ai\Kompo\Traits\HasMethodsAsProperties;
+use Condoedge\Ai\Support\AiAccess;
 use Condoedge\Ai\Support\AiFeature;
 use Condoedge\Utils\Kompo\Chat\ChatScripts;
 use Condoedge\Utils\Kompo\Common\Form;
@@ -56,7 +57,7 @@ abstract class AbstractChatSurface extends Form
         $this->id(static::ID);
 
         // Master switch off: no availability probe, no conversation lookup, nothing rendered.
-        if (!AiFeature::enabled()) {
+        if (!AiFeature::enabled() || !AiAccess::allows(auth()->user())) {
             return;
         }
 
@@ -77,14 +78,14 @@ abstract class AbstractChatSurface extends Form
         }
 
         if ($this->selectedConversationId) {
-            $this->conversation = AiConversation::where('user_id', auth()->id())
+            $this->conversation = AiConversation::ownedBy(auth()->user())
                 ->find($this->selectedConversationId);
         }
     }
 
     public function render()
     {
-        if (!AiFeature::enabled()) {
+        if (!AiFeature::enabled() || !AiAccess::allows(auth()->user())) {
             return null;
         }
 

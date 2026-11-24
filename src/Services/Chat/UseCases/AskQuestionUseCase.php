@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Condoedge\Ai\Services\Chat\UseCases;
 
+use Condoedge\Ai\Support\AiAccess;
 use Condoedge\Ai\Contracts\PipelineObserverInterface;
 use Condoedge\Ai\Contracts\QueryExecutorInterface;
 use Condoedge\Ai\Services\Engines\EngineSwitch;
@@ -80,6 +81,12 @@ class AskQuestionUseCase
         // The turn trace (Phase 4.2) starts BEFORE the gate so the gate's timing is on it.
         $trace = $this->newTrace();
         $observer = $this->turnObserver($trace, $input->observer);
+
+        // The host's rule for this asker (ai.access.authorize) comes before everything: nothing is
+        // read, stored or sent to a model for an account the assistant is not open to.
+        if (!AiAccess::allows($input->user)) {
+            throw new \Illuminate\Auth\Access\AuthorizationException(trans('ai.error.no_access'));
+        }
 
         // STEP 0 — security gate FIRST (precondition + injection scan), before any context
         // processing, persistence, or even opening a transaction. A missing-user precondition

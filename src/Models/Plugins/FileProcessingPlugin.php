@@ -12,6 +12,7 @@ use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
 use Condoedge\Ai\Services\Files\RecordAncestry;
 use Condoedge\Ai\Jobs\ProcessFileJob;
 use Condoedge\Ai\Domain\Contracts\Nodeable;
+use Condoedge\Ai\Support\AiAccess;
 use Condoedge\Ai\Support\AiFeature;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -57,7 +58,7 @@ class FileProcessingPlugin extends ModelPlugin
         //
         // MASTER SWITCH OFF: no job is queued, and a job queued before it does nothing.
         $modelClass::saved(function ($file) {
-            if (!AiFeature::enabled()) {
+            if (!AiFeature::enabled() || !AiAccess::allowsRecord($file)) {
                 return;
             }
 
