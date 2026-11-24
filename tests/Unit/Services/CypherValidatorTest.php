@@ -24,6 +24,20 @@ class CypherValidatorTest extends TestCase
         $this->validator = new CypherValidator();
     }
 
+    public function test_a_query_never_reads_a_file_or_the_server_catalogue(): void
+    {
+        foreach ([
+            "LOAD CSV FROM 'file:///etc/passwd' AS line RETURN line",
+            "MATCH (u:Unit) LOAD  CSV FROM 'http://169.254.169.254/latest' AS l RETURN l LIMIT 1",
+            'SHOW PROCEDURES',
+        ] as $query) {
+            $this->assertFalse($this->validator->validate($query)['valid'], $query);
+            $this->assertFalse($this->validator->isReadOnly($query), $query);
+        }
+
+        $this->assertTrue($this->validator->validate("MATCH (u:Unit) WHERE u.name CONTAINS 'show load' RETURN u.name LIMIT 5")['valid']);
+    }
+
     public function test_canonical_keyword_list_is_the_single_source(): void
     {
         // Every dangerous keyword must be flagged by validate() with allow_write=false,

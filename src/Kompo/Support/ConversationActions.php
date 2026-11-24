@@ -108,7 +108,7 @@ class ConversationActions
     public function archive(int $conversationId, mixed $user): bool
     {
         return AiConversation::query()
-            ->where('user_id', $this->userId($user))
+            ->ownedBy($user)
             ->where('id', $conversationId)
             ->update(['status' => 'archived']) > 0;
     }
@@ -121,7 +121,7 @@ class ConversationActions
     public function delete(int $conversationId, mixed $user): bool
     {
         return AiConversation::query()
-            ->where('user_id', $this->userId($user))
+            ->ownedBy($user)
             ->where('id', $conversationId)
             ->delete() > 0;
     }
@@ -132,15 +132,7 @@ class ConversationActions
     private function ownedConversation(int $conversationId, mixed $user): ?AiConversation
     {
         return AiConversation::query()
-            ->where('user_id', $this->userId($user))
+            ->ownedBy($user)
             ->find($conversationId);
-    }
-
-    /**
-     * The acting user's id, or null when no user is present (gates everything to a no-op).
-     */
-    private function userId(mixed $user): mixed
-    {
-        return $user->id ?? null;
     }
 }

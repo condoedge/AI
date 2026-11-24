@@ -27,7 +27,7 @@ class FeedbackCommentModal extends Modal
 
     public function created()
     {
-        $message = AiConversation::where('user_id', auth()->id())
+        $message = AiConversation::ownedBy(auth()->user())
             ->find($this->store('conversation_id'))
             ?->messages()->find($this->store('message_id'));
         $comment = $message?->metadata['feedback_comment'] ?? null;

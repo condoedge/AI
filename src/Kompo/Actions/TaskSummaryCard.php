@@ -38,7 +38,7 @@ class TaskSummaryCard extends Form
 
     public function created()
     {
-        $this->conversation = AiConversation::where('user_id', auth()->id())->find($this->store('conversation_id'));
+        $this->conversation = AiConversation::ownedBy(auth()->user())->find($this->store('conversation_id'));
         $task = $this->conversation?->messages()->find($this->store('message_id'))?->metadata['task'] ?? null;
         $this->task = is_array($task) && is_string($task['uuid'] ?? null) ? $task : null;
         $this->live = $this->task !== null && TaskOrchestrator::configured() && AiTask::where('uuid', $this->task['uuid'])

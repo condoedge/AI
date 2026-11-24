@@ -87,6 +87,14 @@ class ListedRecordsTest extends TestCase
     }
 
     /** @test */
+    public function a_variable_length_link_to_a_readable_record_names_nothing(): void
+    {
+        $out = $this->apply('MATCH (s:Supplier)-[*1..3]-(b:Bill) RETURN DISTINCT s.name, count(b.id) AS bills');
+
+        $this->assertStringContainsString(self::VISIBLE, $out['query']);
+    }
+
+    /** @test */
     public function a_record_named_on_a_readable_record_keeps_its_name(): void
     {
         foreach ([

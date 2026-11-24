@@ -73,10 +73,13 @@ class FileAccessResolver implements FileAccessResolverInterface
             try {
                 return $this->fileModelQuery()->{$scope}($user)->pluck('id')->toArray();
             } catch (\Throwable $e) {
-                \Log::debug("FileAccessResolver: access scope '{$scope}' failed, using fallback", [
+                // The host's rule could not be read: no file, rather than the wider team-level guess.
+                \Log::warning("FileAccessResolver: access scope '{$scope}' failed, no file is readable this turn", [
                     'error' => $e->getMessage(),
                     'user_id' => $user->id ?? null,
                 ]);
+
+                return [];
             }
         }
 

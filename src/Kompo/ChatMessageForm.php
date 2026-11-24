@@ -60,7 +60,7 @@ class ChatMessageForm extends ChatComposerForm
         }
 
         if ($this->conversationId) {
-            $this->conversation = AiConversation::where('user_id', auth()->id())
+            $this->conversation = AiConversation::ownedBy(auth()->user())
                 ->find($this->conversationId);
         }
     }

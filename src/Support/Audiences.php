@@ -92,9 +92,16 @@ final class Audiences
         return is_array($questions) ? array_values(array_filter($questions, 'is_string')) : null;
     }
 
-    /** @return list<string>|null The entity labels the asker may query; null = no audience limit. */
+    /**
+     * @return list<string>|null The entity labels the asker may query; null = no audience limit.
+     * With audiences configured, an asker who has none (or whose resolver failed) queries nothing.
+     */
     public static function dataEntities(mixed $user): ?array
     {
+        if (self::configured() && self::of($user) === null) {
+            return [];
+        }
+
         $entities = self::entry($user)['data_entities'] ?? null;
 
         return is_array($entities) ? array_values(array_filter($entities, 'is_string')) : null;

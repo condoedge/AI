@@ -501,7 +501,7 @@ class ContextRetriever implements ContextRetrieverInterface
 
         // STEP 3: Similar queries (the top-$limit by similarity)
         try {
-            $candidates = $this->similarQuerySearcher->search($retrievalQuery, $collection, $limit, $scoreThreshold);
+            $candidates = $this->similarQuerySearcher->search($retrievalQuery, $collection, $limit, $scoreThreshold, SimilarQuerySearcher::tenantOf($options['user'] ?? auth()->user()));
             $ctx->similarQueries = array_slice(array_values($candidates), 0, max(0, $limit));
         } catch (\Exception $e) {
             $this->logger->error('context_retriever', 'Vector search failed: ' . $e->getMessage());
@@ -624,7 +624,7 @@ class ContextRetriever implements ContextRetrieverInterface
         string $collection = 'questions',
         int $limit = 5
     ): array {
-        return $this->similarQuerySearcher->search($question, $collection, $limit, $this->exampleMinSimilarity());
+        return $this->similarQuerySearcher->search($question, $collection, $limit, $this->exampleMinSimilarity(), SimilarQuerySearcher::tenantOf(auth()->user()));
     }
 
     /**
@@ -735,8 +735,8 @@ class ContextRetriever implements ContextRetrieverInterface
         }
 
         $reach = CalculationMatcher::withinReach($matched, $calculations, Audiences::dataEntities($options['user'] ?? auth()->user()));
+        $ctx->selectionInfo['calculations'] = ['matched' => $reach['matched']] + ($reach['out_of_reach'] ? ['out_of_reach' => true, 'unreachable' => $matched] : []);
         $matched = $reach['matched'];
-        $ctx->selectionInfo['calculations'] = ['matched' => $matched] + ($reach['out_of_reach'] ? ['out_of_reach' => true] : []);
 
         $labels = [];
         foreach (array_keys($matched) as $key) {

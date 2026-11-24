@@ -51,6 +51,19 @@ class AiConversation extends Model
         return $this->belongsTo(config('auth.providers.users.model', 'App\\Models\\User'));
     }
 
+    /**
+     * The conversations a user may open: their own. With ai.chat.conversations_per_team on, only those
+     * held in the team they are in: a conversation keeps the data answers of the team it took place in,
+     * so it stays there when its owner changes team or is removed from it.
+     */
+    public function scopeOwnedBy($query, mixed $user)
+    {
+        $team = config('ai.chat.conversations_per_team', false) ? data_get($user, 'current_team_id') : null;
+
+        $query->where($this->qualifyColumn('user_id'), data_get($user, 'id') ?? 0)
+            ->when($team !== null && $team !== '', fn ($query) => $query->where($this->qualifyColumn('team_id'), $team));
+    }
+
     // SCOPES
     public function scopeForFilter($query, string $filter)
     {

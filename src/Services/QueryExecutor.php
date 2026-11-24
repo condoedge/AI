@@ -445,6 +445,11 @@ class QueryExecutor implements QueryExecutorInterface
      */
     private function containsWriteOperations(string $query): bool
     {
+        // Not a write, but refused like one: see CypherValidator::FORBIDDEN_READS.
+        if (CypherValidator::readsOutsideTheGraph($query)) {
+            return true;
+        }
+
         foreach ($this->writeKeywords as $keyword) {
             if (preg_match('/\b' . $keyword . '\b/i', $query)) {
                 return true;

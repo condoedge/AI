@@ -66,7 +66,7 @@ class AiConversationPolicyTest extends TestCase
         $this->assertFalse($this->policy->view($user, $conversation));
     }
 
-    public function test_team_member_can_view_team_conversation(): void
+    public function test_a_team_member_cannot_view_a_colleagues_conversation(): void
     {
         $user = $this->createUserInTeam(1, 5);
         $conversation = AiConversation::create([
@@ -75,7 +75,7 @@ class AiConversationPolicyTest extends TestCase
             'title' => 'Test Conversation',
         ]);
 
-        $this->assertTrue($this->policy->view($user, $conversation));
+        $this->assertFalse($this->policy->view($user, $conversation));
     }
 
     public function test_user_cannot_view_other_teams_conversation(): void
@@ -101,7 +101,7 @@ class AiConversationPolicyTest extends TestCase
         $this->assertTrue($this->policy->sendMessage($user, $conversation));
     }
 
-    public function test_team_member_can_send_message_to_team_conversation(): void
+    public function test_a_team_member_cannot_send_a_message_to_a_colleagues_conversation(): void
     {
         $user = $this->createUserInTeam(1, 5);
         $conversation = AiConversation::create([
@@ -110,7 +110,7 @@ class AiConversationPolicyTest extends TestCase
             'title' => 'Test Conversation',
         ]);
 
-        $this->assertTrue($this->policy->sendMessage($user, $conversation));
+        $this->assertFalse($this->policy->sendMessage($user, $conversation));
     }
 
     public function test_non_team_member_cannot_send_message(): void

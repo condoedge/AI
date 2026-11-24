@@ -232,6 +232,33 @@ class CypherScopeAnalyzerTest extends TestCase
         $this->assertTrue($plan->scopes[0]->whereHasTopLevelOr);
     }
 
+    // ---- A path outside a MATCH reads its nodes too ---------------------------
+
+    /** @test */
+    public function an_unscoped_node_in_a_pattern_predicate_is_rejected(): void
+    {
+        $this->assertRejected(
+            "MATCH (u:Union) WHERE (u)-[:UNITS]->({name: '101', loan_company: 'Desjardins'}) RETURN u.name",
+            'unsupported_pattern_scope'
+        );
+        $this->assertRejected(
+            "MATCH (u:Union) RETURN u.name, exists((u)-[*..4]-({account_number: '123'})) AS found",
+            'unsupported_pattern_scope'
+        );
+        $this->assertRejected(
+            'MATCH (u:Union) WHERE (u)-[:UNITS]->(x) RETURN u.name',
+            'unsupported_pattern_scope'
+        );
+    }
+
+    /** @test */
+    public function a_pattern_predicate_between_scoped_bindings_stays_allowed(): void
+    {
+        $plan = $this->analyzer->analyze('MATCH (u:Union), (b:Bill) WHERE (b)-[:BELONGS_TO_UNION]->(u) RETURN u.name, b.id');
+
+        $this->assertTrue($plan->isScopeable, "rejected: {$plan->reason}");
+    }
+
     // ---- Corpus: 13 / 14 sensitive comprehension binding → reject -----------
 
     /** @test */
