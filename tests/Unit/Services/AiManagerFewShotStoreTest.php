@@ -116,7 +116,7 @@ class AiManagerFewShotStoreTest extends TestCase
         $this->mockQueryExecutor->shouldReceive('execute')->once()
             ->andReturn(new QueryExecutionResult(success: true, data: []));
 
-        $this->manager->answerQuestion('which units do I own?', ['user' => (object) ['id' => 13]]);
+        $this->manager->answerQuestion('which units do I own?', ['user' => (object) ['id' => 13, 'current_team_id' => 4]]);
     }
 
     /** @test */
@@ -135,12 +135,13 @@ class AiManagerFewShotStoreTest extends TestCase
                 return true;
             });
 
-        $this->manager->answerQuestion('which units do I own?', ['user' => (object) ['id' => 13]]);
+        $this->manager->answerQuestion('which units do I own?', ['user' => (object) ['id' => 13, 'current_team_id' => 4]]);
 
         $this->assertCount(1, $stored);
         $this->assertSame('which units do I own?', $stored[0]['payload']['question']);
         $this->assertStringContainsString('user_id: $currentUserId', $stored[0]['payload']['cypher_query']);
         $this->assertStringNotContainsString('user_id: 13', $stored[0]['payload']['cypher_query']);
+        $this->assertSame('4', $stored[0]['payload']['team_id']);
     }
 
     /** @test */
@@ -150,7 +151,7 @@ class AiManagerFewShotStoreTest extends TestCase
         $this->mockQueryExecutor->shouldReceive('execute')->once()
             ->andReturn(new QueryExecutionResult(success: true, data: [], metadata: ['safe_stop' => true]));
 
-        $this->manager->answerQuestion('which units do I own?', ['user' => (object) ['id' => 13]]);
+        $this->manager->answerQuestion('which units do I own?', ['user' => (object) ['id' => 13, 'current_team_id' => 4]]);
     }
 
     /** @test */
@@ -160,7 +161,7 @@ class AiManagerFewShotStoreTest extends TestCase
         $this->mockQueryExecutor->shouldReceive('execute')->once()
             ->andThrow(new QueryExecutionException('Neo.ClientError.Statement.SyntaxError'));
 
-        $this->manager->answerQuestion('which units do I own?', ['user' => (object) ['id' => 13]]);
+        $this->manager->answerQuestion('which units do I own?', ['user' => (object) ['id' => 13, 'current_team_id' => 4]]);
     }
 
     /** @test */

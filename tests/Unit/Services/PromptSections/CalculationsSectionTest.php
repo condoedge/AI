@@ -42,6 +42,27 @@ class CalculationsSectionTest extends TestCase
     }
 
     /** @test */
+    public function a_calculation_the_application_computes_shows_its_key_and_values_and_no_cypher(): void
+    {
+        config()->set('ai.calculations', [
+            'unit_balance' => [
+                'label' => 'Balance of a unit',
+                'resolver' => fn (mixed $user, array $values): array => [],
+                'values' => ['UNIT NAME?' => 'the unit the question names'],
+                'notes' => 'One row per unit.',
+            ],
+        ]);
+
+        $output = (new CalculationsSection())->format('what does unit 101 owe?', new PipelineContext());
+
+        $this->assertStringContainsString('Balance of a unit [key: unit_balance]', $output);
+        $this->assertStringContainsString('Computed by the application', $output);
+        $this->assertStringContainsString('Value <UNIT NAME?>: the unit the question names', $output);
+        $this->assertStringContainsString('Notes: One row per unit.', $output);
+        $this->assertStringNotContainsString("\n  Cypher: ", $output);
+    }
+
+    /** @test */
     public function it_requires_verification_columns_alongside_the_exact_aggregate(): void
     {
         // Lever L2-B(iii): "use EXACTLY" alone made the generator drop identifying

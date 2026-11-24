@@ -53,6 +53,9 @@ class PipelineContext
     /** A data question the asker's audience could not even query: the answer says it is not available to them. */
     public bool $dataOutOfReach = false;
 
+    /** The question asks for a figure this asker cannot read, and for nothing a skill explains better: the answer is the refusal. */
+    public bool $figureOutOfReach = false;
+
     /** Conversation context from chat pipeline */
     public array $conversationContext = [];
 

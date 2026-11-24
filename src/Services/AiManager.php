@@ -22,6 +22,8 @@ use Condoedge\Ai\Services\Actions\Attach\ActionAttacher;
 use Condoedge\Ai\Services\Actions\Attach\AttachedActions;
 use Condoedge\Ai\Services\Context\FileContextProvider;
 use Condoedge\Ai\Services\Digest\DigestRunner;
+use Condoedge\Ai\Services\Query\ApplicationCalculation;
+use Condoedge\Ai\Services\Retrieval\SimilarQuerySearcher;
 use Condoedge\Ai\Services\Query\EmptyResultInspector;
 use Condoedge\Ai\Services\Query\FanOutCollapse;
 use Condoedge\Ai\Services\Query\PreviousResultExport;
@@ -296,7 +298,7 @@ class AiManager
 
             $embedding = $this->embedding->embed($question);
 
-            $pointId = md5($question . $cypherQuery);
+            $pointId = md5($question . $cypherQuery . ($metadata[SimilarQuerySearcher::TENANT_KEY] ?? ''));
 
             $payload = array_merge([
                 'question' => $question,
@@ -3488,6 +3490,14 @@ class AiManager
             return null;
         }
 
+        // ai.digest.yields_to_calculation: a question a calculation answers this closely is about that
+        // one subject ("which emails are waiting for me?"), whatever its urgency wording: no digest.
+        $yieldsAt = config('ai.digest.yields_to_calculation');
+        $matched = (array) ($ctx->selectionInfo['calculations']['matched'] ?? []);
+        if (is_numeric($yieldsAt) && $matched !== [] && max($matched) >= (float) $yieldsAt) {
+            return null;
+        }
+
         $registry = $this->digestRunner->registry();
         if (!$registry->hasEnabled()) {
             return null;
@@ -3759,6 +3769,80 @@ class AiManager
      * question comes back (no model call) or when the generator says the recorded query already
      * answers it, else what the generator writes. All of them then run the same path.
      */
+    /**
+     * ai.skills.over_calculations_by: a question about a rule ("must we have a maintenance log?") also
+     * resembles a figure ("maintenance contracts"). When the skill's best reference matches it better than
+     * the best calculation by that much, the question is about the rule: the calculations leave the turn,
+     * and no table nobody asked for is added to the answer; a calculation declared `with_skill` stays. The other way round, a calculation the asker
+     * cannot read that matches better than any reference by that much is what was asked: the answer is
+     * the refusal, not a passage about the subject. Unset, nothing changes.
+     */
+    private function letSkillOutweighCalculations(PipelineContext $ctx): PipelineContext
+    {
+        $by = config('ai.skills.over_calculations_by');
+        $calculations = (array) ($ctx->selectionInfo['calculations'] ?? []);
+        $outOfReach = !empty($calculations['out_of_reach']);
+        $matched = (array) ($outOfReach ? ($calculations['unreachable'] ?? []) : ($calculations['matched'] ?? []));
+        $references = array_column($ctx->skill['references'] ?? [], 'similarity');
+
+        if (!is_numeric($by) || $matched === []) {
+            return $ctx;
+        }
+
+        $skill = $references === [] ? 0.0 : max($references);
+
+        if ($skill - max($matched) >= (float) $by) {
+            // A calculation declared `with_skill` reads what the rule is applied to (the email to
+            // answer): it stays beside the reference instead of leaving the turn.
+            $kept = $outOfReach ? [] : array_filter(
+                $matched,
+                static fn (string $key): bool => (bool) config("ai.calculations.{$key}.with_skill", false),
+                ARRAY_FILTER_USE_KEY
+            );
+            $dropped = array_keys(array_diff_key($matched, $kept));
+            $ctx->selectionInfo['calculations'] = ['matched' => $kept, 'outweighed_by_skill' => $dropped];
+            $this->emitStage($ctx->observer, 'calculations_outweighed', ['by' => $ctx->skill['name'] ?? null, 'calculations' => $dropped]);
+        } elseif ($outOfReach && max($matched) - $skill >= (float) $by) {
+            $ctx->figureOutOfReach = true;
+        }
+
+        return $ctx;
+    }
+
+    /** @param array{key: string, values: array<string, list<string>>} $calculation */
+    private function computedByApplication(array $calculation, mixed $user): QueryExecutionResult
+    {
+        $metadata = ['source' => 'application', 'calculation' => $calculation['key']];
+
+        // The same permission a written query needs for each entity it reads: a resolver narrows
+        // rows, it does not decide whether this user reads the calculation at all.
+        $adapter = app(\Condoedge\Ai\Contracts\AiAuthAdapterInterface::class);
+        foreach ($adapter->isEnabled() ? (array) config("ai.calculations.{$calculation['key']}.entities", []) : [] as $entity) {
+            if ($user === null || $adapter->getTeamsWithPermission($user, (string) $entity) === []) {
+                return new QueryExecutionResult(
+                    metadata: $metadata + ['execution_error' => SecurityException::class],
+                    errors: [['message' => "You do not have permission to query {$entity} data"]],
+                );
+            }
+        }
+
+        try {
+            $rows = ApplicationCalculation::named($calculation['key'], $calculation['values'])->rows($user);
+        } catch (\Throwable $e) {
+            \Log::error('Application calculation failed: ' . $e->getMessage(), ['calculation' => $calculation['key']]);
+
+            return new QueryExecutionResult(
+                metadata: $metadata + ['execution_error' => $e::class],
+                errors: [['message' => $e->getMessage()]],
+            );
+        }
+
+        // A row that names its record (`_label` and `id`) gets that record's actions, as a queried row does.
+        return $this->enrichResultsWithEntityActions(
+            new QueryExecutionResult(success: true, data: $rows, stats: ['row_count' => count($rows)], metadata: $metadata)
+        );
+    }
+
     private function turnQuery(string $question, PipelineContext $ctx, array $options): QueryGenerationResult
     {
         $recorded = $ctx->qu->questionType === 'data_query' && is_array($ctx->conversationContext)
@@ -3835,6 +3919,8 @@ class AiManager
 
     private function generateAndExecute(PipelineContext $ctx, string $question, array $options): PipelineContext
     {
+        $ctx = $this->letSkillOutweighCalculations($ctx);
+
         $hasFileContext = !empty($ctx->fileContext['relevant_files'] ?? []);
         $isEnumeration = !empty($ctx->fileContext['enumeration'] ?? false);
 
@@ -3942,6 +4028,18 @@ class AiManager
         }
 
         $queryResult = $this->turnQuery($question, $ctx, $options);
+
+        if (is_array($queryResult->metadata['application_calculation'] ?? null)) {
+            $ctx->queryResult = $queryResult;
+            $ctx->executionResult = $this->observeStage(
+                $ctx->observer,
+                'execution',
+                fn (): QueryExecutionResult => $this->computedByApplication($queryResult->metadata['application_calculation'], $options['user'] ?? null),
+                fn (QueryExecutionResult $r): array => $this->executionTrace($r) + ['source' => 'application']
+            );
+
+            return $ctx;
+        }
 
         // Thread pipeline identity/provenance into execution so the executor can
         // (a) team-filter against the real user ($options['user']) rather than
@@ -4611,12 +4709,18 @@ class AiManager
             ? $queryResult->metadata['generated_cypher']
             : $queryResult->cypher;
 
+        $tenant = SimilarQuerySearcher::tenantOf($options['user'] ?? null);
+        if ($tenant === null) {
+            return;
+        }
+
         $this->storeQuery(
             question: $question,
             cypherQuery: $this->parameterizerFor($options)->parameterize($cypher),
             metadata: [
                 'confidence' => $queryResult->confidence,
                 'generated_at' => now()->toIso8601String(),
+                SimilarQuerySearcher::TENANT_KEY => $tenant,
             ]
         );
     }
@@ -4935,7 +5039,7 @@ class AiManager
                 'format' => $options['format'] ?? 'text',
                 'metadata' => ['status' => 'asker_facts'],
             ];
-        } elseif (!$hasData && ($denied || $nothingListed || ($ctx->dataOutOfReach && !$hasFileContext))) {
+        } elseif (!$hasData && ($denied || $nothingListed || $ctx->figureOutOfReach || ($ctx->dataOutOfReach && !$hasFileContext))) {
             $branch = 'access_denied';
             $responseResult = [
                 'answer' => trans('ai.error.no_access', [], $ctx->qu->language !== '' ? $ctx->qu->language : null),
@@ -6112,6 +6216,7 @@ class AiManager
             'attempts' => (int) ($metadata['retry_count'] ?? 0) + 1,
             'template' => $metadata['template_used'] ?? null,
             'calculation' => $metadata['calculation'] ?? null,
+            'calculation_values' => $metadata['application_calculation']['values'] ?? null,
             'warnings' => $result->warnings,
             // Task 5.4: what the final draft still gets wrong against the live graph
             // schema (after in-budget repairs), and how many schema repairs ran.
