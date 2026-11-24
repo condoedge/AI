@@ -96,7 +96,7 @@ class ModelMethodMutationAction implements AiActionInterface, AdvertisableAction
      * @param string $label      Human label advertised to the LLM and the approval card.
      * @param callable|string $finder  fn($id): ?object resolving the target, OR a model
      *                                  class-string resolved via {ModelClass}::find($id).
-     * @param callable $mutator   fn($model, array $input): mixed — the EXISTING domain method.
+     * @param callable $mutator   fn($model, array $input, ActionContext $context): mixed — the EXISTING domain method.
      * @param callable|null $authorizer  fn($user, $model, array $input): bool — row-level gate.
      * @param string[] $aliases   Natural-language phrasings the user might say.
      * @param string $description Short description advertised to the LLM.
@@ -399,7 +399,7 @@ class ModelMethodMutationAction implements AiActionInterface, AdvertisableAction
             return AiActionResult::error('The item to act on could not be found.');
         }
 
-        $apply = function () use ($id, $probe, $input): AiActionResult {
+        $apply = function () use ($id, $probe, $input, $context): AiActionResult {
             $model = $this->lockForWrite($id, $probe);
             if ($model === null) {
                 return AiActionResult::error('The item to act on could not be found.');
@@ -410,7 +410,8 @@ class ModelMethodMutationAction implements AiActionInterface, AdvertisableAction
                 return AiActionResult::error('This action was not applied: it no longer applies to the item in its current state.');
             }
 
-            ($this->mutator)($model, $input); // a throw propagates → the transaction rolls back
+            // The context comes third: who acts, and the answer the user approved the action under.
+            ($this->mutator)($model, $input, $context); // a throw propagates → the transaction rolls back
 
             return AiActionResult::element(
                 ['action' => 'mutation', 'key' => $this->key],

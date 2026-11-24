@@ -24,7 +24,7 @@ class ConversationListQuery extends Query
 
         $this->conversationId = (int) session('selected_conversation_id');
 
-        $this->conversation = AiConversation::where('user_id', auth()->id())
+        $this->conversation = AiConversation::ownedBy(auth()->user())
             ->find($this->conversationId);
     }
 
@@ -56,7 +56,7 @@ class ConversationListQuery extends Query
 
     public function query()
     {
-        return AiConversation::where('user_id', auth()->id())
+        return AiConversation::ownedBy(auth()->user())
             ->forFilter(request('filter', $this->conversation->status ?? 'active'))
             ->when(request('search'), fn($q, $search) => $q->search($search))
             ->orderByRaw("JSON_EXTRACT(metadata, '$.pinned') DESC")

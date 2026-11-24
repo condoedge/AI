@@ -28,6 +28,23 @@ class CypherValidator
     ];
 
     /**
+     * Read clauses that reach outside the graph's data: a file or a URL of the database server
+     * (LOAD CSV), and the server's own catalogue (SHOW). Never a data question.
+     */
+    public const FORBIDDEN_READS = ['/\bLOAD\s+CSV\b/i', '/^\s*SHOW\b/i'];
+
+    public static function readsOutsideTheGraph(string $cypherQuery): bool
+    {
+        foreach (self::FORBIDDEN_READS as $pattern) {
+            if (preg_match($pattern, $cypherQuery) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Default maximum allowed complexity before a warning is raised.
      */
     private const DEFAULT_MAX_COMPLEXITY = 100;
@@ -57,6 +74,10 @@ class CypherValidator
             if ($this->containsKeyword($cypherQuery, $keyword) && !$allowWrite) {
                 $errors[] = "Query contains forbidden keyword: {$keyword}";
             }
+        }
+
+        if (self::readsOutsideTheGraph((string) $cypherQuery)) {
+            $errors[] = 'Query contains a forbidden clause: LOAD CSV and SHOW are never allowed';
         }
 
         // Check for LIMIT clause
@@ -92,6 +113,10 @@ class CypherValidator
      */
     public function isReadOnly(string $cypherQuery): bool
     {
+        if (self::readsOutsideTheGraph($cypherQuery)) {
+            return false;
+        }
+
         foreach (self::DANGEROUS_KEYWORDS as $keyword) {
             if ($this->containsKeyword($cypherQuery, $keyword)) {
                 return false;

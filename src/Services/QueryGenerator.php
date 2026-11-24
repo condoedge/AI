@@ -12,6 +12,7 @@ use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\Exceptions\LlmInvalidJsonException;
 use Condoedge\Ai\Exceptions\QueryGenerationException;
+use Condoedge\Ai\Services\Query\ApplicationCalculation;
 use Condoedge\Ai\Services\Query\CalculationQuery;
 use Condoedge\Ai\Services\Resilience\RateLimiter;
 use Condoedge\Ai\Services\Query\CypherBooleanPrecedence;
@@ -227,6 +228,20 @@ class QueryGenerator implements QueryGeneratorInterface
                             'precedence_violations' => [],
                             'optional_filter_violations' => [],
                             'repair_attempts' => $schemaRepairs,
+                        ] + $runMeta,
+                    );
+                }
+
+                if (isset($draft['application'])) {
+                    $this->logger->stopTimer('query_generation');
+
+                    return new QueryGenerationResult(
+                        explanation: 'Computed by the application: ' . $draft['calculation'],
+                        confidence: 1.0,
+                        metadata: [
+                            'calculation' => $draft['calculation'],
+                            'application_calculation' => ['key' => $draft['calculation'], 'values' => $draft['application']],
+                            'retry_count' => $retryCount,
                         ] + $runMeta,
                     );
                 }
@@ -545,6 +560,12 @@ class QueryGenerator implements QueryGeneratorInterface
         $reason = is_string($reply['reason'] ?? null) ? trim($reply['reason']) : '';
 
         $calculation = is_string($reply['calculation'] ?? null) ? trim($reply['calculation']) : '';
+        if ($calculation !== '' && ApplicationCalculation::configured($calculation)) {
+            $computed = ApplicationCalculation::named($calculation, is_array($reply['values'] ?? null) ? $reply['values'] : [], $this->offeredCalculations($context));
+
+            return ['needs_query' => true, 'cypher' => '', 'reason' => $reason, 'format' => 'json', 'reuse_previous' => false, 'calculation' => $computed->key, 'application' => $computed->values];
+        }
+
         if ($calculation !== '') {
             $filled = CalculationQuery::named($calculation, $this->offeredCalculations($context))
                 ->fill(is_array($reply['values'] ?? null) ? $reply['values'] : []);

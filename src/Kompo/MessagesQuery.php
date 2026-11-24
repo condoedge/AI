@@ -86,7 +86,7 @@ class MessagesQuery extends ChatMessagesQuery
             : 'none';
         $speedClass = 'animation-speed-' . $animationSpeed;
 
-        $this->conversation = AiConversation::where('user_id', auth()->id())
+        $this->conversation = AiConversation::ownedBy(auth()->user())
             ->find($this->prop('conversation_id') ?? session('selected_conversation_id'));
 
         $this->class = '!static flex-1 min-h-0 bg-gradient-to-b ' . $this->theme()->heroBackground() . ' ' . $speedClass;

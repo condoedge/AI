@@ -54,6 +54,16 @@ class AudiencesTest extends TestCase
     }
 
     /** @test */
+    public function an_asker_without_an_audience_queries_no_entity(): void
+    {
+        $this->configure(null);
+        $this->assertSame([], Audiences::dataEntities((object) ['id' => 1]));
+
+        $this->configure(new ResolvedAudience('staff'));
+        $this->assertNull(Audiences::dataEntities((object) ['id' => 1]), 'an audience that lists none is not limited');
+    }
+
+    /** @test */
     public function an_unresolved_or_unknown_audience_reads_only_the_documents_written_for_everyone(): void
     {
         $this->configure(null);

@@ -161,6 +161,27 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Access (who the assistant is open to)
+    |--------------------------------------------------------------------------
+    |
+    | Optional. `authorize` is a callable `fn (mixed $user): bool` — e.g.
+    | [App\Ai\Consent::class, 'allows'] — asked for each asker beside the master
+    | switch (ai.enabled): an account that has not accepted the assistant's terms,
+    | a plan without it. Closed, the chat surfaces render nothing and a question is
+    | refused before anything is read or sent to a model. Null: open to everyone.
+    |
+    | `authorize_record` is the same question for an uploaded file, `fn (mixed
+    | $file): bool`: a file of an account the assistant is closed to is not indexed
+    | (its text would go to the embedding provider). Null: every file.
+    |
+    */
+    'access' => [
+        'authorize' => null,
+        'authorize_record' => null,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Skills (expert knowledge the answer reasons from)
     |--------------------------------------------------------------------------
     |
@@ -187,6 +208,10 @@ return [
         'min_similarity' => 0.40,
         'margin' => 0.08,
         'max_references' => 3,
+        // A number: when the best reference matches the question better than the best calculation
+        // (ai.calculations) by at least this much, the question is about the rule, not the figure,
+        // and no calculation runs. Null: both always run.
+        'over_calculations_by' => null,
     ],
 
     /*
@@ -1826,6 +1851,10 @@ return [
     |
     */
     'chat' => [
+        // true: a user opens only the conversations held in the team they are in (a conversation keeps
+        // the data answers of that team). false: every conversation they own, whatever the team.
+        'conversations_per_team' => false,
+
         // Service class for chat functionality
         'service' => env('AI_CHAT_SERVICE', \Condoedge\Ai\Services\Chat\AiChatService::class),
 
@@ -2320,6 +2349,9 @@ return [
     'digest' => [
         'max_sources' => 8,
         'default_row_cap' => 5,
+        // A number: a question that matches one calculation (ai.calculations) at least this closely is
+        // answered by it, never by the digest. Null: the digest decides alone.
+        'yields_to_calculation' => null,
     ],
 
     /*
@@ -2373,6 +2405,7 @@ return [
         // Renders only on a gated document-map turn (ai.file_context.document_map).
         \Condoedge\Ai\Services\ResponseSections\QuestionAnalysisSection::class,
         \Condoedge\Ai\Services\ResponseSections\SkillSection::class, // Priority 44: the host skill the turn selected (ai.skills); zero tokens without one
+        \Condoedge\Ai\Services\ResponseSections\CalculationAnswerSection::class, // Priority 52: a calculation's own answer_notes; zero tokens without them
         \Condoedge\Ai\Services\ResponseSections\FileContextSection::class,
         \Condoedge\Ai\Services\ResponseSections\ResponseConversationContextSection::class, // For file reference follow-ups
         \Condoedge\Ai\Services\ResponseSections\ResultsDataSection::class,

@@ -33,7 +33,7 @@ class EditMessageModal extends Modal
 
         if ($this->messageId && $this->conversationId) {
             // Only allow editing own messages
-            $conversation = AiConversation::where('user_id', auth()->id())
+            $conversation = AiConversation::ownedBy(auth()->user())
                 ->find($this->conversationId);
 
             if ($conversation) {

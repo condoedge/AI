@@ -21,15 +21,8 @@ class AiConversationPolicy
      */
     public function view(Authenticatable $user, AiConversation $conversation): bool
     {
-        if ($conversation->user_id === $user->id) {
-            return true;
-        }
-
-        if ($conversation->team_id && $this->userBelongsToTeam($user, $conversation->team_id)) {
-            return true;
-        }
-
-        return false;
+        // A conversation holds its owner's data answers: a teammate with other rights never reads it.
+        return $conversation->user_id === $user->id;
     }
 
     /**

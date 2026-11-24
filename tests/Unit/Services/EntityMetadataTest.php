@@ -37,6 +37,9 @@ class EntityMetadataTest extends TestCase
     {
         parent::setUp();
 
+        // Stored examples are served per tenant: the asker is in team 1.
+        auth()->setUser(new \Illuminate\Auth\GenericUser(['id' => 1, 'current_team_id' => 1]));
+
         $this->mockVectorStore = Mockery::mock(VectorStoreInterface::class);
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true)->byDefault();
         $this->mockGraphStore = Mockery::mock(GraphStoreInterface::class);

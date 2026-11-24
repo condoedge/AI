@@ -21,6 +21,16 @@ class SimilarQuerySearcher
     ) {
     }
 
+    public const TENANT_KEY = 'team_id';
+
+    /** The tenant an example belongs to: the team its asker is in. Null when there is none. */
+    public static function tenantOf(mixed $user): ?string
+    {
+        $team = data_get($user, 'current_team_id');
+
+        return is_scalar($team) && (string) $team !== '' ? (string) $team : null;
+    }
+
     /**
      * Search for similar queries with score threshold filtering.
      *
@@ -32,8 +42,15 @@ class SimilarQuerySearcher
         string $question,
         string $collection,
         int $limit,
-        float $scoreThreshold
+        float $scoreThreshold,
+        ?string $tenant = null
     ): array {
+        // An example holds a question as its asker typed it, names and amounts included: it is
+        // served to the tenant it came from, and to no one when the asker's tenant is unknown.
+        if ($tenant === null) {
+            return [];
+        }
+
         // The few-shot collection only exists once at least one Q->Cypher pair has
         // been stored. Before that it is legitimately absent: treat it as "no
         // examples yet" instead of a vector-search error, so context quality is not
@@ -61,7 +78,7 @@ class SimilarQuerySearcher
                 $collection,
                 $embedding,
                 $limit,
-                [],
+                [self::TENANT_KEY => $tenant],
                 $scoreThreshold
             );
         } catch (\Exception $e) {

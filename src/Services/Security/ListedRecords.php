@@ -33,7 +33,8 @@ final class ListedRecords
 
     private const NODE = '\(\s*`?(\w*)`?\s*(?::\s*`?(\w+)`?)?[^()]*\)';
 
-    private const LINK = '\s*<?-(?:\[[^\]]*\])?-?>?\s*';
+    // One hop exactly: a variable-length link ([*1..3]) reaches the record through anything and names nothing.
+    private const LINK = '\s*<?-(?:\[[^\]*]*\])?-?>?\s*';
 
     /**
      * The predicate this binding must also meet, for the query as written; null when none applies.

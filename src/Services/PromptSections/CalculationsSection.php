@@ -76,10 +76,23 @@ class CalculationsSection extends BasePromptSection
             if (!empty($calc['description'])) {
                 $output .= " — {$calc['description']}";
             }
-            if (is_string($key) && !empty($calc['cypher'])) {
+            $computed = is_string($key) && is_callable($calc['resolver'] ?? null);
+            if (is_string($key) && (!empty($calc['cypher']) || $computed)) {
                 $output .= " [key: {$key}]";
             }
             $output .= "\n";
+
+            if ($computed) {
+                $output .= "  Computed by the application, the figure its screens show: use it by its key only, never write Cypher for it.\n";
+                foreach ((array) ($calc['values'] ?? []) as $value => $meaning) {
+                    $output .= "  Value <{$value}>: {$meaning}\n";
+                }
+                if (!empty($calc['notes'])) {
+                    $output .= "  Notes: {$calc['notes']}\n";
+                }
+                $output .= "\n";
+                continue;
+            }
 
             if (!empty($calc['formula'])) {
                 $output .= "  Formula: {$calc['formula']}\n";

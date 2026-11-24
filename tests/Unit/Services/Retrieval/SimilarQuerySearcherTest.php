@@ -43,10 +43,10 @@ class SimilarQuerySearcherTest extends TestCase
         $this->embeddingProvider->shouldReceive('embed')->once()->with('q')->andReturn([0.1, 0.2]);
         $this->vectorStore->shouldReceive('search')
             ->once()
-            ->with('my_collection', [0.1, 0.2], 7, [], 0.5)
+            ->with('my_collection', [0.1, 0.2], 7, ['team_id' => '7'], 0.5)
             ->andReturn([]);
 
-        $this->searcher->search('q', 'my_collection', 7, 0.5);
+        $this->searcher->search('q', 'my_collection', 7, 0.5, '7');
 
         $this->assertTrue(true);
     }
@@ -60,7 +60,7 @@ class SimilarQuerySearcherTest extends TestCase
             ['score' => 0.7, 'payload' => ['question' => 'Show customers', 'query' => 'MATCH (c:Customer) RETURN c']],
         ]);
 
-        $results = $this->searcher->search('q', 'questions', 5, 0.0);
+        $results = $this->searcher->search('q', 'questions', 5, 0.0, '7');
 
         $this->assertCount(2, $results);
         $this->assertSame('List teams', $results[0]['question']);
@@ -82,7 +82,7 @@ class SimilarQuerySearcherTest extends TestCase
             ['score' => 0.79, 'payload' => ['question' => 'Just below', 'cypher_query' => 'MATCH (c) RETURN c']],
         ]);
 
-        $results = $this->searcher->search('q', 'questions', 5, 0.80);
+        $results = $this->searcher->search('q', 'questions', 5, 0.80, '7');
 
         $this->assertSame(['Close', 'At threshold'], array_column($results, 'question'));
     }
@@ -97,7 +97,7 @@ class SimilarQuerySearcherTest extends TestCase
             ['payload' => ['question' => 'Unscored', 'cypher_query' => 'MATCH (b) RETURN b']],
         ]);
 
-        $results = $this->searcher->search('q', 'questions', 5, 0.80);
+        $results = $this->searcher->search('q', 'questions', 5, 0.80, '7');
 
         $this->assertSame(['Scored'], array_column($results, 'question'));
     }
@@ -112,7 +112,7 @@ class SimilarQuerySearcherTest extends TestCase
             ['score' => 0.8, 'payload' => ['cypher_query' => 'MATCH (n) RETURN n']],
         ]);
 
-        $results = $this->searcher->search('q', 'questions', 5, 0.0);
+        $results = $this->searcher->search('q', 'questions', 5, 0.0, '7');
 
         $this->assertCount(1, $results);
         $this->assertSame('Has both', $results[0]['question']);
@@ -126,7 +126,7 @@ class SimilarQuerySearcherTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Failed to generate embedding for question');
 
-        $this->searcher->search('q', 'questions', 5, 0.0);
+        $this->searcher->search('q', 'questions', 5, 0.0, '7');
     }
 
     /** @test */
@@ -137,7 +137,7 @@ class SimilarQuerySearcherTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Embedding provider returned empty vector');
 
-        $this->searcher->search('q', 'questions', 5, 0.0);
+        $this->searcher->search('q', 'questions', 5, 0.0, '7');
     }
 
     /** @test */
@@ -149,7 +149,7 @@ class SimilarQuerySearcherTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Vector store search failed');
 
-        $this->searcher->search('q', 'questions', 5, 0.0);
+        $this->searcher->search('q', 'questions', 5, 0.0, '7');
     }
 
     /**
@@ -165,6 +165,12 @@ class SimilarQuerySearcherTest extends TestCase
         $this->vectorStore->shouldNotReceive('search');
         $this->embeddingProvider->shouldReceive('embed')->andReturn([0.1]);
 
+        $this->assertSame([], $this->searcher->search('q', 'questions', 5, 0.0, '7'));
+    }
+
+    /** @test */
+    public function an_asker_without_a_tenant_is_served_no_example(): void
+    {
         $this->assertSame([], $this->searcher->search('q', 'questions', 5, 0.0));
     }
 }

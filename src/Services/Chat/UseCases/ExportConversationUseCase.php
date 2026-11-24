@@ -37,7 +37,7 @@ class ExportConversationUseCase
     {
         // Step 0: authorize — scope by ownership against the passed $user.
         $conversation = AiConversation::query()
-            ->where('user_id', $user->id ?? null)
+            ->ownedBy($user)
             ->find($conversationId);
 
         if (!$conversation) {

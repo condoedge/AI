@@ -42,6 +42,9 @@ class ContextRetrieverTest extends TestCase
     {
         parent::setUp();
 
+        // Stored examples are served per tenant: the asker is in team 1.
+        auth()->setUser(new \Illuminate\Auth\GenericUser(['id' => 1, 'current_team_id' => 1]));
+
         $this->mockVectorStore = Mockery::mock(VectorStoreInterface::class);
         // The similar-query searcher now guards on collection existence before
         // searching; default it present so existing search expectations still fire.
@@ -707,7 +710,7 @@ class ContextRetrieverTest extends TestCase
             ->shouldReceive('search')
             ->once()
             // Review M-4: the configured example_min_similarity (0.80 default), not 0.0.
-            ->with($collection, $embedding, $limit, [], 0.80)
+            ->with($collection, $embedding, $limit, ['team_id' => '1'], 0.80)
             ->andReturn([]);
 
         $this->service->searchSimilar($question, $collection, $limit);
@@ -863,7 +866,7 @@ class ContextRetrieverTest extends TestCase
         $this->mockVectorStore
             ->shouldReceive('search')
             ->once()
-            ->with('questions', Mockery::any(), 5, [], 0.80)
+            ->with('questions', Mockery::any(), 5, ['team_id' => '1'], 0.80)
             ->andReturn([]);
 
         $this->service->searchSimilar($question);

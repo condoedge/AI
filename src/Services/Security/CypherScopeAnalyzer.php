@@ -1237,6 +1237,14 @@ final class CypherScopeAnalyzer
                 // anywhere in the part is a genuinely untyped node access; tenancy
                 // is unprovable → reject.
                 if (!$this->isMatchedNodePattern($tokens, $i, $start, $baseParen, $baseBracket, $baseBrace)) {
+                    // A node of a path written outside a MATCH — a pattern predicate in WHERE, exists(...)
+                    // in RETURN — is read too: `(u)-[:UNITS]->({name: '101'})` answers yes or no about a
+                    // neighbour nothing scopes. Only a live reference to a scoped binding may stand there.
+                    if ($this->isArrowConnectedNode($tokens, $i)
+                        && ($parsed['alias'] === null
+                            || !$this->isLiveBackReference($tokens, $labelledAliasIdx[$parsed['alias']] ?? [], $i, $parsed['alias'], $baseParen, $baseBracket, $baseBrace, true, $start))) {
+                        return ['occurrences' => [], 'reason' => 'unsupported_pattern_scope'];
+                    }
                     continue;
                 }
                 $alias = $parsed['alias'];

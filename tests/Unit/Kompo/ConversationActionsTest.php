@@ -80,6 +80,29 @@ class ConversationActionsTest extends TestCase
     }
 
     /** @test */
+    public function a_conversation_stays_in_the_team_it_took_place_in(): void
+    {
+        config()->set('ai.chat.conversations_per_team', true);
+        $conversation = AiConversation::create(['user_id' => $this->owner->id, 'team_id' => 4]);
+
+        $inTheTeam = clone $this->owner;
+        $inTheTeam->current_team_id = 4;
+        $elsewhere = clone $this->owner;
+        $elsewhere->current_team_id = 9;
+
+        $this->assertTrue($this->actions->togglePin($conversation->id, $inTheTeam));
+        $this->assertFalse($this->actions->togglePin($conversation->id, $elsewhere));
+        $this->assertFalse($this->actions->archive($conversation->id, $elsewhere));
+        $this->assertFalse($this->actions->delete($conversation->id, $elsewhere));
+        $this->assertSame(1, AiConversation::ownedBy($inTheTeam)->count());
+        $this->assertSame(0, AiConversation::ownedBy($elsewhere)->count());
+        $this->assertSame(0, AiConversation::ownedBy(null)->count());
+
+        config()->set('ai.chat.conversations_per_team', false);
+        $this->assertSame(1, AiConversation::ownedBy($elsewhere)->count(), 'off: the owner rule alone');
+    }
+
+    /** @test */
     public function toggle_pin_is_a_no_op_for_a_non_owner(): void
     {
         $conversation = AiConversation::create(['user_id' => $this->owner->id]);
