@@ -22,6 +22,9 @@ use Condoedge\Utils\Facades\FileModel;
  */
 class RichDataRenderer
 {
+    /** Characters of a cited passage shown before « the whole passage ». */
+    protected const PASSAGE_SHOWN = 320;
+
     public function __construct(
         protected ChatThemeInterface $theme,
         protected ChatSettingsInterface $settings,
@@ -128,12 +131,56 @@ class RichDataRenderer
             return null;
         }
 
-        $cards = array_map(fn($file) => $this->fileReferenceCard($file), array_values($files));
+        $cards = array_map(fn($file) => $this->citedPassageCard($file), array_values($files));
 
         return _Rows(
             _Html(__('ai.chat.sources'))->class('text-xs font-medium text-gray-700 mb-2'),
-            _Flex(...$cards)->class('flex-wrap gap-2'),
+            _Rows(...$cards)->class('gap-2'),
         )->class('mt-4 pt-3 border-t border-gray-100');
+    }
+
+    /**
+     * One card per cited passage: the document, where in it (page, articles, section), and
+     * the words the answer rests on. A reference that carries no passage is the document
+     * alone, as before. A project file's text is not the reader's to read: name only.
+     */
+    protected function citedPassageCard(array $file)
+    {
+        $document = $this->fileReferenceCard($file);
+        $passage = trim((string) ($file['passage'] ?? $file['snippet'] ?? ''));
+
+        if ($passage === '' || $this->isInternalFile($file)) {
+            return $document;
+        }
+
+        $where = implode(' · ', array_filter([
+            is_numeric($file['page'] ?? null) ? __('ai.chat.source-page', ['page' => (int) $file['page']]) : null,
+            $this->citedArticlesLabel($file),
+            trim((string) ($file['heading'] ?? '')) !== '' ? '§ ' . trim((string) $file['heading']) : null,
+        ]));
+
+        $short = mb_strlen($passage) > self::PASSAGE_SHOWN ? rtrim(mb_substr($passage, 0, self::PASSAGE_SHOWN)) . '…' : $passage;
+
+        return _Rows(
+            _Flex(
+                is_numeric($file['ref'] ?? null) ? _Html('[' . (int) $file['ref'] . ']')->class('text-xs font-semibold text-gray-700') : null,
+                $document,
+            )->class('items-center gap-2 flex-wrap'),
+            $where === '' ? null : _Html(e($where))->class('text-xs text-gray-700 mt-1'),
+            // Tenant-supplied text: escaped, shown as it is written, never interpreted.
+            _Html('<blockquote class="whitespace-pre-line">' . e($short) . '</blockquote>')->class('text-sm text-gray-700 mt-2 pl-3 border-l-2 border-gray-200'),
+            $short === $passage ? null : _Html('<details><summary class="cursor-pointer">' . e(__('ai.chat.source-full')) . '</summary>'
+                . '<div class="whitespace-pre-line mt-2">' . e($passage) . '</div></details>')->class('text-sm text-gray-700 mt-1'),
+        )->class('rounded-lg border border-gray-200 p-3');
+    }
+
+    /** The articles the answer named in this passage, else the one or the range the passage holds. */
+    protected function citedArticlesLabel(array $file): ?string
+    {
+        $articles = array_filter((array) ($file['cited_articles'] ?? []), 'is_numeric')
+            ?: array_filter([$file['article_range'] ?? null]) ?: array_filter([$file['article_no'] ?? null]);
+
+        return $articles === [] ? null : 'art. ' . implode(', ', array_map('strval', $articles));
     }
 
     /**
