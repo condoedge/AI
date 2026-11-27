@@ -18,7 +18,7 @@ return [
     'repeat-suite' => 'Comme le jeu le prévoit',
     'repeat-once' => 'Une seule fois',
     'repeat-label' => 'Chaque question une fois|Chaque question :count fois',
-    'fixture-help' => 'Les numéros des personnes, du syndicat et de l\'année de cet environnement. Les valeurs en gris sont des exemples : elles ne sont jamais utilisées.',
+    'fixture-help' => 'Les numéros des personnes et des fiches que la suite utilise, remplis avec les valeurs par défaut de cet environnement (fixture.php de la suite). Vérifiez la ligne sous chacun avant de lancer.',
     'fixture-required' => 'Inscrivez le numéro de cet environnement.',
     'id-not-found' => 'Aucun enregistrement avec ce numéro',
     'assistant-closed' => 'Maryanne n\'est pas activée pour : :teams. Un responsable de l\'équipe doit accepter les conditions de l\'IA dans Paramètres ; sans cela, chaque question reçoit la même erreur d\'accès.',

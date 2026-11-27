@@ -92,13 +92,18 @@ class AiEvalPage extends Form
             return null;
         }
 
+        $defaults = EvalSuites::defaultFixture($suite);
+
         return _Rows(
             _Html('ai::eval.fixture-help')->class('text-base text-gray-700 mb-2'),
             _Div(
                 collect(EvalSuites::fixtureKeys($suite))->reject(fn ($key) => str_ends_with($key, '_file'))->map(fn ($key) => _Rows(
-                    _Input($key)->name('fixture_'.$key, false)->placeholder((string) (EvalSuites::defaultFixture($suite)[$key] ?? ''))->class('mb-1')
-                        ->selfPost('fixtureIs', ['key' => $key])->withAllFormValues()->inPanel('ai-eval-id-'.$key),
-                    _Panel()->id('ai-eval-id-'.$key)->class('mb-4'),
+                    // Labelled by its fixture key as written, never translated: a host language file
+                    // of the same name ('union', 'team') would print as a whole array.
+                    tap(_Input()->name('fixture_'.$key, false)->default($defaults[$key] ?? null)->class('mb-1')
+                        ->selfPost('fixtureIs', ['key' => $key])->withAllFormValues()->inPanel('ai-eval-id-'.$key), fn ($input) => $input->label = $key),
+                    // The environment's default is filled in, and what it is here shows at once: a wrong id is seen before launching.
+                    _Panel(isset($defaults[$key]) ? $this->idLine(EvalPanel::host()->describe($key, $defaults[$key], $suite)) : null)->id('ai-eval-id-'.$key)->class('mb-4'),
                 ))
             )->class('grid grid-cols-2 md:grid-cols-4 gap-x-4'),
         )->class('mt-4');

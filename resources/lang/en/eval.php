@@ -18,7 +18,7 @@ return [
     'repeat-suite' => 'As the suite sets',
     'repeat-once' => 'Once only',
     'repeat-label' => 'Each question once|Each question :count times',
-    'fixture-help' => 'The ids of the people, the syndicate and the year of this environment. The grey values are examples: they are never used.',
+    'fixture-help' => 'The ids of the people and records the suite uses, filled with this environment\'s defaults (the suite\'s fixture.php). Check the line under each before launching.',
     'fixture-required' => 'Enter this environment\'s id.',
     'id-not-found' => 'Nothing has this id',
     'assistant-closed' => 'Maryanne is not enabled for: :teams. Someone in charge of the team must accept the AI terms in Settings; without that, every question gets the same access error.',

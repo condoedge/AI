@@ -2,6 +2,7 @@
 
 namespace Condoedge\Ai\Eval;
 
+use Condoedge\Ai\Support\AiAccess;
 use Illuminate\Support\Str;
 
 /**
@@ -193,13 +194,23 @@ class EvalSuites
     }
 
     /**
-     * Who among the askers of these cases the assistant refuses, by the host (EvalHost::closedTo):
-     * every answer of a run would be the same refusal, so it is not started.
+     * Who among the askers of these cases the assistant refuses: every answer of a run would be
+     * the same refusal, so it is not started. The assistant's own rule decides (AiAccess, the
+     * host's ai.access.authorize); the host names the groups behind it (EvalHost::closedTo), and
+     * an asker it refuses that no group explains (no team, say) is named as a person.
      *
      * @return array<string>
      */
     public static function closedTo(array $cases): array
     {
-        return EvalPanel::host()->closedTo(collect($cases)->pluck('case.user')->filter()->unique()->map(fn ($id) => (int) $id)->values()->all());
+        $ids = collect($cases)->pluck('case.user')->filter()->unique()->map(fn ($id) => (int) $id)->values()->all();
+        $refused = EvalPanel::userModel()::whereIn('id', $ids)->get()->reject(fn ($user) => AiAccess::allows($user));
+
+        if ($refused->isEmpty()) {
+            return [];
+        }
+
+        return EvalPanel::host()->closedTo($refused->map(fn ($user) => (int) $user->getKey())->all())
+            ?: $refused->map(fn ($user) => ($user->name ?? '').' #'.$user->getKey())->map('trim')->values()->all();
     }
 }
