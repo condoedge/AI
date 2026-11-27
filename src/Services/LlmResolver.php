@@ -95,10 +95,13 @@ class LlmResolver
         return $this->cache[$key] = $isolated ?? $this->forRole($role);
     }
 
-    /** A role's null value falls back to the base config, except `temperature => null`: send none. */
+    /**
+     * A role's null value falls back to the base config, except `temperature` and
+     * `reasoning_effort`: null there means send none (a model that takes neither).
+     */
     private function overrides(array $config): array
     {
-        return array_filter($config, fn ($v, $k) => $v !== null || $k === 'temperature', ARRAY_FILTER_USE_BOTH);
+        return array_filter($config, fn ($v, $k) => $v !== null || in_array($k, ['temperature', 'reasoning_effort'], true), ARRAY_FILTER_USE_BOTH);
     }
 
     public function default(): LlmProviderInterface
