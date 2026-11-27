@@ -69,4 +69,25 @@ class TaskInstructionsSectionTest extends TestCase
 
         $this->assertStringEndsWith(TaskInstructionsSection::RESPONSE_CUE, (new TaskInstructionsSection())->format('q', $context));
     }
+
+    /** @test The sentence follows the flag the pipeline acts on, never config alone. */
+    public function a_how_to_needs_no_query_only_where_the_documents_are_read_after_it(): void
+    {
+        $sentence = 'A question that asks how to do something in the application, or what a document says, needs no query';
+
+        $this->assertStringNotContainsString($sentence, $this->format());
+
+        $context = new PipelineContext();
+        $context->documentsAfterData = true;
+        $output = (new TaskInstructionsSection())->format('q', $context);
+
+        $this->assertStringContainsString($sentence, $output);
+        $this->assertStringEndsWith(TaskInstructionsSection::RESPONSE_CUE, $output);
+
+        $context->selectionInfo['calculations'] = ['matched' => ['fees' => 0.8]];
+        $output = (new TaskInstructionsSection())->format('q', $context);
+
+        $this->assertStringContainsString($sentence, $output);
+        $this->assertStringEndsWith(TaskInstructionsSection::CALCULATION_RESPONSE_CUE, $output);
+    }
 }

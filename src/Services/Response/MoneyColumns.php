@@ -25,6 +25,9 @@ use Condoedge\Ai\Services\Discovery\EntityLabelIndex;
  * WITH chains, and the keys of collected map literals ({k: expr}). An expression
  * mixing a non-money source (b.due_amount * t.rate), a count, or anything not
  * resolvable is NOT money — when unknown, nothing is summed.
+ *
+ * Rows an application calculation computed have no query to read; their money
+ * columns are the ones the host declares for that calculation (declaredBy).
  */
 final class MoneyColumns
 {
@@ -102,6 +105,20 @@ final class MoneyColumns
         }
 
         return array_values(array_unique($money));
+    }
+
+    /**
+     * An application calculation's money columns: its rows come from the host's own code, with no
+     * query to read them from, so the host names them ('money' => ['billed', ...] in ai.calculations).
+     *
+     * @return array<int, string>
+     */
+    public static function declaredBy(string $calculation): array
+    {
+        $key = explode('.', trim($calculation), 2)[0];
+        $list = $key === '' ? [] : config("ai.calculations.{$key}.money", []);
+
+        return is_array($list) ? array_values(array_filter($list, 'is_string')) : [];
     }
 
     /**

@@ -59,20 +59,25 @@ class DataAnswerPlanLeadTest extends TestCase
         . 'RETURN t.name AS team_name, t.team_type AS team_type, count(DISTINCT u) AS members, t.contact_email AS contact_email, '
         . 't.contact_phone AS contact_phone LIMIT 100';
 
-    /** @test Measured: "what is the difference between the two years?" was told never to add them up. */
+    /**
+     * @test Rows the request works on are material: the rules that present fresh rows (the
+     * HOMONYMS note) yield to it. The fixture is a real value-only homonym (one unit name under
+     * two parents); rows of one subject differing only by a period written as text are no
+     * homonyms at all, so they cannot show the rule yielding.
+     */
     public function rows_the_request_works_on_are_material_and_the_rules_that_present_rows_yield(): void
     {
         $prompt = function (array $metadata): string {
             $context = new PipelineContext();
-            $context->question = 'What is the difference between the two years?';
+            $context->question = 'What is the difference between the two?';
             $context->qu = new QueryUnderstandingResult(questionType: 'data_query', language: 'en');
             $context->queryResult = new QueryGenerationResult(
-                cypher: 'MATCH (u:Union) RETURN u.name AS union_name, u.year AS year, u.supplier AS supplier, sum(u.billed) AS billed',
+                cypher: 'MATCH (u:Unit)-[:UNION]->(un:Union) RETURN un.name AS union_name, u.name AS unit_name, u.balance AS balance',
                 metadata: $metadata
             );
             $context->executionResult = new QueryExecutionResult(success: true, data: [
-                ['union_name' => 'Soho', 'year' => '2021', 'supplier' => 'Hydro', 'billed' => 100.50],
-                ['union_name' => 'Soho', 'year' => '2022', 'supplier' => 'Hydro', 'billed' => 40.25],
+                ['union_name' => 'Soho', 'unit_name' => '310', 'balance' => 100.50],
+                ['union_name' => 'Parc', 'unit_name' => '310', 'balance' => 40.25],
             ]);
 
             return DataAnswerPlan::for($context)->promptBlock(true);

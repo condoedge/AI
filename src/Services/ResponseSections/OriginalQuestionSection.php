@@ -31,7 +31,7 @@ class OriginalQuestionSection extends BaseResponseSection
         // A follow-up leans on the conversation ("that number"), and these words alone do not say
         // what it refers to: measured 2026-10-30, the answer asked the user for a figure the rows
         // held. Query Understanding has already resolved it.
-        $resolved = $context->qu->followUpReference ? trim($context->qu->clarifiedQuestion) : '';
+        $resolved = $context->qu->resolvedFollowUp();
         if ($resolved !== '' && $resolved !== trim($question)) {
             $output .= "Read with the conversation, it asks:\n" . $this->spotlight($resolved, 'resolved_question') . "\n\n";
         }

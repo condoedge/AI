@@ -67,7 +67,7 @@ final class Frontmatter
         return $metadata;
     }
 
-    /** YAML when it parses; else one `key: value` / `key: [a, b]` per line (an unquoted ": " in a value breaks YAML, not this). */
+    /** YAML when it parses; else one `key: value` / `key: [a, b]` per line, and under a key written alone its indented `sub: value` or `- item` lines (one level), so a map or block list is never lost (an unquoted ": " in a value breaks YAML, not this). */
     private static function parse(string $block): array
     {
         if (class_exists(\Symfony\Component\Yaml\Yaml::class)) {
@@ -82,16 +82,32 @@ final class Frontmatter
         }
 
         $fields = [];
+        $parent = null; // a key written with no value: the indented lines under it are its entries
         foreach (preg_split('/\r?\n/', $block) ?: [] as $line) {
-            if (preg_match('/^([A-Za-z_][\w-]*):\s*(.*)$/', $line, $m) !== 1) {
-                continue;
+            if (preg_match('/^([A-Za-z_][\w-]*):\s*(.*)$/', $line, $m) === 1) {
+                $fields[$m[1]] = self::value($m[2]);
+                $parent = trim($m[2]) === '' ? $m[1] : null;
+            } elseif ($parent !== null && preg_match('/^\s+(?:-\s+(.*)|([A-Za-z_][\w-]*):\s*(.*))$/', $line, $c) === 1) {
+                $entries = is_array($fields[$parent]) ? $fields[$parent] : [];
+                if (($c[2] ?? '') === '') {
+                    $entries[] = self::value($c[1]);
+                } else {
+                    $entries[$c[2]] = self::value($c[3]);
+                }
+                $fields[$parent] = $entries;
             }
-            $value = trim($m[2]);
-            $fields[$m[1]] = preg_match('/^\[(.*)\]$/', $value, $list) === 1
-                ? array_values(array_filter(array_map(static fn ($item) => trim(trim($item), '"\''), explode(',', $list[1])), static fn ($v) => $v !== ''))
-                : trim($value, '"\'');
         }
 
         return $fields;
+    }
+
+    /** A scalar without its quotes, or a `[a, b]` flow list. */
+    private static function value(string $raw): string|array
+    {
+        $value = trim($raw);
+
+        return preg_match('/^\[(.*)\]$/', $value, $list) === 1
+            ? array_values(array_filter(array_map(static fn ($item) => trim(trim($item), '"\''), explode(',', $list[1])), static fn ($v) => $v !== ''))
+            : trim($value, '"\'');
     }
 }

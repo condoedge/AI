@@ -45,6 +45,16 @@ class FrontmatterTest extends TestCase
     }
 
     /** @test */
+    public function the_line_reader_keeps_a_map_and_a_block_list_under_a_key(): void
+    {
+        [$fields] = Frontmatter::split("---\nname: Notes: the basics\ndisclaimer:\n  en: Note.\n  fr: \"Remarque.\"\nkeywords:\n  - one\n  - two\nslug: notes\n---\nText");
+
+        $this->assertSame(['en' => 'Note.', 'fr' => 'Remarque.'], $fields['disclaimer']);
+        $this->assertSame(['one', 'two'], $fields['keywords']);
+        $this->assertSame('notes', $fields['slug']);
+    }
+
+    /** @test */
     public function the_metadata_uses_the_package_names_through_the_hosts_key_map(): void
     {
         config(['ai.file_context.frontmatter.keys' => ['title' => 'titre', 'audience' => 'public', 'breadcrumb' => 'chemin', 'keywords' => 'mots_cles', 'related' => 'voir_aussi']]);

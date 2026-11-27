@@ -56,6 +56,9 @@ class PipelineContext
     /** The question asks for a figure this asker cannot read, and for nothing a skill explains better: the answer is the refusal. */
     public bool $figureOutOfReach = false;
 
+    /** Documents are searched after the data part, and only when it returns no rows (AiManager::documentsAfterData). */
+    public bool $documentsAfterData = false;
+
     /** Conversation context from chat pipeline */
     public array $conversationContext = [];
 

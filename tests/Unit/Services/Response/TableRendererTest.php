@@ -277,6 +277,49 @@ class TableRendererTest extends TestCase
         $this->assertSame([], $this->renderer->homonyms($this->units(5)));
     }
 
+    /**
+     * @test A number written as text (a period, an amount) is a per-row fact in the value-only
+     * fallback: lines of one subject differing only by such values are no homonym group.
+     */
+    public function year_and_amount_text_columns_are_never_homonym_by(): void
+    {
+        $rows = [
+            ['name' => 'Northwind', 'parent' => 'Alpha', 'year' => '2022', 'amount' => '145.30'],
+            ['name' => 'Northwind', 'parent' => 'Alpha', 'year' => '2021', 'amount' => '815.11'],
+        ];
+
+        $this->assertSame([], $this->renderer->homonyms($rows));
+    }
+
+    /** @test A text column of decimal numbers is a measure, like a float column: never the shared name. */
+    public function a_decimal_text_column_is_never_a_shared_name(): void
+    {
+        $rows = [
+            ['name' => 'Northwind', 'parent' => 'Alpha', 'still_due' => '0.00'],
+            ['name' => 'Contoso', 'parent' => 'Alpha', 'still_due' => '0.00'],
+        ];
+
+        $groups = $this->renderer->homonyms($rows);
+
+        $this->assertSame([], array_values(array_filter($groups, static fn (array $g): bool => $g['column'] === 'still_due')));
+    }
+
+    /** @test Same-named records told apart by a text parent column are still one homonym group. */
+    public function a_same_name_differing_by_a_text_parent_still_is_one(): void
+    {
+        $rows = $this->renderer->prepare([
+            ['_label' => 'Thread', 'id' => 11, 'subject' => 'Water leak', 'union_name' => 'Alpha', 'opened' => '2024-03-01', 'messages' => 4],
+            ['_label' => 'Thread', 'id' => 12, 'subject' => 'Water leak', 'union_name' => 'Beta', 'opened' => '2024-05-09', 'messages' => 2],
+        ]);
+
+        $groups = $this->renderer->homonyms($rows);
+
+        $this->assertCount(1, $groups);
+        $this->assertSame('subject', $groups[0]['column']);
+        $this->assertSame('union_name', $groups[0]['by']);
+        $this->assertSame(['Alpha', 'Beta'], $groups[0]['values']);
+    }
+
     /** @test F8 (eval A board): an unaliased RETURN c.first_name keys the column `c.first_name` — the header is the property. */
     public function an_unaliased_variable_property_key_is_labelled_by_its_property(): void
     {

@@ -111,14 +111,14 @@ class AiManagerDigestRoutingTest extends TestCase
         ]]);
     }
 
-    private function makeContext(bool $digestRequest, bool $followUp = false, ?string $exportFormat = null): PipelineContext
+    private function makeContext(bool $digestRequest, bool $followUp = false, ?string $exportFormat = null, string $questionType = 'data_query'): PipelineContext
     {
         $ctx = new PipelineContext();
         $ctx->question = 'What should I take care of next?';
         $ctx->qu = new QueryUnderstandingResult(
             searchQuery: 'workspace attention overview',
             intent: 'list',
-            questionType: 'data_query',
+            questionType: $questionType,
             exportFormat: $exportFormat,
             followUpReference: $followUp,
             digestRequest: $digestRequest,
@@ -220,6 +220,19 @@ class AiManagerDigestRoutingTest extends TestCase
     {
         $this->configureSource();
         $ctx = $this->makeContext(digestRequest: false);
+
+        $this->runNormalTurn($ctx);
+
+        $result = $this->manager->answerQuestion($ctx->question, ['user' => (object) ['id' => 13]]);
+
+        $this->assertSame('normal answer', $result['answer']);
+    }
+
+    /** @test */
+    public function a_question_about_where_the_application_shows_the_items_is_not_a_digest(): void
+    {
+        $this->configureSource();
+        $ctx = $this->makeContext(digestRequest: true, questionType: 'knowledge_query');
 
         $this->runNormalTurn($ctx);
 

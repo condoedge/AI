@@ -37,3 +37,22 @@ if (config('ai.admin.enabled', true)) {
 			->name('ai.admin.conversations');
 	});
 }
+
+// The eval panel: suites of questions asked to the assistant as real people, graded against the
+// application's data (Condoedge\Ai\Eval\EvalPanel lists its settings, config ai.eval.*). Gate
+// ability manageAiEval is DENIED unless the host grants it; every component re-checks it.
+if (config('ai.eval.enabled', true)) {
+	Route::group(array_filter([
+		'middleware' => array_merge(
+			(array) config('ai.eval.middleware', config('ai.admin.middleware', ['web', 'auth'])),
+			['can:' . \Condoedge\Ai\Eval\EvalPanel::ABILITY]
+		),
+		'layout' => config('ai.eval.layout', config('ai.admin.layout')),
+	]), function () {
+		$path = trim(config('ai.eval.path', 'ai/admin/eval'), '/');
+
+		Route::get($path, \Condoedge\Ai\Kompo\Admin\Eval\AiEvalPage::class)->name('ai.eval');
+		Route::get($path . '/{id}', \Condoedge\Ai\Kompo\Admin\Eval\AiEvalRunView::class)->name('ai.eval.run');
+		Route::get($path . '/{id}/export', \Condoedge\Ai\Http\Controllers\EvalExportController::class)->name('ai.eval.export');
+	});
+}

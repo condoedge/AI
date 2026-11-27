@@ -857,6 +857,10 @@ class AiServiceProvider extends ServiceProvider
         if (!Gate::has(\Condoedge\Ai\Services\Admin\ConversationInsights::ABILITY)) {
             Gate::define(\Condoedge\Ai\Services\Admin\ConversationInsights::ABILITY, fn ($user = null) => false);
         }
+        // The eval panel asks the assistant as other people: denied the same way.
+        if (!Gate::has(\Condoedge\Ai\Eval\EvalPanel::ABILITY)) {
+            Gate::define(\Condoedge\Ai\Eval\EvalPanel::ABILITY, fn ($user = null) => false);
+        }
 
         // Master switch off: no chat, export, admin or health route at all.
         if (\Condoedge\Ai\Support\AiFeature::enabled()) {
@@ -867,6 +871,8 @@ class AiServiceProvider extends ServiceProvider
         $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
 
         $this->loadJsonTranslationsFrom(__DIR__ . '/../resources/lang');
+        // Grouped files beside the JSON ones: __('ai::eval.key') for the eval panel.
+        $this->loadTranslationsFrom(__DIR__ . '/../resources/lang', 'ai');
 
         $this->publishes([
             __DIR__ . '/../config/ai.php' => config_path('ai.php'),
@@ -908,7 +914,7 @@ class AiServiceProvider extends ServiceProvider
                 \Condoedge\Ai\Console\Commands\SetupCommand::class,
                 \Condoedge\Ai\Console\Commands\EnhanceConfigCommand::class,
                 \Condoedge\Ai\Console\Commands\DocumentMapCommand::class,
-                // ai:eval lives in the dev-only condoedge/ai-eval package.
+                \Condoedge\Ai\Console\Commands\EvalRunCommand::class,
             ]);
         }
 

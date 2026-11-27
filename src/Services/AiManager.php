@@ -1030,10 +1030,22 @@ class AiManager
             $ctx = $this->selectSkill($ctx, $question, $options);
 
             $stage = 'file_context';
-            $ctx = $this->retrieveAndSetFileContext($ctx, $question, $options);
+            $ctx->documentsAfterData = $this->documentsAfterData($ctx, $options['user'] ?? null);
+            if (!$ctx->documentsAfterData) {
+                $ctx = $this->retrieveAndSetFileContext($ctx, $question, $options);
+            }
 
             $stage = 'query_generation';
             $ctx = $this->generateAndExecute($ctx, $question, $options);
+
+            if ($ctx->documentsAfterData) {
+                $stage = 'file_context';
+                if (empty($ctx->executionResult->data)) {
+                    $ctx = $this->retrieveAndSetFileContext($ctx, $question, $options);
+                } else {
+                    $this->emitStage($observer, 'file_context', ['skipped' => 'data_rows']);
+                }
+            }
             $ctx = $this->letUploadsYieldToData($ctx, $options['user'] ?? null);
 
             $stage = 'clarify';
@@ -2230,6 +2242,24 @@ class AiManager
         );
 
         return in_array($questionType, $normalized, true);
+    }
+
+    /**
+     * Whether this data question searches the documents AFTER its query, and only when the query returns
+     * no rows. Answers built from rows do not use the documents, so such a turn never waits on the search.
+     * A declined, empty, denied or failed query, or a calculation out of reach, still gets the documents.
+     * It applies only where the search would run at all: file search on and wired, a query generated for
+     * this asker, data questions not skipped (ai.file_context.skip_for_question_types), and not a file
+     * listing (its enumeration answers before any query). Every other turn searches first, as before.
+     */
+    private function documentsAfterData(PipelineContext $ctx, mixed $user): bool
+    {
+        return strtolower(trim((string) $ctx->qu->questionType)) === 'data_query'
+            && (bool) config('ai.file_context.enabled', true)
+            && $this->fileContextProvider !== null
+            && $this->queryGenerationEnabled($user)
+            && !$this->isFileListingIntent($ctx)
+            && !$this->shouldSkipFileSearchFor($ctx, $user);
     }
 
     /**
@@ -3486,7 +3516,9 @@ class AiManager
         // attention") as a follow-up too; letting that veto the digest exported
         // the previous 1-row result. The digest composer owns a combined
         // export ask (export_followup_offered).
-        if (!$ctx->qu->digestRequest) {
+        // The digest answers a request for the items. A question about where the application
+        // shows them is a question about the application (knowledge_query): the help content answers it.
+        if (!$ctx->qu->digestRequest || $ctx->qu->questionType === 'knowledge_query') {
             return null;
         }
 
@@ -3873,11 +3905,12 @@ class AiManager
 
     /**
      * ai.file_context.uploads_yield_to_data: an uploaded file is a dated picture of the data. On a data
-     * question it leaves the turn when the query returned rows (beside fresh rows it can only contradict
-     * them) and whenever the asker's audience limits what they read (a figure the app does not show them
-     * never reaches them through a PDF); help articles stay. A question that audience's data could not
-     * even be queried for is out of their reach: the answer says so. Wherever uploaded files stay,
-     * FileContextSection asks the answer to name their document and year.
+     * question it leaves the turn whenever the asker's audience limits what they read (a figure the app
+     * does not show them never reaches them through a PDF); help articles stay. Where documents are
+     * searched after the data part ({@see self::documentsAfterData()}), a turn with rows has no documents
+     * at all. A question that audience's data could not even be queried for is out of their reach, and
+     * the answer says so. Wherever uploaded files stay, FileContextSection asks the answer to name their
+     * document and year.
      */
     private function letUploadsYieldToData(PipelineContext $ctx, mixed $user): PipelineContext
     {
@@ -3897,7 +3930,7 @@ class AiManager
             return $ctx;
         }
 
-        if (!$isDataQuestion || (!$hasRows && !$limited)) {
+        if (!$isDataQuestion || !$limited) {
             $ctx->fileContext['uploads_are_dated'] = true;
 
             return $ctx;
@@ -6032,16 +6065,6 @@ class AiManager
         }
     }
 
-    /**
-     * Persist the attached chips on the response (metadata.invocations — what
-     * AskQuestionUseCase stores on the assistant message and MessageBubbleRenderer
-     * re-dispatches with a FRESH authorize at every render). Placeholder substitution
-     * and link filtering already ran on the NARRATIVE inside the composer — never here,
-     * on the finished answer, where a table cell's record content would be touched.
-     *
-     * @param array<string, mixed> $response
-     * @return array<string, mixed>
-     */
     /** The skill's own line under an answer its references ground, in the question's language. */
     private function withSkillDisclaimer(array $response, PipelineContext $ctx): array
     {
@@ -6057,6 +6080,16 @@ class AiManager
         return $response;
     }
 
+    /**
+     * Persist the attached chips on the response (metadata.invocations — what
+     * AskQuestionUseCase stores on the assistant message and MessageBubbleRenderer
+     * re-dispatches with a FRESH authorize at every render). Placeholder substitution
+     * and link filtering already ran on the NARRATIVE inside the composer — never here,
+     * on the finished answer, where a table cell's record content would be touched.
+     *
+     * @param array<string, mixed> $response
+     * @return array<string, mixed>
+     */
     private function withAttachedActions(array $response, ?AttachedActions $attached): array
     {
         if ($attached === null || $attached->isEmpty()) {

@@ -259,6 +259,25 @@ class QueryUnderstandingResult
     }
 
     /**
+     * What a follow-up asks once read with the conversation: $clarifiedQuestion, trimmed. '' on a
+     * first message, where the clarified question only rewords the question itself.
+     *
+     * $orSearchQuery: when $clarifiedQuestion is blank (the rewrite guard can empty it), fall back
+     * to $searchQuery. For a reader that must judge WHAT the follow-up is about: a keyword phrase
+     * still names the subject, which the follow-up's own words may not. A reader that shows the
+     * resolved form as a sentence leaves it off.
+     */
+    public function resolvedFollowUp(bool $orSearchQuery = false): string
+    {
+        if (!$this->followUpReference) {
+            return '';
+        }
+        $clarified = trim($this->clarifiedQuestion);
+
+        return $clarified === '' && $orSearchQuery ? trim($this->searchQuery) : $clarified;
+    }
+
+    /**
      * A copy judged as a follow-up that operates on the previous result, with
      * the clarify fields cleared. Used by AiManager's structured clarify guard
      * (an export ask while a result is recorded) so the export path sources the

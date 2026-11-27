@@ -1264,6 +1264,50 @@ class DataAnswerPlanTest extends TestCase
         $this->assertStringContainsString('| Name | Venue |', DataAnswerPlan::for($ctx)->finalize('{{table}}', true, 'en'));
     }
 
+    /** Two lines of one subject, one per period, as an application calculation returns them (no query). */
+    private function applicationPlan(): DataAnswerPlan
+    {
+        $ctx = new PipelineContext();
+        $ctx->question = 'How much did Northwind bill us?';
+        $ctx->qu = new QueryUnderstandingResult(questionType: 'data_query', language: 'en');
+        $ctx->queryResult = new QueryGenerationResult(cypher: null);
+        $ctx->executionResult = new QueryExecutionResult(success: true, data: [
+            ['parent' => 'Alpha', 'name' => 'Northwind', 'year' => '2022', 'lines' => 1, 'billed' => '145.30'],
+            ['parent' => 'Alpha', 'name' => 'Northwind', 'year' => '2021', 'lines' => 6, 'billed' => '815.11'],
+        ], metadata: ['source' => 'application', 'calculation' => 'x']);
+
+        return DataAnswerPlan::for($ctx);
+    }
+
+    /**
+     * @test Rows the host application computed have no query to read money from: the money
+     * columns the calculation declares get the complete-table total, as a query's would, and
+     * per-period lines of one subject are no homonyms.
+     */
+    public function a_calculation_states_the_total_of_the_money_columns_it_declares(): void
+    {
+        config(['ai.calculations.x.money' => ['billed']]);
+        $plan = $this->applicationPlan();
+
+        $prompt = $plan->promptBlock(true);
+        $this->assertStringContainsString('COMPUTED TOTALS (computed by the system', $prompt);
+        $this->assertStringContainsString('960.41', $this->lineWith($prompt, 'TOTAL of'));
+        $this->assertStringNotContainsString('HOMONYMS', $prompt);
+
+        $totals = $plan->grandTotals();
+        $this->assertCount(1, $totals);
+        $this->assertEqualsWithDelta(960.41, $totals[0], 0.001);
+    }
+
+    /** @test Undeclared, the same rows are never summed (P-3: undeclared decimals are not money). */
+    public function an_undeclared_calculation_is_never_summed(): void
+    {
+        $plan = $this->applicationPlan();
+
+        $this->assertStringNotContainsString('COMPUTED TOTALS (computed by the system', $plan->promptBlock(true));
+        $this->assertSame([], $plan->grandTotals());
+    }
+
     private function lineWith(string $text, string $needle): string
     {
         foreach (preg_split('/\R/', $text) ?: [] as $line) {

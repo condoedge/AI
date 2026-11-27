@@ -16,6 +16,7 @@ use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\DTOs\QueryUnderstandingResult;
 use Condoedge\Ai\Services\AiManager;
 use Condoedge\Ai\Services\Context\FileContextProvider;
+use Condoedge\Ai\Services\PromptSections\TaskInstructionsSection;
 use Condoedge\Ai\DTOs\QueryExecutionResult;
 use Condoedge\Ai\DTOs\QueryGenerationResult;
 use Condoedge\Ai\Tests\TestCase;
@@ -26,8 +27,10 @@ use Mockery;
  * ai.file_context.skip_for_question_types (default ['data_query']), file search
  * is skipped ENTIRELY — no fan-out and, structurally, no recall-floor retry, so
  * borderline chunks can never be admitted into a skipped turn. Knowledge/hybrid
- * turns and hosts that disable the key keep full file search. The explicit
- * file-listing intent takes precedence over the skip.
+ * turns keep full file search, before the query. On a host that does not skip
+ * data questions, a data question searches the documents after its query, and
+ * only when the query returns no rows. The explicit file-listing intent takes
+ * precedence over the skip.
  */
 class AiManagerFileSearchSkipTest extends TestCase
 {
@@ -43,6 +46,12 @@ class AiManagerFileSearchSkipTest extends TestCase
 
     /** @var int Number of times any file search (any angle) was invoked. */
     private int $searchCalls = 0;
+
+    /** @var list<string> The order of the turn's 'search' and 'generate' calls. */
+    private array $calls = [];
+
+    /** The task instructions the query generation was given. */
+    private string $instructions = '';
 
     public function setUp(): void
     {
@@ -64,9 +73,12 @@ class AiManagerFileSearchSkipTest extends TestCase
         $this->mockFileContextProvider = Mockery::mock(FileContextProvider::class);
 
         $this->searchCalls = 0;
+        $this->calls = [];
+        $this->instructions = '';
         $this->mockFileContextProvider->shouldReceive('getFileContext')
             ->andReturnUsing(function ($query, $user) {
                 $this->searchCalls++;
+                $this->calls[] = 'search';
                 return ['relevant_files' => [], 'file_count' => 0];
             });
 
@@ -104,25 +116,35 @@ class AiManagerFileSearchSkipTest extends TestCase
         return $ctx;
     }
 
-    private function runTurn(PipelineContext $ctx): array
+    private function runTurn(PipelineContext $ctx, array $rows = [['c' => 12]]): array
     {
         $this->mockContext->shouldReceive('retrieveContext')->once()->andReturn($ctx);
         $this->mockVectorStore->shouldReceive('collectionExists')->andReturn(true);
         $this->mockVectorStore->shouldReceive('upsert')->andReturn(true);
         $this->mockEmbedding->shouldReceive('embed')->andReturn(array_fill(0, 1536, 0.1));
 
-        $this->mockQueryGenerator->shouldReceive('generate')->andReturn(new QueryGenerationResult(
-            cypher: 'MATCH (u:User) RETURN count(u) AS c',
-            explanation: '',
-            confidence: 0.9,
-            warnings: [],
-            metadata: [],
-        ));
+        $this->mockQueryGenerator->shouldReceive('generate')->andReturnUsing(
+            function (string $q, PipelineContext $context): QueryGenerationResult {
+                $this->calls[] = 'generate';
+                $this->instructions = (new TaskInstructionsSection())->format($q, $context);
+
+                return new QueryGenerationResult(
+                    cypher: 'MATCH (u:User) RETURN count(u) AS c',
+                    explanation: '',
+                    confidence: 0.9,
+                    warnings: [],
+                    metadata: [],
+                );
+            }
+        );
         $this->mockQueryExecutor->shouldReceive('execute')->andReturn(new QueryExecutionResult(
-            success: true, data: [['c' => 12]], stats: [], metadata: [], errors: [],
+            success: true, data: $rows, stats: [], metadata: [], errors: [],
         ));
         $this->mockResponseGenerator->shouldReceive('generate')->andReturn([
             'answer' => 'ok', 'insights' => [], 'visualizations' => [], 'metadata' => [],
+        ]);
+        $this->mockResponseGenerator->shouldReceive('generateEmptyResponse')->andReturn([
+            'answer' => 'none', 'insights' => [], 'visualizations' => [], 'metadata' => [],
         ]);
 
         return $this->manager->answerQuestion($ctx->question, ['user' => (object) ['id' => 1]]);
@@ -139,6 +161,11 @@ class AiManagerFileSearchSkipTest extends TestCase
         $this->assertSame(0, $this->searchCalls, 'File search must not run at all for a skipped data query');
         $this->assertSame([], $ctx->fileContext, 'No chunks may be admitted into a skipped turn');
         $this->assertSame('ok', $result['answer'], 'The data pipeline still answers normally');
+        $this->assertStringNotContainsString(
+            'how to do something in the application',
+            $this->instructions,
+            'Under the package default the documents are never searched after the query, so the prompt does not say they are'
+        );
     }
 
     /**
@@ -186,15 +213,23 @@ class AiManagerFileSearchSkipTest extends TestCase
     /** @test */
     public function hybrid_queries_keep_full_file_search(): void
     {
+        config(['ai.file_context.skip_for_question_types' => []]);
+
         $ctx = $this->makeContext('hybrid');
 
         $this->runTurn($ctx);
 
         $this->assertGreaterThan(0, $this->searchCalls, 'File search must run for hybrid');
+        $this->assertLessThan(
+            array_search('generate', $this->calls, true),
+            array_search('search', $this->calls, true),
+            'A hybrid turn searches the documents before the query'
+        );
+        $this->assertStringNotContainsString('how to do something in the application', $this->instructions);
     }
 
     /** @test */
-    public function disabling_the_key_restores_file_search_for_data_queries(): void
+    public function a_data_query_with_rows_searches_no_documents_when_the_host_does_not_skip_data_questions(): void
     {
         config(['ai.file_context.skip_for_question_types' => []]);
 
@@ -202,7 +237,29 @@ class AiManagerFileSearchSkipTest extends TestCase
 
         $this->runTurn($ctx);
 
-        $this->assertGreaterThan(0, $this->searchCalls, 'Empty skip list = host disabled the skip');
+        $this->assertSame(0, $this->searchCalls, 'An answer built from rows does not use the documents');
+        $this->assertSame([], $ctx->fileContext);
+        $this->assertStringContainsString(
+            'A question that asks how to do something in the application, or what a document says, needs no query',
+            $this->instructions
+        );
+    }
+
+    /** @test */
+    public function a_data_query_without_rows_searches_the_documents_after_its_query(): void
+    {
+        config(['ai.file_context.skip_for_question_types' => []]);
+
+        $ctx = $this->makeContext('data_query');
+
+        $this->runTurn($ctx, []);
+
+        $this->assertGreaterThan(0, $this->searchCalls, 'No rows: the documents are read');
+        $this->assertGreaterThan(
+            array_search('generate', $this->calls, true),
+            array_search('search', $this->calls, true),
+            'The search runs after the query'
+        );
     }
 
     /** @test */
@@ -314,7 +371,7 @@ class AiManagerFileSearchSkipTest extends TestCase
 
         $this->mockFileContextProvider->shouldNotReceive('getFileEnumerationContext');
 
-        $this->runTurn($ctx);
+        $this->runTurn($ctx, []);
 
         $this->assertFalse((bool) ($ctx->fileContext['enumeration'] ?? false), 'No file listing for a file request');
         $this->assertGreaterThan(0, $this->searchCalls, 'The documents are searched as on any other turn');

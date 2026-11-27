@@ -53,6 +53,13 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
     private int $retryBaseDelayMs;
 
     /**
+     * One handle per provider: libcurl keeps its connection alive between requests,
+     * so only the first request of a process pays the TCP+TLS setup. Dropped after
+     * a transport failure so the retry opens a fresh connection.
+     */
+    private ?\CurlHandle $curl = null;
+
+    /**
      * Create a new OpenAI embedding provider
      *
      * @param array $config Configuration array with keys:
@@ -264,9 +271,11 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
      */
     protected function executeCurl(string $jsonBody): array
     {
-        $ch = curl_init(self::API_ENDPOINT);
+        $ch = $this->curl ??= curl_init();
+        curl_reset($ch);
 
         curl_setopt_array($ch, [
+            CURLOPT_URL => self::API_ENDPOINT,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $jsonBody,
@@ -281,7 +290,10 @@ class OpenAiEmbeddingProvider implements EmbeddingProviderInterface
         $response = curl_exec($ch);
         $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlError = curl_error($ch);
-        curl_close($ch);
+
+        if ($response === false) {
+            $this->curl = null;
+        }
 
         return ['code' => $httpCode, 'body' => $response, 'error' => $curlError];
     }

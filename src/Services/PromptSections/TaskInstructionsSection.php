@@ -58,6 +58,12 @@ class TaskInstructionsSection extends BasePromptSection
         $output .= "If the question cannot be answered with a Cypher query based on the provided context, or a query is not required to answer it, "
             . "respond with {\"needs_query\": false, \"cypher\": null, \"reason\": \"<why>\"}.\n\n";
 
+        // Only where the documents really are searched after the query (AiManager::documentsAfterData).
+        if ($context->documentsAfterData) {
+            $output .= "A question that asks how to do something in the application, or what a document says, needs no query: "
+                . "the documents are read for it when no rows come back.\n\n";
+        }
+
         if (!empty($context->selectionInfo['calculations']['matched'])) {
             $output .= "A DOMAIN CALCULATION above matches this question: name it by its key, or its variant's, with \"calculation\" and \"values\". "
                 . "Write \"cypher\" only if none of them can return what is asked.\n\n";

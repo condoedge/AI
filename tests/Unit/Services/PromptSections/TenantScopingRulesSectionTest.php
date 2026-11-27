@@ -94,6 +94,12 @@ class TenantScopingRulesSectionTest extends TestCase
         $this->assertSame(1, substr_count($whole, 'same column names/aliases'), 'one generic UNION column rule');
         // The non-duplicated shape rules stay in the builder's system framing.
         $this->assertStringContainsString('QUERY SHAPE RULES', $prompts['system']);
+
+        // The validator's reserved-identifier rule is taught up front, with its full word list.
+        $this->assertSame(1, preg_match('/^- Never use a Cypher keyword \((.+?)\) as a variable or alias name/m', $prompts['system'], $m));
+        foreach (\Condoedge\Ai\Services\Security\CypherScopeAnalyzer::RESERVED_IDENTIFIERS as $word) {
+            $this->assertContains(strtolower($word), explode(', ', $m[1]));
+        }
     }
 
     /** @test Review M-3: with tenant scoping OFF the generic UNION column rule still ships, once. */

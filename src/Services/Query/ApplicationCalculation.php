@@ -15,6 +15,10 @@ use Condoedge\Ai\Exceptions\QueryGenerationException;
  *
  *   'resolver' => [UnitBalance::class, 'rows'],   // fn (mixed $user, array $values): list<array>
  *   'values' => ['UNIT NAME?' => 'the unit the question names'],
+ *   'money' => ['billed', 'paid'],   // the columns holding money: the answer may then state their total
+ *
+ * A calculation that declares 'money' returns every row, or caps at exactly
+ * ai.query_execution.default_limit: a lower cap would have its sum presented as a complete total.
  *
  * The model names the calculation and gives the values, as for a query ({@see CalculationQuery}).
  * The resolver receives the asker and narrows the rows to what they may read: no scope is applied

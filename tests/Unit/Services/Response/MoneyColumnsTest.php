@@ -69,4 +69,19 @@ class MoneyColumnsTest extends TestCase
         $this->assertSame([], MoneyColumns::fromCypher('MATCH (b:Bill) RETURN b'));
         $this->assertSame([], MoneyColumns::fromCypher(''));
     }
+
+    /** @test An application calculation has no query to read: its money columns are the ones the host declares. */
+    public function a_calculation_declares_its_money_columns(): void
+    {
+        config([
+            'ai.calculations.x.money' => ['a', 'b'],
+            'ai.calculations.y.money' => 'a',
+        ]);
+
+        $this->assertSame(['a', 'b'], MoneyColumns::declaredBy('x'));
+        $this->assertSame(['a', 'b'], MoneyColumns::declaredBy('x.sub'));
+        $this->assertSame([], MoneyColumns::declaredBy('unknown'));
+        $this->assertSame([], MoneyColumns::declaredBy('y'));
+        $this->assertSame([], MoneyColumns::declaredBy(''));
+    }
 }

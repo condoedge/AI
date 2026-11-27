@@ -1014,7 +1014,10 @@ final class DataAnswerPlan
     private function build(PipelineContext $context): void
     {
         $this->rowsAreMaterial = ($context->queryResult->metadata['recorded_query_reason'] ?? null) === RecordedQuery::REASON_GENERATOR;
-        $this->moneyColumns = MoneyColumns::fromCypher($context->queryResult->cypher);
+        $execution = $context->executionResult->metadata;
+        $this->moneyColumns = ($execution['source'] ?? null) === 'application'
+            ? MoneyColumns::declaredBy((string) ($execution['calculation'] ?? ''))
+            : MoneyColumns::fromCypher($context->queryResult->cypher);
         $this->variableLabels = TableRenderer::variableLabels($context->queryResult->cypher);
         $this->subject = $this->subjectOf($context);
         $this->question = trim((string) preg_replace('/\s+/u', ' ', (string) $context->question));
@@ -2200,7 +2203,7 @@ final class DataAnswerPlan
         return '';
     }
 
-    /** Whether a result column is declared money (P-3 MoneyColumns). */
+    /** Whether a result column is declared money (P-3 MoneyColumns, or declared by the calculation). */
     private function isMoney(string $column): bool
     {
         return in_array($column, $this->moneyColumns, true);

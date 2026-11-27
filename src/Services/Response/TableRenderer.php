@@ -1094,9 +1094,14 @@ final class TableRenderer
      *
      * VALUE-ONLY fallback: by values alone a parent repeated beside each child mirrors real
      * homonyms, so callers with record ids use RecordResolver::homonyms() (identity) first.
-     * Here a column holding a date / time value ({@see isTemporalValue()}) or listed in
-     * $nonIdentifying (the cypher's aggregate aliases) is never `by` — a per-row fact never
-     * tells records apart — and a group whose only differing columns are such is skipped.
+     * Rows with no query (an application calculation) reach this fallback even when they carry
+     * `_label` / `id`: an empty cypher gives no identity path.
+     * Here a column holding a date / time value ({@see isTemporalValue()}), a number written as
+     * text (a period, a count, an amount), or listed in $nonIdentifying (the cypher's aggregate
+     * aliases) is treated as a per-row fact and is never `by`; a group whose only differing
+     * columns are such is skipped. So same-named rows differing only by an integer code lose the
+     * note here — rows with ids take the identity path. A text column of decimal numbers is a
+     * measure, like a float column, and is never the shared name either.
      *
      * @param array<int, array<string, mixed>> $rows prepared rows
      * @param array<int, string> $nonIdentifying columns never used as `by` (aggregate aliases)
@@ -1115,6 +1120,8 @@ final class TableRenderer
             $isText = true;
             $any = false;
             $temporal = false;
+            $numeric = true;
+            $decimal = false;
             foreach ($rows as $row) {
                 $value = $row[$column] ?? null;
                 if ($value === null) {
@@ -1124,12 +1131,17 @@ final class TableRenderer
                     $isText = false;
                     break;
                 }
-                $any = $any || trim($value) !== '';
+                if (trim($value) === '') {
+                    continue;
+                }
+                $any = true;
                 $temporal = $temporal || self::isTemporalValue($value);
+                $numeric = $numeric && is_numeric(trim($value));
+                $decimal = $decimal || $this->isDecimal($value);
             }
-            if ($isText && $any) {
+            if ($isText && $any && !($numeric && $decimal)) {
                 $textColumns[] = $column;
-                $identifying[$column] = !$temporal && !in_array($column, $nonIdentifying, true);
+                $identifying[$column] = !$temporal && !$numeric && !in_array($column, $nonIdentifying, true);
             }
         }
         if (count($textColumns) < 2) {

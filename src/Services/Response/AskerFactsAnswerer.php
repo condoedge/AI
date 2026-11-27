@@ -29,13 +29,24 @@ class AskerFactsAnswerer
     /** The answer, or null when no fact gives what is asked or the call failed: the caller goes on without it. */
     public function answer(string $question, PipelineContext $ctx): ?string
     {
+        // A follow-up names its subject only in an earlier turn: judged on its own words, it is
+        // matched to whichever fact shares a word (measured: after a refused turn, "just the total?"
+        // was answered from an unrelated fact about the asker's own records). The search phrase
+        // stands in when the clarified question is blank: this judge needs the subject, not a sentence.
+        $resolved = $ctx->qu->resolvedFollowUp(orSearchQuery: true);
+        $asked = $resolved !== '' && $resolved !== trim($question)
+            ? "{$question}\n\nRead with the conversation, it asks:\n{$resolved}"
+            : $question;
+
         $messages = [
             ['role' => 'system', 'content' => "You answer one question from the facts below and nothing else: they are what the app shows "
-                . "this user about their own records. A fact answers when it gives what is asked, even in other words or another language; "
-                . "a simple calculation from a fact is allowed, and you show it. When a fact says that something is not shown to this user, "
+                . "this user about their own records. A fact answers when it gives what is asked, even in other words or another language, "
+                . "about the subject it states: never a question about another subject that shares a word, such as other people's records "
+                . "(when the question is read with the conversation, what it asks there is the question). "
+                . "A simple calculation from a fact is allowed, and you show it. When a fact says that what is asked is not shown to this user, "
                 . "say so plainly. When no fact gives what is asked, set answered to false. Answer in the language of the question, "
                 . "in one or two sentences, speaking directly to the user, and never mention the facts themselves."],
-            ['role' => 'user', 'content' => "FACTS:\n- " . implode("\n- ", $ctx->askerFacts) . "\n\nQUESTION:\n{$question}"],
+            ['role' => 'user', 'content' => "FACTS:\n- " . implode("\n- ", $ctx->askerFacts) . "\n\nQUESTION:\n{$asked}"],
         ];
 
         $observer = PipelineObserverScope::for($ctx);

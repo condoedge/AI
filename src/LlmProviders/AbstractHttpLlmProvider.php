@@ -50,6 +50,13 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface, ReportsT
     private bool $schemaRefused = false;
 
     /**
+     * One handle per provider: libcurl keeps its connection alive between requests,
+     * so only the first request of a process pays the TCP+TLS setup. Dropped after
+     * a transport failure so the retry opens a fresh connection.
+     */
+    private ?\CurlHandle $curl = null;
+
+    /**
      * @param array $config Provider config (api_key, model, temperature, max_tokens)
      * @throws Exception If the API key is missing
      */
@@ -276,7 +283,7 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface, ReportsT
      */
     private function performRequest(array $requestData, bool $streaming): array
     {
-        $ch = curl_init($this->endpoint());
+        $ch = $this->handle();
 
         $headers = array_merge(['Content-Type: application/json'], $this->authHeaders());
         if ($streaming) {
@@ -294,10 +301,10 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface, ReportsT
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlError = curl_error($ch);
-        curl_close($ch);
 
         if ($response === false) {
             // Network-level failure (DNS, connection reset, timeout) is transient.
+            $this->curl = null;
             throw new TransientLlmException(
                 $this->displayName() . ' API request failed: ' . $curlError
             );
@@ -318,6 +325,19 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface, ReportsT
     }
 
     /**
+     * The provider's kept handle, reset to no options and pointed at the endpoint:
+     * each request sets all of its own options again.
+     */
+    private function handle(): \CurlHandle
+    {
+        $ch = $this->curl ??= curl_init();
+        curl_reset($ch);
+        curl_setopt($ch, CURLOPT_URL, $this->endpoint());
+
+        return $ch;
+    }
+
+    /**
      * Send a streaming request. The streaming body itself is not retried (chunks
      * may already have been delivered), but the connection is still guarded by
      * the circuit breaker and a transient HTTP status surfaces the captured body.
@@ -334,7 +354,7 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface, ReportsT
 
     private function performStreamingRequest(array $requestData, callable $callback): void
     {
-        $ch = curl_init($this->endpoint());
+        $ch = $this->handle();
 
         $buffer = '';
         $body = '';
@@ -385,9 +405,9 @@ abstract class AbstractHttpLlmProvider implements LlmProviderInterface, ReportsT
         curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlError = curl_error($ch);
-        curl_close($ch);
 
         if ($httpCode === 0) {
+            $this->curl = null;
             throw new TransientLlmException(
                 $this->displayName() . ' streaming request failed: ' . $curlError
             );

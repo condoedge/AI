@@ -1734,13 +1734,16 @@ return [
         // fan-out, no recall floor): a pure data query gains nothing from
         // document retrieval and pays ~seconds of latency plus noise chunks
         // for it. Driven by the existing QU question_type signal — never
-        // phrase matching. Set to [] to always run file search.
+        // phrase matching. Set to [] to always run file search. A data question
+        // not skipped here searches the documents after its query, and only when
+        // the query returns no rows.
         'skip_for_question_types' => ['data_query'],
 
-        // For a host that searches the documents on data questions too (the list above is empty, so
-        // help articles answer how-to questions read as data): when the query returned rows, the
-        // uploaded files leave the turn, help articles stay. Every uploaded figure must then name its
-        // document and year (FileContextSection). Off keeps today's behaviour and prompts.
+        // For a host that searches the documents on data questions too (the list above is empty): on a
+        // data question the uploaded files leave the turn whenever the asker's audience limits what they
+        // read, and help articles stay. A data question whose query returned rows searches no documents
+        // at all. Wherever uploaded files stay, every figure from one must name its document and year
+        // (FileContextSection). Off: uploaded files are never dropped or marked dated.
         'uploads_yield_to_data' => env('AI_FILE_UPLOADS_YIELD_TO_DATA', false),
 
         // Maximum snippet length (characters) — the HARD cap on the stitched
@@ -2260,6 +2263,12 @@ return [
     |           'notes'       => 'Split overdue vs not-yet-due on i.due_at < toString(date()) (dates are ISO strings).',
     |       ],
     |   ],
+    |
+    | A calculation the host computes itself (`resolver`, see ApplicationCalculation)
+    | may list its money columns: 'money' => ['billed', 'paid']. The answer then
+    | states their total over the rows — as a complete total only when the resolver
+    | returns every row, or caps at exactly ai.query_execution.default_limit. A
+    | resolver that caps lower must not declare 'money'.
     */
     'calculations' => [],
 

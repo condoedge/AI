@@ -490,8 +490,9 @@ final class CypherScopeAnalyzer
      * LIMIT / OFFSET / ORDER are NOT listed: the lexer resolves them
      * positionally (Token::$keywordAsIdentifier) and every walk honors that;
      * YIELD likewise (anchorClauseKind's operand guard).
+     * The same list is shown to the generator (SemanticPromptBuilder) and in the rejection message.
      */
-    private const RESERVED_IDENTIFIERS = [
+    public const RESERVED_IDENTIFIERS = [
         'MATCH', 'OPTIONAL', 'WITH', 'RETURN', 'CALL', 'UNION',
         'CREATE', 'MERGE', 'DELETE', 'SET', 'REMOVE', 'FOREACH', 'UNWIND', 'WHERE',
     ];
@@ -1892,7 +1893,7 @@ final class CypherScopeAnalyzer
             'unsupported_pattern_scope' => 'Do not match nodes inside pattern comprehensions, EXISTS{}, COUNT{} or COLLECT{} (only variables already matched outside may be referenced there); use a top-level MATCH.',
             'unsupported_pattern_syntax' => 'Use only plain patterns: (alias:Label {props})-[:TYPE]->(alias:Label). No IS labels, inline WHERE inside a pattern, label expressions (| & ! %), SHORTEST/shortestPath or quantified paths.',
             'unsupported_var_length_binding' => 'Do not bind variable-length relationships or paths to a variable (no p = (…)-[*]-(…), no [r*]); match the endpoints only.',
-            'keyword_as_identifier' => 'Do not use Cypher keywords (match, optional, with, return, where, …) as variable or alias names.',
+            'keyword_as_identifier' => 'A variable or alias in your query is a reserved Cypher keyword (' . strtolower(implode(', ', self::RESERVED_IDENTIFIERS)) . '). Rename it, even when a label has that name: use a short letter for a node and a descriptive suffix for an alias (e.g. AS x_name).',
             'unsupported_procedure_or_function' => 'Procedure calls and namespaced functions (apoc.cypher.*, db.index.*, …) are not allowed; only date/duration/apoc.date/apoc.text value functions.',
             'unterminated_string', 'unterminated_comment', 'unbalanced_delimiters' => 'Query is malformed (unbalanced quotes, comments or delimiters).',
             default => 'Query is not in the tenant-scopeable subset.',

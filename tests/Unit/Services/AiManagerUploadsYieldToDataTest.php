@@ -24,8 +24,9 @@ use Mockery;
 
 /**
  * ai.file_context.uploads_yield_to_data: a host whose data questions also search the documents
- * (skip_for_question_types = []) keeps its help articles there, while an uploaded file, a dated
- * picture of the data, never competes with rows the data just returned.
+ * (skip_for_question_types = []) searches them after the query, and only when it returns no rows,
+ * so an uploaded file, a dated picture of the data, never competes with rows the data returned.
+ * Help articles stay; uploads leave a data question whenever the asker's audience is limited.
  */
 class AiManagerUploadsYieldToDataTest extends TestCase
 {
@@ -127,16 +128,13 @@ class AiManagerUploadsYieldToDataTest extends TestCase
     }
 
     /** @test */
-    public function rows_on_a_data_question_drop_the_uploaded_files_and_keep_the_help_articles(): void
+    public function rows_on_a_data_question_search_no_documents(): void
     {
         config(['ai.file_context.uploads_yield_to_data' => true]);
 
         $ctx = $this->turn('data_query', [['amount' => 12]]);
 
-        $this->assertSame(['physical'], $this->sources($ctx));
-        $this->assertSame(1, $ctx->fileContext['file_count']);
-        $this->assertFalse($ctx->fileContext['has_database']);
-        $this->assertTrue($ctx->fileContext['has_physical']);
+        $this->assertSame([], $ctx->fileContext);
     }
 
     /** @test */
@@ -251,7 +249,7 @@ class AiManagerUploadsYieldToDataTest extends TestCase
     /** @test */
     public function off_by_default_nothing_is_dropped(): void
     {
-        $ctx = $this->turn('data_query', [['amount' => 12]]);
+        $ctx = $this->turn('data_query', []);
 
         $this->assertContains('database', $this->sources($ctx));
         $this->assertArrayNotHasKey('uploads_are_dated', $ctx->fileContext);

@@ -8,6 +8,7 @@ use Condoedge\Ai\Contracts\PromptSectionInterface;
 use Condoedge\Ai\DTOs\PipelineContext;
 use Condoedge\Ai\Services\AssistantIdentity;
 use Condoedge\Ai\Services\Retrieval\TokenBudgeter;
+use Condoedge\Ai\Services\Security\CypherScopeAnalyzer;
 use Condoedge\Ai\Support\AiLogger;
 use Condoedge\Ai\Services\PromptSections\GenericContextSection;
 use Condoedge\Ai\Services\PromptSections\ProjectContextSection;
@@ -431,6 +432,7 @@ class SemanticPromptBuilder
             '- One query part per UNION branch; each branch must MATCH its own labelled nodes.',
             '- Do not use CALL {} subqueries, pattern comprehensions over sensitive entities, or EXISTS {} that bind sensitive nodes.',
             '- Emit a single statement (no ";"-separated statements).',
+            '- Never use a Cypher keyword (' . strtolower(implode(', ', CypherScopeAnalyzer::RESERVED_IDENTIFIERS)) . ') as a variable or alias name, even when a label has that name: use a short letter for a node and a suffixed alias (e.g. AS x_name).',
             '- If a WHERE uses a top-level OR, the whole disjunction is fine — it will be grouped automatically.',
             // The UNION RULES block lives ONLY in TenantScopingRulesSection (Task 5.8): it
             // was duplicated verbatim here, and the $ai_team_ids placement it teaches only

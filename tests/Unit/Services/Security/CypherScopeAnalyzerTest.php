@@ -405,4 +405,30 @@ class CypherScopeAnalyzerTest extends TestCase
     {
         $this->assertScoped('MATCH (i:`Invoice`) RETURN i', [['alias' => 'i', 'label' => 'Invoice']]);
     }
+
+    // ---- Keyword as identifier ----------------------------------------------
+
+    /** @test The rejection names every reserved word, so the retry can fix the one it used. */
+    public function a_keyword_variable_is_rejected_with_the_full_reserved_list(): void
+    {
+        $result = $this->analyzer->validateSubset(
+            'MATCH (b:Bill)-[:R]->(union:Union) WHERE union.team_id IN $ai_team_ids RETURN b.id'
+        );
+
+        $this->assertFalse($result['valid']);
+        $this->assertSame('keyword_as_identifier', $result['reason']);
+        foreach (CypherScopeAnalyzer::RESERVED_IDENTIFIERS as $word) {
+            $this->assertStringContainsString(strtolower($word), $result['errors'][0]);
+        }
+    }
+
+    /** @test The rule itself is unchanged: the same query with a plain variable passes. */
+    public function the_same_query_with_a_plain_variable_is_valid(): void
+    {
+        $result = $this->analyzer->validateSubset(
+            'MATCH (b:Bill)-[:R]->(u:Union) WHERE u.team_id IN $ai_team_ids RETURN b.id'
+        );
+
+        $this->assertTrue($result['valid'], implode(' ', $result['errors']));
+    }
 }
