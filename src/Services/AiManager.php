@@ -3841,6 +3841,28 @@ class AiManager
         return $ctx;
     }
 
+    /**
+     * The mirror of letSkillOutweighCalculations, once a calculation is the one that answers: a
+     * figure the question matches at least as well as any reference is a figure question, and the
+     * skill leaves the turn with its references and its line. `with_skill` keeps both.
+     */
+    private function letFigureOutweighSkill(PipelineContext $ctx, string $calculation): PipelineContext
+    {
+        $references = array_column($ctx->skill['references'] ?? [], 'similarity');
+        $matched = $ctx->selectionInfo['calculations']['matched'][$calculation] ?? null;
+
+        if ($references === [] || !is_numeric($matched) || config("ai.calculations.{$calculation}.with_skill", false)) {
+            return $ctx;
+        }
+
+        if ((float) $matched >= max($references)) {
+            $this->emitStage($ctx->observer, 'skill_outweighed', ['by' => $calculation, 'skill' => $ctx->skill['name'] ?? null]);
+            $ctx->skill = [];
+        }
+
+        return $ctx;
+    }
+
     /** @param array{key: string, values: array<string, list<string>>} $calculation */
     private function computedByApplication(array $calculation, mixed $user): QueryExecutionResult
     {
@@ -4064,6 +4086,7 @@ class AiManager
 
         if (is_array($queryResult->metadata['application_calculation'] ?? null)) {
             $ctx->queryResult = $queryResult;
+            $ctx = $this->letFigureOutweighSkill($ctx, (string) ($queryResult->metadata['application_calculation']['key'] ?? ''));
             $ctx->executionResult = $this->observeStage(
                 $ctx->observer,
                 'execution',

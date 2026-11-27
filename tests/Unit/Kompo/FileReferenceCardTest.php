@@ -118,4 +118,44 @@ class FileReferenceCardTest extends TestCase
         $this->assertStringNotContainsString('<img src=x', $html);
         $this->assertStringContainsString('&lt;img src=x', $html);
     }
+
+    /** @test */
+    public function a_cited_passage_shows_its_document_its_place_and_its_words(): void
+    {
+        $rendered = $this->html($this->renderer()->renderFileReferences([[
+            'ref' => 2,
+            'id' => 14655,
+            'name' => 'Déclaration de copropriété.pdf',
+            'page' => 14,
+            'cited_articles' => [72, 73],
+            'heading' => 'Fenêtres et portes',
+            'passage' => 'Les fenêtres sont des parties communes à usage restreint. <b>Leur remplacement</b> est à la charge du syndicat.',
+        ]]));
+
+        $this->assertStringContainsString('[2]', $rendered);
+        $this->assertStringContainsString('Déclaration de copropriété.pdf', $rendered);
+        // The page label is a translation the test application does not load: its key stands for it.
+        $this->assertMatchesRegularExpression('/(page 14|ai\.chat\.source-page) · art\. 72, 73 · § Fenêtres et portes/u', $rendered);
+        $this->assertStringContainsString('parties communes à usage restreint', $rendered);
+        $this->assertStringNotContainsString('<b>Leur remplacement</b>', $rendered, 'the passage is tenant text: escaped');
+    }
+
+    /** @test */
+    public function a_long_passage_is_cut_and_kept_whole_behind_a_toggle(): void
+    {
+        $passage = str_repeat('Le syndicat entretient les parties communes. ', 20);
+
+        $rendered = $this->html($this->renderer()->renderFileReferences([['id' => 3, 'name' => 'Règlement.pdf', 'passage' => $passage]]));
+
+        $this->assertStringContainsString('<details>', $rendered);
+        $this->assertStringContainsString('…', $rendered);
+    }
+
+    /** @test */
+    public function the_text_of_a_project_file_is_not_shown(): void
+    {
+        $rendered = $this->html($this->renderer()->renderFileReferences([['id' => 'physical:skills/a.md', 'name' => 'a.md', 'passage' => 'Fiche interne.']]));
+
+        $this->assertStringNotContainsString('Fiche interne.', $rendered);
+    }
 }

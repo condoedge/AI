@@ -87,6 +87,8 @@
     "ai.chat.settings": "Paramètres",
     "ai.chat.history": "Conversations",
     "ai.chat.sources": "Sources",
+    "ai.chat.source-page": "page :page",
+    "ai.chat.source-full": "Voir tout le passage",
     "ai.chat.new-conversation-tooltip": "Nouvelle conversation",
     "ai.chat.clear": "Effacer",
     "ai.chat.clear-tooltip": "Effacer la discussion",
